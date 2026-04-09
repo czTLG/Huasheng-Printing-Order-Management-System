@@ -1,0 +1,21 @@
+{
+  "name": "packaging-printing-mes-demo",
+  "version": "0.1.0",
+  "description": "包装袋印刷厂智能生产管理系统（演示版后端）",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "baseline:verify": "node scripts/verify-baseline.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^11.8.1",
+    "compression": "^1.8.1",
+    "express": "^4.21.2",
+    "jimp": "^0.22.12",
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.1",
+    "pdfkit": "^0.17.2"
+  }
+}

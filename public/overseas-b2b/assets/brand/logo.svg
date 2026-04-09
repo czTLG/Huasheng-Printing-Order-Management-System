@@ -1,0 +1,7 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 120'>
+<rect width='360' height='120' rx='16' fill='#0f3d73'/>
+<text x='26' y='52' fill='#fff' font-size='32' font-family='Arial' font-weight='700'>HUASHENG</text>
+<text x='26' y='84' fill='#c7dbff' font-size='18' font-family='Arial'>Printing & Packaging</text>
+<circle cx='320' cy='60' r='24' fill='#fff'/>
+<path d='M307 60h26M320 47v26' stroke='#0f3d73' stroke-width='4'/>
+</svg>

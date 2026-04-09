@@ -1,0 +1,19 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1180 180'>
+<rect width='1180' height='180' fill='#f2f6fc'/>
+<g font-family='Arial' font-size='14' fill='#0f3d73'>
+<circle cx='80' cy='90' r='28' fill='#dceafe'/><text x='80' y='95' text-anchor='middle'>1</text>
+<circle cx='240' cy='90' r='28' fill='#dceafe'/><text x='240' y='95' text-anchor='middle'>2</text>
+<circle cx='400' cy='90' r='28' fill='#dceafe'/><text x='400' y='95' text-anchor='middle'>3</text>
+<circle cx='560' cy='90' r='28' fill='#dceafe'/><text x='560' y='95' text-anchor='middle'>4</text>
+<circle cx='720' cy='90' r='28' fill='#dceafe'/><text x='720' y='95' text-anchor='middle'>5</text>
+<circle cx='880' cy='90' r='28' fill='#dceafe'/><text x='880' y='95' text-anchor='middle'>6</text>
+<circle cx='1040' cy='90' r='28' fill='#dceafe'/><text x='1040' y='95' text-anchor='middle'>7</text>
+<line x1='108' y1='90' x2='212' y2='90' stroke='#7ea2d6' stroke-width='2'/>
+<line x1='268' y1='90' x2='372' y2='90' stroke='#7ea2d6' stroke-width='2'/>
+<line x1='428' y1='90' x2='532' y2='90' stroke='#7ea2d6' stroke-width='2'/>
+<line x1='588' y1='90' x2='692' y2='90' stroke='#7ea2d6' stroke-width='2'/>
+<line x1='748' y1='90' x2='852' y2='90' stroke='#7ea2d6' stroke-width='2'/>
+<line x1='908' y1='90' x2='1012' y2='90' stroke='#7ea2d6' stroke-width='2'/>
+<text x='80' y='140' text-anchor='middle'>咨询沟通</text><text x='240' y='140' text-anchor='middle'>方案报价</text><text x='400' y='140' text-anchor='middle'>设计打样</text><text x='560' y='140' text-anchor='middle'>订单生产</text><text x='720' y='140' text-anchor='middle'>质检</text><text x='880' y='140' text-anchor='middle'>打包发货</text><text x='1040' y='140' text-anchor='middle'>售后服务</text>
+</g>
+</svg>

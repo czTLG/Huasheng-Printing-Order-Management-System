@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Huasheng Printing | Global B2B Packaging & Printing</title>
+  <meta name="description" content="Huasheng Printing Co., Limited - Trusted OEM/ODM partner for custom packaging bags, labels, catalogs and commercial printing." />
+  <style>
+    :root{--bg:#f3f7fd;--card:#fff;--line:#dbe5f2;--blue:#0f3d73;--blue2:#1a64bb;--txt:#1f2937;--muted:#64748b}
+    *{box-sizing:border-box} body{margin:0;font-family:Inter,Arial,Helvetica,sans-serif;color:var(--txt);background:var(--bg)}
+    a{text-decoration:none;color:inherit} .wrap{max-width:1240px;margin:auto;padding:0 16px}
+    .topbar{background:#0b2d53;color:#dbeafe;font-size:12px}.topbar .wrap{display:flex;justify-content:space-between;padding:8px 16px}
+    header{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line);z-index:50}
+    .head{min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .brand{display:flex;align-items:center;gap:10px}.brand img{height:40px}.brand b{color:#0f3d73;font-size:18px}
+    nav{display:flex;gap:14px;font-size:14px;color:#334155;flex-wrap:wrap}
+    .lang{display:flex;gap:8px}.lang button{border:1px solid #c8d4e6;background:#fff;padding:6px 10px;border-radius:999px;cursor:pointer}.lang .on{background:var(--blue);color:#fff;border-color:var(--blue)}
+
+    .hero{margin:18px 0;position:relative;border-radius:18px;overflow:hidden;background:#0c2848;color:#fff}
+    .slides{display:flex;transition:.45s ease}.slide{min-width:100%;height:500px;position:relative}
+    .slide img{width:100%;height:100%;object-fit:cover;filter:brightness(.55)}
+    .overlay{position:absolute;inset:0;padding:44px;display:flex;flex-direction:column;justify-content:flex-end}
+    .overlay h1{font-size:44px;margin:0 0 10px;max-width:760px}
+    .overlay p{font-size:18px;margin:0;max-width:760px;color:#e2e8f0}
+    .heroBtns{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+    .btn{padding:10px 14px;border-radius:10px;border:1px solid #ffffff66;font-weight:600}.btn.pri{background:#fff;color:#0f3d73}
+    .heroCtrl{position:absolute;inset:auto 14px 14px auto;display:flex;gap:8px;align-items:center}.dot{width:9px;height:9px;border-radius:50%;background:#ffffff88}.dot.on{background:#fff}
+    .arr{width:34px;height:34px;border-radius:50%;border:1px solid #ffffff8c;background:#00000030;color:#fff;cursor:pointer}
+
+    section{margin:28px 0}.ttl{font-size:32px;color:#0f3d73;margin:0 0 8px}.sub{margin:0 0 14px;color:var(--muted)}
+    .grid{display:grid;gap:12px}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;transition:.25s ease;box-shadow:0 1px 0 #fff inset}.card:hover{transform:translateY(-4px);box-shadow:0 14px 30px #0f172a14}.card img{width:100%;height:200px;object-fit:cover;border-radius:10px}
+    .pill{display:inline-block;font-size:12px;padding:3px 10px;border-radius:999px;background:#e8f1ff;border:1px solid #c5daf8;color:#113f7a}
+
+    .adv .card{min-height:88px;display:flex;align-items:center;font-weight:600}
+    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+    .metric{background:#0f3d73;color:#fff;border-radius:14px;padding:16px;text-align:center}
+    .metric b{display:block;font-size:30px}
+
+    .scrollRow{display:flex;gap:12px;overflow:auto;scroll-snap-type:x mandatory;padding-bottom:4px}
+    .scrollRow::-webkit-scrollbar{height:8px}.scrollRow::-webkit-scrollbar-thumb{background:#cdd9ea;border-radius:10px}
+    .prod{min-width:280px;scroll-snap-align:start}
+
+    .bagCard img{height:280px;object-fit:cover;background:#edf3ff}
+    .brands{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+    .brandBox{background:#fff;border:1px dashed #bfd0e7;padding:10px;border-radius:10px;text-align:center;color:#475569;font-size:13px}
+
+    .timeline{display:flex;gap:10px;overflow:auto}.step{min-width:160px;background:#fff;border:1px solid var(--line);padding:12px;border-radius:12px;text-align:center}
+    .step b{display:inline-flex;width:28px;height:28px;border-radius:50%;background:#0f3d73;color:#fff;align-items:center;justify-content:center;margin-bottom:6px}
+
+    .contact{display:grid;grid-template-columns:1.2fr 1fr;gap:12px}
+    input,textarea{width:100%;padding:10px;border:1px solid #c8d4e6;border-radius:10px;margin:6px 0;background:#fff}
+    .submit{background:#0f3d73;color:#fff;border:none;padding:10px 14px;border-radius:10px;cursor:pointer}
+
+    footer{margin-top:30px;background:#0d1f36;color:#dbeafe;padding:24px 0}
+    .float{position:fixed;right:14px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:60}
+    .float a{background:#0f3d73;color:#fff;padding:10px 12px;border-radius:999px;font-size:13px;box-shadow:0 8px 20px #0003}
+
+
+    .showcase{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}.showcase .main img{height:360px}.showcase .miniGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.showcase .miniGrid img{height:172px}
+    .faq details{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px}.faq details+details{margin-top:8px}.faq summary{cursor:pointer;font-weight:600}
+    .tag{display:inline-block;background:#eff6ff;border:1px solid #c7d9f5;color:#1e3a8a;padding:4px 10px;border-radius:999px;font-size:12px;margin-right:6px;margin-bottom:6px}
+    @media(max-width:1000px){.g4,.g3,.brands,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.contact,.g2{grid-template-columns:1fr}.overlay h1{font-size:32px}.slide{height:400px}}
+    @media(max-width:640px){nav{display:none}.g4,.g3,.brands,.metrics{grid-template-columns:1fr}.overlay{padding:24px}.overlay h1{font-size:24px}.slide{height:340px}}
+  </style>
+</head>
+<body>
+  <div class="topbar"><div class="wrap"><span data-i18n="topline">Professional OEM/ODM Packaging | Fast Sampling | Global Delivery</span><span>sales@huashengprint.com</span></div></div>
+  <header>
+    <div class="wrap head">
+      <div class="brand"><img src="assets/brand/logo.svg" alt="logo"><b>Huasheng Printing Co., Limited</b></div>
+      <nav>
+        <a href="#home" data-i18n="n_home">Home</a><a href="#about" data-i18n="n_about">About</a><a href="#products" data-i18n="n_products">Products</a><a href="#bags" data-i18n="n_bags">Bag Types</a><a href="#cases" data-i18n="n_cases">Cases</a><a href="#contact" data-i18n="n_contact">Contact</a>
+      </nav>
+      <div class="lang"><button class="on" data-lang="en">EN</button><button data-lang="zh">中文</button><button data-lang="ru">RU</button><button data-lang="ms">BM</button></div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <section class="hero" id="home">
+      <div class="slides" id="slides">
+        <div class="slide"><img src="assets/real3/file_187---6f25ff28-da9b-42c0-8226-b5be4dc547ed.jpg" alt="hero"><div class="overlay"><h1 data-i18n="hero1_t">Premium Custom Packaging That Builds Buyer Trust</h1><p data-i18n="hero1_d">Stand-up pouches, zipper bags, roll films and labels for Russia, Malaysia, SEA, Europe and North America.</p><div class="heroBtns"><a href="#contact" class="btn pri" data-i18n="cta_quote">Get Quote</a><a href="#products" class="btn" data-i18n="cta_catalog">View Catalog</a></div></div></div>
+        <div class="slide"><img src="assets/real3/file_190---c6188b6f-cc9e-4325-9d58-be53825a258b.jpg" alt="hero"><div class="overlay"><h1 data-i18n="hero2_t">Factory-grade Quality Control, Stable Lead Time</h1><p data-i18n="hero2_d">Imported machines + SOP production + full-process inspection.</p></div></div>
+        <div class="slide"><img src="assets/real3/file_193---46db1756-d3f2-4d84-9de1-3bf29ac4b60d.jpg" alt="hero"><div class="overlay"><h1 data-i18n="hero3_t">Bag Types Based on Real Production Cost Models</h1><p data-i18n="hero3_d">Eight-side seal, stand-up zipper, side/back/four-side seal and more.</p></div></div>
+      </div>
+      <div class="heroCtrl"><button class="arr" id="prev">‹</button><span class="dot on"></span><span class="dot"></span><span class="dot"></span><button class="arr" id="next">›</button></div>
+    </section>
+
+    <section class="adv">
+      <h2 class="ttl" data-i18n="adv_t">Core Advantages</h2>
+      <div class="grid g3">
+        <div class="card" data-i18n="adv1">10+ years industry experience</div><div class="card" data-i18n="adv2">Full-category customization</div><div class="card" data-i18n="adv3">Imported equipment</div>
+        <div class="card" data-i18n="adv4">Fast sampling</div><div class="card" data-i18n="adv5">Small & large MOQ support</div><div class="card" data-i18n="adv6">Multilingual business support</div>
+      </div>
+    </section>
+
+    <section id="about">
+      <h2 class="ttl" data-i18n="about_t">About Huasheng</h2>
+      <p class="sub" data-i18n="about_d">Export-focused custom printing with modern workshop, quality team and stable supply for global B2B clients.</p>
+      <div class="grid g3">
+        <div class="card"><img src="assets/real3/file_190---c6188b6f-cc9e-4325-9d58-be53825a258b.jpg" alt="workshop"><p data-i18n="about_i1">Factory panorama & clean production area</p></div>
+        <div class="card"><img src="assets/real3/file_189---2bb62106-54e7-469e-a5bd-ec863d999864.jpg" alt="machine"><p data-i18n="about_i2">Imported printing and finishing lines</p></div>
+        <div class="card"><p><b data-i18n="mission">Mission</b>: <span data-i18n="mission_d">Deliver premium packaging with speed and consistency.</span></p><p><b data-i18n="vision">Vision</b>: <span data-i18n="vision_d">Be a trusted global packaging partner.</span></p><p><b data-i18n="values">Values</b>: <span data-i18n="values_d">Quality · Delivery · Integrity</span></p></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="metrics">
+        <div class="metric"><b>10+</b><span data-i18n="m1">Years Experience</span></div>
+        <div class="metric"><b>24h</b><span data-i18n="m2">Fast Quotation</span></div>
+        <div class="metric"><b>4</b><span data-i18n="m3">Languages Service</span></div>
+        <div class="metric"><b>100+</b><span data-i18n="m4">Export Customers</span></div>
+      </div>
+    </section>
+
+    <section id="products">
+      <h2 class="ttl" data-i18n="prod_t">Product Center</h2>
+      <p class="sub" data-i18n="prod_d">Detailed categories with retail-ready and industrial-ready packaging options.</p>
+      <div class="scrollRow">
+        <div class="card prod"><span class="pill" data-i18n="pc1">Packaging Printing</span><img src="assets/real3/file_194---c3a3ea3e-63ed-4f32-84b3-d5dbd2adedb1.jpg"><p data-i18n="pc1d">Color boxes, gift boxes, carrier bags, food/cosmetic/electronics packaging.</p></div>
+        <div class="card prod"><span class="pill" data-i18n="pc2">Catalog & Booklet</span><img src="assets/real3/file_188---562a420d-784c-41ea-b4fd-907f2989eebd.jpg"><p data-i18n="pc2d">Corporate brochure, manuals, posters with multilingual layout support.</p></div>
+        <div class="card prod"><span class="pill" data-i18n="pc3">Label & Sticker</span><img src="assets/real3/file_191---ab087bc7-dafc-41af-8cb6-1a1b4ccc701a.jpg"><p data-i18n="pc3d">Self-adhesive labels, roll labels, anti-counterfeit labels.</p></div>
+        <div class="card prod"><span class="pill" data-i18n="pc4">Commercial Printing</span><img src="assets/real3/file_192---e7c11425-b991-443b-bcb4-725e818bc02f.jpg"><p data-i18n="pc4d">Flyers, cards, folders, forms and unified brand collateral.</p></div>
+        <div class="card prod"><span class="pill" data-i18n="pc5">Special Finishing</span><img src="assets/real3/file_193---46db1756-d3f2-4d84-9de1-3bf29ac4b60d.jpg"><p data-i18n="pc5d">Hot stamping, UV, emboss/deboss, lamination, spot color, reverse UV.</p></div>
+      </div>
+    </section>
+
+    <section id="showcase">
+      <h2 class="ttl" data-i18n="sh_t">Featured Real Cases</h2>
+      <p class="sub" data-i18n="sh_d">Real production-style visuals for snack, pet food, tea and daily-use packaging.</p>
+      <div class="showcase">
+        <div class="card main"><img src="assets/real3/file_187---6f25ff28-da9b-42c0-8226-b5be4dc547ed.jpg" alt="featured"><p><span class="tag">Food Packaging</span><span class="tag">Stand-up Pouch</span><span class="tag">OEM</span></p></div>
+        <div class="miniGrid">
+          <div class="card"><img src="assets/real3/file_188---562a420d-784c-41ea-b4fd-907f2989eebd.jpg" alt="case"></div>
+          <div class="card"><img src="assets/real3/file_195---0975bb1d-f7d6-4782-8e10-878317f67d7f.jpg" alt="case"></div>
+          <div class="card"><img src="assets/real3/file_192---e7c11425-b991-443b-bcb4-725e818bc02f.jpg" alt="case"></div>
+          <div class="card"><img src="assets/real3/file_195---0975bb1d-f7d6-4782-8e10-878317f67d7f.jpg" alt="case"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="bags">
+      <h2 class="ttl" data-i18n="bag_t">Bag Types (Stand-up Focus)</h2>
+      <div class="card" style="margin-bottom:12px"><img src="assets/real3/file_195---0975bb1d-f7d6-4782-8e10-878317f67d7f.jpg" alt="bag type map" style="height:360px;object-fit:contain;background:#fff"><p class="sub" style="margin:8px 0 0">Bag structure map used for customer communication and quotation alignment.</p></div>
+      <div class="grid g4">
+        <div class="card bagCard"><img src="assets/real3/file_187---6f25ff28-da9b-42c0-8226-b5be4dc547ed.jpg"><p><b>Eight-side Seal</b><br><span data-i18n="b1">Premium shelf display for coffee, pet food and snacks.</span></p></div>
+        <div class="card bagCard"><img src="assets/real3/file_188---562a420d-784c-41ea-b4fd-907f2989eebd.jpg"><p><b>Stand-up Zipper</b><br><span data-i18n="b2">Resealable format for retail and e-commerce.</span></p></div>
+        <div class="card bagCard"><img src="assets/real3/file_191---ab087bc7-dafc-41af-8cb6-1a1b4ccc701a.jpg"><p><b>Three-side Seal</b><br><span data-i18n="b3">Simple structure with stable mass production.</span></p></div>
+        <div class="card bagCard"><img src="assets/real3/file_195---0975bb1d-f7d6-4782-8e10-878317f67d7f.jpg"><p><b>Irregular Zipper</b><br><span data-i18n="b4">Distinctive look for branding campaigns.</span></p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="ttl" data-i18n="brand_t">Branding Modules</h2>
+      <div class="brands">
+        <div class="brandBox">A-series Minimal</div><div class="brandBox">B-series Industrial</div><div class="brandBox">C-series Pet Food</div><div class="brandBox">D-series Health Snack</div><div class="brandBox">E-series Beauty Care</div><div class="brandBox">F-series E-commerce</div>
+      </div>
+    </section>
+
+    <section id="cases">
+      <h2 class="ttl" data-i18n="case_t">Case Gallery</h2>
+      <div class="grid g4">
+        <div class="card"><img src="assets/real3/file_187---6f25ff28-da9b-42c0-8226-b5be4dc547ed.jpg"><p data-i18n="c1">Russia gift packaging project</p></div>
+        <div class="card"><img src="assets/real3/file_189---2bb62106-54e7-469e-a5bd-ec863d999864.jpg"><p data-i18n="c2">Malaysia label roll project</p></div>
+        <div class="card"><img src="assets/real3/file_191---ab087bc7-dafc-41af-8cb6-1a1b4ccc701a.jpg"><p data-i18n="c3">SEA stand-up pouch project</p></div>
+        <div class="card"><img src="assets/real3/file_190---c6188b6f-cc9e-4325-9d58-be53825a258b.jpg"><p data-i18n="c4">EU/US mixed packaging project</p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="ttl" data-i18n="flow_t">Service Process</h2>
+      <div class="timeline">
+        <div class="step"><b>1</b><div data-i18n="s1">Consultation</div></div>
+        <div class="step"><b>2</b><div data-i18n="s2">Quotation</div></div>
+        <div class="step"><b>3</b><div data-i18n="s3">Design & Sample</div></div>
+        <div class="step"><b>4</b><div data-i18n="s4">Mass Production</div></div>
+        <div class="step"><b>5</b><div data-i18n="s5">Quality Inspection</div></div>
+        <div class="step"><b>6</b><div data-i18n="s6">Packing & Shipping</div></div>
+        <div class="step"><b>7</b><div data-i18n="s7">After-sales</div></div>
+      </div>
+    </section>
+
+    <section id="factory">
+      <h2 class="ttl" data-i18n="f_t">Factory & Capability</h2>
+      <div class="grid g3">
+        <div class="card"><img src="assets/real2/file_185---b941afce-0135-457f-a1e1-6b665c6f2964.jpg" alt="factory"><p data-i18n="f1">Workshop, showroom and quality lab.</p></div>
+        <div class="card"><img src="assets/real2/file_181---16011c3b-336f-4e44-a58f-770b870a6f17.jpg" alt="machine"><p data-i18n="f2">Bag manufacturing capability across multiple categories.</p></div>
+        <div class="card"><img src="assets/real2/file_183---7f71e14b-b825-4f84-8600-f96571ae1b14.jpg" alt="film"><p data-i18n="f3">Roll film and laminated material converting capacity.</p></div>
+      </div>
+    </section>
+
+    <section class="faq">
+      <h2 class="ttl" data-i18n="faq_t">FAQ</h2>
+      <details open><summary data-i18n="q1">Can you remove competitor style and rebuild as our own brand visuals?</summary><p data-i18n="a1">Yes. We rebuild layouts and product presentation with Huasheng branding and export-ready style.</p></details>
+      <details><summary data-i18n="q2">Do you support low MOQ and mixed designs?</summary><p data-i18n="a2">Yes, low MOQ and mixed designs are supported with digital proofing workflow.</p></details>
+      <details><summary data-i18n="q3">What files do you need for quotation?</summary><p data-i18n="a3">Size, structure type, material request, quantity and artwork (AI/PDF/PSD if available).</p></details>
+    </section>
+
+    <section id="contact">
+      <h2 class="ttl" data-i18n="contact_t">Contact Us</h2>
+      <div class="contact">
+        <div class="card">
+          <p><b>Email:</b> sales@huashengprint.com</p>
+          <p><b>Telegram:</b> @huashengprint</p>
+          <p><b>Phone/WhatsApp:</b> +86 138 XXXX XXXX</p>
+          <p><b data-i18n="hours_t">Service Hours:</b> <span data-i18n="hours_v">Mon-Sat 9:00-22:00</span></p>
+          <p><b data-i18n="addr_t">Address:</b> <span data-i18n="addr_v">Guangdong Printing Industrial Base, China</span></p>
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=https://t.me/huashengprint" alt="qr" style="width:180px;height:180px;border:1px solid var(--line);border-radius:10px">
+        </div>
+        <form class="card" onsubmit="event.preventDefault();alert('Submitted. We will contact you shortly.');">
+          <input placeholder="Name" required><input placeholder="Company" required><input placeholder="Country" required><input placeholder="Phone" required>
+          <textarea rows="5" placeholder="Requirements"></textarea><input type="file" multiple><button class="submit">Submit</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <footer><div class="wrap">Huasheng Printing Co., Limited · © 2026 All Rights Reserved · <a href="privacy.html">Privacy Policy</a> · <a href="sitemap.xml">Sitemap</a></div></footer>
+
+  <div class="float"><a href="https://t.me/huashengprint" target="_blank">Telegram</a><a href="mailto:sales@huashengprint.com">Email</a><a href="https://wa.me/86138XXXXXXXX" target="_blank">WhatsApp</a></div>
+
+  <script>
+    const tr={
+      en:{topline:'Professional OEM/ODM Packaging | Fast Sampling | Global Delivery',n_home:'Home',n_about:'About',n_products:'Products',n_bags:'Bag Types',n_cases:'Cases',n_contact:'Contact',hero1_t:'Premium Custom Packaging That Builds Buyer Trust',hero1_d:'Stand-up pouches, zipper bags, roll films and labels for Russia, Malaysia, SEA, Europe and North America.',hero2_t:'Factory-grade Quality Control, Stable Lead Time',hero2_d:'Imported machines + SOP production + full-process inspection.',hero3_t:'Bag Types Based on Real Production Cost Models',hero3_d:'Eight-side seal, stand-up zipper, side/back/four-side seal and more.',cta_quote:'Get Quote',cta_catalog:'View Catalog',adv_t:'Core Advantages',adv1:'10+ years industry experience',adv2:'Full-category customization',adv3:'Imported equipment',adv4:'Fast sampling',adv5:'Small & large MOQ support',adv6:'Multilingual business support',about_t:'About Huasheng',about_d:'Export-focused custom printing with modern workshop, quality team and stable supply for global B2B clients.',about_i1:'Factory panorama & clean production area',about_i2:'Imported printing and finishing lines',mission:'Mission',mission_d:'Deliver premium packaging with speed and consistency.',vision:'Vision',vision_d:'Be a trusted global packaging partner.',values:'Values',values_d:'Quality · Delivery · Integrity',m1:'Years Experience',m2:'Fast Quotation',m3:'Languages Service',m4:'Export Customers',prod_t:'Product Center',prod_d:'Detailed categories with retail-ready and industrial-ready packaging options.',pc1:'Packaging Printing',pc1d:'Color boxes, gift boxes, carrier bags, food/cosmetic/electronics packaging.',pc2:'Catalog & Booklet',pc2d:'Corporate brochure, manuals, posters with multilingual layout support.',pc3:'Label & Sticker',pc3d:'Self-adhesive labels, roll labels, anti-counterfeit labels.',pc4:'Commercial Printing',pc4d:'Flyers, cards, folders, forms and unified brand collateral.',pc5:'Special Finishing',pc5d:'Hot stamping, UV, emboss/deboss, lamination, spot color, reverse UV.',bag_t:'Bag Types (Stand-up Focus)',b1:'Premium shelf display for coffee, pet food and snacks.',b2:'Resealable format for retail and e-commerce.',b3:'Simple structure with stable mass production.',b4:'Distinctive look for branding campaigns.',brand_t:'Branding Modules',case_t:'Case Gallery',c1:'Russia gift packaging project',c2:'Malaysia label roll project',c3:'SEA stand-up pouch project',c4:'EU/US mixed packaging project',flow_t:'Service Process',s1:'Consultation',s2:'Quotation',s3:'Design & Sample',s4:'Mass Production',s5:'Quality Inspection',s6:'Packing & Shipping',s7:'After-sales',sh_t:'Featured Real Cases',sh_d:'Real production-style visuals for snack, pet food, tea and daily-use packaging.',f_t:'Factory & Capability',f1:'Workshop, showroom and quality lab.',f2:'Bag manufacturing capability across multiple categories.',f3:'Roll film and laminated material converting capacity.',faq_t:'FAQ',q1:'Can you remove competitor style and rebuild as our own brand visuals?',a1:'Yes. We rebuild layouts and product presentation with Huasheng branding and export-ready style.',q2:'Do you support low MOQ and mixed designs?',a2:'Yes, low MOQ and mixed designs are supported with digital proofing workflow.',q3:'What files do you need for quotation?',a3:'Size, structure type, material request, quantity and artwork (AI/PDF/PSD if available).',contact_t:'Contact Us',hours_t:'Service Hours:',hours_v:'Mon-Sat 9:00-22:00',addr_t:'Address:',addr_v:'Guangdong Printing Industrial Base, China'},
+      zh:{topline:'专业OEM/ODM包装 | 快速打样 | 全球交付',n_home:'首页',n_about:'关于我们',n_products:'产品中心',n_bags:'袋型系列',n_cases:'案例',n_contact:'联系',hero1_t:'高端定制包装，让海外买家一眼信任',hero1_d:'站立袋、拉链袋、卷膜、标签贴纸，服务俄罗斯/马来西亚/东南亚/欧美市场。',hero2_t:'工厂级品控与稳定交期',hero2_d:'进口设备 + SOP生产 + 全流程质检。',hero3_t:'袋型基于真实成本模型设计',hero3_d:'八边封、自立拉链、侧封/背封/四边封等。',cta_quote:'立即询价',cta_catalog:'查看目录',adv_t:'核心优势',adv1:'10年以上行业经验',adv2:'全品类定制',adv3:'进口设备',adv4:'快速打样',adv5:'大小单都支持',adv6:'多语种服务',about_t:'关于华胜',about_d:'专注出口定制印刷，现代化车间+专业团队，稳定服务全球B2B客户。',about_i1:'工厂全景与洁净生产区',about_i2:'进口印刷与后道产线',mission:'使命',mission_d:'高品质包装，更快更稳地交付。',vision:'愿景',vision_d:'成为全球可信赖包装合作伙伴。',values:'价值观',values_d:'品质 · 交付 · 诚信',m1:'年经验',m2:'小时快速报价',m3:'种语言服务',m4:'出口客户',prod_t:'产品中心',prod_d:'零售与工业场景全覆盖的包装与印刷方案。',pc1:'包装印刷',pc1d:'彩盒/礼盒/手提袋/食品化妆品电子包装。',pc2:'书刊画册',pc2d:'画册、说明书、海报，支持多语言排版。',pc3:'标签贴纸',pc3d:'不干胶、卷标、防伪标签。',pc4:'商务印刷',pc4d:'宣传单、名片、文件夹、单据。',pc5:'特种工艺',pc5d:'烫金、UV、凹凸、覆膜、专色、逆向UV。',bag_t:'袋型系列（站立式主推）',b1:'适用于咖啡、宠粮、坚果等高端陈列。',b2:'可重复开合，零售与电商友好。',b3:'结构简洁，量产稳定。',b4:'外观独特，适合品牌营销。',brand_t:'品牌视觉模块',case_t:'案例展示',c1:'俄罗斯礼盒项目',c2:'马来标签卷装项目',c3:'东南亚自立袋项目',c4:'欧美复合包装项目',flow_t:'服务流程',s1:'咨询沟通',s2:'方案报价',s3:'设计打样',s4:'订单生产',s5:'全流程质检',s6:'打包发货',s7:'售后服务',sh_t:'精选实拍案例',sh_d:'零食、宠粮、茶饮、日化等包装实拍风格展示。',f_t:'工厂与产能',f1:'车间、展厅与质检实验室。',f2:'多类型包装袋生产能力。',f3:'卷膜与复合材料转换能力。',faq_t:'常见问题',q1:'能否把竞品风格改成华胜自己的品牌视觉？',a1:'可以，我们会重构版式与呈现逻辑，统一华胜品牌风格。',q2:'支持小起订量和混款吗？',a2:'支持，小起订+混款，配套数字打样流程。',q3:'报价需要提供什么信息？',a3:'尺寸、袋型结构、材料要求、数量、设计稿（AI/PDF/PSD优先）。',contact_t:'联系我们',hours_t:'服务时间：',hours_v:'周一至周六 9:00-22:00',addr_t:'地址：',addr_v:'中国广东印刷产业基地'},
+      ru:{topline:'Профессиональная OEM/ODM упаковка | Быстрый образец | Глобальная доставка',n_home:'Главная',n_about:'О нас',n_products:'Продукция',n_bags:'Типы пакетов',n_cases:'Кейсы',n_contact:'Контакты',hero1_t:'Премиальная упаковка, которой доверяют зарубежные покупатели',hero1_d:'Стоячие пакеты, зип-пакеты, рулонные пленки и этикетки для России, Малайзии, ЮВА, Европы и США.',hero2_t:'Заводской контроль качества и стабильные сроки',hero2_d:'Импортное оборудование + SOP + полный контроль.',hero3_t:'Типы пакетов на основе реальных моделей себестоимости',hero3_d:'Восьмишовный, стоячий с зипом, боковой/задний/четырехшовный.',cta_quote:'Получить цену',cta_catalog:'Смотреть каталог',adv_t:'Преимущества',adv1:'10+ лет опыта',adv2:'Полная кастомизация',adv3:'Импортное оборудование',adv4:'Быстрые образцы',adv5:'Малые и крупные партии',adv6:'Многоязычная поддержка',about_t:'О Huasheng',about_d:'Экспортная печать и упаковка: современный цех, команда качества, стабильные поставки для B2B.',about_i1:'Панорама завода и чистая зона',about_i2:'Импортные линии печати и постобработки',mission:'Миссия',mission_d:'Быстро и стабильно поставлять премиальную упаковку.',vision:'Видение',vision_d:'Стать надежным глобальным партнером по упаковке.',values:'Ценности',values_d:'Качество · Сроки · Честность',m1:'Лет опыта',m2:'Часов до оффера',m3:'Языка сервиса',m4:'Экспортных клиентов',prod_t:'Центр продукции',prod_d:'Решения для retail и industrial упаковки.',pc1:'Печать упаковки',pc1d:'Коробки, подарочные коробки, пакеты, упаковка для food/cosmetics/electronics.',pc2:'Каталоги и буклеты',pc2d:'Каталоги, инструкции, постеры, многоязычная верстка.',pc3:'Этикетки и стикеры',pc3d:'Самоклеящиеся, рулонные, анти-контрафакт этикетки.',pc4:'Коммерческая печать',pc4d:'Листовки, визитки, папки, формы.',pc5:'Спец-отделка',pc5d:'Тиснение, UV, ламинация, spot color, reverse UV.',bag_t:'Типы пакетов (фокус на стоячие)',b1:'Премиальная выкладка для кофе, pet food и снеков.',b2:'Повторное закрытие, удобно для retail/e-commerce.',b3:'Простая конструкция и стабильный выпуск.',b4:'Выразительный вид для брендинга.',brand_t:'Брендовые визуальные модули',case_t:'Галерея кейсов',c1:'Подарочная упаковка для России',c2:'Рулонные этикетки для Малайзии',c3:'Стоячие пакеты для ЮВА',c4:'Смешанная упаковка для ЕС/США',flow_t:'Процесс работы',s1:'Консультация',s2:'Коммерческое предложение',s3:'Дизайн и образец',s4:'Массовое производство',s5:'Контроль качества',s6:'Упаковка и отгрузка',s7:'Послепродажный сервис',sh_t:'Реальные кейсы',sh_d:'Реальные визуалы упаковки для снеков, pet food, чая и daily-use.',f_t:'Фабрика и мощности',f1:'Цех, шоурум и лаборатория качества.',f2:'Производство различных типов пакетов.',f3:'Производство рулонной и ламинированной пленки.',faq_t:'FAQ',q1:'Можно ли пересобрать визуал под бренд Huasheng?',a1:'Да, мы перестраиваем подачу и бренд-стиль под экспорт.',q2:'Поддерживаете ли малые MOQ и микс-дизайны?',a2:'Да, поддерживаем малые MOQ и смешанные дизайны.',q3:'Что нужно для расчета цены?',a3:'Размер, тип пакета, материал, тираж и макет (AI/PDF/PSD).',contact_t:'Связаться с нами',hours_t:'Часы работы:',hours_v:'Пн-Сб 9:00-22:00',addr_t:'Адрес:',addr_v:'Промышленная база печати, Гуандун, Китай'},
+      ms:{topline:'Pembungkusan OEM/ODM profesional | Sampel pantas | Penghantaran global',n_home:'Laman Utama',n_about:'Tentang',n_products:'Produk',n_bags:'Jenis Beg',n_cases:'Kes',n_contact:'Hubungi',hero1_t:'Pembungkusan premium yang membina kepercayaan pembeli global',hero1_d:'Beg berdiri, beg zip, filem gulung dan label untuk Rusia, Malaysia, ASEAN, Eropah dan Amerika.',hero2_t:'Kawalan kualiti kilang & masa penghantaran stabil',hero2_d:'Mesin import + SOP pengeluaran + pemeriksaan penuh.',hero3_t:'Jenis beg berdasarkan model kos pengeluaran sebenar',hero3_d:'Eight-side seal, stand-up zipper, side/back/four-side seal dan lain-lain.',cta_quote:'Dapatkan Sebut Harga',cta_catalog:'Lihat Katalog',adv_t:'Kelebihan Teras',adv1:'10+ tahun pengalaman',adv2:'Penyesuaian penuh',adv3:'Peralatan import',adv4:'Sampel pantas',adv5:'Sokongan MOQ kecil & besar',adv6:'Sokongan berbilang bahasa',about_t:'Tentang Huasheng',about_d:'Percetakan tersuai berfokus eksport dengan bengkel moden dan pasukan kualiti.',about_i1:'Panorama kilang & zon pengeluaran bersih',about_i2:'Laluan percetakan dan finishing import',mission:'Misi',mission_d:'Menyampaikan pembungkusan premium dengan cepat dan konsisten.',vision:'Visi',vision_d:'Menjadi rakan pembungkusan global yang dipercayai.',values:'Nilai',values_d:'Kualiti · Penghantaran · Integriti',m1:'Tahun pengalaman',m2:'Jam sebut harga pantas',m3:'Bahasa perkhidmatan',m4:'Pelanggan eksport',prod_t:'Pusat Produk',prod_d:'Pilihan pembungkusan untuk retail dan industri.',pc1:'Percetakan Pembungkusan',pc1d:'Kotak warna/hadiah, beg pembawa, pembungkusan food/cosmetics/electronics.',pc2:'Katalog & Booklet',pc2d:'Katalog, manual, poster dengan susun atur berbilang bahasa.',pc3:'Label & Sticker',pc3d:'Label pelekat, label gulung, label anti-pemalsuan.',pc4:'Percetakan Komersial',pc4d:'Flyer, kad nama, folder, borang.',pc5:'Finishing Khas',pc5d:'Hot stamping, UV, emboss/deboss, laminasi, spot color, reverse UV.',bag_t:'Jenis Beg (Fokus Stand-up)',b1:'Paparan premium untuk kopi, makanan haiwan dan snek.',b2:'Boleh ditutup semula, sesuai retail/e-commerce.',b3:'Struktur ringkas dan pengeluaran stabil.',b4:'Reka bentuk unik untuk kempen jenama.',brand_t:'Modul Visual Jenama',case_t:'Galeri Kes',c1:'Projek kotak hadiah Rusia',c2:'Projek label gulung Malaysia',c3:'Projek beg berdiri ASEAN',c4:'Projek campuran EU/US',flow_t:'Proses Servis',s1:'Konsultasi',s2:'Sebutharga',s3:'Reka bentuk & sampel',s4:'Pengeluaran massa',s5:'Pemeriksaan kualiti',s6:'Pembungkusan & penghantaran',s7:'Selepas jualan',sh_t:'Kes Sebenar Pilihan',sh_d:'Visual gaya pengeluaran sebenar untuk snek, makanan haiwan, teh dan daily-use.',f_t:'Kilang & Keupayaan',f1:'Bengkel, showroom dan makmal kualiti.',f2:'Keupayaan pembuatan pelbagai jenis beg.',f3:'Keupayaan roll film & laminasi.',faq_t:'Soalan Lazim',q1:'Boleh tukar gaya pesaing kepada visual jenama Huasheng?',a1:'Ya. Kami susun semula visual produk dengan gaya eksport Huasheng.',q2:'Adakah sokong MOQ kecil & reka bentuk campuran?',a2:'Ya, MOQ kecil dan reka bentuk campuran disokong.',q3:'Fail apa perlu untuk sebut harga?',a3:'Saiz, jenis struktur, bahan, kuantiti dan artwork (AI/PDF/PSD).',contact_t:'Hubungi Kami',hours_t:'Waktu Servis:',hours_v:'Isnin-Sabtu 9:00-22:00',addr_t:'Alamat:',addr_v:'Pangkalan Industri Percetakan Guangdong, China'}
+    };
+    document.querySelectorAll('.lang button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.lang button').forEach(x=>x.classList.remove('on'));b.classList.add('on');const l=b.dataset.lang;document.documentElement.lang=l;document.querySelectorAll('[data-i18n]').forEach(el=>{const k=el.dataset.i18n;if(tr[l]&&tr[l][k]) el.textContent=tr[l][k];});});
+
+    let idx=0; const slides=document.getElementById('slides'); const dots=[...document.querySelectorAll('.dot')];
+    const go=(n)=>{idx=(n+3)%3;slides.style.transform=`translateX(-${idx*100}%)`;dots.forEach((d,i)=>d.classList.toggle('on',i===idx));};
+    document.getElementById('prev').onclick=()=>go(idx-1); document.getElementById('next').onclick=()=>go(idx+1); setInterval(()=>go(idx+1),5000);
+  </script>
+</body>
+</html>

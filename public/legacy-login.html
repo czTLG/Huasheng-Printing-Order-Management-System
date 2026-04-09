@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>系统登录（兼容模式）</title>
+  <style>
+    body{font-family:Arial,"PingFang SC","Microsoft YaHei",sans-serif;background:#f3f4f6;margin:0;padding:16px}
+    .card{max-width:460px;margin:20px auto;background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:14px}
+    h2{margin:0 0 10px;font-size:22px}
+    .muted{font-size:12px;color:#6b7280}
+    input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:6px;margin:6px 0}
+    button{width:100%;padding:10px;border:0;border-radius:6px;color:#fff;background:#0f766e;margin-top:8px}
+    .btn2{background:#334155}
+    .btn3{background:#64748b}
+    #msg{margin-top:10px;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>登录系统（兼容模式）</h2>
+    <div class="muted">适用于低版本浏览器。登录仅需账号密码；注册需要姓名。</div>
+    <input id="u" placeholder="账号" />
+    <input id="p" type="password" placeholder="密码" />
+    <button onclick="doLogin()">登录</button>
+    <button class="btn2" onclick="showReg()">注册新账号</button>
+    <div id="reg" style="display:none">
+      <input id="n" placeholder="姓名（注册必填）" />
+      <button onclick="doRegister()">提交注册</button>
+      <button class="btn3" onclick="hideReg()">返回登录</button>
+    </div>
+    <div id="msg"></div>
+    <div style="margin-top:10px"><a href="/">返回新版登录页</a></div>
+  </div>
+
+<script>
+function msg(t,c){var el=document.getElementById('msg');el.innerHTML=t;el.style.color=c||'#111827';}
+function xhr(method,url,data,cb){
+  var x=new XMLHttpRequest();
+  x.open(method,url,true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onreadystatechange=function(){
+    if(x.readyState!==4) return;
+    var d={};
+    try{ d=JSON.parse(x.responseText||'{}'); }catch(_e){}
+    cb(x.status,d);
+  };
+  x.send(data?JSON.stringify(data):null);
+}
+function showReg(){document.getElementById('reg').style.display='block';}
+function hideReg(){document.getElementById('reg').style.display='none';}
+function doLogin(){
+  var u=document.getElementById('u').value||'';
+  var p=document.getElementById('p').value||'';
+  if(!u||!p){ msg('请输入账号和密码','#b91c1c'); return; }
+  msg('登录中...','#334155');
+  xhr('POST','/api/auth/login',{username:u,password:p},function(code,d){
+    if(code>=200 && code<300 && d.token){
+      try{ localStorage.setItem('token',d.token); }catch(_e){}
+      msg('登录成功，正在进入系统...','#166534');
+      setTimeout(function(){ location.href='/'; },500);
+    }else{
+      msg('登录失败：'+(d.error||'请检查账号密码'),'#b91c1c');
+    }
+  });
+}
+function doRegister(){
+  var u=document.getElementById('u').value||'';
+  var p=document.getElementById('p').value||'';
+  var n=document.getElementById('n').value||'';
+  if(!u||!p||!n){ msg('注册需要账号、密码、姓名','#b91c1c'); return; }
+  msg('提交注册中...','#334155');
+  xhr('POST','/api/auth/register',{username:u,password:p,fullName:n},function(code,d){
+    if(code>=200 && code<300){ msg('注册成功：'+(d.message||'等待审批'),'#166534'); hideReg(); }
+    else{ msg('注册失败：'+(d.error||'请稍后再试'),'#b91c1c'); }
+  });
+}
+</script>
+</body>
+</html>

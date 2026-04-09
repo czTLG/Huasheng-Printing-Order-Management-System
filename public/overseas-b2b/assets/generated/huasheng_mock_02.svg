@@ -1,0 +1,19 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1400 1000'>
+<defs><linearGradient id='bg' x1='0' x2='0' y1='0' y2='1'><stop offset='0%' stop-color='#baf1ee'/><stop offset='100%' stop-color='#d9faf6'/></linearGradient><linearGradient id='bag' x1='0' x2='0' y1='0' y2='1'><stop offset='0%' stop-color='#f7fbff'/><stop offset='100%' stop-color='#d6e6ff'/></linearGradient></defs>
+<rect width='1400' height='1000' fill='url(#bg)'/>
+<rect x='0' y='0' width='230' height='1000' fill='#60d5e1'/>
+<g opacity='.6'>
+<rect x='25' y='0' width='12' height='1000' fill='#2ba3b5'/><rect x='52' y='0' width='12' height='1000' fill='#2ba3b5'/><rect x='79' y='0' width='12' height='1000' fill='#2ba3b5'/><rect x='106' y='0' width='12' height='1000' fill='#2ba3b5'/><rect x='133' y='0' width='12' height='1000' fill='#2ba3b5'/><rect x='160' y='0' width='12' height='1000' fill='#2ba3b5'/><rect x='187' y='0' width='12' height='1000' fill='#2ba3b5'/>
+</g>
+<rect x='0' y='760' width='1400' height='240' fill='#f3edd2'/>
+<ellipse cx='700' cy='790' rx='220' ry='35' fill='#b8aa8f' opacity='.45'/>
+<path d='M520 220h360l28 50v410l-28 50H520l-28-50V270z' fill='url(#bag)' stroke='#7ea2d6' stroke-width='3'/>
+<rect x='540' y='320' width='320' height='300' rx='16' fill='white' stroke='#dbeafe'/>
+<rect x='642' y='246' width='116' height='20' rx='10' fill='#eef2f7' stroke='#cfd8e3'/>
+<rect x='560' y='350' width='260' height='66' rx='10' fill='#0f3d73'/>
+<text x='690' y='393' text-anchor='middle' fill='white' font-size='34' font-family='Arial' font-weight='700'>HUASHENG</text>
+<text x='700' y='465' text-anchor='middle' fill='#334155' font-size='36' font-family='Arial' font-weight='700'>CUSTOM BAG</text>
+<text x='700' y='510' text-anchor='middle' fill='#64748b' font-size='26' font-family='Arial'>OEM / ODM Packaging</text>
+<circle cx='700' cy='610' r='62' fill='#f9bb6b'/>
+<rect x='40' y='40' width='380' height='86' rx='20' fill='#0f3d73'/><text x='230' y='95' text-anchor='middle' fill='white' font-size='38' font-family='Arial' font-weight='700'>Huasheng Printing</text>
+</svg>

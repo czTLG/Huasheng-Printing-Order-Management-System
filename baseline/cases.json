@@ -1,0 +1,162 @@
+[
+  {
+    "id": "EIGHT-001",
+    "costType": "eight_side_seal",
+    "input": {
+      "ba_chang": 20,
+      "ba_kuang": 12,
+      "ba_di": 5,
+      "thick": [3, 4, 5, 0],
+      "price": [9500, 12000, 13500, 0],
+      "proportion": [0.92, 1.02, 1.12, 0],
+      "jgf": 18,
+      "zxyf": 200,
+      "sh": 0.05,
+      "lr": 0.12,
+      "lldj": 2.2
+    }
+  },
+  {
+    "id": "EIGHT-002",
+    "costType": "eight_side_seal",
+    "input": {
+      "ba_chang": 16,
+      "ba_kuang": 10,
+      "ba_di": 4,
+      "thick": [2, 3, 4, 0],
+      "price": [9000, 10800, 12600, 0],
+      "proportion": [0.92, 1.02, 1.12, 0],
+      "jgf": 16,
+      "zxyf": 180,
+      "sh": 0.04,
+      "lr": 0.1,
+      "lldj": 2
+    }
+  },
+  {
+    "id": "STAND-001",
+    "costType": "stand_zipper_bag",
+    "input": {
+      "ba_chang": 20,
+      "ba_kuang": 12,
+      "ba_di": 5,
+      "thick": [3, 4, 5, 0],
+      "price": [9500, 12000, 13500, 0],
+      "proportion": [0.92, 1.02, 1.12, 0],
+      "jgf": 18,
+      "zxyf": 200,
+      "sh": 0.05,
+      "lr": 0.12,
+      "lldj": 2.2,
+      "z_mian_2": 620,
+      "z_mian_3": 630,
+      "z_mian_4": 0
+    }
+  },
+  {
+    "id": "STAND-002",
+    "costType": "stand_zipper_bag",
+    "input": {
+      "ba_chang": 18,
+      "ba_kuang": 11,
+      "ba_di": 4,
+      "thick": [2, 3, 4, 0],
+      "price": [9000, 11000, 12800, 0],
+      "proportion": [0.91, 1.01, 1.11, 0],
+      "jgf": 15,
+      "zxyf": 190,
+      "sh": 0.04,
+      "lr": 0.1,
+      "lldj": 1.9,
+      "z_mian_2": 500,
+      "z_mian_3": 510,
+      "z_mian_4": 0
+    }
+  },
+  {
+    "id": "IRREG-001",
+    "costType": "irregular_zipper_bag",
+    "input": {
+      "ba_chang": 18,
+      "ba_kuang": 11,
+      "ba_di": 4,
+      "thick": [2, 4, 4, 0],
+      "price": [9000, 11000, 12500, 0],
+      "proportion": [0.92, 1.02, 1.12, 0],
+      "jgf": 16,
+      "zxyf": 180,
+      "sh": 0.04,
+      "lr": 0.1,
+      "ba_zdf": 0.35
+    }
+  },
+  {
+    "id": "IRREG-002",
+    "costType": "irregular_zipper_bag",
+    "input": {
+      "ba_chang": 22,
+      "ba_kuang": 13,
+      "ba_di": 6,
+      "thick": [3, 5, 6, 0],
+      "price": [9800, 12500, 14000, 0],
+      "proportion": [0.92, 1.03, 1.13, 0],
+      "jgf": 20,
+      "zxyf": 230,
+      "sh": 0.06,
+      "lr": 0.13,
+      "lldj": 2.3
+    }
+  },
+  {
+    "id": "AUTO-001",
+    "costType": "auto_bag",
+    "input": {
+      "thick": [3, 4, 5, 0],
+      "price": [9500, 12000, 13500, 0],
+      "proportion": [0.92, 1.02, 1.12, 0],
+      "jgf": 18,
+      "fqfy": 300,
+      "yf": 200,
+      "zt": 450,
+      "btzt": 150,
+      "sh": 0.05,
+      "lr": 0.12
+    }
+  },
+  {
+    "id": "AUTO-002",
+    "costType": "auto_bag",
+    "input": {
+      "thick": [2, 3, 4, 0],
+      "price": [9000, 11000, 12500, 0],
+      "proportion": [0.92, 1.01, 1.1, 0],
+      "jgf": 15,
+      "fqfy": 250,
+      "yf": 180,
+      "zt": 400,
+      "btzt": 130,
+      "sh": 0.04,
+      "lr": 0.1
+    }
+  },
+  {
+    "id": "WEIGHT-001",
+    "costType": "material_weight",
+    "input": {
+      "chang": 0.2,
+      "kuang": 0.12,
+      "thick": [3, 4, 5, 0],
+      "proportion": [0.92, 1.02, 1.12, 0]
+    }
+  },
+  {
+    "id": "WEIGHT-002",
+    "costType": "material_weight",
+    "input": {
+      "chang": 0.25,
+      "kuang": 0.14,
+      "thick": [2, 3, 4, 0],
+      "proportion": [0.91, 1.01, 1.11, 0]
+    }
+  }
+]

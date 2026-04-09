@@ -1,0 +1,49 @@
+{
+  "generatedAt": "2026-03-10T01:42:37.352Z",
+  "score": 360,
+  "fetched": 3,
+  "resolvedEventRisk": "high",
+  "evidence": [
+    {
+      "title": "Iran-US 冲突主题新闻命中 20 条",
+      "score": 30,
+      "pubDate": ""
+    },
+    {
+      "title": "Trump says Iran war will be over 'pretty quickly' but US hasn't 'won enough' yet, as Israel launches strikes on Tehran - BBC",
+      "score": 7,
+      "pubDate": "Tue, 10 Mar 2026 00:41:48 GMT"
+    },
+    {
+      "title": "Live updates: Trump gives conflicting answers on how long the Iran war will last - CNN",
+      "score": 5,
+      "pubDate": "Tue, 10 Mar 2026 01:07:00 GMT"
+    },
+    {
+      "title": "Iran war live: Trump says conflict will be over soon; Gulf attacks continue - Al Jazeera",
+      "score": 8,
+      "pubDate": "Tue, 10 Mar 2026 00:40:30 GMT"
+    },
+    {
+      "title": "Trump says US-Israeli war on Iran will be over ‘very soon’ - Al Jazeera",
+      "score": 7,
+      "pubDate": "Mon, 09 Mar 2026 23:51:56 GMT"
+    },
+    {
+      "title": "Iran Live Updates: Trump Sends Conflicting Messages on Status of War, and Threatens Harder Hit on Iran - The New York Times",
+      "score": 7,
+      "pubDate": "Tue, 10 Mar 2026 01:37:49 GMT"
+    },
+    {
+      "title": "Trump says \"the war is very complete,\" and he's considering taking over Strait of Hormuz - CBS News",
+      "score": 6,
+      "pubDate": "Mon, 09 Mar 2026 19:53:00 GMT"
+    },
+    {
+      "title": "Opinion | President Trump's war will likely leave Iran with an even worse regime - MS NOW",
+      "score": 5,
+      "pubDate": "Thu, 05 Mar 2026 08:00:00 GMT"
+    }
+  ],
+  "source": "rss-keyword"
+}

@@ -1,0 +1,61 @@
+{
+  "source_file": "file_147---853936a2-f53f-4362-a01d-27ba25e5c4bc.txt",
+  "broker": "广发期货（文本存在编码乱码，按英文与数字字段解析）",
+  "date": "2026-02-13",
+  "client_id": "999016851",
+  "currency": "CNY",
+  "account_summary": {
+    "balance_bf": 40159.67,
+    "balance_cf": 43369.67,
+    "mtm_pl": 3210.00,
+    "client_equity": 43369.67,
+    "margin_occupied": 38771.40,
+    "fund_avail": 4598.27,
+    "risk_degree_pct": 89.40,
+    "commission": 0.00,
+    "realized_pl": 0.00
+  },
+  "positions": [
+    {
+      "instrument": "RM605",
+      "direction": "long",
+      "long_pos": 1,
+      "short_pos": 0,
+      "avg_buy_price": 2278.0,
+      "sttl_today": 2308.0,
+      "mtm_pl": 70.0,
+      "margin_occupied": 4154.4
+    },
+    {
+      "instrument": "SH603",
+      "direction": "long",
+      "long_pos": 2,
+      "short_pos": 0,
+      "avg_buy_price": 2092.0,
+      "sttl_today": 2010.0,
+      "mtm_pl": 3120.0,
+      "margin_occupied": 20502.0
+    },
+    {
+      "instrument": "ao2605",
+      "direction": "short",
+      "long_pos": 0,
+      "short_pos": 1,
+      "avg_sell_price": 2692.0,
+      "sttl_today": 2823.0,
+      "mtm_pl": 20.0,
+      "margin_occupied": 14115.0
+    }
+  ],
+  "totals": {
+    "total_long": 3,
+    "total_short": 1,
+    "mtm_pl": 3210.0,
+    "margin_occupied": 38771.4
+  },
+  "risk_flags": [
+    "风险度 89.40% 偏高，接近高风险区",
+    "可用资金 4598.27，占权益约 10.6%，缓冲较薄",
+    "保证金占用率约 89.4%（38771.4 / 43369.67）"
+  ]
+}

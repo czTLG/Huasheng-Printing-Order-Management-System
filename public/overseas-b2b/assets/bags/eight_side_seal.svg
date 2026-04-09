@@ -1,0 +1,16 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 420 560'>
+  <defs>
+    <linearGradient id='g' x1='0' x2='0' y1='0' y2='1'>
+      <stop offset='0%' stop-color='#f8fbff'/><stop offset='100%' stop-color='#d7e7ff'/>
+    </linearGradient>
+  </defs>
+  <rect width='420' height='560' fill='#eef3fa'/>
+  <ellipse cx='210' cy='500' rx='120' ry='28' fill='#000' opacity='.12'/>
+  <path d='M120 90h180l20 40v300l-20 40H120l-20-40V130z' fill='url(#g)' stroke='#7ea2d6' stroke-width='3'/>
+  <rect x='132' y='154' width='156' height='226' rx='10' fill='#fff' stroke='#dbeafe'/>
+  <text x='210' y='215' text-anchor='middle' fill='#0f3d73' font-size='28' font-family='Arial' font-weight='700'>HUASHENG</text>
+  <text x='210' y='250' text-anchor='middle' fill='#5b6472' font-size='18' font-family='Arial'>eight_side_seal</text>
+  <text x='210' y='280' text-anchor='middle' fill='#5b6472' font-size='16' font-family='Arial'>Custom Printed Bag</text>
+  <rect x='150' y='408' width='120' height='28' rx='14' fill='#0f3d73'/>
+  <text x='210' y='427' text-anchor='middle' fill='#fff' font-size='14' font-family='Arial'>OEM / ODM</text>
+</svg>

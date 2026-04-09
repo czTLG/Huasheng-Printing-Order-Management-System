@@ -1,0 +1,16 @@
+{
+  "updatedAt": "2026-03-10T02:25:08.885Z",
+  "hedgePair": "纯碱(SH) vs 氧化铝(AO)",
+  "status": "active",
+  "detail": "用户在纯碱大跌时买入氧化铝做对冲，现反馈双边卡住",
+  "sh": {
+    "instrument": "SH603",
+    "direction": "多",
+    "lots": 2
+  },
+  "ao": {
+    "instrument": "ao2605",
+    "direction": "空",
+    "lots": 1
+  }
+}
