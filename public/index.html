@@ -32,16 +32,19 @@ button:hover{filter:brightness(.98)}
 #panel-orders .orders-head .orders-title{margin:0}
 #panel-orders .orders-head-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;padding-right:4px}
 #panel-orders .item b{font-size:20px}
-#panel-orders .orders-toolbar{display:grid;gap:8px;margin-top:8px;padding:10px;border:1px solid #dbe3f0;border-radius:10px;background:#f8fafc}
-#panel-orders .orders-toolbar-row{display:grid;gap:8px;align-items:center}
-#panel-orders .orders-toolbar-row.main{grid-template-columns:minmax(280px,420px) auto;justify-content:space-between}
-#panel-orders .orders-main-actions{display:flex;gap:8px;justify-content:flex-start;flex-wrap:nowrap}
-#panel-orders .orders-toolbar-row.main #q{max-width:420px}
-#panel-orders .orders-toolbar-row.filter{grid-template-columns:repeat(6,minmax(120px,1fr))}
-#panel-orders .orders-toolbar-row.sort{grid-template-columns:repeat(3,minmax(120px,1fr)) 1.8fr}
-#panel-orders .quick-sort-wrap{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-start}
-#panel-orders .orders-toolbar input,#panel-orders .orders-toolbar select,#panel-orders .orders-toolbar button{height:38px}
-#panel-orders .orders-toolbar button{min-width:92px;border-radius:9px;font-weight:700}
+#app.modern-nav-on .orders-toolbar{display:grid;gap:10px;margin-top:16px;padding:16px;border:1px solid #e2e8f0;border-radius:12px;background:#fff; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1)}
+#app.modern-nav-on .orders-toolbar-row{display:grid;gap:10px;align-items:center}
+#app.modern-nav-on .orders-toolbar-row.main{grid-template-columns:1fr auto;justify-content:space-between}
+#app.modern-nav-on .orders-toolbar-row.filter{grid-template-columns:repeat(3, 1fr)}
+#app.modern-nav-on .orders-toolbar-row.sort{grid-template-columns:repeat(3, 1fr); border-top: 1px solid #f1f5f9; padding-top: 10px}
+#app.modern-nav-on .orders-toolbar input, #app.modern-nav-on .orders-toolbar select{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; height: 36px; padding: 0 10px; font-size: 13px; font-weight: 500; transition: all 0.2s }
+#app.modern-nav-on .orders-toolbar input:focus, #app.modern-nav-on .orders-toolbar select:focus{ border-color: var(--modern-primary); background: #fff; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1); outline: none }
+#app.modern-nav-on .orders-toolbar button{ height: 36px; border-radius: 8px; font-weight: 700; font-size: 13px }
+@media (max-width: 768px) {
+  #app.modern-nav-on .orders-toolbar-row.main{grid-template-columns: 1fr}
+  #app.modern-nav-on .orders-toolbar-row.filter{grid-template-columns:repeat(2, 1fr)}
+  #app.modern-nav-on .orders-toolbar-row.sort{grid-template-columns:repeat(2, 1fr)}
+}
 @media (max-width:1100px){#panel-orders .orders-toolbar-row.main,#panel-orders .orders-toolbar-row.filter,#panel-orders .orders-toolbar-row.sort{grid-template-columns:repeat(2,minmax(0,1fr))}#panel-orders .orders-main-actions{justify-content:flex-start;flex-wrap:wrap}}
 #orderFilterWrap{position:static;top:auto;z-index:1;background:rgba(248,250,252,.98);backdrop-filter:blur(2px);padding:6px;border:1px solid #dbeafe;border-radius:10px}
 body.mobile-mode #orderFilterWrap{top:4px;padding:4px}
@@ -194,64 +197,89 @@ body.care-mode #panel-cost .cost-zone h4{font-size:26px}
 #uiVersionToast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 #modernTopNav{display:none}
 #app.modern-nav-on{
-  --modern-primary:#1a365d;
-  --modern-success:#38a169;
-  --modern-warning:#d69e2e;
-  --modern-danger:#e53e3e;
-  --modern-radius:6px;
-  --modern-gap-card:16px;
+  --modern-primary:#3b82f6;
+  --modern-success:#10b981;
+  --modern-warning:#f59e0b;
+  --modern-danger:#ef4444;
+  --modern-radius:8px;
+  --modern-gap-card:20px;
   --modern-gap-form:24px;
   --modern-page-padding:24px;
-  --modern-font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;
+  --modern-font:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-family:var(--modern-font);
 }
+#app.modern-nav-on .modern-stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
+#app.modern-nav-on .modern-stat-card{background:#fff;border:1px solid #f1f5f9;border-radius:16px;padding:20px;box-shadow:0 1px 3px 0 rgba(0,0,0,0.1);display:flex;flex-direction:column;gap:8px}
+#app.modern-nav-on .modern-stat-card .label{color:#64748b;font-size:14px;font-weight:600}
+#app.modern-nav-on .modern-stat-card .value{color:#0f172a;font-size:28px;font-weight:800;letter-spacing:-0.5px}
+#app.modern-nav-on .modern-stat-card .value.danger{color:#ef4444}
+#app.modern-nav-on .modern-stat-card .value.warning{color:#f59e0b}
+#app.modern-nav-on .modern-stat-card .value.success{color:#10b981}
+#app.modern-nav-on .modern-section-title{font-size:18px;font-weight:800;color:#0f172a;margin:32px 0 16px;display:flex;align-items:center;gap:8px}
+#app.modern-nav-on .modern-section-title::before{content:'';width:4px;height:18px;background:var(--modern-primary);border-radius:2px}
+#app.modern-nav-on details.modern-details{border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fff;margin-bottom:12px}
+#app.modern-nav-on details.modern-details summary{padding:16px;background:#f8fafc;cursor:pointer;font-weight:700;color:#334155;list-style:none;display:flex;justify-content:space-between;align-items:center}
+#app.modern-nav-on details.modern-details summary::after{content:'↓';font-size:12px;transition:transform 0.2s}
+#app.modern-nav-on details.modern-details[open] summary::after{transform:rotate(180deg)}
+#app.modern-nav-on details.modern-details .content{padding:16px;border-top:1px solid #e2e8f0}
+#app.modern-nav-on .modern-badge{display:inline-flex; align-items: center; justify-content: center; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap}
 #app.modern-nav-on #appTop,#app.modern-nav-on #mainTabs{display:none!important}
 #app.modern-nav-on #modernTopNav{display:block}
-#app.modern-nav-on .card{margin-bottom:var(--modern-gap-card);padding:var(--modern-page-padding);border-radius:var(--modern-radius)}
+#app.modern-nav-on .card:not(#panel-cost):not(#panel-cost .card){margin-bottom:var(--modern-gap-card);padding:var(--modern-page-padding);border-radius:var(--modern-radius);box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1); border: 1px solid #f1f5f9}
+#panel-cost { background: var(--card) !important; color: var(--text) !important; font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif !important; }
+#panel-cost .card { background: #f8fafc !important; box-shadow: var(--shadow) !important; border: 1px solid var(--line) !important; padding: 14px !important; border-radius: var(--radius) !important; }
+#panel-cost input, #panel-cost select, #panel-cost button { font-size: 14px !important; }
 #app.modern-nav-on .row,#app.modern-nav-on .grid2,#app.modern-nav-on .wo-actions{gap:var(--modern-gap-form)}
-#app.modern-nav-on .modern-btn-primary{background:var(--modern-primary)!important;color:#fff!important;border:1px solid var(--modern-primary)!important;border-radius:var(--modern-radius)!important}
-#app.modern-nav-on .modern-btn-default{background:#fff!important;color:var(--modern-primary)!important;border:1px solid #cbd5e1!important;border-radius:var(--modern-radius)!important}
-#app.modern-nav-on .modern-btn-danger{background:var(--modern-danger)!important;color:#fff!important;border:1px solid var(--modern-danger)!important;border-radius:var(--modern-radius)!important}
+#app.modern-nav-on .modern-btn-primary{background:var(--modern-primary)!important;color:#fff!important;border:none!important;border-radius:var(--modern-radius)!important;box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); transition: opacity .2s}
+#app.modern-nav-on .modern-btn-primary:hover{opacity: .9}
+#app.modern-nav-on .modern-btn-default{background:#fff!important;color:#334155!important;border:1px solid #e2e8f0!important;border-radius:var(--modern-radius)!important; transition: background .2s}
+#app.modern-nav-on .modern-btn-default:hover{background:#f8fafc!important}
+#app.modern-nav-on .modern-btn-danger{background:var(--modern-danger)!important;color:#fff!important;border:none!important;border-radius:var(--modern-radius)!important}
 #app.modern-nav-on button:not(.modern-btn-default):not(.modern-btn-danger){border-radius:var(--modern-radius)}
 #app.modern-nav-on .modern-msg-wrap{position:fixed;top:84px;left:50%;transform:translateX(-50%);z-index:10070;display:grid;gap:8px}
-#app.modern-nav-on .modern-msg{padding:10px 14px;border-radius:8px;color:#fff;box-shadow:0 8px 20px rgba(15,23,42,.2);font-size:13px}
+#app.modern-nav-on .modern-msg{padding:10px 16px;border-radius:8px;color:#fff;box-shadow:0 8px 24px rgba(15,23,42,.15);font-size:14px; font-weight: 500}
 #app.modern-nav-on .modern-msg.success{background:var(--modern-success)}
 #app.modern-nav-on .modern-msg.error{background:var(--modern-danger)}
-#app.modern-nav-on .modern-confirm-mask{position:fixed;inset:0;background:rgba(2,6,23,.45);z-index:10080;display:grid;place-items:center}
-#app.modern-nav-on .modern-confirm{width:min(460px,92vw);background:#fff;border:1px solid #dbe3f0;border-radius:10px;padding:14px}
-#app.modern-nav-on .modern-confirm .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+#app.modern-nav-on .modern-confirm-mask{position:fixed;inset:0;background:rgba(15,23,42,.4);backdrop-filter: blur(4px);z-index:10080;display:grid;place-items:center}
+#app.modern-nav-on .modern-confirm{width:min(460px,92vw);background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1)}
+#app.modern-nav-on .modern-confirm .actions{display:flex;justify-content:flex-end;gap:12px;margin-top:24px}
 #app.modern-nav-on .btn-loading{position:relative;pointer-events:none;opacity:.86}
 #app.modern-nav-on .btn-loading::after{content:'';display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.7);border-top-color:transparent;border-radius:50%;margin-left:8px;vertical-align:-2px;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 #app.modern-nav-on .modern-skeleton{display:grid;gap:8px}
-#app.modern-nav-on .modern-skeleton .line{height:14px;background:linear-gradient(90deg,#eef2f7 25%,#f8fafc 37%,#eef2f7 63%);background-size:400% 100%;animation:sk 1.2s ease infinite;border-radius:6px}
+#app.modern-nav-on .modern-skeleton .line{height:14px;background:linear-gradient(90deg,#f1f5f9 25%,#f8fafc 37%,#f1f5f9 63%);background-size:400% 100%;animation:sk 1.2s ease infinite;border-radius:6px}
 @keyframes sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
-#app.modern-nav-on .modern-empty{padding:28px 12px;text-align:center;color:#64748b}
-#app.modern-nav-on .modern-empty .title{font-size:14px;font-weight:700;color:#334155}
-.modern-layout-header{position:fixed;top:0;left:0;right:0;z-index:10020;background:var(--modern-primary);color:#fff;border-bottom:1px solid rgba(255,255,255,.18);box-shadow:0 6px 20px rgba(15,23,42,.18)}
-.modern-layout-header .inner{max-width:1360px;margin:auto;padding:10px 14px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px}
-.modern-brand{display:flex;align-items:center;gap:8px;font-weight:800}
-.modern-brand img{width:44px;height:28px;border-radius:6px;object-fit:cover;background:#fff}
-.modern-menu{display:flex;gap:6px;overflow:auto;padding-bottom:2px}
-.modern-hamburger{display:none;width:auto!important;padding:6px 10px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);color:#fff;border-radius:8px}
-.modern-nav-drawer-mask{position:fixed;inset:0;background:rgba(2,6,23,.45);z-index:10061;display:none}
-.modern-nav-drawer{position:fixed;top:0;left:0;height:100vh;width:min(320px,86vw);background:#fff;z-index:10062;transform:translateX(-100%);transition:transform .2s ease;border-right:1px solid #dbe3f0;padding:14px;display:flex;flex-direction:column;gap:8px}
+#app.modern-nav-on .modern-empty{padding:48px 12px;text-align:center;color:#64748b}
+#app.modern-nav-on .modern-empty .title{font-size:16px;font-weight:700;color:#334155; margin-bottom: 8px}
+.modern-layout-header{position:fixed;top:0;left:0;right:0;z-index:10020;background:rgba(255,255,255,.8); backdrop-filter: blur(12px); color:var(--modern-primary);border-bottom:1px solid rgba(226, 232, 240, .8);box-shadow:0 1px 2px 0 rgba(0, 0, 0, 0.05)}
+.modern-layout-header .inner{max-width:1360px;margin:auto;padding:0 14px;height: 50px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px}
+.modern-brand{display:flex;align-items:center;gap:8px;font-weight:800; font-size: 15px; color: var(--modern-primary)}
+.modern-brand img{width:30px;height:30px;border-radius:6px;object-fit:cover;background:#fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05)}
+.modern-menu{display:flex;gap:2px;height: 100%; align-items: stretch}
+.modern-hamburger{display:none;width:auto!important;padding:4px 8px;border:1px solid #e2e8f0;background:#f8fafc;color:var(--modern-primary);border-radius:8px}
+.modern-nav-drawer-mask{position:fixed;inset:0;background:rgba(15,23,42,.4);backdrop-filter: blur(4px);z-index:10061;display:none}
+.modern-nav-drawer{position:fixed;top:0;left:0;height:100vh;width:min(320px,86vw);background:#fff;z-index:10062;transform:translateX(-100%);transition:transform .3s cubic-bezier(0.4, 0, 0.2, 1);border-right:1px solid #e2e8f0;padding:14px;display:flex;flex-direction:column;gap:8px}
 .modern-nav-drawer.open{transform:translateX(0)}
-.modern-nav-drawer .m-tab{width:100%!important;text-align:left;background:#fff;color:#1a365d;border:1px solid #dbe3f0}
-.modern-menu .m-tab{width:auto!important;flex:0 0 auto;padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;font-weight:700}
-.modern-menu .m-tab.active{background:#fff;color:var(--modern-primary);border-color:#fff}
-.modern-user{position:relative}
-.modern-user-btn{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.24);color:#fff;border-radius:999px;padding:6px 10px;cursor:pointer}
-.modern-avatar{width:28px;height:28px;border-radius:50%;display:inline-grid;place-items:center;background:#dbeafe;color:var(--modern-primary);font-weight:800}
-.modern-user-menu{position:absolute;right:0;top:42px;min-width:170px;background:#fff;border:1px solid #dbe3f0;border-radius:10px;box-shadow:0 10px 28px rgba(15,23,42,.2);padding:8px;display:none;z-index:10021}
+.modern-nav-drawer .m-tab{width:100%!important;text-align:left;background:#fff;color:#334155;border:1px solid #f1f5f9; padding: 10px 14px; border-radius: 8px}
+.modern-nav-drawer .m-tab.active{background:#eff6ff; color: var(--modern-primary); border-color: #bfdbfe; font-weight: 700}
+.modern-menu .m-tab{width:auto!important;flex:0 0 auto;padding:0 10px; display: flex; align-items: center; background: transparent; color:#64748b; border: none; font-weight: 600; font-size: 13px; position: relative; transition: color .2s}
+.modern-menu .m-tab:hover{color: var(--modern-primary)}
+.modern-menu .m-tab.active{color: var(--modern-primary)}
+.modern-menu .m-tab.active::after{content:''; position: absolute; bottom: 0; left: 10px; right: 10px; height: 3px; background: var(--modern-primary); border-radius: 3px 3px 0 0}
+.modern-user{position:relative; display: flex; align-items: center}
+.modern-user-btn{display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;color:#334155;border-radius:999px;padding:3px 8px;cursor:pointer; transition: background .2s}
+.modern-user-btn:hover{background: #f1f5f9}
+.modern-avatar{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;background:var(--modern-primary);color:#fff;font-weight:800; font-size: 11px}
+.modern-user-menu{position:absolute;right:0;top:40px;min-width:180px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 25px -5px rgb(0 0 0 / 0.1);padding:6px;display:none;z-index:10021}
 .modern-user-menu.open{display:block}
-.modern-user-menu button,.modern-user-menu select{margin-bottom:6px}
+.modern-user-menu button,.modern-user-menu select{margin-bottom:4px; font-size: 13px; border-radius: 8px}
 .modern-user-menu button:last-child{margin-bottom:0}
-#modernBreadcrumb{position:fixed;left:0;right:0;top:64px;z-index:10019;background:#f8fafc;border-bottom:1px solid #e2e8f0}
-#modernBreadcrumb .inner{max-width:1360px;margin:auto;padding:8px 14px;font-size:13px;color:#475569}
+#modernBreadcrumb{position:fixed;left:0;right:0;top:50px;z-index:10019;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+#modernBreadcrumb .inner{max-width:1360px;margin:auto;padding:8px 14px;font-size:12px;color:#64748b; font-weight: 500}
+#modernBreadcrumbText b { color: var(--modern-primary); font-weight: 600 }
 #app.modern-nav-on .card{margin-top:0}
-#app.modern-nav-on #panel-orders{margin-top:104px}
-#app.modern-nav-on #panel-workorder,#app.modern-nav-on #panel-chat,#app.modern-nav-on #panel-sheet,#app.modern-nav-on #panel-history,#app.modern-nav-on #panel-cost,#app.modern-nav-on #panel-board,#app.modern-nav-on #panel-stats,#app.modern-nav-on #panel-menu,#app.modern-nav-on #panel-stock,#app.modern-nav-on #panel-futures,#app.modern-nav-on #panel-admin,#app.modern-nav-on #panel-package{margin-top:104px}
+#app.modern-nav-on #panel-orders{margin-top:82px}
+#app.modern-nav-on #panel-workorder,#app.modern-nav-on #panel-chat,#app.modern-nav-on #panel-sheet,#app.modern-nav-on #panel-history,#app.modern-nav-on #panel-cost,#app.modern-nav-on #panel-board,#app.modern-nav-on #panel-stats,#app.modern-nav-on #panel-menu,#app.modern-nav-on #panel-stock,#app.modern-nav-on #panel-futures,#app.modern-nav-on #panel-admin,#app.modern-nav-on #panel-package{margin-top:82px}
 @media (min-width:768px) and (max-width:1199px){
   #app.modern-nav-on{--modern-page-padding:16px;--modern-gap-form:16px;--modern-gap-card:14px}
   #app.modern-nav-on .row,#app.modern-nav-on .grid2{grid-template-columns:repeat(2,minmax(0,1fr))!important}
@@ -260,15 +288,15 @@ body.care-mode #panel-cost .cost-zone h4{font-size:26px}
 }
 @media (max-width:767px){
   #app.modern-nav-on{--modern-page-padding:12px;--modern-gap-form:12px;--modern-gap-card:12px}
-  .modern-layout-header .inner{grid-template-columns:auto 1fr auto;gap:8px;padding:8px 10px}
+  .modern-layout-header .inner{grid-template-columns:auto 1fr auto;gap:8px;padding:8px 10px; height: 46px}
   .modern-brand{font-size:14px}
-  .modern-brand img{width:38px;height:24px}
+  .modern-brand img{width:26px;height:26px}
   .modern-menu{display:none}
   .modern-hamburger{display:inline-block}
-  #modernBreadcrumb{top:60px}
+  #modernBreadcrumb{top:46px}
   #modernBreadcrumb .inner{padding:6px 10px;font-size:12px}
   #app.modern-nav-on #panel-orders,
-  #app.modern-nav-on #panel-workorder,#app.modern-nav-on #panel-chat,#app.modern-nav-on #panel-sheet,#app.modern-nav-on #panel-history,#app.modern-nav-on #panel-cost,#app.modern-nav-on #panel-board,#app.modern-nav-on #panel-stats,#app.modern-nav-on #panel-menu,#app.modern-nav-on #panel-stock,#app.modern-nav-on #panel-futures,#app.modern-nav-on #panel-admin,#app.modern-nav-on #panel-package{margin-top:104px}
+  #app.modern-nav-on #panel-workorder,#app.modern-nav-on #panel-chat,#app.modern-nav-on #panel-sheet,#app.modern-nav-on #panel-history,#app.modern-nav-on #panel-cost,#app.modern-nav-on #panel-board,#app.modern-nav-on #panel-stats,#app.modern-nav-on #panel-menu,#app.modern-nav-on #panel-stock,#app.modern-nav-on #panel-futures,#app.modern-nav-on #panel-admin,#app.modern-nav-on #panel-package{margin-top:78px}
   #app.modern-nav-on .row,#app.modern-nav-on .grid2{grid-template-columns:1fr!important}
   #panel-workorder .wo-table-pagination{justify-content:flex-start}
   #panel-workorder .wo-modern-drawer{width:100vw}
@@ -385,30 +413,38 @@ body.mobile-mode .boss-mat-cards .item{margin:0!important;padding:8px}
 #panel-workorder .wo-sync-inline{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;font-weight:600;line-height:1.1;margin-right:6px}
 #panel-workorder #wo_sync_order{width:14px;height:14px;transform:none;accent-color:#2563eb}
 #panel-workorder .wo-list .item{border:1px solid #e2e8f0;border-radius:10px;padding:8px;margin-bottom:8px;background:#fff}
-#loginModernShell{display:none;min-height:100vh}
-.modern-login{display:grid;grid-template-columns:60% 40%;min-height:100vh}
-.modern-login-left{background:linear-gradient(135deg,#1a365d,#2d4a7a);color:#fff;padding:38px 44px;display:flex;flex-direction:column}
-.modern-login-brand{display:flex;align-items:center;gap:12px;font-weight:800;font-size:24px}
-.modern-login-brand img{width:64px;height:40px;border-radius:8px;object-fit:cover;background:#fff}
-.modern-login-slogan{margin:auto 0;font-size:40px;font-weight:900;letter-spacing:1px;line-height:1.2}
-.modern-login-illus{margin-top:auto;opacity:.9;font-size:14px}
-.modern-login-right{background:#fff;display:flex;align-items:center;justify-content:center;padding:24px}
-.modern-login-card{width:min(420px,92vw);border:1px solid #e2e8f0;border-radius:12px;padding:22px;box-shadow:0 10px 28px rgba(15,23,42,.12)}
-.modern-login-title{font-size:28px;font-weight:900;color:#0f172a;margin:0 0 12px}
-.modern-segmented{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:#f1f5f9;border-radius:999px;padding:4px;margin-bottom:14px}
-.modern-segmented button{padding:8px 6px;border-radius:999px;border:0;background:transparent;color:#334155;font-weight:700}
-.modern-segmented button.active{background:#1a365d;color:#fff}
-.modern-input{display:flex;align-items:center;border:1px solid #cbd5e1;border-radius:8px;padding:0 10px;margin-bottom:12px}
-.modern-input span{color:#64748b;font-size:14px}
-.modern-input input{border:0;background:transparent;height:44px;padding:0 8px}
+#loginModernShell{display:none;min-height:100vh; background: #f8fafc}
+.modern-login{display:grid;grid-template-columns:55% 45%;min-height:100vh}
+.modern-login-left{background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);color:#fff;padding:48px;display:flex;flex-direction:column; position: relative; overflow: hidden}
+.modern-login-left::before { content: ''; position: absolute; top: -10%; left: -10%; width: 120%; height: 120%; background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%); pointer-events: none; }
+.modern-login-brand{display:flex;align-items:center;gap:16px;font-weight:800;font-size:28px; z-index: 1}
+.modern-login-brand img{width:64px;height:64px;border-radius:12px;object-fit:cover;background:#fff; box-shadow: 0 4px 12px rgba(0,0,0,0.1)}
+.modern-login-slogan{margin:auto 0;font-size:56px;font-weight:900;letter-spacing:-1px;line-height:1.1; z-index: 1}
+.modern-login-illus{margin-top:auto;opacity:.8;font-size:16px; font-weight: 500; z-index: 1; display: flex; align-items: center; gap: 8px}
+.modern-login-illus::before { content: '✓'; display: inline-flex; width: 20px; height: 20px; background: rgba(255,255,255,0.2); border-radius: 50%; align-items: center; justify-content: center; font-size: 12px }
+.modern-login-right{background:#f8fafc;display:flex;align-items:center;justify-content:center;padding:32px}
+.modern-login-card{width:100%; max-width: 440px; background: #fff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 40px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.05)}
+.modern-login-title{font-size:32px;font-weight:800;color:#0f172a;margin:0 0 8px; letter-spacing: -0.5px}
+.modern-login-subtitle{color: #64748b; font-size: 16px; margin-bottom: 32px}
+.modern-segmented{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:#f1f5f9;border-radius:12px;padding:4px;margin-bottom:24px}
+.modern-segmented button{padding:10px 4px;border-radius:10px;border:0;background:transparent;color:#475569;font-weight:600; font-size: 14px; transition: all .2s}
+.modern-segmented button.active{background:#fff;color:var(--modern-primary); box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1)}
+.modern-field { margin-bottom: 20px }
+.modern-field label { display: block; font-size: 14px; font-weight: 600; color: #334155; margin-bottom: 6px; margin-left: 2px }
+.modern-input{display:flex;align-items:center;border:1px solid #e2e8f0;border-radius:12px;padding:0 14px; background: #fff; transition: border-color .2s, box-shadow .2s}
+.modern-input:focus-within{border-color:var(--modern-primary); box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1)}
+.modern-input span{color:#94a3b8;font-size:18px}
+.modern-input input{border:0;background:transparent;height:48px;padding:0 12px; width: 100%; font-size: 15px; font-weight: 500}
 .modern-input input:focus{outline:none;box-shadow:none}
-.modern-pwd-toggle{width:auto!important;background:transparent!important;color:#475569!important;padding:0 4px;border:0!important}
-.modern-login-footer{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:13px;color:#64748b}
-@media (max-width: 900px){
+.modern-pwd-toggle{width:auto!important;background:transparent!important;color:#94a3b8!important;padding:0 8px;border:0!important; cursor: pointer; font-size: 18px}
+.modern-login-footer{display:flex;justify-content:space-between;align-items:center;margin-top:24px;font-size:14px;color:#64748b}
+.modern-login-footer a { color: var(--modern-primary); font-weight: 600; text-decoration: none }
+.modern-login-footer a:hover { text-decoration: underline }
+@media (max-width: 1024px){
   .modern-login{grid-template-columns:1fr}
   .modern-login-left{display:none}
-  .modern-login-right{padding:16px}
-  #loginModernShell{display:block}
+  .modern-login-right{padding:24px; background: #fff}
+  .modern-login-card{box-shadow: none; border: none; padding: 0}
 }
 #panel-workorder .wo-modern-wrap{position:relative}
 #panel-workorder .wo-ant-table-wrap{border:1px solid #dbe3f0;border-radius:10px;overflow:auto;background:#fff}
@@ -558,16 +594,23 @@ body.mobile-mode #orders .order-actions .btn-sm{min-width:78px!important;width:a
     <div class='modern-login-right'>
       <div class='modern-login-card'>
         <h2 class='modern-login-title'>欢迎登录</h2>
+        <p class='modern-login-subtitle'>智能生产管理系统 · 包装制造数字化平台</p>
         <div class='modern-segmented' id='modernRoleSeg'>
           <button type='button' class='active' data-role='manager' onclick='selectModernRole(this)'>管理员</button>
           <button type='button' data-role='ai_sales' onclick='selectModernRole(this)'>AI商务</button>
           <button type='button' data-role='worker_print' onclick='selectModernRole(this)'>工人</button>
         </div>
-        <div class='modern-input'><span>👤</span><input id='modern_u' placeholder='请输入账号'/></div>
-        <div class='modern-input'><span>🔒</span><input id='modern_p' type='password' placeholder='请输入密码（至少6位）'/><button type='button' class='modern-pwd-toggle' onclick='toggleModernPassword()'>👁</button></div>
-        <div style='display:flex;align-items:center;gap:6px;margin:6px 0 12px'><input id='modernRememberPwd' type='checkbox' checked style='width:auto'/><label for='modernRememberPwd' class='muted-sm'>记住密码</label></div>
-        <button id='modernLoginBtn' class='modern-btn-primary' style='width:100%' onclick='doLoginModern()'>登录系统</button>
-        <div class='modern-login-footer'><a href='/register.html'>注册新账号</a><span>v0.1</span></div>
+        <div class='modern-field'>
+          <label>账号</label>
+          <div class='modern-input'><span>👤</span><input id='modern_u' placeholder='请输入登录账号'/></div>
+        </div>
+        <div class='modern-field'>
+          <label>密码</label>
+          <div class='modern-input'><span>🔒</span><input id='modern_p' type='password' placeholder='请输入 6 位以上密码'/><button type='button' class='modern-pwd-toggle' onclick='toggleModernPassword()'>👁</button></div>
+        </div>
+        <div style='display:flex;align-items:center;gap:6px;margin:0 0 24px'><input id='modernRememberPwd' type='checkbox' checked style='width:auto'/><label for='modernRememberPwd' class='muted-sm' style='font-weight: 500'>记住密码</label></div>
+        <button id='modernLoginBtn' class='modern-btn-primary' style='width:100%; height: 48px; font-size: 16px' onclick='doLoginModern()'>进入系统</button>
+        <div class='modern-login-footer'><a href='/register.html'>没有账号？立即注册</a><span>v1.0 Professional</span></div>
         <p id='modernMsg' class='muted' style='margin-top:10px'></p>
       </div>
     </div>
@@ -622,8 +665,8 @@ body.mobile-mode #orders .order-actions .btn-sm{min-width:78px!important;width:a
           <button class='modern-user-btn' onclick='toggleModernUserMenu(event)'><span class='modern-avatar' id='modernAvatar'>U</span><span id='modernUserName'>用户</span></button>
           <div id='modernUserMenu' class='modern-user-menu'>
             <button class='btn-sm' style='background:#2563eb' onclick='changeMyPassword()'>修改密码</button>
-            <select id='viewAsRoleModern' style='display:none' onchange='changeViewAsRoleModern()'></select>
-            <select id='themeSelModern' onchange='changeThemeModern()'>
+            <button class='btn-sm' style='background:#1a365d' onclick='toggleUiVersion()'>返回经典版</button>
+            <select id='viewAsRoleModern' style='display:none' onchange='changeViewAsRoleModern()'></select>            <select id='themeSelModern' onchange='changeThemeModern()'>
               <option value='light'>主题：清爽浅色</option><option value='soft'>主题：柔和浅色</option><option value='warm'>主题：暖灰护眼</option><option value='dusk'>主题：暮蓝中间</option><option value='dark'>主题：深色夜间</option>
             </select>
             <button class='btn-sm' style='background:#0f766e' onclick='cycleBackground()'>切换背景</button>
@@ -1885,15 +1928,45 @@ function tabs(){
   const statusRoot = document.getElementById('statusTabs');
   if (statusRoot){
     statusRoot.innerHTML='';
+    const isModern = isModernUiActive();
+    if(isModern) {
+      statusRoot.style.display = 'flex';
+      statusRoot.style.gap = '8px';
+      statusRoot.style.padding = '4px';
+      statusRoot.style.background = '#f1f5f9';
+      statusRoot.style.borderRadius = '12px';
+      statusRoot.style.width = 'fit-content';
+      statusRoot.style.marginBottom = '20px';
+    } else {
+      statusRoot.style = ''; // Reset
+    }
     statusList.forEach(x=>{
       const btn=document.createElement('button');
-      btn.className='tab'+(st===x?' active':'');
+      if(isModern) {
+        btn.className = 'modern-tab' + (st===x ? ' active' : '');
+        btn.style.padding = '8px 20px';
+        btn.style.borderRadius = '10px';
+        btn.style.border = 'none';
+        btn.style.fontSize = '14px';
+        btn.style.fontWeight = '700';
+        btn.style.cursor = 'pointer';
+        btn.style.transition = 'all 0.2s';
+        if(st===x) {
+          btn.style.background = '#fff';
+          btn.style.color = 'var(--modern-primary)';
+          btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+        } else {
+          btn.style.background = 'transparent';
+          btn.style.color = '#64748b';
+        }
+      } else {
+        btn.className='tab'+(st===x?' active':'');
+      }
       btn.textContent=uiTerm(x);
       btn.onclick=()=>setSt(x);
       statusRoot.appendChild(btn);
     });
-  }
-}
+  }}
 function switchMain(k){main=k; try{localStorage.setItem('lastMain',k);}catch(e){} tabs(); const active=main;['orders','workorder','chat','sheet','history','cost','board','stats','menu','stock','futures','admin','package'].forEach(p=>document.getElementById('panel-'+p).style.display=p===active?'block':'none'); if(active==='orders'){ st=localStorage.getItem('orders.stageTab.v1')||st||'印刷'; tabs(); restoreOrderUiPref(); loadOrders(); } if(active==='history')loadMyHistory(); if(active==='admin'){loadPendingUsers();loadAdminDashboard();loadSlowApis();loadPackageConfig();} if(active==='package'){loadPackageConfig();} if(active==='menu'){loadMenuItems();} if(active==='stock'){ loadStockResults(); loadStockSources(); loadWatchlistAnalysis(); } if(active==='futures'){ loadFuturesFramework(); runFuturesReport(); loadFuturesRankingLatest(); } if(active==='board'){const bs=document.getElementById('boardStage'); if(bs) bs.value=getBoardStagePref(); applyBoardStageAcl(); restoreBoardUiPref(); const panel=document.getElementById('panel-board'); if(panel) panel.classList.add('board-fs'); applyBoardStatsPanePref(); applyBoardDensityPref(); renderBoardHeadByTemplate();initBoardColumnResize(); initBoardHoverPause(); refreshBoard(); setBoardAuto(true); const wantFs=localStorage.getItem('boardAutoPanelFs.v1')==='1'; setBoardKioskMode(wantFs); if(localStorage.getItem('boardWakeLock.v1')==='1') setBoardWakeLock(true); else setBoardWakeLock(false); if(wantFs) ensureBoardFullscreen().catch(()=>{}); } else { setBoardKioskMode(false); setBoardWakeLock(false); const panel=document.getElementById('panel-board'); if(panel) panel.classList.remove('board-fs'); } if(active==='stats'){loadBossDashboard();loadFilmStats();loadProductionReport();} if(active==='workorder'){bindWoUi(); applyWoBagLastDefaults(); loadWorkOrderMeta(); loadWorkOrders(); /* 不自动恢复草稿，避免刷新后残留 */ } if(active==='cost'){ loadMaterialPrices(); initMaterialSelectors(); bindCostAutoSummaryWatchers(); reloadCostServerData(); disableCostAutocomplete(); startCostEmailAutoRefresh(); } else { stopCostEmailAutoRefresh(); } if(active==='stats'){ loadCapacityStats(); } applyOrdersCompactPref();
 applyCostTemplate();
 
@@ -3529,14 +3602,14 @@ function syncModernBreadcrumb(){
 }
 const MODERN_THEME_CONFIG={
   token:{
-    colorPrimary:'#1a365d',
-    colorSuccess:'#38a169',
-    colorWarning:'#d69e2e',
-    colorError:'#e53e3e',
-    borderRadius:6,
-    fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif"
+    colorPrimary:'#3b82f6',
+    colorSuccess:'#10b981',
+    colorWarning:'#f59e0b',
+    colorError:'#ef4444',
+    borderRadius:8,
+    fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
   },
-  spacing:{card:16,form:24,page:24}
+  spacing:{card:20,form:24,page:24}
 };
 function applyModernThemeScope(){
   const app=document.getElementById('app');
@@ -4635,6 +4708,7 @@ function refreshRollerOptions(rows){
 
 function renderOrders(arr){
   const cardMode=(document.getElementById('orderCardMode')?.value||'full');
+  const isModern = isModernUiActive();
   document.getElementById('orders').innerHTML=arr.length?arr.map(r=>{
     const product=extractProductNameFromUseCase(r);
     const roller=extractRoller(r)||'-';
@@ -4648,52 +4722,91 @@ function renderOrders(arr){
     const printFilmSize=String(r.wo_print_film_size||'').trim();
     const printFilmQty=String(r.wo_print_film_qty||'').trim();
     const printFilmUnit=String(r.wo_print_film_unit||'').trim();
-    const moldNorm=printMoldRaw.replace(/\s+/g,'').toLowerCase();
-    const sizeNorm=printFilmSize.replace(/\s+/g,'').toLowerCase();
-    const qtyUnitNorm=`${printFilmQty}${printFilmUnit}`.replace(/\s+/g,'').toLowerCase();
-    const hasSizeInMold=!!(sizeNorm && moldNorm.includes(sizeNorm));
-    const hasQtyUnitInMold=!!(qtyUnitNorm && moldNorm.includes(qtyUnitNorm));
-    const shouldAppendTail=(printFilmSize || printFilmQty || printFilmUnit) && !(hasSizeInMold && hasQtyUnitInMold);
     const printFilmMain = printMoldRaw || [printFilmSize, (printFilmQty?`${printFilmQty}${printFilmUnit||''}`:'')].filter(Boolean).join(' ');
-    const printFilmTail = shouldAppendTail
-      ? `（${[printFilmSize, (printFilmQty?`${printFilmQty}${printFilmUnit||''}`:'')].filter(Boolean).join(' / ')}）`
-      : '';
-    const line2 = `印膜：<b style='font-weight:900;color:#0f172a'>${esc(printFilmMain||'-')}</b>${esc(printFilmTail)}`;
-    const line3 = `数量：${qty||'-'} ｜ 压辊：${roller}`;
+    const shouldAppendTail=(printFilmSize || printFilmQty || printFilmUnit) && !(printMoldRaw.replace(/\s+/g,'').toLowerCase().includes(printFilmSize.replace(/\s+/g,'').toLowerCase()));
+    const printFilmTail = shouldAppendTail ? `（${[printFilmSize, (printFilmQty?`${printFilmQty}${printFilmUnit||''}`:'')].filter(Boolean).join(' / ')}）` : '';
+    
     const stageDoneMap={印刷:'完成印刷',复膜:'完成覆膜',制袋:'完成制袋',发货:'完成发货'};
     const doneLabel=stageDoneMap[r.status]||'下一步';
-    const createdLine=`<div class='order-subline kv-two' style='margin-top:2px'>创建：${esc(fmtTimeShort(created))}</div>`;
-    const remarkLine = remark ? `<div class='order-subline kv-two' style='margin-top:2px'>备注：${esc(remark)}</div>` : '';
-    const liteMode = (cardMode==='lite') && !isMobile;
-    const line2Html=(liteMode?'':`<div class='order-subline kv-two'>${line2}</div>`);
-    const line3Html=((cardMode==='full' || isMobile)?`<div class='order-subline kv-two'>${esc(line3)}</div>`:'');
-    const createdHtml=(liteMode?'':createdLine);
-    const remarkHtml=((cardMode==='full' || isMobile)?remarkLine:'');
-    const subBtn = Number(r.my_subscribed||0)===1
-      ? `<button class='btn-sm' style='background:#7c3aed' onclick='toggleOrderSubscribe(${r.id},1)'>取消订阅</button>`
-      : `<button class='btn-sm' style='background:#7c3aed' onclick='toggleOrderSubscribe(${r.id},0)'>订阅</button>`;
     const rollbackStage=getRollbackStageByStatus(r.status);
-    const rollbackBtn = rollbackStage?`<button class='btn-sm' style='background:#d97706' onclick='rollbackLastComplete(${r.id},${JSON.stringify(rollbackStage)})'>回退${uiTerm(rollbackStage)}</button>`:'';
-    const doneBtn = r.status==='完成' ? '' : `<button class='btn-sm' style='background:#475569' onclick='advanceOrderStage(${r.id},1,${JSON.stringify(r.status||'')})'>${doneLabel}</button>`;
-    const detailBtn = `<button class='btn-sm' style='background:#0f766e' onclick='openOrderDetail(${r.id})'>详情</button>`;
-    const actions = `${doneBtn}${rollbackBtn}${detailBtn}${subBtn}`;
+    
     const customerName = String(r.customer_name_display||r.customer_name||'').trim();
     const titleMain = product || customerName || '-';
     const showCustomer = !!customerName && !(r.is_legacy_imported || isLegacyImportedOrder(r)) && customerName!==titleMain;
     const abnormal=isOrderDataAbnormal(r);
     const inkRaw=String(r.wo_ink_requirement||r.ink_requirement||'').trim();
     const inkList=inkRaw?inkRaw.split(/[\/、，,；;\s]+/).map(x=>String(x||'').trim()).filter(Boolean):[];
-    const inkTagsHtml=inkList.map(x=>`<span class='tag' style='color:#dc2626;border-color:#fecaca;background:#fff1f2'>油墨:${esc(x)}</span>`).join('');
     const hl=(Number(r.id)===Number(pendingOrderHighlightId));
+
+    if(isModern) {
+      const statusColors = { '印刷': '#3b82f6', '复膜': '#8b5cf6', '制袋': '#f59e0b', '发货': '#10b981', '完成': '#64748b' };
+      const statusBg = { '印刷': '#eff6ff', '复膜': '#f5f3ff', '制袋': '#fffbeb', '发货': '#ecfdf3', '完成': '#f8fafc' };
+      const sColor = statusColors[r.status] || '#64748b';
+      const sBg = statusBg[r.status] || '#f1f5f9';
+      
+      const inkTags = inkList.map(x=>`<span class="modern-badge" style="color:#ef4444; background:#fef2f2; border:1px solid #fee2e2; font-size: 11px; padding: 1px 6px">油墨:${esc(x)}</span>`).join('');
+      const subbed = Number(r.my_subscribed||0)===1;
+      const isMob = window.innerWidth <= 768;
+      const cardPadding = isMob ? '12px' : '16px';
+      
+      return `<div class='card modern-order-card ${hl?'order-hl':''}' data-order-id='${r.id}' style="padding: ${cardPadding}; border-radius: 12px; position: relative; overflow: hidden; margin-bottom: 12px">
+        ${r.urgency ? `<div style="position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: #ef4444"></div>` : ''}
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 10px">
+          <div style="flex: 1; min-width: 0">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 2px">
+              <span class="modern-badge" style="background:${sBg}; color:${sColor}; font-weight: 700; font-size: 12px; padding: 2px 8px">${esc(r.status)}</span>
+              ${r.urgency ? `<span class="modern-badge" style="background:#fef2f2; color:#ef4444; border:1px solid #fee2e2; font-weight: 700; font-size: 11px; padding: 1px 6px">加急</span>` : ''}
+              <span class="modern-badge" style="background:#f8fafc; color:#475569; border:1px solid #e2e8f0; font-size: 11px; padding: 1px 6px">${esc(r.bag_type)}</span>
+              ${subbed ? `<span class="modern-badge" style="background:#f5f3ff; color:#7c3aed; border:1px solid #ddd6fe; font-size: 11px; padding: 1px 6px">已订</span>` : ''}
+              ${inkTags}
+            </div>
+            <h3 style="margin: 0; font-size: ${isMob ? '16px' : '18px'}; font-weight: 800; color: #0f172a; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">${esc(titleMain)}</h3>
+            ${showCustomer ? `<div style="font-size: 12px; color: #64748b; margin-top: 1px">客户：${esc(customerName)}</div>` : ''}
+          </div>
+          <div style="text-align: right; flex-shrink: 0">
+             <div style="font-size: 18px; font-weight: 900; color: ${days > 3 ? '#ef4444' : '#334155'}; line-height: 1">${days}</div>
+             <div style="font-size: 10px; color: #94a3b8; font-weight: 600">滞留</div>
+          </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 12px; padding: 10px 12px; background: #f8fafc; border-radius: 8px; margin-bottom: 12px">
+          <div style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="color: #94a3b8">规格：</span><span style="color: #334155; font-weight: 600">${esc(spec)}</span></div>
+          <div style="font-size: 13px"><span style="color: #94a3b8">数量：</span><span style="color: #334155; font-weight: 600">${esc(qty)}</span></div>
+          <div style="font-size: 13px; grid-column: 1 / -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="color: #94a3b8">印膜：</span><span style="color: #0f172a; font-weight: 700">${esc(printFilmMain)}${esc(printFilmTail)}</span></div>
+          <div style="font-size: 13px"><span style="color: #94a3b8">压辊：</span><span style="color: #334155; font-weight: 600">${esc(roller)}</span></div>
+          <div style="font-size: 13px"><span style="color: #94a3b8">创建：</span><span style="color: #334155">${esc(fmtTimeShort(created).split(' ')[0])}</span></div>
+        </div>
+
+        ${remark ? `<div style="font-size: 12px; color: #475569; padding: 0 2px 10px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden"><b>注：</b>${esc(remark)}</div>` : ''}
+
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; border-top: 1px solid #f1f5f9; padding-top: 10px">
+          ${r.status!=='完成' ? `<button class="modern-btn-primary" style="height: 32px; padding: 0 12px; font-size: 13px; font-weight: 700" onclick='advanceOrderStage(${r.id},1,${JSON.stringify(r.status||'')})'>${doneLabel}</button>` : ''}
+          <button class="modern-btn-default" style="height: 32px; padding: 0 12px; font-size: 13px; font-weight: 700" onclick='openOrderDetail(${r.id})'>详情</button>
+          ${rollbackStage ? `<button class="modern-btn-default" style="height: 32px; padding: 0 12px; font-size: 13px; font-weight: 700; color:#b45309" onclick='rollbackLastComplete(${r.id},${JSON.stringify(rollbackStage)})'>回退</button>` : ''}
+        </div>
+      </div>`;
+    }
+
+    const line2 = `印膜：<b style='font-weight:900;color:#0f172a'>${esc(printFilmMain||'-')}</b>${esc(printFilmTail)}`;
+    const line3 = `数量：${qty||'-'} ｜ 压辊：${roller}`;
+    const doneBtn = r.status==='完成' ? '' : `<button class='btn-sm' style='background:#475569' onclick='advanceOrderStage(${r.id},1,${JSON.stringify(r.status||'')})'>${doneLabel}</button>`;
+    const rollbackBtn = rollbackStage?`<button class='btn-sm' style='background:#d97706' onclick='rollbackLastComplete(${r.id},${JSON.stringify(rollbackStage)})'>回退${uiTerm(rollbackStage)}</button>`:'';
+    const detailBtn = `<button class='btn-sm' style='background:#0f766e' onclick='openOrderDetail(${r.id})'>详情</button>`;
+    const subBtn = Number(r.my_subscribed||0)===1
+      ? `<button class='btn-sm' style='background:#7c3aed' onclick='toggleOrderSubscribe(${r.id},1)'>取消订阅</button>`
+      : `<button class='btn-sm' style='background:#7c3aed' onclick='toggleOrderSubscribe(${r.id},0)'>订阅</button>`;
+    const actions = `${doneBtn}${rollbackBtn}${detailBtn}${subBtn}`;
+    const inkTagsHtml=inkList.map(x=>`<span class='tag' style='color:#dc2626;border-color:#fecaca;background:#fff1f2'>油墨:${esc(x)}</span>`).join('');
+    
     return `<div class='item order-card ${hl?'order-hl':''}' data-order-id='${r.id}'>
       <div class='order-title'><b>${esc(titleMain)}</b>${showCustomer?`<span class='tag tag-customer'>客户：${esc(customerName)}</span>`:''}<span class='tag'>${esc(r.bag_type)}</span><span class='tag'>${esc(r.status)}</span>${inkTagsHtml}${Number(r.my_subscribed||0)===1?"<span class='tag' style='color:#5b21b6;border-color:#ddd6fe;background:#f5f3ff'>我已订阅</span>":''}<span class='tag' style='color:#b91c1c;border-color:#fecaca;background:#fff1f2'>滞留 ${days} 天</span>${r.urgency?"<span class='tag' style='color:#dc2626;border-color:#fecaca;background:#fff1f2'>加急</span>":''}${abnormal?"<span class='tag' style='color:#92400e;border-color:#fde68a;background:#fffbeb'>数据待核对</span>":''}</div>
       <div class='order-quick'>
         <div style='min-width:0;flex:1'>
           <div class='order-mainline kv-two'>${esc(line1)}</div>
-          ${line2Html}
-          ${line3Html}
-          ${createdHtml}
-          ${remarkHtml}
+          ${(cardMode==='lite' && !isMobile)?'':`<div class='order-subline kv-two'>${line2}</div>`}
+          ${((cardMode==='full' || isMobile)?`<div class='order-subline kv-two'>${esc(line3)}</div>`:'')}
+          ${(cardMode==='lite' && !isMobile)?'':`<div class='order-subline kv-two' style='margin-top:2px'>创建：${esc(fmtTimeShort(created))}</div>`}
+          ${((cardMode==='full' || isMobile) && remark)?`<div class='order-subline kv-two' style='margin-top:2px'>备注：${esc(remark)}</div>`:''}
         </div>
       </div>
       <div class='order-actions'>${actions}</div>
@@ -4732,6 +4845,10 @@ function isBossSectionOpen(sectionId, fallbackOpen=true){
 }
 function wrapBossSection(sectionId, title, innerHtml, fallbackOpen=true){
   const open=isBossSectionOpen(sectionId, fallbackOpen);
+  const isModern = isModernUiActive();
+  if(isModern) {
+    return `<details class='modern-details' data-boss-section='${esc(sectionId)}' ${open?'open':''}><summary>${title}</summary><div class='content'>${innerHtml}</div></details>`;
+  }
   return `<details class='item' data-boss-section='${esc(sectionId)}' ${open?'open':''}><summary style='cursor:pointer;font-weight:700'>${title}</summary><div style='margin-top:6px'>${innerHtml}</div></details>`;
 }
 function applyBossSectionStates(scope){
@@ -4844,18 +4961,31 @@ async function loadBossDashboard(){
     const overdueEl=document.getElementById('bossOverdue');
     const matEl=document.getElementById('bossMaterials');
     const machineEl=document.getElementById('bossMachineOutput');
-    if(sumEl) sumEl.innerHTML=wrapBossSection('bossSummary','老板总览',`
-      <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px'>
-        <div class='item' style='margin:0'><div class='muted'>今日新单</div><div><b>${s.today||0}</b></div></div>
-        <div class='item' style='margin:0'><div class='muted'>近7天新单</div><div><b>${s.week||0}</b></div></div>
-        <div class='item' style='margin:0'><div class='muted'>近30天新单</div><div><b>${s.month||0}</b></div></div>
-        <div class='item' style='margin:0'><div class='muted'>在制订单</div><div><b>${s.inProgress||0}</b></div></div>
-        <div class='item' style='margin:0'><div class='muted'>近30天完成</div><div><b>${s.doneMonth||0}</b></div></div>
-        <div class='item' style='margin:0'><div class='muted'>在制加急</div><div><b>${s.urgentInProgress||0}</b></div></div>
-        <div class='item' style='margin:0'><div class='muted'>今日变动订单</div><div><b>${todayChanges.length||0}</b></div></div>
-      </div>
-    `, true);
-    if(stEl) stEl.innerHTML=wrapBossSection('bossStatus','状态分布',`<div class='muted'>${sb.map(x=>`${esc(x.status)}：${x.c}`).join(' ｜ ')||'无数据'}</div>`, true);
+    if(sumEl) {
+      const isModern = isModernUiActive();
+      const innerHtml = isModern ? `
+        <div class='modern-stat-grid'>
+          <div class='modern-stat-card'><div class='label'>今日新单</div><div class='value'>${s.today||0}</div></div>
+          <div class='modern-stat-card'><div class='label'>近7天新单</div><div class='value'>${s.week||0}</div></div>
+          <div class='modern-stat-card'><div class='label'>近30天新单</div><div class='value'>${s.month||0}</div></div>
+          <div class='modern-stat-card'><div class='label'>在制订单</div><div class='value warning'>${s.inProgress||0}</div></div>
+          <div class='modern-stat-card'><div class='label'>近30天完成</div><div class='value success'>${s.doneMonth||0}</div></div>
+          <div class='modern-stat-card'><div class='label'>在制加急</div><div class='value danger'>${s.urgentInProgress||0}</div></div>
+          <div class='modern-stat-card'><div class='label'>今日变动</div><div class='value'>${todayChanges.length||0}</div></div>
+        </div>
+      ` : `
+        <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px'>
+          <div class='item' style='margin:0'><div class='muted'>今日新单</div><div><b>${s.today||0}</b></div></div>
+          <div class='item' style='margin:0'><div class='muted'>近7天新单</div><div><b>${s.week||0}</b></div></div>
+          <div class='item' style='margin:0'><div class='muted'>近30天新单</div><div><b>${s.month||0}</b></div></div>
+          <div class='item' style='margin:0'><div class='muted'>在制订单</div><div><b>${s.inProgress||0}</b></div></div>
+          <div class='item' style='margin:0'><div class='muted'>近30天完成</div><div><b>${s.doneMonth||0}</b></div></div>
+          <div class='item' style='margin:0'><div class='muted'>在制加急</div><div><b>${s.urgentInProgress||0}</b></div></div>
+          <div class='item' style='margin:0'><div class='muted'>今日变动订单</div><div><b>${todayChanges.length||0}</b></div></div>
+        </div>
+      `;
+      sumEl.innerHTML=wrapBossSection('bossSummary','老板总览', innerHtml, true);
+    }    if(stEl) stEl.innerHTML=wrapBossSection('bossStatus','状态分布',`<div class='muted'>${sb.map(x=>`${esc(x.status)}：${x.c}`).join(' ｜ ')||'无数据'}</div>`, true);
     if(todayChgEl) todayChgEl.innerHTML=wrapBossSection('bossTodayChanges','今日变动订单',`${todayChanges.length?`<div class='muted' style='margin:0 0 8px'>点击“查看详情”可直接打开订单详情。</div>${todayChanges.map((x,i)=>`<div class='item'><b>${i+1}. #${x.orderId} ${esc(x.customerName||'-')}</b><div class='muted'>${esc(x.fromStatus||'-')} → ${esc(x.toStatus||'-')} ｜ 变动时间：${esc(x.changedAt||'-')} ｜ 操作人：${esc(x.operatedBy||'-')}</div><div style='margin-top:6px'><button class='btn-sm' style='width:auto;background:#1d4ed8' onclick='openOrderDetail(${Number(x.orderId)||0})'>查看详情</button></div></div>`).join('')}`:'<div class="item"><div class="muted">今日暂无状态变动</div></div>'}`, false);
     if(stuckEl) stuckEl.innerHTML=wrapBossSection('bossStuck','滞留TOP（小时）',`${stuck.length?stuck.map((x,i)=>`<div class='item'><b>${i+1}. ${esc(x.customer_name||'-')}</b><div class='muted'>状态：${esc(x.status||'-')} ｜ 滞留：${Number(x.stay_hours||0)}h ｜ 规格：${esc(x.order_spec||'-')}</div></div>`).join(''):'<div class="item"><div class="muted">暂无数据</div></div>'}`, false);
     if(overdueEl) overdueEl.innerHTML=wrapBossSection('bossOverdue','交期风险TOP（逾期）',`${overdue.length?overdue.map((x,i)=>`<div class='item'><b>${i+1}. ${esc(x.customer_name||'-')} / ${esc(x.product_name||'-')}</b><div class='muted'>交货日期：${esc(x.delivery_date||'-')} ｜ 逾期：${Number(x.overdue_days||0)}天 ｜ 当前：${esc(x.order_status||'未同步')}</div></div>`).join(''):'<div class="item"><div class="muted">暂无逾期</div></div>'}`, false);
@@ -5386,12 +5516,43 @@ async function toggleOrderSubscribe(id, on){
 function renderOrdersSummary(arr=[],stage='全部'){
   const el=document.getElementById('boardSummary');
   if(!el) return;
+  const isModern = isModernUiActive();
   const total=arr.length;
   const urgent=arr.filter(x=>Number(x.urgency||0)===1).length;
   const abnormal=arr.filter(x=>isOrderDataAbnormal(x)).length;
   const avgStay=total?Math.round(arr.reduce((s,x)=>s+stayDays(x),0)/total):0;
   const stageMap=['印刷','复膜','制袋','发货','完成'].map(s=>({s,c:arr.filter(x=>x.status===s).length}));
   const topStage=(stageMap.sort((a,b)=>b.c-a.c)[0]||{s:'-',c:0});
+
+  if(isModern) {
+    el.style.display = 'grid';
+    el.style.gridTemplateColumns = 'repeat(2, 1fr)'; // 2 columns on mobile
+    if(window.innerWidth > 768) el.style.gridTemplateColumns = 'repeat(auto-fit, minmax(160px, 1fr))';
+    el.style.gap = '10px';
+    el.style.marginBottom = '16px';
+    el.innerHTML=`
+      <div class="card" style="margin:0; padding: 12px; border-radius: 12px; display: flex; flex-direction: column; gap: 2px">
+        <div style="color: #64748b; font-size: 12px; font-weight: 600">筛选结果</div>
+        <div style="color: #0f172a; font-size: 18px; font-weight: 800">${total} <span style="font-size: 12px; font-weight: 500">单</span></div>
+      </div>
+      <div class="card" style="margin:0; padding: 12px; border-radius: 12px; display: flex; flex-direction: column; gap: 2px">
+        <div style="color: #64748b; font-size: 12px; font-weight: 600">加急单量</div>
+        <div style="color: #ef4444; font-size: 18px; font-weight: 800">${urgent} <span style="font-size: 12px; font-weight: 500; color: #64748b">单</span></div>
+      </div>
+      <div class="card" style="margin:0; padding: 12px; border-radius: 12px; display: flex; flex-direction: column; gap: 2px">
+        <div style="color: #64748b; font-size: 12px; font-weight: 600">平均滞留</div>
+        <div style="color: ${avgStay > 2 ? '#f59e0b' : '#0f172a'}; font-size: 18px; font-weight: 800">${avgStay} <span style="font-size: 12px; font-weight: 500; color: #64748b">天</span></div>
+      </div>
+      <div class="card" style="margin:0; padding: 12px; border-radius: 12px; display: flex; flex-direction: column; gap: 2px">
+        <div style="color: #64748b; font-size: 12px; font-weight: 600">数据待核对</div>
+        <div style="color: ${abnormal > 0 ? '#b45309' : '#0f172a'}; font-size: 18px; font-weight: 800">${abnormal} <span style="font-size: 12px; font-weight: 500; color: #64748b">单</span></div>
+      </div>
+    `;
+    return;
+  }
+  el.style.display = 'flex'; // Reset for classic
+  el.style.flexWrap = 'wrap';
+  el.style.gap = '8px';
   el.innerHTML=`
     <div class='item'><b>筛选结果</b><div class='muted'>${total} 单</div></div>
     <div class='item'><b>加急</b><div class='muted'>${urgent} 单</div></div>
