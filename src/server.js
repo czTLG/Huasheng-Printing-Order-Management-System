@@ -89,25 +89,27 @@ app.use('/api/menu', menuRouter);
 app.use('/api/stocks', stocksRouter);
 app.use('/api/futures', futuresRouter);
 
-// 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）
-cron.schedule('40 14 * * 1-5', async () => {
-  try {
-    await stocksRouter.runStrategy({ sendMail: false, operator: 'cron-stock' });
-    console.log('[股市筛选任务] 已执行（未自动发邮件）');
-  } catch (e) {
-    console.warn('[股市筛选任务] 失败', e?.message || e);
-  }
-}, { timezone: 'Asia/Shanghai' });
+if (process.env.DISABLE_CRON !== '1') {
+  // 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）
+  cron.schedule('40 14 * * 1-5', async () => {
+    try {
+      await stocksRouter.runStrategy({ sendMail: false, operator: 'cron-stock' });
+      console.log('[股市筛选任务] 已执行（未自动发邮件）');
+    } catch (e) {
+      console.warn('[股市筛选任务] 失败', e?.message || e);
+    }
+  }, { timezone: 'Asia/Shanghai' });
 
-// 每个交易日15:10 跑自选股技术面分析
-cron.schedule('10 15 * * 1-5', async () => {
-  try {
-    await stocksRouter.runWatchlistAnalysis({ operator: 'cron-watchlist' });
-    console.log('[自选股技术面] 已执行');
-  } catch (e) {
-    console.warn('[自选股技术面] 失败', e?.message || e);
-  }
-}, { timezone: 'Asia/Shanghai' });
+  // 每个交易日15:10 跑自选股技术面分析
+  cron.schedule('10 15 * * 1-5', async () => {
+    try {
+      await stocksRouter.runWatchlistAnalysis({ operator: 'cron-watchlist' });
+      console.log('[自选股技术面] 已执行');
+    } catch (e) {
+      console.warn('[自选股技术面] 失败', e?.message || e);
+    }
+  }, { timezone: 'Asia/Shanghai' });
+}
 
 const port = Number(process.env.PORT || 80);
 const host = '0.0.0.0';
