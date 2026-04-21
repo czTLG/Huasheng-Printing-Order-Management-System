@@ -9,6 +9,27 @@ const router = express.Router();
 const flow = ['印刷', '复膜', '制袋', '发货', '完成'];
 const boardPanelCache = new Map();
 const STAGE_UNIT = { '印刷': '米', '复膜': '米', '制袋': '袋', '发货': '单' };
+const WORKER_ROLES = ['worker','worker_print','worker_film','worker_bag','worker_ship'];
+
+function validId(v) {
+  const id = Number(v);
+  return Number.isInteger(id) && id > 0 ? id : 0;
+}
+
+function canOperateStage(row = {}, user = {}, stage = '') {
+  if (!WORKER_ROLES.includes(user.role)) return true;
+  const worker = String(user.userName || '');
+  if (user.role === 'worker_print') return stage === '印刷' && row.assigned_print_worker === worker;
+  if (user.role === 'worker_film') return stage === '复膜' && row.assigned_lamination_worker === worker;
+  if (user.role === 'worker_bag') return stage === '制袋' && row.assigned_bagging_worker === worker;
+  if (user.role === 'worker_ship') return stage === '发货' && row.assigned_shipping_worker === worker;
+  return (
+    (stage === '印刷' && row.assigned_print_worker === worker) ||
+    (stage === '复膜' && row.assigned_lamination_worker === worker) ||
+    (stage === '制袋' && row.assigned_bagging_worker === worker) ||
+    (stage === '发货' && row.assigned_shipping_worker === worker)
+  );
+}
 
 function normalizeRollbackStage(processType = '') {
   const p = String(processType || '').trim().toUpperCase();
@@ -129,7 +150,9 @@ router.post('/', allowRoles('super_admin','manager'), (req, res) => {
     orderSpec = ''
   } = req.body || {};
 
-  if (!customerName || !bagType) {
+  const cleanCustomerName = String(customerName || '').trim();
+  const cleanBagType = String(bagType || '').trim();
+  if (!cleanCustomerName || !cleanBagType) {
     return res.status(400).json({ error: 'customerName 与 bagType 必填' });
   }
 
@@ -143,18 +166,18 @@ router.post('/', allowRoles('super_admin','manager'), (req, res) => {
 
   const ts = now();
   const result = stmt.run(
-    customerName,
-    bagType,
-    useCase,
+    cleanCustomerName,
+    cleanBagType,
+    String(useCase || '').trim(),
     JSON.stringify(size),
     String(orderQty || ''),
     String(orderSpec || ''),
     Number(urgency) ? 1 : 0,
     Number(urgency) ? 100 : 0,
-    assignedPrintWorker,
-    assignedLaminationWorker,
-    assignedBaggingWorker,
-    assignedShippingWorker,
+    String(assignedPrintWorker || '').trim(),
+    String(assignedLaminationWorker || '').trim(),
+    String(assignedBaggingWorker || '').trim(),
+    String(assignedShippingWorker || '').trim(),
     req.user.userName,
     ts,
     ts,
@@ -167,7 +190,7 @@ router.post('/', allowRoles('super_admin','manager'), (req, res) => {
     action: 'create_order',
     resourceType: 'order',
     resourceId: result.lastInsertRowid,
-    detail: `${customerName}-${bagType}`
+    detail: `${cleanCustomerName}-${cleanBagType}`
   });
 
   res.json({ ok: true, id: result.lastInsertRowid });
@@ -818,7 +841,8 @@ router.get('/stats/film-usage', allowRoles('super_admin','manager','ai_sales'), 
 });
 
 router.patch('/:id', allowRoles('super_admin','manager'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
 
@@ -838,7 +862,8 @@ router.patch('/:id', allowRoles('super_admin','manager'), (req, res) => {
 });
 
 router.patch('/:id/full', allowRoles('super_admin','manager'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
 
@@ -875,20 +900,14 @@ router.patch('/:id/full', allowRoles('super_admin','manager'), (req, res) => {
 });
 
 router.patch('/:id/processing', allowRoles('super_admin', 'manager', 'worker', 'worker_print', 'worker_film', 'worker_bag', 'worker_ship'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
   if (row.status === '完成') return res.status(400).json({ error: '已完成订单无需标记处理中' });
 
-  if (['worker','worker_print','worker_film','worker_bag','worker_ship'].includes(req.user.role)) {
-    const worker = req.user.userName;
-    const canPrint = row.status === '印刷' && row.assigned_print_worker === worker;
-    const canLamination = row.status === '复膜' && row.assigned_lamination_worker === worker;
-    const canBagging = row.status === '制袋' && row.assigned_bagging_worker === worker;
-    const canShip = row.status === '发货' && row.assigned_shipping_worker === worker;
-    if (!(canPrint || canLamination || canBagging || canShip)) {
-      return res.status(403).json({ error: '工人仅可操作本人负责工序' });
-    }
+  if (!canOperateStage(row, req.user, row.status)) {
+    return res.status(403).json({ error: '工人仅可操作本人负责工序' });
   }
 
   db.prepare('UPDATE orders SET processing_started_at = ?, processing_stage = ?, updated_at = ? WHERE id = ?').run(now(), row.status, now(), id);
@@ -905,7 +924,8 @@ router.patch('/:id/processing', allowRoles('super_admin', 'manager', 'worker', '
 });
 
 router.patch('/:id/next', allowRoles('super_admin', 'manager', 'worker', 'worker_print', 'worker_film', 'worker_bag', 'worker_ship'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
 
@@ -914,16 +934,8 @@ router.patch('/:id/next', allowRoles('super_admin', 'manager', 'worker', 'worker
     return res.status(400).json({ error: '当前状态不可继续流转' });
   }
 
-  if (['worker','worker_print','worker_film','worker_bag','worker_ship'].includes(req.user.role)) {
-    const worker = req.user.userName;
-    const canPrint = row.status === '印刷' && row.assigned_print_worker === worker;
-    const canLamination = row.status === '复膜' && row.assigned_lamination_worker === worker;
-    const canBagging = row.status === '制袋' && row.assigned_bagging_worker === worker;
-    const canShip = row.status === '发货' && row.assigned_shipping_worker === worker;
-
-    if (!(canPrint || canLamination || canBagging || canShip)) {
-      return res.status(403).json({ error: '工人仅可操作本人负责工序' });
-    }
+  if (!canOperateStage(row, req.user, row.status)) {
+    return res.status(403).json({ error: '工人仅可操作本人负责工序' });
   }
 
   const stage = row.status;
@@ -947,16 +959,17 @@ router.patch('/:id/next', allowRoles('super_admin', 'manager', 'worker', 'worker
   }
 
   const next = flow[idx + 1];
-  db.prepare('UPDATE orders SET status = ?, processing_started_at = NULL, processing_stage = NULL, updated_at = ? WHERE id = ?').run(next, now(), id);
-
-  let completionLogId = 0;
-  if (source) {
+  const ts = now();
+  const advance = db.transaction(() => {
+    db.prepare('UPDATE orders SET status = ?, processing_started_at = NULL, processing_stage = NULL, updated_at = ? WHERE id = ?').run(next, ts, id);
+    if (!source) return 0;
     const ins = db.prepare(`
       INSERT INTO order_stage_logs (order_id, stage, source, qty, unit, operated_by, role, event_type, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'COMPLETE', ?)
-    `).run(id, stage, source, Number.isFinite(qty) ? qty : null, cfg.unit || String(req.body?.unit || ''), req.user.userName || '', req.user.role || '', now());
-    completionLogId = Number(ins.lastInsertRowid || 0);
-  }
+    `).run(id, stage, source, Number.isFinite(qty) ? qty : null, cfg.unit || String(req.body?.unit || ''), req.user.userName || '', req.user.role || '', ts);
+    return Number(ins.lastInsertRowid || 0);
+  });
+  const completionLogId = advance();
 
   audit({
     role: req.user.role,
@@ -971,7 +984,7 @@ router.patch('/:id/next', allowRoles('super_admin', 'manager', 'worker', 'worker
 });
 
 router.post('/:id/rollback-last-complete', allowRoles('super_admin', 'manager', 'ai_sales', 'worker', 'worker_print', 'worker_film', 'worker_bag', 'worker_ship'), (req, res) => {
-  const id = Number(req.params.id || 0);
+  const id = validId(req.params.id);
   if (!id) return res.status(400).json({ error: '订单ID无效' });
 
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
@@ -979,6 +992,9 @@ router.post('/:id/rollback-last-complete', allowRoles('super_admin', 'manager', 
 
   const stage = getRollbackStageByOrderStatus(row.status);
   if (!stage) return res.status(400).json({ error: '当前环节无可回退的上一步' });
+  if (!canOperateStage(row, req.user, stage)) {
+    return res.status(403).json({ error: '工人仅可回退本人负责工序' });
+  }
 
   const reason = String(req.body?.reason || '').trim();
   const ts = now();
@@ -1285,7 +1301,8 @@ router.get('/subscriptions/mine', (req, res) => {
 });
 
 router.post('/:id/subscribe', (req, res) => {
-  const id = Number(req.params.id || 0);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   const row = db.prepare('SELECT id FROM orders WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
   db.prepare('INSERT OR IGNORE INTO order_subscriptions(order_id,user_name,created_at) VALUES(?,?,?)').run(id, String(req.user?.userName||''), now());
@@ -1294,23 +1311,29 @@ router.post('/:id/subscribe', (req, res) => {
 });
 
 router.delete('/:id/subscribe', (req, res) => {
-  const id = Number(req.params.id || 0);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   db.prepare('DELETE FROM order_subscriptions WHERE order_id=? AND user_name=?').run(id, String(req.user?.userName||''));
   audit({ role: req.user.role, userName: req.user.userName, action: 'unsubscribe_order', resourceType: 'order', resourceId: id });
   res.json({ ok: true });
 });
 
 router.post('/:id/priority', allowRoles('super_admin','manager'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
+  const row = db.prepare('SELECT id FROM orders WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: '订单不存在' });
   const { priority = 0 } = req.body || {};
-  db.prepare('UPDATE orders SET priority = ?, updated_at = ? WHERE id = ?').run(Number(priority) || 0, now(), id);
-  audit({ role: req.user.role, userName: req.user.userName, action: 'set_order_priority', resourceType: 'order', resourceId: id, detail: String(priority) });
-  res.json({ ok: true, id, priority: Number(priority) || 0 });
+  const cleanPriority = Math.max(0, Math.min(999, Math.trunc(Number(priority) || 0)));
+  db.prepare('UPDATE orders SET priority = ?, updated_at = ? WHERE id = ?').run(cleanPriority, now(), id);
+  audit({ role: req.user.role, userName: req.user.userName, action: 'set_order_priority', resourceType: 'order', resourceId: id, detail: String(cleanPriority) });
+  res.json({ ok: true, id, priority: cleanPriority });
 });
 
 router.post('/:id/image', allowRoles('super_admin','manager','ai_sales'), async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = validId(req.params.id);
+    if (!id) return res.status(400).json({ error: '订单ID无效' });
     const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '订单不存在' });
 
@@ -1365,7 +1388,8 @@ router.post('/:id/image', allowRoles('super_admin','manager','ai_sales'), async 
 });
 
 router.delete('/:id/image', allowRoles('super_admin','manager','ai_sales','worker','worker_print','worker_film','worker_bag','worker_ship'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   const row = db.prepare('SELECT id, order_image_url, order_image_thumb_url, order_image_uploaded_by FROM orders WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
   if (!row.order_image_url && !row.order_image_thumb_url) return res.json({ ok: true, removed: false });
@@ -1392,7 +1416,8 @@ router.delete('/:id/image', allowRoles('super_admin','manager','ai_sales','worke
 });
 
 router.get('/:id/detail', allowRoles('super_admin','manager','ai_sales','worker','worker_print','worker_film','worker_bag','worker_ship'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
 
@@ -1535,7 +1560,7 @@ router.get('/:id/detail', allowRoles('super_admin','manager','ai_sales','worker'
 });
 
 router.patch('/:id/work-order-full', allowRoles('super_admin','manager'), (req, res) => {
-  const id = Number(req.params.id || 0);
+  const id = validId(req.params.id);
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: '订单不存在' });
 
@@ -1611,7 +1636,10 @@ router.patch('/:id/work-order-full', allowRoles('super_admin','manager'), (req, 
 });
 
 router.delete('/:id', allowRoles('super_admin','manager'), (req, res) => {
-  const id = Number(req.params.id);
+  const id = validId(req.params.id);
+  if (!id) return res.status(400).json({ error: '订单ID无效' });
+  const row = db.prepare('SELECT id FROM orders WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: '订单不存在' });
   db.prepare('DELETE FROM orders WHERE id = ?').run(id);
   audit({ role: req.user.role, userName: req.user.userName, action: 'delete_order', resourceType: 'order', resourceId: id });
   res.json({ ok: true });

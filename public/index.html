@@ -47,6 +47,7 @@ button:hover{filter:brightness(.98)}
 }
 @media (max-width:1100px){#panel-orders .orders-toolbar-row.main,#panel-orders .orders-toolbar-row.filter,#panel-orders .orders-toolbar-row.sort{grid-template-columns:repeat(2,minmax(0,1fr))}#panel-orders .orders-main-actions{justify-content:flex-start;flex-wrap:wrap}}
 #orderFilterWrap{position:static;top:auto;z-index:1;background:rgba(248,250,252,.98);backdrop-filter:blur(2px);padding:6px;border:1px solid #dbeafe;border-radius:10px}
+#orderFilterWrap.filter-collapsed{display:none!important}
 body.mobile-mode #orderFilterWrap{top:4px;padding:4px}
 #boardSummary .item{font-size:15px}
 #boardSummary .item b{font-size:18px}
@@ -357,9 +358,17 @@ body.mobile-mode .order-stay-badge{align-self:flex-end}
 body.mobile-mode #panel-orders .orders-title{font-size:22px!important;margin:0 0 6px!important}
 body.mobile-mode #panel-orders .orders-tip{display:none}
 body.mobile-mode .order-subline.kv-two,body.mobile-mode .order-mainline.kv-two{display:block;-webkit-line-clamp:unset;max-height:none;overflow:visible}
+body.orders-compact #panel-orders{margin-top:6px;padding:8px!important}
+body.orders-compact #panel-orders .card,body.orders-compact #panel-orders .item{padding:7px!important;margin-bottom:6px!important}
+body.orders-compact #orderFilterWrap{padding:6px!important;margin-top:6px!important}
+body.orders-compact #orderFilterWrap .orders-toolbar-row.filter,body.orders-compact #orderFilterWrap .orders-toolbar-row.sort,body.orders-compact #statusTabs,body.orders-compact #boardSummary{display:none!important}
+body.orders-compact #orders{margin-top:6px!important}
+body.orders-compact #orders .item{padding:7px!important;margin-bottom:6px!important}
+body.orders-compact #orders .meta{gap:3px!important}
+body.orders-compact #orders .meta .kv{padding:3px 5px!important}
+body.orders-compact .order-subline:nth-of-type(n+3),body.orders-compact .orders-tip{display:none!important}
+body.orders-compact #ordersCompactBtn{background:#0f766e!important}
 body.mobile-mode.orders-compact #appTop,body.mobile-mode.orders-compact #mainTabs{display:none!important}
-body.mobile-mode.orders-compact #orderFilterWrap>.row,body.mobile-mode.orders-compact #orderFilterWrap>.grid2,body.mobile-mode.orders-compact #statusTabs,body.mobile-mode.orders-compact #boardSummary{display:none!important}
-body.mobile-mode.orders-compact #panel-orders{margin-top:6px;padding:8px!important}
 body.mobile-mode.orders-compact #panel-orders .orders-title{display:none!important}
 body.mobile-mode #ordersCompactBtn{min-width:92px}
 body.mobile-mode .board-table th,body.mobile-mode .board-table td{font-size:13px;padding:6px}
@@ -511,6 +520,7 @@ body.mobile-mode #topActions.open{display:flex !important;position:absolute;righ
 body.mobile-mode #topActions button,body.mobile-mode #topActions select{max-width:100% !important;width:100% !important;flex:1 1 auto;font-size:13px;padding:7px 8px}
 body.mobile-mode #orderFilterWrap{display:none}
 body.mobile-mode #orderFilterWrap.open{display:block}
+body.mobile-mode #orderFilterWrap.filter-collapsed{display:none!important}
 body.mobile-mode #boardSummary{display:flex;overflow:auto;gap:6px;white-space:nowrap}
 body.mobile-mode #boardSummary .item{min-width:100px;padding:5px}
 body.mobile-mode #boardSummary .item .muted{font-size:12px}
@@ -3761,14 +3771,44 @@ function toggleTopActions(){
 function toggleOrderFilters(){
   const box=document.getElementById('orderFilterWrap');
   if(!box) return;
-  box.classList.toggle('open');
+  const mobile = isMobileView();
+  if(mobile){
+    const open = !box.classList.contains('open');
+    box.classList.toggle('open', open);
+    box.classList.remove('filter-collapsed');
+    localStorage.setItem('ordersFilterOpen.v1', open?'1':'0');
+  }else{
+    const collapsed = !box.classList.contains('filter-collapsed');
+    box.classList.toggle('filter-collapsed', collapsed);
+    box.classList.toggle('open', !collapsed);
+    localStorage.setItem('ordersFilterOpen.v1', collapsed?'0':'1');
+  }
+  syncOrderFilterButton();
+}
+function syncOrderFilterButton(){
+  const box=document.getElementById('orderFilterWrap');
+  const btn=document.querySelector('.orders-head-actions button[onclick="toggleOrderFilters()"]');
+  if(!box || !btn) return;
+  const visible = isMobileView() ? box.classList.contains('open') : !box.classList.contains('filter-collapsed');
+  btn.textContent = visible ? '收起筛选' : '搜索/筛选';
 }
 function applyMobileCompactDefaults(){
-  if(!isMobileView()) return;
   const topActions=document.getElementById('topActions');
   const filterWrap=document.getElementById('orderFilterWrap');
-  if(topActions) topActions.classList.remove('open');
-  if(filterWrap) filterWrap.classList.remove('open');
+  if(isMobileView()){
+    if(topActions) topActions.classList.remove('open');
+    if(filterWrap){
+      const open = localStorage.getItem('ordersFilterOpen.v1')==='1';
+      filterWrap.classList.toggle('open', open);
+      filterWrap.classList.remove('filter-collapsed');
+    }
+  }else if(filterWrap){
+    const saved = localStorage.getItem('ordersFilterOpen.v1');
+    const collapsed = saved==='0';
+    filterWrap.classList.toggle('filter-collapsed', collapsed);
+    filterWrap.classList.toggle('open', !collapsed);
+  }
+  syncOrderFilterButton();
 }
 
 function showPullTip(show,text='下拉刷新中…'){
@@ -4535,12 +4575,12 @@ function restoreOrderUiPref(){
 function applyOrdersCompactPref(){
   const on = localStorage.getItem('ordersCompact.v1')==='1';
   const isOrders = main==='orders';
-  const active = !!(on && isMobile && isOrders);
+  const active = !!(on && isOrders);
   document.body.classList.toggle('orders-compact', active);
   const b=document.getElementById('ordersCompactBtn');
   if(b) b.textContent=`紧凑模式：${on?'开':'关'}`;
   const tip=document.getElementById('ordersCompactTip');
-  if(tip) tip.style.display=active?'block':'none';
+  if(tip) tip.style.display=active && isMobileView()?'block':'none';
 }
 function toggleOrdersCompact(){
   const on = localStorage.getItem('ordersCompact.v1')==='1';
