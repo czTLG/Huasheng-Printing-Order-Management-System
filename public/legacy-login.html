@@ -58,7 +58,7 @@ function doLogin(){
     if(code>=200 && code<300 && d.token){
       try{ localStorage.setItem('token',d.token); }catch(_e){}
       msg('登录成功，正在进入系统...','#166534');
-      setTimeout(function(){ location.href='/'; },500);
+      setTimeout(function(){ location.href='/legacy-app.html?ui=classic'; },500);
     }else{
       msg('登录失败：'+(d.error||'请检查账号密码'),'#b91c1c');
     }

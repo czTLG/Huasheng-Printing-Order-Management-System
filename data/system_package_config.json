@@ -1,7 +1,7 @@
 {
   "enabled": false,
   "email": "383651879@qq.com",
-  "kind": "all",
+  "kind": "system",
   "weekday": 0,
   "hour": 21,
   "minute": 0

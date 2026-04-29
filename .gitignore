@@ -20,6 +20,10 @@ data/*.bak
 data/uploads/
 
 public/uploads/
+public/new/
+
+.ai-memory/
+.claude/
 
 *.log
 .DS_Store

@@ -75,6 +75,38 @@ function normalizeTxt(s=''){
   return String(s||'').replace(/\s+/g,'').trim();
 }
 
+function parseLegacyRowJson(row = {}) {
+  try {
+    if (row && typeof row.legacy_json === 'string') return JSON.parse(row.legacy_json || '{}');
+    if (row && row.legacy_json && typeof row.legacy_json === 'object') return row.legacy_json;
+  } catch (_) {}
+  return {};
+}
+
+function extractProductNameLikeLegacy(row = {}) {
+  const summaryName = String(row?.work_order_summary?.productName || row?.product_name || '').trim();
+  if (summaryName) return summaryName;
+  const useCase = String(row?.use_case || '');
+  const useCaseMatch = useCase.match(/(?:品名|用途)[:：]\s*([^；;\n]+)/);
+  if (useCaseMatch && useCaseMatch[1]) return String(useCaseMatch[1]).trim();
+  const legacy = parseLegacyRowJson(row);
+  const legacyName = String(legacy.name || legacy.old_product || '').trim();
+  if (legacyName) return legacyName;
+  const customer = String(row?.customer_name_display || row?.customer_name || '').trim();
+  if (customer && !/^备注[:：]/.test(customer)) return customer;
+  return '';
+}
+
+function extractRollerLikeLegacy(row = {}) {
+  const summaryRoller = String(row?.work_order_summary?.roller || row?.roller || '').trim();
+  if (summaryRoller) return summaryRoller;
+  const useCase = String(row?.use_case || '');
+  const useCaseMatch = useCase.match(/(?:滚筒|压辊)[:：]\s*([^；;\n]+)/);
+  if (useCaseMatch && useCaseMatch[1]) return String(useCaseMatch[1]).trim();
+  const legacy = parseLegacyRowJson(row);
+  return String(legacy.roller || '').trim();
+}
+
 function inferPrintFilmFields(p = {}) {
   const mold = String(p.printMold || p.printFilm || '').trim();
   let size = String(p.printFilmSize || '').trim();
@@ -248,11 +280,60 @@ router.get('/', (req, res) => {
     const ids = rows.map(r=>Number(r.id)).filter(Boolean);
     if(!ids.length) return rows;
     const marks = ids.map(()=>'?').join(',');
-    const ws = db.prepare(`SELECT order_id, customer_name, spec, process_requirements_json, id FROM work_orders WHERE order_id IN (${marks}) ORDER BY id DESC`).all(...ids);
+    const ws = db.prepare(`
+      SELECT order_id, work_no, customer_name, product_name, bag_type, spec, quantity, delivery_date, roller, remark, process_requirements_json, id
+      FROM work_orders
+      WHERE order_id IN (${marks})
+      ORDER BY id DESC
+    `).all(...ids);
     const map = new Map();
-    const build = (p={})=>{
+    const build = (w={}, p={})=>{
       const pf = inferPrintFilmFields(p);
+      const summary = {
+        id: Number(w.id || 0),
+        workNo: String(w.work_no || ''),
+        customerName: String(w.customer_name || ''),
+        productName: String(w.product_name || ''),
+        bagType: String(w.bag_type || ''),
+        spec: String(w.spec || ''),
+        quantity: String(w.quantity || ''),
+        deliveryDate: String(w.delivery_date || ''),
+        roller: String(w.roller || ''),
+        remark: String(w.remark || ''),
+        printQty: String(p.printQty || p.print_qty || '').trim(),
+        printMold: String(pf.mold || '').trim(),
+        printFilmSize: String(pf.size || '').trim(),
+        printFilmQty: String(pf.qty || '').trim(),
+        printFilmUnit: String(pf.unit || '').trim(),
+        printShift: String(p.printShift || '').trim(),
+        refColor: String(p.refColor || '').trim(),
+        inkRequirement: String(p.inkRequirement || '').trim(),
+        filmType: String(p.filmType || '').trim(),
+        filmNote: String(p.filmNote || '').trim(),
+        layer1: { material: String(p.layer1 || '').trim(), size: String(p.l1Size || '').trim(), weight: String(p.l1Weight || '').trim() },
+        layer2: { material: String(p.layer2 || '').trim(), size: String(p.l2Size || '').trim(), weight: String(p.l2Weight || '').trim() },
+        layer3: { material: String(p.layer3 || '').trim(), size: String(p.l3Size || '').trim(), weight: String(p.l3Weight || '').trim() },
+        layer4: { material: String(p.layer4 || '').trim(), size: String(p.l4Size || '').trim(), weight: String(p.l4Weight || '').trim() },
+        outsource: String(p.outsource || '').trim(),
+        zipPos: String(p.zipPos || '').trim(),
+        tearPos: String(p.tearPos || '').trim(),
+        holePos: String(p.holePos || '').trim(),
+        holes: String(p.holes || '').trim(),
+        edges: String(p.edges || '').trim(),
+        edgeCm: String(p.edgeCm || '').trim(),
+        packType: String(p.packType || '').trim(),
+        boxSpec: String(p.boxSpec || '').trim(),
+        actualQty: String(p.actualQty || '').trim(),
+        packerSign: String(p.packerSign || '').trim(),
+        otherReq: String(p.otherReq || '').trim()
+      };
       return {
+        source_work_no: String(w.work_no || '').trim(),
+        product_name: String(w.product_name || '').trim(),
+        bag_type: String(w.bag_type || '').trim(),
+        delivery_date: String(w.delivery_date || '').trim(),
+        roller: String(w.roller || '').trim(),
+        work_order_summary: summary,
         wo_print_qty: String(p.printQty||p.print_qty||'').trim(),
         wo_print_mold: String(pf.mold||'').trim(),
         wo_print_film_size: String(pf.size||'').trim(),
@@ -266,13 +347,13 @@ router.get('/', (req, res) => {
       if(!oid || map.has(oid)) return;
       let p={};
       try{ p=JSON.parse(w.process_requirements_json||'{}'); }catch(_){ p={}; }
-      map.set(oid, build(p));
+      map.set(oid, build(w, p));
     });
 
     const missing = rows.filter(r=>!map.has(Number(r.id)));
     if(missing.length){
       const fallbackRows = db.prepare(`
-        SELECT customer_name, spec, process_requirements_json
+        SELECT work_no, customer_name, product_name, bag_type, spec, quantity, delivery_date, roller, remark, process_requirements_json, id
         FROM work_orders
         WHERE customer_name IS NOT NULL AND spec IS NOT NULL
         ORDER BY id DESC
@@ -284,7 +365,7 @@ router.get('/', (req, res) => {
         if(!key || pairMap.has(key)) return;
         let p={};
         try{ p=JSON.parse(w.process_requirements_json||'{}'); }catch(_){ p={}; }
-        pairMap.set(key, build(p));
+        pairMap.set(key, build(w, p));
       });
       missing.forEach(r=>{
         const key = `${String(r.customer_name||'').trim()}||${String(r.order_spec||'').trim()}`;
@@ -294,7 +375,15 @@ router.get('/', (req, res) => {
 
     const subRows = db.prepare(`SELECT order_id FROM order_subscriptions WHERE user_name=? AND order_id IN (${marks})`).all(String(req.user?.userName||''), ...ids);
     const subSet = new Set(subRows.map(x=>Number(x.order_id||0)));
-    return rows.map(r=>({ ...r, ...(map.get(Number(r.id))||{}), my_subscribed: subSet.has(Number(r.id)) ? 1 : 0 }));
+    return rows.map(r=>{
+      const merged = { ...r, ...(map.get(Number(r.id)) || {}) };
+      return {
+        ...merged,
+        product_name: String(merged.product_name || '').trim() || extractProductNameLikeLegacy(merged),
+        roller: String(merged.roller || '').trim() || extractRollerLikeLegacy(merged),
+        my_subscribed: subSet.has(Number(r.id)) ? 1 : 0
+      };
+    });
   };
 
   if (!usePaging) {
@@ -314,6 +403,23 @@ router.get('/', (req, res) => {
     pageSize,
     totalPages: Math.max(1, Math.ceil(total / pageSize))
   });
+});
+
+router.get('/today-stage-completions', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT stage, COUNT(DISTINCT order_id) AS cnt
+      FROM order_stage_logs
+      WHERE event_type='COMPLETE' AND COALESCE(rolled_back,0)=0
+        AND datetime(created_at) >= datetime('now','start of day','localtime')
+      GROUP BY stage
+    `).all();
+    const map = {};
+    rows.forEach(r => { map[r.stage] = r.cnt; });
+    res.json(map);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/stats/capacity', allowRoles('super_admin','manager','ai_sales'), (req, res) => {
@@ -1545,7 +1651,7 @@ router.get('/:id/detail', allowRoles('super_admin','manager','ai_sales','worker'
     };
   });
 
-  res.json({
+  const detailPayload = {
     ...row,
     is_legacy_imported: isLegacyImported,
     customer_name_display: fixedCustomer,
@@ -1556,6 +1662,12 @@ router.get('/:id/detail', allowRoles('super_admin','manager','ai_sales','worker'
     source_work_no: woSummary?.workNo || '',
     recent_change_diff: recentChangeDiff,
     operation_logs
+  };
+
+  res.json({
+    ...detailPayload,
+    product_name: String(woSummary?.productName || '').trim() || extractProductNameLikeLegacy(detailPayload),
+    roller: String(woSummary?.roller || row.roller || '').trim() || extractRollerLikeLegacy(detailPayload)
   });
 });
 

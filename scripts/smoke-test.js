@@ -58,6 +58,11 @@ async function login(username, password, expectedStatus = 200) {
 
 async function main() {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const legacyLoginHtml = fs.readFileSync(path.join(root, 'public', 'legacy-login.html'), 'utf8');
+  assert(
+    legacyLoginHtml.includes("location.href='/legacy-app.html?ui=classic'"),
+    'legacy login should redirect directly to legacy classic app after successful login'
+  );
 
   child = spawn(process.execPath, ['src/server.js'], {
     cwd: root,
@@ -188,6 +193,75 @@ async function main() {
   const target = adminOrders.find(row => Number(row.id) === orderId);
   assert(target, 'admin order list should include created order');
   assert.strictEqual(target.status, '复膜');
+
+  const legacyStyleOrder = await httpJson('/api/orders', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      customerName: '旧版映射客户',
+      bagType: '三边封袋',
+      useCase: '品名：手撕牛肉；规格：16*24；滚筒：80+；备注：旧版字段映射校验',
+      size: { length: 16, width: 24 },
+      orderQty: '8888',
+      orderSpec: '16*24'
+    }
+  });
+  assert.strictEqual(legacyStyleOrder.ok, true);
+  const legacyStyleId = Number(legacyStyleOrder.id);
+  assert(legacyStyleId > 0, 'legacy style order id should be > 0');
+
+  const legacyStyleOrders = await httpJson('/api/orders?q=旧版映射客户', { token: adminToken });
+  const legacyStyleRow = legacyStyleOrders.find(row => Number(row.id) === legacyStyleId);
+  assert(legacyStyleRow, 'legacy style order should appear in orders list');
+  assert.strictEqual(legacyStyleRow.product_name, '手撕牛肉');
+  assert.strictEqual(legacyStyleRow.roller, '80+');
+
+  const legacyStyleDetail = await httpJson(`/api/orders/${legacyStyleId}/detail`, { token: adminToken });
+  assert.strictEqual(legacyStyleDetail.product_name, '手撕牛肉');
+  assert.strictEqual(legacyStyleDetail.roller, '80+');
+
+  const workOrderCreate = await httpJson('/api/work-orders', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      salespersonId: 1,
+      customerName: '摘要联调客户',
+      productName: '柠檬凤爪',
+      bagType: '自立拉链',
+      spec: '18*26*8',
+      quantity: '30000',
+      deliveryDate: '2026-05-20',
+      roller: 'HS-ROLL-01',
+      processRequirements: {
+        printMold: 'PET',
+        printFilmSize: '44*12c',
+        printFilmQty: 500,
+        printFilmUnit: '米',
+        printQty: '500米',
+        refColor: '黄/黑',
+        inkRequirement: '食品级',
+        filmType: '双组',
+        layer1: 'PET',
+        l1Size: '44*12c',
+        l1Weight: '12kg'
+      },
+      syncToOrder: true
+    }
+  });
+  assert.strictEqual(workOrderCreate.ok, true);
+  assert(Number(workOrderCreate.orderId) > 0, 'work order should sync to a real order');
+
+  const summaryOrders = await httpJson('/api/orders?q=摘要联调客户', { token: adminToken });
+  const summaryOrder = summaryOrders.find(row => Number(row.id) === Number(workOrderCreate.orderId));
+  assert(summaryOrder, 'synced work order should appear in orders list');
+  assert.strictEqual(summaryOrder.product_name, '柠檬凤爪 04.29');
+  assert.strictEqual(summaryOrder.source_work_no, workOrderCreate.workNo);
+  assert(summaryOrder.work_order_summary, 'orders list should include work order summary');
+  assert.strictEqual(summaryOrder.work_order_summary.productName, '柠檬凤爪 04.29');
+  assert.strictEqual(summaryOrder.work_order_summary.printMold, 'PET');
+  assert.strictEqual(summaryOrder.work_order_summary.printFilmSize, '44*12c');
+  assert.strictEqual(summaryOrder.work_order_summary.roller, 'HS-ROLL-01');
+  assert.strictEqual(summaryOrder.roller, 'HS-ROLL-01');
 
   console.log('SMOKE PASS');
 }

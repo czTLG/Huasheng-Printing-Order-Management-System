@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>包装袋系统（手机版）</title>
+  <style>
+    :root{--bg:#f4f6fb;--card:#fff;--pri:#1677ff;--ok:#16a34a;--text:#0f172a;--muted:#64748b;--line:#dbe2ef}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+    .wrap{max-width:720px;margin:0 auto;padding:12px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
+    h1{font-size:28px;margin:0 0 8px} h2{font-size:24px;margin:0 0 8px}
+    .muted{color:var(--muted);font-size:18px}
+    input,select,button{width:100%;font-size:22px;padding:14px;border-radius:12px;border:1px solid var(--line);background:#fff}
+    button{background:var(--pri);color:#fff;border:none;font-weight:700}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .tabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0}
+    .tab{padding:12px;border-radius:12px;border:1px solid var(--line);background:#fff;font-size:20px;text-align:center;font-weight:700}
+    .tab.active{background:#eaf2ff;border-color:#b7d1ff;color:#0b5bd3}
+    .order-title{font-size:28px;font-weight:800;line-height:1.25}
+    .tags{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+    .tag{font-size:16px;padding:3px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc}
+    .meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+    .kv{border:1px solid #dbe2ef;background:#f8fbff;border-radius:10px;padding:8px}
+    .kv b{display:block;font-size:16px;color:#334155}
+    .kv div{font-size:20px;margin-top:4px;word-break:break-all}
+    .stay{font-size:32px;font-weight:900;color:#dc2626}
+    .btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+    .btn-gray{background:#64748b}.btn-green{background:#0f766e}
+    .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .stat{border:1px solid #dbe2ef;background:#fff;border-radius:10px;padding:10px}
+    .stat .k{font-size:16px;color:#64748b}.stat .v{font-size:30px;font-weight:800}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div id="loginCard" class="card">
+    <h1>包装袋系统（手机版）</h1>
+    <div class="muted">大字版 · 适合老花阅读</div>
+    <div class="row" style="margin-top:10px">
+      <input id="u" placeholder="账号" autocomplete="username" />
+      <input id="p" type="password" placeholder="密码" autocomplete="current-password" />
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="doLogin()">登录</button>
+      <button class="btn-gray" onclick="goDesktop()">电脑版</button>
+    </div>
+    <div id="msg" class="muted" style="margin-top:8px"></div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="card">
+      <h2 id="hello">你好</h2>
+      <div class="tabs">
+        <div id="tab-orders" class="tab active" onclick="switchTab('orders')">订单</div>
+        <div id="tab-board" class="tab" onclick="switchTab('board')">看板</div>
+        <div id="tab-cost" class="tab" onclick="switchTab('cost')">成本</div>
+      </div>
+    </div>
+
+    <div id="panel-orders">
+      <div class="card">
+        <div class="row">
+          <input id="q" placeholder="搜索客户/备注/规格" />
+          <select id="statusFilter" onchange="loadOrders()"><option value="全部">全部状态</option><option value="印刷">印刷</option><option value="复膜">覆膜</option><option value="制袋">制袋</option><option value="发货">发货</option><option value="完成">完成</option></select>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <select id="rollerFilter" onchange="loadOrders()"><option value="全部">全部压辊</option></select>
+          <button onclick="loadOrders()">搜索</button>
+        </div>
+      </div>
+      <div id="orders"></div>
+      <div class="card row">
+        <button class="btn-gray" onclick="prevPage()">上一页</button>
+        <button onclick="nextPage()">下一页</button>
+      </div>
+    </div>
+
+    <div id="panel-board" class="hidden">
+      <div class="card">
+        <div class="row">
+          <select id="boardStage" onchange="refreshBoard()"><option value="全部">总体看板</option><option value="印刷">印刷</option><option value="复膜">覆膜</option><option value="制袋">制袋</option><option value="发货">发货</option><option value="完成">完成</option></select>
+          <select id="boardRoller" onchange="refreshBoard()"><option value="全部">全部压辊</option></select>
+        </div>
+        <input id="boardSearch" placeholder="搜索客户/备注/规格" style="margin-top:8px" />
+        <button style="margin-top:8px" onclick="refreshBoard()">刷新看板</button>
+      </div>
+      <div id="boardStats" class="card stat-grid"></div>
+      <div id="boardList"></div>
+    </div>
+
+    <div id="panel-cost" class="hidden">
+      <div class="card">
+        <div class="muted">成本核算建议在手机端仅用于查看结果，复杂录入建议用电脑版。</div>
+        <button style="margin-top:8px" onclick="location.href='/'">去电脑版核算</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let token=localStorage.getItem('token')||'';
+let currentUser=null;
+let ordersPage=1,ordersTotalPages=1;
+const api=async(u,m='GET',b)=>{const r=await fetch(u,{method:m,headers:token?{'Authorization':'Bearer '+token,'Content-Type':'application/json'}:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});const d=await r.json().catch(()=>({}));if(!r.ok) throw new Error(d.error||'请求失败'); return d;};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function goDesktop(){location.href='/';}
+function switchTab(k){['orders','board','cost'].forEach(x=>{document.getElementById('panel-'+x).classList.toggle('hidden',x!==k);document.getElementById('tab-'+x).classList.toggle('active',x===k)}); if(k==='orders') loadOrders(); if(k==='board') refreshBoard();}
+function extractRoller(r){const u=String(r.use_case||'');let m=u.match(/滚筒[:：]\s*([^；;\n]+)/);if(m)return m[1].trim();try{const j=typeof r.legacy_json==='string'?JSON.parse(r.legacy_json||'{}'):(r.legacy_json||{});if(j.roller)return String(j.roller).trim();}catch{}return '';}
+function extractRemark(r){const u=String(r.use_case||'');let m=u.match(/备注[:：]\s*([^；;\n]+)/);if(m)return m[1].trim();try{const j=typeof r.legacy_json==='string'?JSON.parse(r.legacy_json||'{}'):(r.legacy_json||{});if(j.comment)return String(j.comment).trim();}catch{}return '';}
+function stayDays(r){const t=new Date(r.updated_at||r.start_time||r.created_at||Date.now()).getTime();return Math.max(0,Math.floor((Date.now()-t)/86400000));}
+function refreshRollerOptions(rows, id){const vals=[...new Set((rows||[]).map(extractRoller).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN',{numeric:true}));const el=document.getElementById(id); if(!el) return; const cur=el.value||'全部'; el.innerHTML="<option value='全部'>全部压辊</option>"+vals.map(v=>`<option value="${esc(v)}">压辊 ${esc(v)}</option>`).join(''); el.value=vals.includes(cur)?cur:'全部';}
+
+async function doLogin(){
+  try{
+    const username=document.getElementById('u').value.trim();
+    const password=document.getElementById('p').value.trim();
+    const d=await api('/api/auth/login','POST',{username,password});
+    token=d.token; currentUser=d.user;
+    localStorage.setItem('token',token);
+    document.getElementById('hello').textContent=`${d.user.name}（${d.user.username}）`;
+    document.getElementById('loginCard').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    loadOrders();
+  }catch(e){document.getElementById('msg').textContent='登录失败：'+(e.message||'');}
+}
+
+async function loadOrders(){
+  try{
+    const sf=document.getElementById('statusFilter').value||'全部';
+    const params=[]; if(sf!=='全部') params.push('status='+encodeURIComponent(sf));
+    params.push('page='+ordersPage,'pageSize=18');
+    const resp=await api('/api/orders?'+params.join('&'));
+    const rows=Array.isArray(resp)?resp:(resp.rows||[]);
+    if(!Array.isArray(resp)){ordersTotalPages=resp.totalPages||1;ordersPage=resp.page||1;}
+    refreshRollerOptions(rows,'rollerFilter');
+    const key=(document.getElementById('q').value||'').trim();
+    const roller=(document.getElementById('rollerFilter').value||'全部');
+    const list=rows.filter(r=>{
+      const hitKey=!key||((r.customer_name+(r.order_spec||'')+extractRemark(r)+(r.use_case||'')).includes(key));
+      const hitRoller=roller==='全部'||extractRoller(r)===roller;
+      return hitKey&&hitRoller;
+    });
+    document.getElementById('orders').innerHTML=list.map(r=>{
+      const days=stayDays(r), roller=extractRoller(r)||'-', remark=extractRemark(r)||'-';
+      return `<div class='card'>
+        <div class='order-title'>#${r.id} ${esc(r.customer_name||'')}</div>
+        <div class='tags'><span class='tag'>${esc(r.status||'-')}</span>${r.urgency?"<span class='tag' style='color:#dc2626;border-color:#fecaca;background:#fff1f2'>加急</span>":''}<span class='tag'>${esc(r.bag_type||'-')}</span></div>
+        <div class='meta'>
+          <div class='kv'><b>压辊</b><div>${esc(roller)}</div></div>
+          <div class='kv'><b>规格</b><div>${esc(r.order_spec||'-')}</div></div>
+          <div class='kv'><b>备注</b><div>${esc(remark)}</div></div>
+          <div class='kv'><b>创建时间</b><div>${esc(String((r.start_time||r.created_at||'')).replace('T',' ').slice(0,19))}</div></div>
+          <div class='kv'><b>状态滞留</b><div class='stay'>${days} 天</div></div>
+        </div>
+        <div class='btns'>
+          <button onclick='nextOrder(${r.id})'>推进工序</button>
+          <button class='btn-green' onclick='showDetail(${r.id})'>查看详情</button>
+        </div>
+      </div>`;
+    }).join('') || '<div class="card muted">暂无订单</div>';
+  }catch(e){document.getElementById('orders').innerHTML='<div class="card muted">加载失败</div>';}
+}
+function prevPage(){if(ordersPage>1){ordersPage--;loadOrders();}}
+function nextPage(){if(ordersPage<ordersTotalPages){ordersPage++;loadOrders();}}
+async function nextOrder(id){try{await api('/api/orders/'+id+'/next','PATCH');loadOrders();refreshBoard();}catch(e){alert(e.message||'推进失败')}}
+async function showDetail(id){try{const d=await api('/api/orders/'+id+'/detail');alert(`订单#${d.id}\n客户:${d.customer_name}\n状态:${d.status}\n压辊:${extractRoller(d)||'-'}\n规格:${d.order_spec||'-'}\n备注:${extractRemark(d)||'-'}`)}catch(e){alert(e.message||'加载失败')}}
+
+async function refreshBoard(){
+  try{
+    const rows=await api('/api/orders');
+    const arr=Array.isArray(rows)?rows:(rows.rows||[]);
+    refreshRollerOptions(arr,'boardRoller');
+    const stage=document.getElementById('boardStage').value||'全部';
+    const roller=document.getElementById('boardRoller').value||'全部';
+    const key=(document.getElementById('boardSearch').value||'').trim();
+    const list=arr.filter(r=>stage==='全部'||r.status===stage).filter(r=>roller==='全部'||extractRoller(r)===roller).filter(r=>!key||((r.customer_name+(r.order_spec||'')+extractRemark(r)+(r.use_case||'')).includes(key)));
+    const done=list.filter(x=>x.status==='完成').length;
+    const urgent=list.filter(x=>x.urgency===1).length;
+    const now=new Date(); const dayStart=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime(); const weekStart=dayStart-((now.getDay()+6)%7)*86400000;
+    const doneAll=arr.filter(x=>x.status==='完成');
+    const doneToday=doneAll.filter(x=>new Date(x.updated_at||x.created_at).getTime()>=dayStart).length;
+    const doneWeek=doneAll.filter(x=>new Date(x.updated_at||x.created_at).getTime()>=weekStart).length;
+    document.getElementById('boardStats').innerHTML=`
+      <div class='stat'><div class='k'>筛选后订单</div><div class='v'>${list.length}</div></div>
+      <div class='stat'><div class='k'>已完成</div><div class='v'>${done}</div></div>
+      <div class='stat'><div class='k'>今日完成</div><div class='v'>${doneToday}</div></div>
+      <div class='stat'><div class='k'>本周完成</div><div class='v'>${doneWeek}</div></div>
+      <div class='stat'><div class='k'>加急订单</div><div class='v'>${urgent}</div></div>
+      <div class='stat'><div class='k'>待处理</div><div class='v'>${Math.max(0,list.length-done)}</div></div>`;
+    document.getElementById('boardList').innerHTML=list.slice(0,80).map(r=>`<div class='card'><div class='order-title'>#${r.id} ${esc(r.customer_name||'')}</div><div class='muted'>${esc(r.status)} ｜ 压辊 ${esc(extractRoller(r)||'-')} ｜ 滞留 ${stayDays(r)}天</div></div>`).join('') || '<div class="card muted">暂无数据</div>';
+  }catch(e){document.getElementById('boardStats').innerHTML='';document.getElementById('boardList').innerHTML='<div class="card muted">看板加载失败</div>';}
+}
+
+if(token){
+  api('/api/orders?page=1&pageSize=1').then(()=>{
+    document.getElementById('loginCard').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    loadOrders();
+  }).catch(()=>{localStorage.removeItem('token');token='';});
+}
+</script>
+</body>
+</html>

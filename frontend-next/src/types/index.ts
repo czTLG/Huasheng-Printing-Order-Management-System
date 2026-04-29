@@ -1,0 +1,243 @@
+export type OrderStatus = '印刷' | '复膜' | '制袋' | '发货' | '完成' | '全部';
+
+export interface User {
+  id: number;
+  username: string;
+  full_name: string;
+  role: string;
+  status: 'active' | 'pending' | 'inactive';
+  permissions: {
+    all: boolean;
+    modules: Record<string, boolean>;
+  };
+}
+
+export interface Layer {
+  material?: string;
+  size?: string;
+  weight?: string;
+}
+
+export interface WorkOrderSummary {
+  workNo?: string;
+  customerName?: string;
+  customerContact?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  productName?: string;
+  productAlias?: string;
+  bagType?: string;
+  spec?: string;
+  quantity?: string | number;
+  quantityUnit?: string;
+  deliveryDate?: string;
+  urgency?: string;
+  useCase?: string;
+  orderNote?: string;
+  roller?: string;
+  printMold?: string;
+  printFilmSize?: string;
+  printFilmThickness?: string;
+  printFilmQty?: string | number;
+  printFilmUnit?: string;
+  printQty?: string | number;
+  colorCount?: string;
+  refColor?: string;
+  inkRequirement?: string;
+  printProcessNote?: string;
+  printSpecialNote?: string;
+  filmType?: string;
+  filmNote?: string;
+  filmInkRequirement?: string;
+  layer1?: Layer & { thickness?: string; enabled?: boolean; role?: string; unit?: string };
+  layer2?: Layer & { thickness?: string; enabled?: boolean; role?: string; unit?: string };
+  layer3?: Layer & { thickness?: string; enabled?: boolean; role?: string; unit?: string };
+  layer4?: Layer & { thickness?: string; enabled?: boolean; role?: string; unit?: string };
+  bagSpec?: string;
+  bagEdgeType?: string;
+  zipperType?: string;
+  zipperPos?: string;
+  tearType?: string;
+  holeType?: string;
+  holeCount?: string;
+  outsourceBagging?: string;
+  outsourceVendor?: string;
+  deliveryMethod?: string;
+  actualDeliveryQty?: string;
+  packType?: string;
+  boxSpec?: string;
+  boxQty?: string;
+  mailTo?: string;
+  mailCc?: string;
+  mailSubject?: string;
+  mailRemark?: string;
+  otherReq?: string;
+  laminationLayers?: any[];
+  outsource?: string;
+  actualQty?: string | number;
+  packerSign?: string;
+  remark?: string;
+  printShift?: string;
+  tearPos?: string;
+  zipPos?: string;
+  holes?: string;
+  holePos?: string;
+  edges?: string;
+  edgeCm?: string;
+}
+
+export interface Order {
+  id: number;
+  work_no: string;
+  product_name?: string;
+  product_alias?: string;
+  customer_name: string;
+  customer_name_display?: string;
+  customer_contact?: string;
+  customer_phone?: string;
+  customer_email?: string;
+  bag_type?: string;
+  use_case?: string;
+  order_qty: string | number;
+  order_qty_unit?: string;
+  order_spec: string;
+  status: OrderStatus;
+  urgency: number;
+  urgency_label?: string;
+  is_legacy_imported?: boolean;
+  legacy_data?: Record<string, any>;
+  priority?: number;
+  roller?: string;
+  start_time?: string;
+  wo_print_shift?: string;
+  created_at: string;
+  updated_at: string;
+  remark?: string;
+  my_subscribed?: number;
+  wo_print_mold?: string;
+  wo_print_film_size?: string;
+  wo_print_film_thickness?: string;
+  wo_print_film_qty?: string | number;
+  wo_print_film_unit?: string;
+  wo_print_qty?: string | number;
+  wo_color_count?: string;
+  wo_ref_color?: string;
+  wo_ink_requirement?: string;
+  wo_print_process_note?: string;
+  wo_print_special_note?: string;
+  wo_film_type?: string;
+  wo_film_note?: string;
+  wo_film_ink_requirement?: string;
+  layer1_material?: string;
+  layer1_size?: string;
+  layer1_weight?: string;
+  layer1_thickness?: string;
+  layer2_material?: string;
+  layer2_size?: string;
+  layer2_weight?: string;
+  layer2_thickness?: string;
+  layer3_material?: string;
+  layer3_size?: string;
+  layer3_weight?: string;
+  layer3_thickness?: string;
+  layer4_material?: string;
+  layer4_size?: string;
+  layer4_weight?: string;
+  layer4_thickness?: string;
+  wo_bag_spec?: string;
+  wo_bag_edge_type?: string;
+  wo_zipper_type?: string;
+  wo_zipper_pos?: string;
+  wo_tear_type?: string;
+  wo_hole_type?: string;
+  wo_hole_count?: string;
+  wo_outsource?: string | boolean;
+  wo_outsource_vendor?: string;
+  wo_delivery_method?: string;
+  wo_actual_delivery_qty?: string;
+  wo_pack_type?: string;
+  wo_box_spec?: string;
+  wo_box_qty?: string;
+  wo_mail_to?: string;
+  wo_mail_cc?: string;
+  wo_mail_subject?: string;
+  wo_mail_remark?: string;
+  wo_internal_note?: string;
+  wo_customer_note?: string;
+  bagging_info?: any;
+  packing_info?: any;
+  delivery_date?: string;
+  recent_change_diff?: string;
+  source_work_no?: string;
+  unit?: string;
+  work_order_summary?: WorkOrderSummary;
+  order_image_url?: string;
+  order_image_thumb_url?: string;
+  image_can_delete?: boolean;
+  assigned_print_worker?: string;
+  assigned_lamination_worker?: string;
+  assigned_bagging_worker?: string;
+  assigned_shipping_worker?: string;
+  operation_logs?: Array<{
+    type: 'COMPLETE' | 'ROLLBACK' | 'CREATE' | 'EDIT' | string;
+    operator: string;
+    time: string;
+    detail: string;
+    source?: string;
+    qty?: string | number;
+    unit?: string;
+    reason?: string;
+    is_rolled_back?: boolean;
+  }>;
+}
+
+export interface WorkOrder {
+  id: number;
+  work_no: string;
+  salesman: string;
+  salesperson_name: string;
+  customer_id?: number | string;
+  customer_name: string;
+  customer_contact?: string;
+  customer_phone?: string;
+  customer_email?: string;
+  product_name: string;
+  product_alias?: string;
+  bag_type: string;
+  spec: string;
+  order_spec: string;
+  quantity: string;
+  order_qty: string;
+  order_qty_unit: string;
+  delivery_date: string;
+  urgency: string;
+  use_case?: string;
+  order_note?: string;
+  roller: string;
+  remark: string;
+  email_status: string;
+  order_id?: number | null;
+  sync_order: boolean;
+  draft_status?: string;
+  created_at: string;
+  process_requirements: WorkOrderSummary;
+}
+
+export interface WorkOrderDraft {
+  id: number;
+  salesperson_name: string;
+  customer_name: string;
+  product_name: string;
+  bag_type: string;
+  spec: string;
+  quantity: string;
+  created_at: string;
+  payload: any;
+}
+
+export interface DashboardStats {
+  orders: number;
+  urgent: number;
+  activeUsers: number;
+  avgLatency?: number;
+}
