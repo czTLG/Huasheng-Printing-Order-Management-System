@@ -1,158 +1,120 @@
-# 包装袋印刷厂智能生产管理系统（演示版后端）
+# 华胜印刷订单管理系统
 
-这是根据《包装袋印刷厂智能生产管理系统 - 开发对接文档（MD版）》实现的**第一阶段可运行版本**，用于快速验证核心业务流。
+包装袋印刷厂生产订单流转、开单管理与成本核算平台。用于软包装（食品袋、日化袋、自动包装膜）的生产全流程数字化管理。
 
-## 已实现模块
+## 系统架构
 
-1. **角色权限（RBAC）**
-   - super_admin：全权限
-   - ai_sales：可生成报价、看客户版报价
-   - worker：仅可推进自己负责工序的订单
-
-2. **订单管理与工序流转**
-   - 固定流程：印刷 → 复膜 → 制袋 → 发货 → 完成
-   - 支持加急排序
-   - 工人只能操作本人负责工序
-
-3. **AI报价引擎（演示公式版）**
-   - 自动包核算（参考 hess_calculation_formulas.txt）
-   - 八边封核算（参考 babian_calculation_formulas.txt）
-   - 材料重量核算（参考 clhs_calculation_formulas.txt）
-   - 生成内部版/客户版双版本报价
-
-4. **增量知识更新记录（演示版）**
-   - 记录 sourceType/sourceId/changeType，模拟增量更新任务触发
-
-5. **全操作留痕（审计日志）**
-   - 下单、流转、报价、增量更新、日报任务都有日志
-
-6. **每晚20:00生产日报任务（演示版）**
-   - 目前写入审计日志，后续可接企业微信/Telegram/邮件
-
----
-
-## 快速部署到新机器
-
-```bash
-git clone https://github.com/czTLG/packaging-system.git /home/admin/work/packaging-system
-cd /home/admin/work/packaging-system
-bash deploy/scripts/bootstrap.sh
+```
+nginx (:80) → Express (:8080) → SQLite (data/app.db)
+                                  ↓
+                  React SPA (public/new/) + 旧版 jQuery (public/legacy-app.html)
 ```
 
-默认结果：
+| 层 | 技术 | 说明 |
+|---|---|---|
+| 前端（新版） | React 18 + TypeScript + Vite 5 + Tailwind CSS | `frontend-next/` 构建输出到 `public/new/` |
+| 前端（旧版） | jQuery + 原生 HTML/CSS | `public/legacy-app.html` 完整业务逻辑 |
+| 后端 | Express.js (CommonJS) | `src/server.js` 入口，路由模块在 `src/routes/` |
+| 数据库 | SQLite (better-sqlite3) | 单文件 `data/app.db`，通过 `DB_PATH` 环境变量指定 |
 
-- Node 服务监听 `127.0.0.1:8080`
-- Nginx 对外暴露 `80`
-- systemd 服务名：`packaging-system.service`
+## 核心功能模块
 
-如果你需要恢复旧机器的数据，再把备份库放回 `data/app.db` 后重启服务即可。
+- **订单管理** — 多步工序流转（印刷→复膜→制袋→…→完成），支持加急/回退
+- **开单管理** — 生产作业单创建，含印刷/覆膜四层结构/制袋/装箱参数，导出 PDF/Excel，邮件发送
+- **成本核算** — 9 种袋型核算引擎（八边封/自立拉链/三边封/自动包/材料重量等），报价对比，案例管理
+- **生产看板** — 工序跟踪、产能统计、老板仪表盘
+- **权限系统** — super_admin / manager / ai_sales / worker 四级角色，模块级权限控制
+- **审计日志** — 全操作留痕
 
-完整迁移文档见 `docs/DEPLOYMENT_FULL_REPRO.md`。
+## 快速部署到新服务器
 
-## 本地运行
+### 前置要求
+- Ubuntu 20.04+ / Debian 12+
+- Node.js 22+
+- Nginx（可选，推荐用于生产）
+
+### 步骤
 
 ```bash
-cd /home/admin/work/packaging-system
+# 1. 克隆仓库
+git clone git@github.com:czTLG/Huasheng-Printing-Order-Management-System.git
+cd Huasheng-Printing-Order-Management-System
+
+# 2. 安装依赖
 npm install
-npm start
+
+# 3. 构建前端
+cd frontend-next && npm install && npm run build && cd ..
+
+# 4. 恢复数据库（从备份）
+mkdir -p data
+xz -d app.db.xz && mv app.db data/
+cp customer_bag_map.json data/
+cp material_options.json data/
+cp product_prefill_map.json data/
+cp system_package_config.json data/
+
+# 5. 启动服务
+PORT=8080 node src/server.js
 ```
 
-服务默认运行在 `http://localhost:8080`
+服务默认监听 `http://0.0.0.0:8080`，可通过 `PORT` 环境变量修改端口。
 
-## 鉴权方式（演示版）
+数据库路径通过 `DB_PATH` 环境变量指定，默认为 `./data/app.db`。
 
-通过 Header 模拟登录身份：
+## 数据备份与恢复
 
-- `x-user-role`: `super_admin` | `ai_sales` | `worker`
-- `x-user-name`: 用户名（工人流转校验会用到）
-
----
-
-## API 示例
-
-### 1) 创建订单（管理员）
-
+### 备份
 ```bash
-curl -X POST http://localhost:8080/api/orders \
-  -H 'Content-Type: application/json' \
-  -H 'x-user-role: super_admin' \
-  -H 'x-user-name: admin01' \
-  -d '{
-    "customerName":"A客户",
-    "bagType":"八边封",
-    "useCase":"食品",
-    "size":{"length":20,"width":12,"bottom":5},
-    "urgency":1,
-    "assignedPrintWorker":"zhangsan",
-    "assignedLaminationWorker":"lisi",
-    "assignedBaggingWorker":"wangwu"
-  }'
+tar czf backup-$(date +%Y%m%d).tar.gz data/
 ```
 
-### 2) 推进工序（工人）
-
+### 恢复
 ```bash
-curl -X PATCH http://localhost:8080/api/orders/1/next \
-  -H 'x-user-role: worker' \
-  -H 'x-user-name: zhangsan'
+tar xzf backup-YYYYMMDD.tar.gz
+PORT=8080 DB_PATH=./data/app.db node src/server.js
 ```
 
-### 3) 生成报价（管理员/商务）
+数据库为单文件 SQLite，备份即复制文件，无需 `pg_dump` 或 `mysqldump`。
+
+## 本地开发
 
 ```bash
-curl -X POST http://localhost:8080/api/quotes/generate \
-  -H 'Content-Type: application/json' \
-  -H 'x-user-role: ai_sales' \
-  -H 'x-user-name: sales01' \
-  -d '{
-    "orderId":1,
-    "quoteType":"eight_side_seal",
-    "input":{
-      "ba_chang":20,
-      "ba_kuang":12,
-      "ba_di":5,
-      "thick":[3,4,5,0],
-      "price":[9500,12000,13500,0],
-      "proportion":[0.92,1.02,1.12,0],
-      "jgf":18,
-      "zxyf":200,
-      "sh":0.05,
-      "lr":0.12,
-      "ba_zdf":50
+cd frontend-next && npm run dev      # 前端开发服务器
+cd .. && PORT=8080 node src/server.js  # 后端 API
+```
+
+## Nginx 配置参考
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    client_max_body_size 20m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
-  }'
+}
 ```
 
-### 4) 增量更新记录（管理员）
+## GitHub 仓库
 
-```bash
-curl -X POST http://localhost:8080/api/system/knowledge/incremental-update \
-  -H 'Content-Type: application/json' \
-  -H 'x-user-role: super_admin' \
-  -H 'x-user-name: admin01' \
-  -d '{
-    "sourceType":"order",
-    "sourceId":"1",
-    "changeType":"updated",
-    "detail":"客户调整尺寸"
-  }'
-```
+https://github.com/czTLG/Huasheng-Printing-Order-Management-System
 
-### 5) 查询审计日志（管理员）
+## 数据规模参考（截至 2026-06-13）
 
-```bash
-curl http://localhost:8080/api/system/audit-logs \
-  -H 'x-user-role: super_admin' \
-  -H 'x-user-name: admin01'
-```
-
----
-
-## 下一阶段建议
-
-- 接入 MySQL(RDS) + Redis + JWT 正式鉴权
-- 增加前端（PC/手机响应式）
-- 补齐 Excel/Word/PDF 实际导出
-- 接入真实消息通道（Telegram/企业微信/邮件）
-- 增加 OpenClaw + GPT 实际调用链（并做机密字段脱敏）
-- 上线前补齐 HTTPS、字段级加密、备份恢复与演示/生产环境隔离
+| 数据表 | 记录数 |
+|---|---|
+| 订单 (orders) | 10,050 |
+| 工单 (work_orders) | 608 |
+| 客户 (customers) | 251 |
+| 成本快照 (cost_snapshots) | 814 |
+| 审计日志 (audit_logs) | 5,166 |
+| 用户 (users) | 12 |
