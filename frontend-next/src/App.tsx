@@ -29,18 +29,20 @@ import CrmCustomers from './components/crm/CrmCustomers';
 import CrmInquiries from './components/crm/CrmInquiries';
 import CrmAuditLogs from './components/crm/CrmAuditLogs';
 import CrmCostingRequests from './components/crm/CrmCostingRequests';
+import CrmFreightQuotes from './components/crm/CrmFreightQuotes';
 import { mockService } from './lib/mockService';
 import { getVisibleModuleKeys, MODULE_KEYS } from './lib/permissions';
 import { User } from './types';
 
 import Login from './components/Login';
 
-type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm_customers' | 'crm_inquiries' | 'crm_costing_requests' | 'crm_audit';
+type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm_customers' | 'crm_inquiries' | 'crm_costing_requests' | 'crm_freight_quotes' | 'crm_audit';
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin: '超级管理员', manager: '生产经理',
   foreign_trade_crm_admin: '外贸客户管理负责人',
   costing_user: '成本核算员',
+  freight_user: '物流费用员',
   ai_sales: '业务员', worker: '通用工人',
   worker_print: '印刷工人', worker_film: '复膜工人',
   worker_bag: '制袋工人', worker_ship: '发货工人',
@@ -166,6 +168,7 @@ const App: React.FC = () => {
     { id: 'crm_customers', label: 'CRM 客户', icon: MessageSquare, requiredModule: 'crm' },
     { id: 'crm_inquiries', label: 'CRM 询盘', icon: ClipboardList, requiredModule: 'crm' },
     { id: 'crm_costing_requests', label: 'CRM 核价', icon: Calculator, requiredModule: 'crm' },
+    { id: 'crm_freight_quotes', label: 'CRM 物流', icon: Package, requiredModule: 'crm' },
     { id: 'crm_audit', label: 'CRM 日志', icon: ShieldAlert, requiredModule: 'crm' },
     { id: 'stats', label: '统计分析', icon: BarChart3, requiredModule: 'stats' },
     { id: 'admin', label: '系统管理', icon: Shield, requiredModule: 'admin' },
@@ -202,6 +205,7 @@ const App: React.FC = () => {
       case 'crm_customers': return visibleModules.includes('crm') ? <CrmCustomers /> : forbidden;
       case 'crm_inquiries': return visibleModules.includes('crm') ? <CrmInquiries /> : forbidden;
       case 'crm_costing_requests': return visibleModules.includes('crm') ? <CrmCostingRequests /> : forbidden;
+      case 'crm_freight_quotes': return visibleModules.includes('crm') ? <CrmFreightQuotes /> : forbidden;
       case 'crm_audit': return visibleModules.includes('crm') ? <CrmAuditLogs /> : forbidden;
       case 'stats': return <Stats />;
       case 'admin': return <Admin />;

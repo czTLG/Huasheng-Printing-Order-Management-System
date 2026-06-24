@@ -146,6 +146,10 @@ async function main() {
     method: 'POST',
     body: { username: 'father_costing_guard', password: 'guard123', fullName: '父亲核价' }
   });
+  await httpJson('/api/auth/register', {
+    method: 'POST',
+    body: { username: 'freight_guard', password: 'guard123', fullName: '物流守护' }
+  });
 
   const pending = await httpJson('/api/auth/users/pending', { token: adminToken });
   const costUser = pending.find(row => row.username === 'chenyongjie');
@@ -153,11 +157,13 @@ async function main() {
   const scopedSalesUser = pending.find(row => row.username === 'sales_scope_guard');
   const crmAdminUser = pending.find(row => row.username === 'crm_admin_guard');
   const costingUser = pending.find(row => row.username === 'father_costing_guard');
+  const freightUser = pending.find(row => row.username === 'freight_guard');
   assert(costUser, 'pending cost user should exist');
   assert(workerUser, 'pending worker user should exist');
   assert(scopedSalesUser, 'pending scoped sales user should exist');
   assert(crmAdminUser, 'pending crm admin user should exist');
   assert(costingUser, 'pending costing user should exist');
+  assert(freightUser, 'pending freight user should exist');
 
   await httpJson(`/api/auth/users/${costUser.id}/approve`, {
     method: 'POST',
@@ -189,6 +195,11 @@ async function main() {
     token: adminToken,
     body: { role: 'costing_user' }
   });
+  await httpJson(`/api/auth/users/${freightUser.id}/approve`, {
+    method: 'POST',
+    token: adminToken,
+    body: { role: 'freight_user' }
+  });
 
   const costLogin = await login('chenyongjie', 'guard123');
   assert(costLogin?.token, 'cost user login should return token');
@@ -211,6 +222,11 @@ async function main() {
   const costingMe = await httpJson('/api/auth/me', { token: costingLogin.token });
   assert.strictEqual(costingMe.user.role, 'costing_user');
   assert.strictEqual(costingMe.user.permissions.modules.crm, false, 'costing user should not have full crm menu module');
+  const freightLogin = await login('freight_guard', 'guard123');
+  assert(freightLogin?.token, 'freight user login should return token');
+  const freightMe = await httpJson('/api/auth/me', { token: freightLogin.token });
+  assert.strictEqual(freightMe.user.role, 'freight_user');
+  assert.strictEqual(freightMe.user.permissions.modules.crm, false, 'freight user should not have full crm menu module');
 
   await httpJson('/api/crm/customers', { token: scopedSalesLogin.token, expectedStatus: 403 });
 
@@ -427,6 +443,103 @@ async function main() {
   });
   assert.strictEqual(completedCosting.ok, true);
   assert.strictEqual(completedCosting.costing_request.status, 'completed');
+
+  await httpJson('/api/crm/freight-quotes', { token: adminToken });
+  await httpJson('/api/crm/freight-quotes', { token: scopedSalesLogin.token, expectedStatus: 403 });
+  await httpJson('/api/crm/freight-quotes', { token: costingLogin.token, expectedStatus: 403 });
+
+  const freightQuoteOne = await httpJson(`/api/crm/inquiries/${inquiryId}/freight-quotes`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      assigned_to: 'freight_guard',
+      assigned_to_user_id: freightMe.user.id,
+      quote_source: 'manual',
+      forwarder_name: 'Freight A',
+      forwarder_contact: 'forwarder-a@example.com',
+      shipping_mode: 'sea',
+      origin_port: 'Shenzhen',
+      destination_country: 'Thailand',
+      destination_port: 'Bangkok',
+      destination_address: 'Bangkok warehouse',
+      container_type: 'LCL',
+      cargo_weight: '1200kg',
+      cargo_volume: '8cbm',
+      package_type: 'carton',
+      package_count: '200',
+      trade_term: 'CIF',
+      currency: 'RMB',
+      ocean_freight: '3500',
+      trucking_origin: '600',
+      trucking_destination: '900',
+      documentation_fee: '200',
+      thc_origin: '300',
+      thc_destination: '450',
+      customs_clearance_fee: '500',
+      duty_tax_estimate: '1200',
+      destination_local_charge: '800',
+      delivery_fee: '700',
+      insurance_fee: '150',
+      other_fee: '100',
+      valid_until: '2026-07-01',
+      notes: 'first freight quote',
+      status: 'received'
+    }
+  });
+  assert.strictEqual(freightQuoteOne.ok, true);
+  const freightQuoteOneId = Number(freightQuoteOne.freight_quote.id);
+  assert(freightQuoteOneId > 0, 'freight quote id should be > 0');
+  assert.strictEqual(Number(freightQuoteOne.freight_quote.customer_id), crmCustomerId);
+  assert.strictEqual(Number(freightQuoteOne.freight_quote.inquiry_id), inquiryId);
+  assert(Number(freightQuoteOne.freight_quote.total_freight_cost || 0) > 0, 'freight total should be calculated when empty');
+
+  const freightQuoteTwo = await httpJson(`/api/crm/inquiries/${inquiryId}/freight-quotes`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      assigned_to: 'freight_guard',
+      assigned_to_user_id: freightMe.user.id,
+      forwarder_name: 'Freight B',
+      shipping_mode: 'sea',
+      destination_country: 'Thailand',
+      destination_port: 'Bangkok',
+      currency: 'RMB',
+      ocean_freight: '3200',
+      total_freight_cost: '5000',
+      status: 'received'
+    }
+  });
+  assert.strictEqual(freightQuoteTwo.ok, true);
+  const freightQuoteTwoId = Number(freightQuoteTwo.freight_quote.id);
+
+  const inquiryFreight = await httpJson(`/api/crm/inquiries/${inquiryId}/freight-quotes`, { token: crmAdminLogin.token });
+  assert(inquiryFreight.rows.some(row => Number(row.id) === freightQuoteOneId), 'inquiry freight list should include first quote');
+  assert(inquiryFreight.rows.some(row => Number(row.id) === freightQuoteTwoId), 'inquiry freight list should include second quote');
+
+  const freightListForAssigned = await httpJson('/api/crm/freight-quotes', { token: freightLogin.token });
+  assert(freightListForAssigned.rows.some(row => Number(row.id) === freightQuoteOneId), 'assigned freight user should see assigned quote');
+  assert(freightListForAssigned.rows.every(row => row.email === undefined && row.whatsapp === undefined && row.raw_content === undefined), 'freight list should hide sensitive fields');
+
+  const freightDetailForAssigned = await httpJson(`/api/crm/freight-quotes/${freightQuoteOneId}`, { token: freightLogin.token });
+  assert.strictEqual(Number(freightDetailForAssigned.freight_quote.id), freightQuoteOneId);
+  assert(!('email' in freightDetailForAssigned.customer), 'freight user customer summary should hide email');
+  assert(!('whatsapp' in freightDetailForAssigned.customer), 'freight user customer summary should hide whatsapp');
+  assert(!JSON.stringify(freightDetailForAssigned).includes('Need 50000 stand up pouches'), 'freight user detail should not include raw communication content');
+
+  await httpJson(`/api/crm/freight-quotes/${freightQuoteTwoId}`, {
+    method: 'PATCH',
+    token: freightLogin.token,
+    body: { status: 'selected', notes: 'selected forwarder' }
+  });
+  const freightAfterSelect = await httpJson(`/api/crm/inquiries/${inquiryId}/freight-quotes`, { token: crmAdminLogin.token });
+  const selectedFreight = freightAfterSelect.rows.find(row => Number(row.id) === freightQuoteTwoId);
+  const oldFreight = freightAfterSelect.rows.find(row => Number(row.id) === freightQuoteOneId);
+  assert.strictEqual(Number(selectedFreight.is_current), 1, 'selected freight quote should be current');
+  assert.strictEqual(Number(oldFreight.is_current), 0, 'other freight quotes should no longer be current');
+
+  const freightPrefill = await httpJson(`/api/crm/inquiries/${inquiryId}/freight-prefill`, { token: crmAdminLogin.token });
+  assert.strictEqual(freightPrefill.suggested_freight_input.destination_country, 'Thailand');
+  assert.strictEqual(freightPrefill.suggested_freight_input.quantity, '50000');
 
   const costCalc = await httpJson('/api/cost/calculate', {
     method: 'POST',

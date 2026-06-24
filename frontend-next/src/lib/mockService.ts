@@ -631,6 +631,42 @@ export const mockService = {
     return api<any>(`/api/crm/inquiries/${inquiryId}/costing-prefill`);
   },
 
+  async createFreightQuote(inquiryId: number | string, payload: any) {
+    return api<any>(`/api/crm/inquiries/${inquiryId}/freight-quotes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listFreightQuotes(params: Record<string, any> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) search.set(key, String(value));
+    });
+    return api<any>(`/api/crm/freight-quotes?${search.toString()}`);
+  },
+
+  async getFreightQuote(id: number | string) {
+    return api<any>(`/api/crm/freight-quotes/${id}`);
+  },
+
+  async updateFreightQuote(id: number | string, payload: any) {
+    return api<any>(`/api/crm/freight-quotes/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listInquiryFreightQuotes(inquiryId: number | string) {
+    return api<any>(`/api/crm/inquiries/${inquiryId}/freight-quotes`);
+  },
+
+  async getFreightPrefill(inquiryId: number | string) {
+    return api<any>(`/api/crm/inquiries/${inquiryId}/freight-prefill`);
+  },
+
   async getBossDashboard() {
     return api('/api/orders/stats/boss-dashboard');
   },

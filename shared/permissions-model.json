@@ -43,6 +43,19 @@
       "ordersStages": [],
       "boardStages": []
     },
+    "freight_user": {
+      "modules": {
+        "orders": false,
+        "workorder": false,
+        "board": false,
+        "cost": false,
+        "stats": false,
+        "admin": false,
+        "crm": false
+      },
+      "ordersStages": [],
+      "boardStages": []
+    },
     "ai_sales": {
       "modules": {
         "orders": true,

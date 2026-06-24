@@ -295,6 +295,55 @@ function initDb() {
       updated_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS freight_quotes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      freight_quote_code TEXT UNIQUE,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      assigned_to TEXT,
+      assigned_to_user_id INTEGER,
+      quote_source TEXT,
+      forwarder_name TEXT,
+      forwarder_contact TEXT,
+      shipping_mode TEXT,
+      origin_city TEXT,
+      origin_port TEXT,
+      destination_country TEXT,
+      destination_port TEXT,
+      destination_address TEXT,
+      container_type TEXT,
+      cargo_weight TEXT,
+      cargo_volume TEXT,
+      package_type TEXT,
+      package_count TEXT,
+      trade_term TEXT,
+      currency TEXT,
+      ocean_freight TEXT,
+      air_freight TEXT,
+      trucking_origin TEXT,
+      trucking_destination TEXT,
+      documentation_fee TEXT,
+      thc_origin TEXT,
+      thc_destination TEXT,
+      customs_clearance_fee TEXT,
+      duty_tax_estimate TEXT,
+      destination_local_charge TEXT,
+      delivery_fee TEXT,
+      insurance_fee TEXT,
+      other_fee TEXT,
+      total_freight_cost TEXT,
+      valid_from TEXT,
+      valid_until TEXT,
+      quote_file_url TEXT,
+      notes TEXT,
+      status TEXT DEFAULT 'draft',
+      is_current INTEGER DEFAULT 1,
+      version_no INTEGER DEFAULT 1,
+      created_by TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS work_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_no TEXT NOT NULL UNIQUE,
@@ -527,6 +576,9 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_costing_requests_inquiry ON costing_requests(inquiry_id, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_costing_requests_assigned ON costing_requests(assigned_to_user_id, assigned_to, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_sheet_lines_request ON cost_sheet_lines(costing_request_id, specification_id, id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_inquiry ON freight_quotes(inquiry_id, is_current DESC, version_no DESC, id DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_assigned ON freight_quotes(assigned_to_user_id, assigned_to, status, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_destination ON freight_quotes(destination_country, destination_port, shipping_mode, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_salesperson ON work_orders(salesperson_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_customer ON work_orders(customer_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_order_id ON work_orders(order_id)");

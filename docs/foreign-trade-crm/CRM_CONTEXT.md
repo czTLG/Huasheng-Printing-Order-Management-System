@@ -308,6 +308,12 @@ Suggested CRM APIs:
 * GET /api/crm/costing-requests/:id - implemented
 * PATCH /api/crm/costing-requests/:id - implemented
 * GET /api/crm/inquiries/:id/costing-prefill - implemented
+* POST /api/crm/inquiries/:id/freight-quotes - implemented in Phase 5
+* GET /api/crm/freight-quotes - implemented in Phase 5
+* GET /api/crm/freight-quotes/:id - implemented in Phase 5
+* PATCH /api/crm/freight-quotes/:id - implemented in Phase 5
+* GET /api/crm/inquiries/:id/freight-quotes - implemented in Phase 5
+* GET /api/crm/inquiries/:id/freight-prefill - implemented in Phase 5
 * GET /api/crm/specifications/:id - implemented
 * POST /api/crm/specifications/:id/layers - implemented
 * GET /api/crm/audit-logs - implemented
@@ -337,6 +343,8 @@ Suggested components:
 * CrmInquiryDetail.tsx - implemented
 * CrmCostingRequests.tsx - implemented in Phase 4
 * CrmCostingRequestDetail.tsx - implemented in Phase 4
+* CrmFreightQuotes.tsx - implemented in Phase 5
+* CrmFreightQuoteDetail.tsx - implemented in Phase 5
 * CrmAuditLogs.tsx - implemented
 
 ## 14. Permission Implementation Strategy
@@ -351,6 +359,8 @@ Suggested components:
 * Field-level permissions must be handled at the API response layer by hiding email, whatsapp, and raw_content.
 
 Phase 4 implementation note: src/routes/crm.js protects full CRM APIs with super_admin and foreign_trade_crm_admin. costing_user can access only assigned costing request APIs and costing-prefill data. costing_user cannot access the full customer or inquiry CRM APIs and does not receive customer email, WhatsApp, raw communication content, or full communication timeline.
+
+Phase 5 implementation note: freight_user has crm=false and can access only assigned freight quote APIs by assigned_to_user_id or assigned_to username. freight_user cannot access full CRM customer/inquiry APIs and does not receive customer email, WhatsApp, raw communication content, or full communication timeline.
 
 ## 15. Costing Integration Strategy
 
@@ -472,3 +482,49 @@ Still deferred:
 New implementation risk:
 
 * costing_user has API access to assigned costing requests but no dedicated frontend menu because crm module remains false by design. A later dedicated costing queue entry may be needed if costing_user should use the React UI directly.
+
+## 21. Phase 5 Freight and Clearance Charge Records Status
+
+Implemented on 2026-06-24:
+
+* freight_quotes table with generated FQ-YYYYMMDD-0001 style codes.
+* freight_user role added with crm=false and no full CRM menu access.
+* POST /api/crm/inquiries/:id/freight-quotes creates freight/clearance charge records tied to inquiry_id and customer_id.
+* GET /api/crm/freight-quotes, GET /api/crm/freight-quotes/:id, PATCH /api/crm/freight-quotes/:id.
+* GET /api/crm/inquiries/:id/freight-quotes returns all freight quotes for an inquiry.
+* GET /api/crm/inquiries/:id/freight-prefill returns destination, quantity, product, package, and trade term seed data.
+* CrmFreightQuotes and CrmFreightQuoteDetail frontend pages.
+* CrmInquiryDetail can create freight quotes and display existing logistics/clearance charges.
+
+freight_quotes fee model:
+
+* Fee fields are stored as TEXT to preserve mixed currencies, remarks, and freight-forwarder formatting.
+* total_freight_cost is preserved when manually provided.
+* If total_freight_cost is empty, the backend attempts to sum parseable numeric fee fields.
+* Sum failures do not block saving.
+* Currency conversion is deferred to quotation phases.
+
+freight_user permission rules:
+
+* freight_user can only access assigned freight quotes.
+* Assignment is checked by assigned_to_user_id or assigned_to username.
+* freight_user responses hide customer email, WhatsApp, raw_content, and communication timeline.
+* freight_user does not receive crm=true and has no full CRM menu by default.
+
+selected / is_current rules:
+
+* Each inquiry can have multiple freight_quotes.
+* When a quote is updated to status=selected, that quote is set is_current=1.
+* Other freight_quotes for the same inquiry are set is_current=0.
+* When a quote is updated to status=expired, that quote is set is_current=0.
+
+Still deferred:
+
+* Quotation versions and quotation_lines.
+* Currency conversion and formal quotation rollup.
+* Dedicated freight_user frontend queue entry.
+* AI Inbox, IMAP, weekly reports, and order conversion.
+
+New implementation risk:
+
+* freight_user assigned API access exists, but React navigation is still hidden because freight_user has crm=false. A later dedicated logistics queue may be needed.

@@ -174,7 +174,7 @@
 
 * Operator: Codex
 * Branch: feature/foreign-trade-crm
-* Commit: pending
+* Commit: 308fdec
 * Scope:
   * 实现 CRM 询盘到成本核算请求的桥接
   * 新增 costing_requests 和 cost_sheet_lines
@@ -237,3 +237,68 @@
   * Defer formal cost_sheets abstraction
 * Next step:
   * Phase 5: logistics, clearance, and miscellaneous charge records
+
+---
+
+## 2026-06-24 - Phase 5 - Freight and Clearance Charge Records
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: pending
+* Scope:
+  * 实现 CRM 询盘下物流、货代、清关、目的港、本地派送等费用记录
+  * 新增 freight_quotes 表
+  * 新增 freight_user 受限 API 权限
+  * 新增 CRM 物流列表、详情编辑页
+  * 在询盘详情增加物流/清关费用区域
+  * 保持 quotations、订单转化、AI Inbox、Cost.tsx 不变
+* Files changed:
+  * shared/permissions-model.json
+  * src/db.js
+  * src/middleware/auth.js
+  * src/routes/crm.js
+  * frontend-next/src/App.tsx
+  * frontend-next/src/components/Admin.tsx
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmInquiryDetail.tsx
+  * frontend-next/src/components/crm/CrmFreightQuotes.tsx
+  * frontend-next/src/components/crm/CrmFreightQuoteDetail.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * Added freight_quotes table
+  * Added indexes for freight quote inquiry lookup, assignment lookup, and destination/shipping filters
+* Permission changes:
+  * Added freight_user role
+  * freight_user has crm=false
+  * freight_user can access only assigned freight quote APIs
+  * freight_user responses hide email, WhatsApp, raw_content, and communication timeline
+  * costing_user and normal ai_sales cannot access freight quote APIs
+* API changes:
+  * POST /api/crm/inquiries/:id/freight-quotes
+  * GET /api/crm/freight-quotes
+  * GET /api/crm/freight-quotes/:id
+  * PATCH /api/crm/freight-quotes/:id
+  * GET /api/crm/inquiries/:id/freight-quotes
+  * GET /api/crm/inquiries/:id/freight-prefill
+* Frontend changes:
+  * Added CRM 物流 menu entry for full CRM users
+  * Added CrmFreightQuotes page
+  * Added CrmFreightQuoteDetail page
+  * Added freight quote creation and existing freight quote display to CrmInquiryDetail
+* Build result:
+  * frontend-next npm run build: PASS
+* Test result:
+  * frontend-next npm run lint: PASS
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * freight_user has assigned API access but no dedicated frontend queue because crm=false
+  * Fee fields are TEXT, so exact currency conversion is deferred
+* Decisions:
+  * Do not implement quotations or quotation_lines in Phase 5
+  * Do not modify Cost.tsx or costing formulas
+  * Store fee items as TEXT and only sum parseable numeric values when total_freight_cost is empty
+* Next step:
+  * Phase 6: quotation versions

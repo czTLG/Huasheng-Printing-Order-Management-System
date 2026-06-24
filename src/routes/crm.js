@@ -5,6 +5,7 @@ const { allowRoles } = require('../middleware/auth');
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
 const COSTING_ROLES = ['super_admin', 'foreign_trade_crm_admin', 'costing_user'];
+const FREIGHT_ROLES = ['super_admin', 'foreign_trade_crm_admin', 'freight_user'];
 
 function roleAllowed(req, roles) {
   return !!req.user && roles.includes(req.user.role);
@@ -13,7 +14,11 @@ function roleAllowed(req, roles) {
 router.use((req, res, next) => {
   const isCostingReadOrUpdate = req.path.startsWith('/costing-requests') || /\/costing-prefill$/.test(req.path);
   const isCreateCostingRequest = req.method === 'POST' && /^\/inquiries\/\d+\/costing-requests$/.test(req.path);
-  const roles = isCostingReadOrUpdate && !isCreateCostingRequest ? COSTING_ROLES : CRM_ROLES;
+  const isFreightAccess = req.path.startsWith('/freight-quotes') || /^\/inquiries\/\d+\/freight-quotes$/.test(req.path);
+  const isCreateFreightQuote = req.method === 'POST' && /^\/inquiries\/\d+\/freight-quotes$/.test(req.path);
+  const roles = isCostingReadOrUpdate && !isCreateCostingRequest
+    ? COSTING_ROLES
+    : (isFreightAccess && !isCreateFreightQuote ? FREIGHT_ROLES : CRM_ROLES);
   if (!roleAllowed(req, roles)) {
     return res.status(403).json({ error: '无权限访问该功能', yourRole: req.user?.role || null, need: roles });
   }
@@ -963,13 +968,379 @@ router.get('/inquiries/:id/costing-prefill', (req, res) => {
   }
 });
 
+function isFreightUser(req) {
+  return req.user?.role === 'freight_user';
+}
+
+function assertFreightAssignment(req, row) {
+  if (!isFreightUser(req)) return true;
+  const userName = String(req.user?.userName || '');
+  const userId = Number(req.user?.id || 0);
+  return Number(row?.assigned_to_user_id || 0) === userId || String(row?.assigned_to || '') === userName;
+}
+
+const FREIGHT_FEE_FIELDS = [
+  'ocean_freight', 'air_freight', 'trucking_origin', 'trucking_destination',
+  'documentation_fee', 'thc_origin', 'thc_destination', 'customs_clearance_fee',
+  'duty_tax_estimate', 'destination_local_charge', 'delivery_fee', 'insurance_fee', 'other_fee'
+];
+const FREIGHT_UPDATE_FIELDS = [
+  'assigned_to', 'assigned_to_user_id', 'quote_source', 'forwarder_name', 'forwarder_contact',
+  'shipping_mode', 'origin_city', 'origin_port', 'destination_country', 'destination_port',
+  'destination_address', 'container_type', 'cargo_weight', 'cargo_volume', 'package_type',
+  'package_count', 'trade_term', 'currency', ...FREIGHT_FEE_FIELDS, 'total_freight_cost',
+  'valid_from', 'valid_until', 'quote_file_url', 'notes', 'status'
+];
+
+function parseMoneyText(value) {
+  const raw = String(value || '').replace(/,/g, '').trim();
+  if (!raw) return null;
+  const match = raw.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const num = Number(match[0]);
+  return Number.isFinite(num) ? num : null;
+}
+
+function computeFreightTotal(body = {}) {
+  const manual = text(body.total_freight_cost);
+  if (manual) return manual;
+  let total = 0;
+  let count = 0;
+  FREIGHT_FEE_FIELDS.forEach((field) => {
+    const num = parseMoneyText(body[field]);
+    if (num === null) return;
+    total += num;
+    count += 1;
+  });
+  return count > 0 ? String(total) : '';
+}
+
+function generateFreightQuoteCode() {
+  const day = now().slice(0, 10).replace(/-/g, '');
+  const prefix = `FQ-${day}-`;
+  const row = db.prepare('SELECT freight_quote_code FROM freight_quotes WHERE freight_quote_code LIKE ? ORDER BY freight_quote_code DESC LIMIT 1').get(`${prefix}%`);
+  const last = row?.freight_quote_code ? Number(String(row.freight_quote_code).slice(prefix.length)) : 0;
+  return `${prefix}${String((Number.isFinite(last) ? last : 0) + 1).padStart(4, '0')}`;
+}
+
+function getFreightQuoteRow(id) {
+  return db.prepare(`
+    SELECT
+      fq.*,
+      COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未命名客户') AS customer_display_name,
+      c.country AS customer_country,
+      i.inquiry_title,
+      i.product_type,
+      i.quantity,
+      i.destination_country AS inquiry_destination_country,
+      i.destination_port AS inquiry_destination_port,
+      i.destination_address AS inquiry_destination_address,
+      i.trade_term_requested,
+      s.bag_type,
+      s.film_type,
+      s.size_width,
+      s.size_height,
+      s.gusset_size,
+      s.thickness_total,
+      s.material_structure_text
+    FROM freight_quotes fq
+    LEFT JOIN customers c ON c.id = fq.customer_id
+    LEFT JOIN inquiries i ON i.id = fq.inquiry_id
+    LEFT JOIN inquiry_specifications s ON s.id = i.latest_specification_id
+    WHERE fq.id = ?
+  `).get(id);
+}
+
+function freightChanges(oldRow, body) {
+  return FREIGHT_UPDATE_FIELDS
+    .filter((field) => Object.prototype.hasOwnProperty.call(body, field))
+    .map((field) => ({
+      field,
+      oldValue: oldRow ? oldRow[field] ?? '' : '',
+      newValue: body[field] ?? ''
+    }))
+    .filter((item) => String(item.oldValue ?? '') !== String(item.newValue ?? ''));
+}
+
+router.post('/inquiries/:id/freight-quotes', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    const inquiry = getInquiry(inquiryId);
+    if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const body = req.body || {};
+    const ts = now();
+    const maxRow = db.prepare('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM freight_quotes WHERE inquiry_id = ?').get(inquiryId);
+    const code = generateFreightQuoteCode();
+    const total = computeFreightTotal(body);
+    const result = db.prepare(`
+      INSERT INTO freight_quotes (
+        freight_quote_code, customer_id, inquiry_id, assigned_to, assigned_to_user_id, quote_source,
+        forwarder_name, forwarder_contact, shipping_mode, origin_city, origin_port, destination_country,
+        destination_port, destination_address, container_type, cargo_weight, cargo_volume, package_type,
+        package_count, trade_term, currency, ocean_freight, air_freight, trucking_origin,
+        trucking_destination, documentation_fee, thc_origin, thc_destination, customs_clearance_fee,
+        duty_tax_estimate, destination_local_charge, delivery_fee, insurance_fee, other_fee,
+        total_freight_cost, valid_from, valid_until, quote_file_url, notes, status, is_current,
+        version_no, created_by, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+    `).run(
+      code,
+      Number(inquiry.customer_id || 0),
+      inquiryId,
+      text(body.assigned_to),
+      Number(body.assigned_to_user_id || 0) || null,
+      text(body.quote_source || 'manual'),
+      text(body.forwarder_name),
+      text(body.forwarder_contact),
+      text(body.shipping_mode || 'sea'),
+      text(body.origin_city),
+      text(body.origin_port),
+      text(body.destination_country || inquiry.destination_country),
+      text(body.destination_port || inquiry.destination_port),
+      text(body.destination_address || inquiry.destination_address),
+      text(body.container_type),
+      text(body.cargo_weight),
+      text(body.cargo_volume),
+      text(body.package_type),
+      text(body.package_count),
+      text(body.trade_term || inquiry.trade_term_requested),
+      text(body.currency || 'RMB'),
+      text(body.ocean_freight),
+      text(body.air_freight),
+      text(body.trucking_origin),
+      text(body.trucking_destination),
+      text(body.documentation_fee),
+      text(body.thc_origin),
+      text(body.thc_destination),
+      text(body.customs_clearance_fee),
+      text(body.duty_tax_estimate),
+      text(body.destination_local_charge),
+      text(body.delivery_fee),
+      text(body.insurance_fee),
+      text(body.other_fee),
+      total,
+      text(body.valid_from),
+      text(body.valid_until),
+      text(body.quote_file_url),
+      text(body.notes),
+      text(body.status || 'draft'),
+      Number(maxRow?.max_version || 0) + 1,
+      req.user.userName,
+      ts,
+      ts
+    );
+    const row = getFreightQuoteRow(result.lastInsertRowid);
+    crmAudit(req, 'create_freight_quote', 'crm_freight_quote', result.lastInsertRowid, {
+      freight_quote_id: result.lastInsertRowid,
+      freight_quote_code: code,
+      inquiry_id: inquiryId,
+      customer_id: inquiry.customer_id,
+      old_status: '',
+      new_status: row.status,
+      changed_fields: [],
+      assigned_to: row.assigned_to,
+      assigned_to_user_id: row.assigned_to_user_id
+    });
+    res.json({ ok: true, freight_quote: row });
+  } catch (err) {
+    handleError(res, err, '物流报价创建失败');
+  }
+});
+
+router.get('/freight-quotes', (req, res) => {
+  try {
+    const params = [];
+    let where = 'WHERE 1 = 1';
+    if (isFreightUser(req)) {
+      where += ' AND (fq.assigned_to_user_id = ? OR fq.assigned_to = ?)';
+      params.push(Number(req.user.id || 0), String(req.user.userName || ''));
+    }
+    ['status', 'assigned_to', 'customer_id', 'inquiry_id', 'destination_country', 'destination_port', 'forwarder_name', 'shipping_mode'].forEach((key) => {
+      const value = text(req.query[key]);
+      if (!value) return;
+      where += ` AND fq.${key} = ?`;
+      params.push(key.endsWith('_id') ? Number(value) : value);
+    });
+    const q = text(req.query.q);
+    if (q) {
+      const like = `%${q}%`;
+      where += ' AND (fq.freight_quote_code LIKE ? OR fq.forwarder_name LIKE ? OR c.company_name LIKE ? OR c.name LIKE ? OR i.inquiry_title LIKE ?)';
+      params.push(like, like, like, like, like);
+    }
+    if (text(req.query.date_from)) {
+      where += ' AND fq.created_at >= ?';
+      params.push(text(req.query.date_from));
+    }
+    if (text(req.query.date_to)) {
+      where += ' AND fq.created_at <= ?';
+      params.push(text(req.query.date_to));
+    }
+    const rows = db.prepare(`
+      SELECT
+        fq.*,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未命名客户') AS customer_display_name,
+        c.country AS customer_country,
+        i.inquiry_title,
+        i.product_type,
+        i.quantity
+      FROM freight_quotes fq
+      LEFT JOIN customers c ON c.id = fq.customer_id
+      LEFT JOIN inquiries i ON i.id = fq.inquiry_id
+      ${where}
+      ORDER BY fq.updated_at DESC, fq.id DESC
+      LIMIT 300
+    `).all(...params);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '物流报价列表读取失败');
+  }
+});
+
+router.get('/freight-quotes/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const row = getFreightQuoteRow(id);
+    if (!row) return res.status(404).json({ ok: false, error: '物流报价不存在' });
+    if (!assertFreightAssignment(req, row)) return res.status(403).json({ error: '无权限访问该物流报价' });
+    const customer = getCustomer(Number(row.customer_id || 0));
+    const inquiry = getInquiry(Number(row.inquiry_id || 0));
+    const specification = inquiry?.latest_specification_id ? getSpecification(Number(inquiry.latest_specification_id || 0)) : null;
+    const auditLogs = db.prepare(`
+      SELECT *
+      FROM audit_logs
+      WHERE resource_type = 'crm_freight_quote' AND resource_id = ?
+      ORDER BY id DESC
+      LIMIT 100
+    `).all(String(id));
+    res.json({
+      ok: true,
+      freight_quote: row,
+      customer: safeCustomerSummary(customer || {}, !isFreightUser(req)),
+      inquiry,
+      current_specification: specification,
+      audit_logs: auditLogs
+    });
+  } catch (err) {
+    handleError(res, err, '物流报价详情读取失败');
+  }
+});
+
+router.patch('/freight-quotes/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const oldRow = getFreightQuoteRow(id);
+    if (!oldRow) return res.status(404).json({ ok: false, error: '物流报价不存在' });
+    if (!assertFreightAssignment(req, oldRow)) return res.status(403).json({ error: '无权限更新该物流报价' });
+    const body = { ...(req.body || {}) };
+    if (Object.prototype.hasOwnProperty.call(body, 'total_freight_cost') || FREIGHT_FEE_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
+      body.total_freight_cost = computeFreightTotal({ ...oldRow, ...body });
+    }
+    const changes = freightChanges(oldRow, body);
+    updateByFields('freight_quotes', id, body, FREIGHT_UPDATE_FIELDS);
+    const nextStatus = text(body.status || oldRow.status);
+    if (nextStatus === 'selected') {
+      db.prepare('UPDATE freight_quotes SET is_current = 0, updated_at = ? WHERE inquiry_id = ? AND id <> ?').run(now(), oldRow.inquiry_id, id);
+      db.prepare('UPDATE freight_quotes SET is_current = 1, updated_at = ? WHERE id = ?').run(now(), id);
+    } else if (nextStatus === 'expired') {
+      db.prepare('UPDATE freight_quotes SET is_current = 0, updated_at = ? WHERE id = ?').run(now(), id);
+    }
+    const action = nextStatus === 'selected'
+      ? 'select_freight_quote'
+      : nextStatus === 'expired'
+        ? 'expire_freight_quote'
+        : nextStatus === 'cancelled'
+          ? 'cancel_freight_quote'
+          : 'update_freight_quote';
+    crmAudit(req, action, 'crm_freight_quote', id, {
+      freight_quote_id: id,
+      freight_quote_code: oldRow.freight_quote_code,
+      inquiry_id: oldRow.inquiry_id,
+      customer_id: oldRow.customer_id,
+      old_status: oldRow.status,
+      new_status: nextStatus,
+      changed_fields: changes,
+      assigned_to: Object.prototype.hasOwnProperty.call(body, 'assigned_to') ? text(body.assigned_to) : oldRow.assigned_to,
+      assigned_to_user_id: Object.prototype.hasOwnProperty.call(body, 'assigned_to_user_id') ? Number(body.assigned_to_user_id || 0) : oldRow.assigned_to_user_id
+    });
+    res.json({ ok: true, freight_quote: getFreightQuoteRow(id) });
+  } catch (err) {
+    handleError(res, err, '物流报价更新失败');
+  }
+});
+
+router.get('/inquiries/:id/freight-quotes', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    if (!getInquiry(inquiryId)) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const params = [inquiryId];
+    let where = 'WHERE fq.inquiry_id = ?';
+    if (isFreightUser(req)) {
+      where += ' AND (fq.assigned_to_user_id = ? OR fq.assigned_to = ?)';
+      params.push(Number(req.user.id || 0), String(req.user.userName || ''));
+    }
+    const rows = db.prepare(`
+      SELECT
+        fq.*,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未命名客户') AS customer_display_name,
+        c.country AS customer_country,
+        i.inquiry_title,
+        i.product_type,
+        i.quantity
+      FROM freight_quotes fq
+      LEFT JOIN customers c ON c.id = fq.customer_id
+      LEFT JOIN inquiries i ON i.id = fq.inquiry_id
+      ${where}
+      ORDER BY fq.is_current DESC, fq.version_no DESC, fq.id DESC
+    `).all(...params);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '询盘物流报价读取失败');
+  }
+});
+
+router.get('/inquiries/:id/freight-prefill', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    const inquiry = getInquiry(inquiryId);
+    if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const customer = getCustomer(Number(inquiry.customer_id || 0));
+    const specification = inquiry.latest_specification_id ? getSpecification(Number(inquiry.latest_specification_id || 0)) : null;
+    const suggested = {
+      destination_country: inquiry.destination_country || '',
+      destination_port: inquiry.destination_port || '',
+      destination_address: inquiry.destination_address || '',
+      quantity: inquiry.quantity || '',
+      product_type: inquiry.product_type || specification?.product_type || '',
+      shipping_mode: 'sea',
+      package_type: '',
+      trade_term: inquiry.trade_term_requested || ''
+    };
+    res.json({
+      ok: true,
+      inquiry,
+      customer: safeCustomerSummary(customer || {}, true),
+      current_specification: specification,
+      material_structure_text: specification?.material_structure_text || '',
+      quantity: inquiry.quantity || '',
+      destination_country: inquiry.destination_country || '',
+      destination_port: inquiry.destination_port || '',
+      destination_address: inquiry.destination_address || '',
+      trade_term_requested: inquiry.trade_term_requested || '',
+      suggested_freight_input: suggested
+    });
+  } catch (err) {
+    handleError(res, err, '物流费用预填数据读取失败');
+  }
+});
+
 router.get('/audit-logs', (req, res) => {
   try {
     const resourceType = text(req.query.resourceType);
     const action = text(req.query.action);
     const user = text(req.query.user);
     const params = [];
-    let where = "WHERE (resource_type LIKE 'crm_%' OR action IN ('create_customer','update_customer','create_communication_log','create_inquiry','update_inquiry','create_specification_version','create_specification_layer','update_customer_latest_inquiry','create_costing_request','update_costing_request','assign_costing_request','complete_costing_request','reject_costing_request','cancel_costing_request','update_inquiry_costing_status','update_cost_snapshot_crm_link'))";
+    let where = "WHERE (resource_type LIKE 'crm_%' OR action IN ('create_customer','update_customer','create_communication_log','create_inquiry','update_inquiry','create_specification_version','create_specification_layer','update_customer_latest_inquiry','create_costing_request','update_costing_request','assign_costing_request','complete_costing_request','reject_costing_request','cancel_costing_request','update_inquiry_costing_status','update_cost_snapshot_crm_link','create_freight_quote','update_freight_quote','select_freight_quote','expire_freight_quote','cancel_freight_quote'))";
     if (resourceType) {
       where += ' AND resource_type = ?';
       params.push(resourceType);

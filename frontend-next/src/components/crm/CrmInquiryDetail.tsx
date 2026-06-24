@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Calculator, Copy, Layers, Plus, RefreshCcw, Save } from 'lucide-react';
+import { ArrowLeft, Calculator, Copy, Layers, Plus, RefreshCcw, Save, Ship } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
 
 type Props = {
@@ -13,6 +13,7 @@ const areaClass = 'min-h-[76px] px-3 py-2 rounded-lg border border-slate-200 bg-
 export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const [data, setData] = useState<any>(null);
   const [costingRequests, setCostingRequests] = useState<any[]>([]);
+  const [freightQuotes, setFreightQuotes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [inquiryForm, setInquiryForm] = useState<any>({});
@@ -33,14 +34,51 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
     due_at: '',
     request_note: '',
   });
+  const [freightForm, setFreightForm] = useState({
+    assigned_to: '',
+    assigned_to_user_id: '',
+    forwarder_name: '',
+    shipping_mode: 'sea',
+    origin_port: '',
+    destination_country: '',
+    destination_port: '',
+    destination_address: '',
+    container_type: '',
+    cargo_weight: '',
+    cargo_volume: '',
+    package_type: '',
+    package_count: '',
+    trade_term: '',
+    currency: 'RMB',
+    ocean_freight: '',
+    trucking_origin: '',
+    trucking_destination: '',
+    documentation_fee: '',
+    thc_origin: '',
+    thc_destination: '',
+    customs_clearance_fee: '',
+    duty_tax_estimate: '',
+    destination_local_charge: '',
+    delivery_fee: '',
+    insurance_fee: '',
+    other_fee: '',
+    total_freight_cost: '',
+    valid_until: '',
+    notes: '',
+    status: 'draft',
+  });
 
   const load = async () => {
     setLoading(true);
     try {
       const detail = await mockService.getCrmInquiry(inquiryId);
-      const costing = await mockService.listCostingRequests({ inquiry_id: inquiryId });
+      const [costing, freight] = await Promise.all([
+        mockService.listCostingRequests({ inquiry_id: inquiryId }),
+        mockService.listInquiryFreightQuotes(inquiryId),
+      ]);
       setData(detail);
       setCostingRequests(Array.isArray(costing?.rows) ? costing.rows : []);
+      setFreightQuotes(Array.isArray(freight?.rows) ? freight.rows : []);
       setInquiryForm({
         inquiry_title: detail.inquiry?.inquiry_title || '',
         status: detail.inquiry?.status || 'new',
@@ -114,6 +152,20 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
     }
   };
 
+  const createFreightQuote = async () => {
+    setSaving(true);
+    try {
+      await mockService.createFreightQuote(inquiryId, {
+        ...freightForm,
+        assigned_to_user_id: Number(freightForm.assigned_to_user_id || 0) || undefined,
+      });
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '物流报价已创建' } }));
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading) return <div className="p-8 text-sm font-bold text-slate-400">加载询盘详情...</div>;
   if (!data?.inquiry) return <div className="p-8 text-sm font-bold text-slate-400">询盘不存在</div>;
 
@@ -121,6 +173,7 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const specifications = Array.isArray(data.specifications) ? data.specifications : [];
   const layers = Array.isArray(current?.layers) ? current.layers : [];
   const latestCosting = costingRequests[0] || null;
+  const currentFreight = freightQuotes.find((row: any) => Number(row.is_current) === 1) || freightQuotes[0] || null;
   const costingSummary = [
     `客户简称：${data.inquiry.customer_display_name || '-'}`,
     `询盘编号：${data.inquiry.inquiry_code || data.inquiry.id || '-'}`,
@@ -297,6 +350,58 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
           }} className="h-9 px-4 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-black flex items-center gap-2"><Copy className="w-4 h-4" /> 复制成本核算摘要</button>
         </div>
         <pre className="whitespace-pre-wrap rounded-lg bg-slate-50 border border-slate-100 p-4 text-sm text-slate-700">{costingSummary}</pre>
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-800 flex items-center gap-2"><Ship className="w-4 h-4 text-indigo-600" /> 物流/清关费用</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              目的地 {data.inquiry.destination_country || '-'} / {data.inquiry.destination_port || '-'} · 数量 {data.inquiry.quantity || '-'} · 贸易条款 {data.inquiry.trade_term_requested || '-'}
+            </p>
+          </div>
+          <div className="text-xs font-bold text-slate-500">
+            {currentFreight ? `当前 ${currentFreight.freight_quote_code} · ${currentFreight.status} · ${currentFreight.currency || ''} ${currentFreight.total_freight_cost || '-'}` : '暂无物流报价'}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input className={inputClass} value={freightForm.assigned_to} onChange={e => setFreightForm(f => ({ ...f, assigned_to: e.target.value }))} placeholder="物流负责人用户名" />
+          <input className={inputClass} value={freightForm.assigned_to_user_id} onChange={e => setFreightForm(f => ({ ...f, assigned_to_user_id: e.target.value }))} placeholder="负责人用户 ID" />
+          <input className={inputClass} value={freightForm.forwarder_name} onChange={e => setFreightForm(f => ({ ...f, forwarder_name: e.target.value }))} placeholder="货代名称" />
+          <select className={inputClass} value={freightForm.shipping_mode} onChange={e => setFreightForm(f => ({ ...f, shipping_mode: e.target.value }))}>
+            <option value="sea">sea</option><option value="air">air</option><option value="truck">truck</option><option value="express">express</option>
+          </select>
+          {['origin_port','destination_country','destination_port','destination_address','container_type','cargo_weight','cargo_volume','package_type','package_count','trade_term','currency','ocean_freight','trucking_origin','trucking_destination','documentation_fee','thc_origin','thc_destination','customs_clearance_fee','duty_tax_estimate','destination_local_charge','delivery_fee','insurance_fee','other_fee','total_freight_cost','valid_until'].map(field => (
+            <input key={field} className={inputClass} value={(freightForm as any)[field] || ''} onChange={e => setFreightForm(f => ({ ...f, [field]: e.target.value }))} placeholder={field} />
+          ))}
+          <select className={inputClass} value={freightForm.status} onChange={e => setFreightForm(f => ({ ...f, status: e.target.value }))}>
+            <option value="draft">draft</option><option value="requested">requested</option><option value="received">received</option><option value="selected">selected</option>
+          </select>
+        </div>
+        <textarea className={`${areaClass} w-full`} value={freightForm.notes} onChange={e => setFreightForm(f => ({ ...f, notes: e.target.value }))} placeholder="物流/清关备注" />
+        <button disabled={saving} onClick={createFreightQuote} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">新增物流报价</button>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
+              <tr><th className="px-3 py-2">编号</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">货代</th><th className="px-3 py-2">目的地</th><th className="px-3 py-2">方式</th><th className="px-3 py-2">费用</th><th className="px-3 py-2">有效期</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {freightQuotes.map((row: any) => (
+                <tr key={row.id}>
+                  <td className="px-3 py-2 text-sm font-black">{row.freight_quote_code}{Number(row.is_current) === 1 ? ' · current' : ''}</td>
+                  <td className="px-3 py-2 text-sm">{row.status}</td>
+                  <td className="px-3 py-2 text-sm">{row.forwarder_name || '-'}</td>
+                  <td className="px-3 py-2 text-sm">{[row.destination_country, row.destination_port].filter(Boolean).join(' / ') || '-'}</td>
+                  <td className="px-3 py-2 text-sm">{row.shipping_mode || '-'}</td>
+                  <td className="px-3 py-2 text-sm font-bold">{row.currency || ''} {row.total_freight_cost || '-'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-400">{row.valid_until || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );
