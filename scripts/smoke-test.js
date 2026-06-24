@@ -110,8 +110,12 @@ async function main() {
 
   await waitForHealth();
 
+  // Extract randomly generated admin password from server stdout
+  const pwMatch = stdout.match(/\[db\] Created default admin account\. username=admin password=(\S+)/);
+  const adminPwd = pwMatch ? pwMatch[1] : 'admin';
+
   await login('admin', 'wrong-password', 401);
-  const adminLogin = await login('admin', 'admin');
+  const adminLogin = await login('admin', adminPwd);
   assert(adminLogin?.token, 'admin login should return token');
   const adminToken = adminLogin.token;
 
