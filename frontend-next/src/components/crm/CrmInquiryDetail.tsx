@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Calculator, Copy, Layers, Plus, RefreshCcw, Save, Ship } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
+import CrmTermTooltip from './CrmTermTooltip';
 
 type Props = {
   inquiryId: number;
@@ -242,8 +243,12 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
               <span className="text-sm font-black text-indigo-950">{current.bag_type || current.film_type || current.product_type || '未填写袋型'}</span>
               <span className="text-xs font-bold text-indigo-700">{current.size_width || '-'} x {current.size_height || '-'} {current.gusset_size ? `+ ${current.gusset_size}` : ''}</span>
             </div>
-            <div className="text-sm text-indigo-900 mt-2">{current.material_structure_text || '-'}</div>
-            <div className="text-xs font-bold text-indigo-700 mt-1">厚度 {current.thickness_total || '-'} {current.thickness_unit || ''} · 印色 {current.printing_colors || '-'}</div>
+            <div className="text-sm text-indigo-900 mt-2 flex items-center gap-2">
+              <span>材料结构</span>
+              <CrmTermTooltip term="Lamination" />
+              <span>{current.material_structure_text || '-'}</span>
+            </div>
+            <div className="text-xs font-bold text-indigo-700 mt-1">厚度 {current.thickness_total || '-'} {current.thickness_unit || ''} <CrmTermTooltip term="Micron" /> · 印色 {current.printing_colors || '-'}</div>
           </div>
         ) : <div className="text-sm text-slate-400">暂无规格版本</div>}
 

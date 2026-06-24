@@ -127,7 +127,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
                 <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 text-xs font-black">{data.customer.stage || 'new'}</span>
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm">
               <div className="rounded-lg border border-slate-100 p-3">
                 <div className="text-xs font-bold text-slate-400">最近询盘</div>
                 <div className="text-sm font-black text-slate-900 mt-1">{latest?.inquiry_title || '-'}</div>
@@ -143,6 +143,11 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
                 <div className="text-sm font-black text-slate-900 mt-1">{overview.latestFreight?.freight_quote_code || '-'}</div>
                 <div className="text-xs text-slate-500 mt-1">{overview.latestFreight?.status || '暂无'} · 总计 {overview.freight_quote_count || 0}</div>
               </div>
+              <div className="rounded-lg border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">待确认导入建议</div>
+                <div className="text-sm font-black text-slate-900 mt-1">{data.pendingImportSuggestionCount || 0}</div>
+                <div className="text-xs text-slate-500 mt-1">最新调研 {latestResearchNote?.title || '未记录'}</div>
+              </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
@@ -154,6 +159,12 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
                 <div className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{data.customer.next_action || latest?.next_action || '暂无下一步动作'}</div>
                 <div className="text-xs text-slate-500 mt-2">下次跟进：{data.customer.next_followup_at || '-'} / 最近联系：{data.customer.last_contact_at || '-'}</div>
               </div>
+              <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">核价与物流状态</div>
+                <div className="text-sm text-slate-700 mt-1">待核价 {overview.pending_costing_count || 0} / 已完成 {overview.completed_costing_count || 0}</div>
+                <div className="text-sm text-slate-700 mt-1">当前物流 {overview.selectedFreight?.freight_quote_code || '未记录'} / {overview.selectedFreight?.total_freight_cost || '未记录'}</div>
+                <div className="text-xs text-slate-500 mt-2">有效期：{overview.selectedFreight?.valid_until || '未记录'}</div>
+              </div>
             </div>
             {data.customer.risk_notes || latestResearchNote?.risk_flags ? (
               <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-100 px-3 py-3 text-sm text-amber-800">
@@ -164,10 +175,10 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
           </div>
           <div className="border border-slate-100 rounded-lg p-4 space-y-3">
             <div className="text-sm font-black text-slate-900">联系信息</div>
-            <div className="text-sm text-slate-600">联系人：{data.customer.contact_person || data.customer.contact || '-'}</div>
-            <div className="text-sm text-slate-600">Email：{data.customer.email || '-'}</div>
-            <div className="text-sm text-slate-600">WhatsApp：{data.customer.whatsapp || '-'}</div>
-            <div className="text-sm text-slate-600 flex items-center gap-2"><Globe className="w-4 h-4 text-slate-400" />{data.customer.website || latestResearchNote?.website || '-'}</div>
+            <div className="text-sm text-slate-600">联系人：{data.customer.contact_person || data.customer.contact || '未记录'}</div>
+            <div className="text-sm text-slate-600">Email：{data.customer.email || '未记录'}</div>
+            <div className="text-sm text-slate-600">WhatsApp：{data.customer.whatsapp || '未记录'}</div>
+            <div className="text-sm text-slate-600 flex items-center gap-2"><Globe className="w-4 h-4 text-slate-400" />{data.customer.website || latestResearchNote?.website || '未记录'}</div>
             <div className="pt-2 border-t border-slate-100 text-xs text-slate-500 space-y-1">
               <div>来源：{data.customer.source_channel || '-'}</div>
               <div>负责人：{data.customer.owner_id || '-'}</div>
@@ -176,7 +187,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             {latestCommunication ? (
               <div className="pt-2 border-t border-slate-100">
                 <div className="text-xs font-bold text-slate-400">最近沟通摘要</div>
-                <div className="text-sm text-slate-700 mt-1">{latestCommunication.ai_summary || latestCommunication.subject || latestCommunication.raw_content || '-'}</div>
+              <div className="text-sm text-slate-700 mt-1">{latestCommunication.ai_summary || latestCommunication.subject || latestCommunication.raw_content || '未记录'}</div>
               </div>
             ) : null}
           </div>
@@ -226,7 +237,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
           <button onClick={() => onOpenInquiry?.(Number(latest.id))} className="w-full text-left rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 hover:border-indigo-300 space-y-1">
             <div className="text-sm font-black text-indigo-900">{latest.inquiry_title}</div>
             <div className="text-xs font-bold text-indigo-600">{latest.status} · {latest.priority} · {latest.quantity || '-'}</div>
-            <div className="text-xs text-indigo-700">{latestSpecification ? `${latestSpecification.bag_type || latestSpecification.film_type || latestSpecification.product_type || '-'} · ${latestSpecification.material_structure_text || '-'}` : '暂无当前规格'}</div>
+            <div className="text-xs text-indigo-700">{latestSpecification ? `${latestSpecification.bag_type || latestSpecification.film_type || latestSpecification.product_type || '未记录'} · ${latestSpecification.material_structure_text || '未记录'}` : '暂无当前规格'}</div>
           </button>
         ) : <div className="text-sm text-slate-400">暂无询盘</div>}
       </section>
@@ -294,6 +305,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             </div>
             <div className="text-sm font-bold text-slate-800 mt-1">{item.subject || '(无主题)'}</div>
             <div className="text-xs text-slate-500 mt-1">处理状态：{item.processing_status || 'new'}</div>
+            <div className="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{item.preview || '未记录'}</div>
           </div>
         ))}
       </section>

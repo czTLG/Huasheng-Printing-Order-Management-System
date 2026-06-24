@@ -10,6 +10,15 @@ function parseBool(value, fallback = true) {
   return String(value).toLowerCase() === 'true';
 }
 
+function maskMailboxUser(value) {
+  const raw = text(value);
+  if (!raw) return '';
+  const [local, domain] = raw.split('@');
+  if (!domain) return raw ? `${raw[0]}***` : '';
+  const prefix = local ? `${local[0]}***` : '***';
+  return `${prefix}@${domain}`;
+}
+
 function getImapConfig() {
   const host = text(process.env.ALIYUN_MAIL_IMAP_HOST);
   const port = Number(process.env.ALIYUN_MAIL_IMAP_PORT || 993);
@@ -19,6 +28,14 @@ function getImapConfig() {
   const syncDays = Number(process.env.ALIYUN_MAIL_SYNC_DAYS || 90);
   const syncLimit = Number(process.env.ALIYUN_MAIL_SYNC_LIMIT || 200);
   return { host, port, secure, user, password, syncDays, syncLimit };
+}
+
+function sanitizeErrorMessage(message) {
+  const raw = text(message);
+  const secret = text(process.env.ALIYUN_MAIL_PASSWORD);
+  if (!raw) return '';
+  if (!secret) return raw;
+  return raw.split(secret).join('[redacted]');
 }
 
 function validateImapConfig(config = getImapConfig()) {
@@ -35,9 +52,47 @@ function validateImapConfig(config = getImapConfig()) {
       port: config.port,
       secure: config.secure,
       user: config.user,
+      userMasked: maskMailboxUser(config.user),
+      passwordConfigured: !!config.password,
       syncDays: config.syncDays,
       syncLimit: config.syncLimit
     }
+  };
+}
+
+function classifyImapError(err) {
+  const code = text(err?.code).toUpperCase();
+  const message = text(err?.message).toLowerCase();
+  if (code === 'ENOTFOUND') {
+    return 'IMAP DNS lookup failed. Please verify IMAP host or run this on the deployment server with external DNS access.';
+  }
+  if (code === 'ECONNREFUSED') {
+    return 'IMAP connection refused. Please verify host, port, and firewall.';
+  }
+  if (code === 'ETIMEDOUT') {
+    return 'IMAP connection timed out. Please verify server network and outbound port 993.';
+  }
+  if (code.includes('AUTH') || code.includes('LOGIN') || message.includes('auth') || message.includes('login failed') || message.includes('invalid credentials')) {
+    return 'IMAP authentication failed. Please verify mailbox user and third-party client password.';
+  }
+  return 'IMAP sync failed.';
+}
+
+function createSyncResult(overrides = {}) {
+  return {
+    id: null,
+    mailbox: '',
+    folder: 'INBOX',
+    messages: [],
+    inserted: [],
+    skipped: [],
+    errors: [],
+    scanned_count: 0,
+    inserted_count: 0,
+    skipped_count: 0,
+    error_count: 0,
+    status: 'pending',
+    ...overrides
   };
 }
 
@@ -157,14 +212,20 @@ function upsertEmailMessage(mailbox, folder, rawMessage) {
 async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' } = {}) {
   const cfgCheck = validateImapConfig();
   const ts = now();
+  const result = createSyncResult({
+    mailbox: cfgCheck.config.user,
+    folder: text(folder || 'INBOX'),
+    status: 'running'
+  });
   const run = db.prepare(`
     INSERT INTO email_sync_runs (mailbox, folder, sync_type, status, started_at, created_by, created_at)
     VALUES (?, ?, 'manual', 'running', ?, ?, ?)
   `).run(cfgCheck.config.user || '', text(folder || 'INBOX'), ts, operator, ts);
   const runId = run.lastInsertRowid;
+  result.id = runId;
 
   if (!cfgCheck.ok) {
-    const message = `Missing IMAP env: ${cfgCheck.missing.join(', ')}`;
+    const message = 'IMAP configuration is incomplete';
     db.prepare(`
       UPDATE email_sync_runs
       SET status = 'failed', finished_at = ?, error_count = 1, error_message = ?
@@ -173,6 +234,7 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
     const error = new Error(message);
     error.code = 'IMAP_ENV_MISSING';
     error.runId = runId;
+    error.summary = { ...result, status: 'failed', error_count: 1, errors: [{ code: error.code, message }] };
     throw error;
   }
 
@@ -191,6 +253,7 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
     const error = new Error(message);
     error.code = 'IMAP_DEP_MISSING';
     error.runId = runId;
+    error.summary = { ...result, status: 'failed', error_count: 1, errors: [{ code: error.code, message }] };
     throw error;
   }
 
@@ -216,10 +279,20 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
 
   try {
     await client.connect();
-    await client.mailboxOpen(text(folder || 'INBOX'), { readOnly: true });
-    const searchResults = await client.search({ since: sinceDate });
+    await client.mailboxOpen(text(folder || 'INBOX'));
+    const searchResultsRaw = await client.search({ since: sinceDate });
+    const searchResults = Array.isArray(searchResultsRaw) ? searchResultsRaw : [];
     const uids = searchResults.slice(-maxItems).reverse();
     scannedCount = uids.length;
+    result.scanned_count = scannedCount;
+    if (!uids.length) {
+      db.prepare(`
+        UPDATE email_sync_runs
+        SET status = 'completed', finished_at = ?, scanned_count = 0, inserted_count = 0, skipped_count = 0, error_count = 0
+        WHERE id = ?
+      `).run(now(), runId);
+      return { ...result, status: 'completed', scanned_count: 0, inserted_count: 0, skipped_count: 0, error_count: 0 };
+    }
     for await (const msg of client.fetch(uids, { uid: true, envelope: true, source: true, bodyStructure: true, internalDate: true, flags: true, headers: true })) {
       try {
         const parsed = await simpleParser(msg.source);
@@ -253,10 +326,20 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
             references: parsed.references || '',
           })
         });
-        if (imported.inserted) insertedCount += 1;
-        else skippedCount += 1;
+        result.messages.push({ id: imported.id, message_id: imported.normalized.message_id, subject: imported.normalized.subject });
+        if (imported.inserted) {
+          insertedCount += 1;
+          result.inserted.push(imported.id);
+        } else {
+          skippedCount += 1;
+          result.skipped.push(imported.id);
+        }
       } catch (err) {
         errorCount += 1;
+        result.errors.push({
+          code: text(err?.code),
+          message: sanitizeErrorMessage(err?.message || err)
+        });
       }
     }
     db.prepare(`
@@ -264,14 +347,32 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
       SET status = 'completed', finished_at = ?, scanned_count = ?, inserted_count = ?, skipped_count = ?, error_count = ?
       WHERE id = ?
     `).run(now(), scannedCount, insertedCount, skippedCount, errorCount, runId);
-    return { id: runId, mailbox, folder, scanned_count: scannedCount, inserted_count: insertedCount, skipped_count: skippedCount, error_count: errorCount };
+    return {
+      ...result,
+      status: 'completed',
+      scanned_count: scannedCount,
+      inserted_count: insertedCount,
+      skipped_count: skippedCount,
+      error_count: errorCount
+    };
   } catch (err) {
+    const message = sanitizeErrorMessage(classifyImapError(err));
     db.prepare(`
       UPDATE email_sync_runs
       SET status = 'failed', finished_at = ?, scanned_count = ?, inserted_count = ?, skipped_count = ?, error_count = ?, error_message = ?
       WHERE id = ?
-    `).run(now(), scannedCount, insertedCount, skippedCount, errorCount + 1, text(err.message || err), runId);
+    `).run(now(), scannedCount, insertedCount, skippedCount, errorCount + 1, message, runId);
     err.runId = runId;
+    err.message = message;
+    err.summary = {
+      ...result,
+      status: 'failed',
+      scanned_count: scannedCount,
+      inserted_count: insertedCount,
+      skipped_count: skippedCount,
+      error_count: errorCount + 1,
+      errors: [...result.errors, { code: text(err?.code), message }]
+    };
     throw err;
   } finally {
     try {
@@ -283,7 +384,10 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
 module.exports = {
   getImapConfig,
   validateImapConfig,
+  maskMailboxUser,
+  classifyImapError,
   cleanMessageText,
   upsertEmailMessage,
+  sanitizeErrorMessage,
   syncMailbox
 };

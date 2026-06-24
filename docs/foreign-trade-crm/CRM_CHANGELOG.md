@@ -435,3 +435,81 @@
   * Keep IMAP sync manual-trigger only
 * Next step:
   * Manual IMAP verification with runtime environment configured, then quotation version work
+
+---
+
+## 2026-06-24 - CRM Workbench Consolidation and Final Daily Batch
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 修复 IMAP 同步失败时的稳定返回结构和错误分类
+  * 增强 IMAP config-status，确保不暴露 password
+  * 保持单一“外贸 CRM”顶层入口，完善统一 CRM 工作台内部结构
+  * 增强客户档案页，补充核价/物流/邮件建议聚合展示
+  * 增强客户优先级页，增加待确认建议与客户类型筛选
+  * 增加静态术语 Tooltip
+  * 不进入 quotations 骨架，优先保证现有 CRM 稳定性
+* Files changed:
+  * src/lib/imapSync.js
+  * src/routes/crm.js
+  * src/server.js
+  * package.json
+  * package-lock.json
+  * frontend-next/src/components/crm/CrmEmailImport.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * frontend-next/src/components/crm/CrmCustomerPriority.tsx
+  * frontend-next/src/components/crm/CrmInquiryDetail.tsx
+  * frontend-next/src/components/crm/CrmCostingRequestDetail.tsx
+  * frontend-next/src/components/crm/CrmFreightQuoteDetail.tsx
+  * frontend-next/src/components/crm/CrmTermTooltip.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * 无新增表结构
+  * 复用既有 email_sync_runs, email_messages, crm_import_suggestions, customer_research_notes
+* Permission changes:
+  * CRM full-access rules unchanged
+  * email config-status, sync, research notes, and customer priority remain restricted to super_admin and foreign_trade_crm_admin
+* API changes:
+  * Hardened POST /api/crm/email/sync failure path
+  * Enhanced GET /api/crm/email/config-status
+  * Enhanced GET /api/crm/customer-priority with pending import suggestion aggregation
+  * Enhanced GET /api/crm/customers/:id with related email preview and richer overview aggregation
+* Frontend changes:
+  * CRM remains a single top-level 外贸 CRM entry with unified CrmModule tabs
+  * Customer detail better surfaces overview, logistics, and email suggestion state
+  * Customer priority page supports customer_type and pending_suggestions filters
+  * Added static glossary tooltip for trade/logistics/material terms
+* IMAP safety fixes:
+  * syncMailbox now uses stable arrays/counters on success and failure
+  * IMAP DNS, timeout, refused, auth, and generic failures are mapped to explicit safe messages
+  * error_message is sanitized and password is never returned
+* CRM menu consolidation:
+  * Kept the single 外贸 CRM entry and internal tabs model
+* Customer profile enhancements:
+  * Added richer overview cards, selected freight summary, pending suggestion count, and email preview
+* Research notes:
+  * Existing research note storage/display preserved; no auto-apply path added
+* Priority dashboard:
+  * Added pending import suggestion visibility and extra filters
+* Tooltip:
+  * Added lightweight static tooltip component, no database dependency
+* Quotation skeleton, if implemented:
+  * Not implemented in this batch to keep build/test risk controlled
+* Build result:
+  * frontend-next npm run build: PASS
+* Test result:
+  * frontend-next npm run lint: not run in this batch
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * Real IMAP connectivity still requires deployment-server validation with external DNS
+  * Customer detail remains a large component and may need later decomposition
+* Decisions:
+  * Prefer CRM workbench stability over rushing quotation skeleton
+  * Keep email import suggestion flow review-only
+* Next step:
+  * Finalize smoke/build evidence, then move into quotation foundation only after this batch is stable

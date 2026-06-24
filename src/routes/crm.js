@@ -144,12 +144,27 @@ function getCustomerOverview(customerId) {
     FROM freight_quotes
     WHERE customer_id = ?
   `).get(customerId) || {};
+  const selectedFreight = db.prepare(`
+    SELECT id, freight_quote_code, total_freight_cost, valid_until, status
+    FROM freight_quotes
+    WHERE customer_id = ? AND is_current = 1
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `).get(customerId) || null;
+  const pendingImportSuggestions = db.prepare(`
+    SELECT COUNT(*) AS total_count
+    FROM crm_import_suggestions cis
+    INNER JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+    WHERE em.matched_customer_id = ? AND cis.status IN ('pending', 'needs_review')
+  `).get(customerId) || {};
   return {
     latestCosting,
     latestFreight,
+    selectedFreight,
     pending_costing_count: Number(summary.pending_costing_count || 0),
     completed_costing_count: Number(summary.completed_costing_count || 0),
     freight_quote_count: Number(freightCount.total_count || 0),
+    pending_import_suggestion_count: Number(pendingImportSuggestions.total_count || 0),
   };
 }
 
@@ -210,6 +225,12 @@ router.get('/customers', (req, res) => {
           FROM freight_quotes fq
           WHERE fq.customer_id = c.id AND fq.status IN ('draft', 'requested', 'received')
         ) AS pending_freight_count,
+        (
+          SELECT COUNT(*)
+          FROM crm_import_suggestions cis
+          INNER JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+          WHERE em.matched_customer_id = c.id AND cis.status IN ('pending', 'needs_review')
+        ) AS pending_import_suggestion_count,
         (
           SELECT suggested_priority
           FROM customer_research_notes rn
@@ -294,7 +315,8 @@ router.get('/customers/:id', (req, res) => {
     const latestSpecification = latestInquiry?.latest_specification_id ? getSpecification(Number(latestInquiry.latest_specification_id)) : null;
     const latestCommunication = communications[0] || null;
     const relatedEmails = db.prepare(`
-      SELECT id, subject, from_email, from_name, received_at, direction, processing_status, matched_inquiry_id
+      SELECT id, subject, from_email, from_name, received_at, direction, processing_status, matched_inquiry_id,
+             SUBSTR(COALESCE(cleaned_text, text_body, ''), 1, 240) AS preview
       FROM email_messages
       WHERE matched_customer_id = ?
       ORDER BY COALESCE(received_at, created_at) DESC, id DESC
@@ -324,6 +346,7 @@ router.get('/customers/:id', (req, res) => {
       relatedEmails,
       latestResearchNote,
       overview,
+      pendingImportSuggestionCount: Number(overview.pending_import_suggestion_count || 0),
       audit_logs: auditLogs
     });
   } catch (err) {
@@ -432,7 +455,7 @@ router.get('/customer-priority', (req, res) => {
   try {
     const params = [];
     let where = 'WHERE COALESCE(c.active, 1) = 1';
-    ['priority', 'stage', 'country', 'owner_id'].forEach((key) => {
+    ['priority', 'stage', 'country', 'owner_id', 'customer_type'].forEach((key) => {
       const value = text(req.query[key]);
       if (!value) return;
       where += ` AND c.${key} = ?`;
@@ -450,6 +473,24 @@ router.get('/customer-priority', (req, res) => {
         WHERE fq.customer_id = c.id AND fq.status IN ('draft', 'requested', 'received')
       )`;
     }
+    if (text(req.query.pending_suggestions) === '1') {
+      where += ` AND EXISTS (
+        SELECT 1
+        FROM crm_import_suggestions cis
+        INNER JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+        WHERE em.matched_customer_id = c.id AND cis.status IN ('pending', 'needs_review')
+      )`;
+    }
+    const keyword = text(req.query.keyword || req.query.q);
+    if (keyword) {
+      const like = `%${keyword}%`;
+      where += ` AND (
+        COALESCE(c.company_name, '') LIKE ? OR COALESCE(c.name, '') LIKE ? OR COALESCE(c.country, '') LIKE ?
+        OR COALESCE(c.customer_type, '') LIKE ? OR COALESCE(c.industry, '') LIKE ? OR COALESCE(c.next_action, '') LIKE ?
+        OR COALESCE(c.risk_notes, '') LIKE ? OR COALESCE(i.inquiry_title, '') LIKE ?
+      )`;
+      params.push(like, like, like, like, like, like, like, like);
+    }
     const rows = db.prepare(`
       SELECT
         ${customerDisplaySelect('c')},
@@ -457,6 +498,7 @@ router.get('/customer-priority', (req, res) => {
         i.inquiry_code AS latest_inquiry_code,
         i.inquiry_title AS latest_inquiry_title,
         i.status AS latest_inquiry_status,
+        i.product_type AS latest_product_type,
         i.updated_at AS latest_inquiry_updated_at,
         i.next_action AS latest_inquiry_next_action,
         (
@@ -467,6 +509,12 @@ router.get('/customer-priority', (req, res) => {
           SELECT COUNT(*) FROM freight_quotes fq
           WHERE fq.customer_id = c.id AND fq.status IN ('draft', 'requested', 'received')
         ) AS pending_freight_count,
+        (
+          SELECT COUNT(*)
+          FROM crm_import_suggestions cis
+          INNER JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+          WHERE em.matched_customer_id = c.id AND cis.status IN ('pending', 'needs_review')
+        ) AS pending_import_suggestion_count,
         (
           SELECT status FROM costing_requests cr
           WHERE cr.customer_id = c.id
@@ -940,9 +988,15 @@ function safeCustomerSummary(customer = {}, includeSensitive = false) {
 function safeEmailConfigStatus() {
   const validation = validateImapConfig();
   return {
-    configured: validation.ok,
+    imapConfigured: validation.ok,
+    host: validation.config.host || '',
+    port: validation.config.port || 0,
+    secure: !!validation.config.secure,
+    userMasked: validation.config.userMasked || '',
+    passwordConfigured: !!validation.config.passwordConfigured,
     missing: validation.missing,
-    config: validation.config
+    suggestedHosts: ['imap.qiye.aliyun.com', 'imap.mxhichina.com'],
+    note: 'Run real IMAP connectivity verification on the deployment server.'
   };
 }
 
@@ -1705,6 +1759,7 @@ router.post('/email/sync', async (req, res) => {
     res.status(code).json({
       ok: false,
       error: text(err.message || '邮件同步失败'),
+      sync_run: err.summary || null,
       config_status: safeEmailConfigStatus(),
       run_id: err.runId || null
     });
@@ -1722,6 +1777,22 @@ router.get('/email/sync-runs', (req, res) => {
     res.json({ ok: true, rows, config_status: safeEmailConfigStatus() });
   } catch (err) {
     handleError(res, err, '邮件同步记录读取失败');
+  }
+});
+
+router.get('/email/config-status', (req, res) => {
+  try {
+    const status = safeEmailConfigStatus();
+    if (!status.imapConfigured) {
+      return res.status(400).json({
+        ok: false,
+        error: 'IMAP configuration is incomplete',
+        ...status
+      });
+    }
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    handleError(res, err, 'IMAP 配置状态读取失败');
   }
 });
 

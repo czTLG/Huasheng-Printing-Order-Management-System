@@ -12,10 +12,10 @@ type CrmTab = 'customers' | 'inquiries' | 'costing' | 'freight' | 'priority' | '
 
 const tabs: Array<{ id: CrmTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'customers', label: '客户档案', icon: Users },
+  { id: 'priority', label: '客户优先级', icon: Package },
   { id: 'inquiries', label: '询盘项目', icon: ClipboardList },
   { id: 'costing', label: '核价请求', icon: FileSearch },
   { id: 'freight', label: '物流费用', icon: Truck },
-  { id: 'priority', label: '客户优先级', icon: Package },
   { id: 'email', label: '邮件导入', icon: Mail },
   { id: 'audit', label: 'CRM 日志', icon: ShieldAlert },
 ];

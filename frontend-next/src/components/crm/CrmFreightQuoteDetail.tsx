@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, RefreshCcw, Save } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
+import CrmTermTooltip from './CrmTermTooltip';
 
 type Props = {
   freightQuoteId: number;
@@ -100,7 +101,10 @@ export default function CrmFreightQuoteDetail({ freightQuoteId, onBack }: Props)
           <select className={inputClass} value={form.shipping_mode || 'sea'} onChange={e => setField('shipping_mode', e.target.value)}>
             <option value="sea">sea</option><option value="air">air</option><option value="truck">truck</option><option value="express">express</option>
           </select>
-          <input className={inputClass} value={form.trade_term || ''} onChange={e => setField('trade_term', e.target.value)} placeholder="贸易条款" />
+          <div className="relative">
+            <input className={`${inputClass} w-full pr-8`} value={form.trade_term || ''} onChange={e => setField('trade_term', e.target.value)} placeholder="贸易条款" />
+            <span className="absolute right-2 top-1/2 -translate-y-1/2"><CrmTermTooltip term={form.trade_term || 'FOB'} /></span>
+          </div>
           <input className={inputClass} value={form.currency || ''} onChange={e => setField('currency', e.target.value)} placeholder="币种" />
         </div>
       </section>
@@ -139,6 +143,12 @@ export default function CrmFreightQuoteDetail({ freightQuoteId, onBack }: Props)
 
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
         <h3 className="text-sm font-black text-slate-800">费用明细</h3>
+        <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+          <span className="inline-flex items-center gap-1">THC <CrmTermTooltip term="THC" /></span>
+          <span className="inline-flex items-center gap-1">DOC Fee <CrmTermTooltip term="DOC Fee" /></span>
+          <span className="inline-flex items-center gap-1">Customs Clearance <CrmTermTooltip term="Customs Clearance" /></span>
+          <span className="inline-flex items-center gap-1">Duty <CrmTermTooltip term="Duty" /></span>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           {['ocean_freight','air_freight','trucking_origin','trucking_destination','documentation_fee','thc_origin','thc_destination','customs_clearance_fee','duty_tax_estimate','destination_local_charge','delivery_fee','insurance_fee','other_fee','total_freight_cost'].map(field => (
             <input key={field} className={inputClass} value={form[field] || ''} onChange={e => setField(field, e.target.value)} placeholder={field} />
@@ -160,4 +170,3 @@ export default function CrmFreightQuoteDetail({ freightQuoteId, onBack }: Props)
     </div>
   );
 }
-

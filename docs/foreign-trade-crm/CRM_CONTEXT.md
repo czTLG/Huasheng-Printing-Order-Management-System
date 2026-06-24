@@ -645,3 +645,41 @@ New implementation risks:
 
 * IMAP sync depends on external mailbox configuration and third-party credentials, so smoke tests validate permission and missing-config behavior only.
 * Rule-based parsing is intentionally incomplete and should remain separate from future LLM-assisted parsing.
+
+## 24. CRM Workbench Consolidation and Email Import Hardening
+
+Implemented on 2026-06-24:
+
+* CRM remains a single top-level `外贸 CRM` entry in `App.tsx`.
+* `CrmModule.tsx` now acts as the unified CRM workbench and keeps internal tabs for:
+  * 客户档案
+  * 客户优先级
+  * 询盘项目
+  * 核价请求
+  * 物流费用
+  * 邮件导入
+  * CRM 日志
+* `CrmCustomerDetail.tsx` is the primary customer profile page. It emphasizes overview, latest inquiry/specification, costing and freight status, related emails, research notes, communication summaries, and CRM audit logs.
+* `CrmCustomerPriority.tsx` now exposes pending costing, pending freight, and pending import suggestion signals in one grouped view.
+* `CrmTermTooltip.tsx` provides a lightweight static glossary for key trade, logistics, quotation, and material terms. This is a frontend-only helper and does not require database storage.
+
+IMAP hardening strategy:
+
+* `syncMailbox()` must always return or throw with a stable summary shape. Arrays and counters must never be undefined.
+* IMAP failures are classified into DNS failure, connection refused, timeout, authentication failure, and generic sync failure.
+* `email_sync_runs` must record `failed` status with sanitized error messages.
+* `GET /api/crm/email/config-status` returns masked configuration status only and must never expose the mailbox password.
+* Real IMAP connectivity validation should be done on the deployment server. Local or sandbox DNS restrictions must not block CRM development or break API responses.
+
+Customer profile display strategy refinements:
+
+* Empty values should render as quiet placeholders such as `未记录`.
+* Customer detail should favor profile visibility over data-entry density.
+* Related email display should use subject and cleaned-text previews instead of expanding raw HTML by default.
+* `customer_research_notes` remain display/storage only. They do not auto-apply to `customers`.
+
+Still deferred after this batch:
+
+* Quotation foundation tables and pages were intentionally deferred in this batch to avoid destabilizing build/test quality.
+* Dedicated costing_user and freight_user frontend queue entries remain deferred.
+* Formal quotation rollup, export, and order conversion remain later phases.

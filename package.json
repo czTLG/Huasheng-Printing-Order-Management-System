@@ -12,6 +12,7 @@
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^11.8.1",
     "compression": "^1.8.1",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "imapflow": "^1.4.2",
     "jimp": "^0.22.12",

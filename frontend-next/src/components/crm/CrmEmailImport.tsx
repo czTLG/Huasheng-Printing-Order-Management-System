@@ -102,18 +102,19 @@ export default function CrmEmailImport() {
       <section className="bg-white border border-slate-200 rounded-lg p-4 space-y-4">
         <div className="text-sm font-black text-slate-900">IMAP 配置状态</div>
         <div className="grid grid-cols-1 md:grid-cols-6 gap-3 text-sm">
-          <div className="rounded-lg border border-slate-100 px-3 py-2">Host：{configStatus?.config?.host || '-'}</div>
-          <div className="rounded-lg border border-slate-100 px-3 py-2">Port：{configStatus?.config?.port || '-'}</div>
-          <div className="rounded-lg border border-slate-100 px-3 py-2">Secure：{String(configStatus?.config?.secure ?? '-')}</div>
-          <div className="rounded-lg border border-slate-100 px-3 py-2">User：{configStatus?.config?.user || '-'}</div>
-          <div className="rounded-lg border border-slate-100 px-3 py-2">Days：{configStatus?.config?.syncDays || '-'}</div>
-          <div className="rounded-lg border border-slate-100 px-3 py-2">Limit：{configStatus?.config?.syncLimit || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Host：{configStatus?.host || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Port：{configStatus?.port || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Secure：{String(configStatus?.secure ?? '-')}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">User：{configStatus?.userMasked || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Password：{configStatus?.passwordConfigured ? 'configured' : 'missing'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">DNS 提示：{Array.isArray(configStatus?.suggestedHosts) ? configStatus.suggestedHosts[0] : '-'}</div>
         </div>
-        {!configStatus?.configured && (
+        {!configStatus?.imapConfigured && (
           <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-sm text-amber-800">
             当前未完成 IMAP 配置：{Array.isArray(configStatus?.missing) ? configStatus.missing.join(', ') : 'unknown'}
           </div>
         )}
+        {configStatus?.note && <div className="text-xs text-slate-500">{configStatus.note}</div>}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <input className={inputClass} value={syncForm.folder} onChange={e => setSyncForm(f => ({ ...f, folder: e.target.value }))} placeholder="folder" />
           <input className={inputClass} type="number" value={syncForm.days} onChange={e => setSyncForm(f => ({ ...f, days: Number(e.target.value || 0) }))} placeholder="days" />

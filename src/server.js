@@ -1,3 +1,9 @@
+const bootEnv = { ...process.env };
+require('dotenv').config({ quiet: true });
+for (const [key, value] of Object.entries(bootEnv)) {
+  if (value !== undefined) process.env[key] = value;
+}
+
 const express = require('express');
 const compression = require('compression');
 const cron = require('node-cron');

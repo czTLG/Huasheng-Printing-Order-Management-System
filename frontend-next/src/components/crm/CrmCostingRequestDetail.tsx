@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Calculator, CheckCircle2, Copy, RefreshCcw, XCircle } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
+import CrmTermTooltip from './CrmTermTooltip';
 
 type Props = {
   requestId: number;
@@ -110,9 +111,13 @@ export default function CrmCostingRequestDetail({ requestId, onBack }: Props) {
           <h3 className="text-sm font-black text-slate-800">请求信息</h3>
           {[
             ['状态', req.status], ['紧急度', req.urgency], ['负责人', req.assigned_to || req.assigned_to_user_id],
-            ['贸易条款', req.required_quote_terms], ['币种', req.required_currency], ['单位', req.required_unit],
+            ['币种', req.required_currency], ['单位', req.required_unit],
             ['目标利润', req.target_margin], ['截止时间', req.due_at], ['请求备注', req.request_note],
           ].map(([k, v]) => <div key={k} className="flex justify-between gap-3 text-sm"><span className="text-slate-400 font-bold">{k}</span><span className="text-slate-800 font-bold text-right">{v || '-'}</span></div>)}
+          <div className="flex justify-between gap-3 text-sm">
+            <span className="text-slate-400 font-bold inline-flex items-center gap-1">贸易条款 <CrmTermTooltip term={req.required_quote_terms || 'EXW'} /></span>
+            <span className="text-slate-800 font-bold text-right">{req.required_quote_terms || '-'}</span>
+          </div>
         </section>
 
         <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
@@ -141,7 +146,7 @@ export default function CrmCostingRequestDetail({ requestId, onBack }: Props) {
           <div><span className="text-slate-400 font-bold">尺寸</span><div className="font-bold text-slate-900">{[spec.size_width, spec.size_height, spec.gusset_size].filter(Boolean).join(' x ') || '-'}</div></div>
           <div><span className="text-slate-400 font-bold">厚度</span><div className="font-bold text-slate-900">{spec.thickness_total || '-'} {spec.thickness_unit || ''}</div></div>
         </div>
-        <div className="text-sm text-slate-700"><span className="font-bold text-slate-400">材料结构：</span>{spec.material_structure_text || '-'}</div>
+        <div className="text-sm text-slate-700"><span className="font-bold text-slate-400 inline-flex items-center gap-1">材料结构 <CrmTermTooltip term="Lamination" />：</span>{spec.material_structure_text || '-'}</div>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
@@ -173,4 +178,3 @@ export default function CrmCostingRequestDetail({ requestId, onBack }: Props) {
     </div>
   );
 }
-

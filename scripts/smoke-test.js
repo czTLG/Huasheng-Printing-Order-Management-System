@@ -98,7 +98,14 @@ async function main() {
       PORT: String(port),
       DB_PATH: dbPath,
       DISABLE_CRON: '1',
-      FORCE_HTTPS: '0'
+      FORCE_HTTPS: '0',
+      ALIYUN_MAIL_IMAP_HOST: '',
+      ALIYUN_MAIL_IMAP_PORT: '',
+      ALIYUN_MAIL_IMAP_SECURE: '',
+      ALIYUN_MAIL_USER: '',
+      ALIYUN_MAIL_PASSWORD: '',
+      ALIYUN_MAIL_SYNC_DAYS: '',
+      ALIYUN_MAIL_SYNC_LIMIT: ''
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -390,12 +397,18 @@ async function main() {
   const customerPriority = await httpJson('/api/crm/customer-priority?pending_costing=0', { token: crmAdminLogin.token });
   assert(Array.isArray(customerPriority.rows), 'customer priority should return rows');
   assert(customerPriority.rows.some(row => Number(row.id) === crmCustomerId), 'customer priority should include crm customer');
+  const customerPriorityFiltered = await httpJson('/api/crm/customer-priority?pending_suggestions=1&customer_type=brand_owner', { token: crmAdminLogin.token });
+  assert(Array.isArray(customerPriorityFiltered.rows), 'filtered customer priority should return rows');
 
   await httpJson('/api/crm/email/sync-runs', { token: adminToken });
   await httpJson('/api/crm/email/sync-runs', { token: crmAdminLogin.token });
   await httpJson('/api/crm/email/sync-runs', { token: scopedSalesLogin.token, expectedStatus: 403 });
   await httpJson('/api/crm/email/sync-runs', { token: costingLogin.token, expectedStatus: 403 });
   await httpJson('/api/crm/email/sync-runs', { token: freightLogin.token, expectedStatus: 403 });
+  const configStatus = await httpJson('/api/crm/email/config-status', { token: crmAdminLogin.token, expectedStatus: 400 });
+  assert.strictEqual(configStatus.ok, false, 'config status should report missing env in smoke');
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(configStatus, 'password'), false, 'config status must not expose password');
+  assert(Array.isArray(configStatus.suggestedHosts), 'config status should include suggested hosts');
   const emailSyncMissingEnv = await httpJson('/api/crm/email/sync', {
     method: 'POST',
     token: crmAdminLogin.token,
@@ -403,6 +416,8 @@ async function main() {
     body: { folder: 'INBOX', days: 7, limit: 10 }
   });
   assert.strictEqual(emailSyncMissingEnv.ok, false, 'email sync should fail clearly when env is missing');
+  assert(!String(emailSyncMissingEnv.error || '').includes('undefined'), 'email sync failure should not expose undefined.length style errors');
+  assert(emailSyncMissingEnv.sync_run, 'email sync failure should include structured sync run summary');
   assert(Array.isArray(emailSyncMissingEnv.config_status?.missing), 'missing env response should list missing variables');
 
   const db = new Database(dbPath);
