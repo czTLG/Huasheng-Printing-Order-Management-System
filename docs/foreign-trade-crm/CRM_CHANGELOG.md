@@ -167,3 +167,73 @@
   * Reuse audit() and store field-level changes in detail JSON
 * Next step:
   * Phase 4: costing request association, without rewriting cost calculation formulas
+
+---
+
+## 2026-06-24 - Phase 4 - Costing Request Integration
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: pending
+* Scope:
+  * 实现 CRM 询盘到成本核算请求的桥接
+  * 新增 costing_requests 和 cost_sheet_lines
+  * 扩展 cost_snapshots CRM 关联字段
+  * 新增 costing_user 受限 API 访问
+  * 新增成本核算请求列表、详情、状态流转、预填数据与复制摘要
+  * 保持 Cost.tsx 和 9 种袋型核心公式不变
+* Files changed:
+  * shared/permissions-model.json
+  * src/db.js
+  * src/middleware/auth.js
+  * src/routes/crm.js
+  * src/routes/cost.js
+  * frontend-next/src/App.tsx
+  * frontend-next/src/components/Admin.tsx
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmInquiryDetail.tsx
+  * frontend-next/src/components/crm/CrmCostingRequests.tsx
+  * frontend-next/src/components/crm/CrmCostingRequestDetail.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * Added costing_requests table
+  * Added cost_sheet_lines table
+  * Extended cost_snapshots with customer_id, inquiry_id, specification_id, costing_request_id, version_no, is_current, crm_quote_status, crm_notes
+  * Added indexes for costing request assignment, inquiry lookup, cost sheet lines, and CRM-linked cost snapshots
+* Permission changes:
+  * Added costing_user role
+  * costing_user has crm=false and cost=true
+  * costing_user can access only assigned /api/crm/costing-requests and costing-prefill data
+  * costing_user responses hide email, WhatsApp, raw_content, and communication timeline
+  * full CRM APIs remain limited to super_admin and foreign_trade_crm_admin
+* API changes:
+  * POST /api/crm/inquiries/:id/costing-requests
+  * GET /api/crm/costing-requests
+  * GET /api/crm/costing-requests/:id
+  * PATCH /api/crm/costing-requests/:id
+  * GET /api/crm/inquiries/:id/costing-prefill
+  * POST /api/cost/snapshots accepts optional CRM association fields without changing old payload compatibility
+* Frontend changes:
+  * Added CRM 核价 menu entry for full CRM users
+  * Added CrmCostingRequests page
+  * Added CrmCostingRequestDetail page
+  * Added cost request creation section to CrmInquiryDetail
+  * Added copyable costing summary as the safe Cost.tsx handoff path
+* Build result:
+  * frontend-next npm run build: PASS
+* Test result:
+  * frontend-next npm run lint: PASS
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * costing_user has assigned-request API access but no dedicated frontend menu because crm=false
+  * Cost.tsx is not prefilled directly; copyable summary is the Phase 4 transition strategy
+* Decisions:
+  * Do not rewrite Cost.tsx
+  * Do not modify the 9 bag-type calculation formulas
+  * Keep cost_snapshots and add optional CRM link fields only
+  * Defer formal cost_sheets abstraction
+* Next step:
+  * Phase 5: logistics, clearance, and miscellaneous charge records

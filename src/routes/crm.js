@@ -4,8 +4,21 @@ const { allowRoles } = require('../middleware/auth');
 
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
+const COSTING_ROLES = ['super_admin', 'foreign_trade_crm_admin', 'costing_user'];
 
-router.use(allowRoles(...CRM_ROLES));
+function roleAllowed(req, roles) {
+  return !!req.user && roles.includes(req.user.role);
+}
+
+router.use((req, res, next) => {
+  const isCostingReadOrUpdate = req.path.startsWith('/costing-requests') || /\/costing-prefill$/.test(req.path);
+  const isCreateCostingRequest = req.method === 'POST' && /^\/inquiries\/\d+\/costing-requests$/.test(req.path);
+  const roles = isCostingReadOrUpdate && !isCreateCostingRequest ? COSTING_ROLES : CRM_ROLES;
+  if (!roleAllowed(req, roles)) {
+    return res.status(403).json({ error: '无权限访问该功能', yourRole: req.user?.role || null, need: roles });
+  }
+  next();
+});
 
 function idParam(value) {
   const id = Number(value);
@@ -586,13 +599,377 @@ router.post('/specifications/:id/layers', (req, res) => {
   }
 });
 
+function isCostingUser(req) {
+  return req.user?.role === 'costing_user';
+}
+
+function assertCostingAssignment(req, row) {
+  if (!isCostingUser(req)) return true;
+  const userName = String(req.user?.userName || '');
+  const userId = Number(req.user?.id || 0);
+  return Number(row?.assigned_to_user_id || 0) === userId || String(row?.assigned_to || '') === userName;
+}
+
+function safeCustomerSummary(customer = {}, includeSensitive = false) {
+  const base = {
+    id: customer.id,
+    display_name: customer.display_name || customer.company_name || customer.name || '未命名客户',
+    company_name: customer.company_name || customer.name || '',
+    country: customer.country || '',
+    city: customer.city || '',
+    contact_person: customer.contact_person || customer.contact || '',
+  };
+  if (includeSensitive) {
+    base.email = customer.email || '';
+    base.whatsapp = customer.whatsapp || '';
+  }
+  return base;
+}
+
+function buildSuggestedCostInput(inquiry = {}, specification = {}, layers = [], costingRequest = {}) {
+  return {
+    product_type: specification.product_type || inquiry.product_type || '',
+    bag_type: specification.bag_type || '',
+    film_type: specification.film_type || '',
+    material_structure_text: specification.material_structure_text || '',
+    layers,
+    thickness_total: specification.thickness_total || '',
+    thickness_unit: specification.thickness_unit || '',
+    quantity: inquiry.quantity || '',
+    required_unit: costingRequest.required_unit || '',
+    destination_country: inquiry.destination_country || '',
+    destination_port: inquiry.destination_port || '',
+    trade_term_requested: inquiry.trade_term_requested || '',
+  };
+}
+
+function getCostingRequestRow(id) {
+  return db.prepare(`
+    SELECT
+      cr.*,
+      COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未命名客户') AS customer_display_name,
+      c.country AS customer_country,
+      i.inquiry_title,
+      i.product_type AS inquiry_product_type,
+      i.quantity AS inquiry_quantity,
+      i.destination_country,
+      i.destination_port,
+      i.trade_term_requested,
+      s.product_type AS specification_product_type,
+      s.bag_type,
+      s.film_type,
+      s.size_width,
+      s.size_height,
+      s.gusset_size,
+      s.thickness_total,
+      s.thickness_unit,
+      s.material_structure_text
+    FROM costing_requests cr
+    LEFT JOIN customers c ON c.id = cr.customer_id
+    LEFT JOIN inquiries i ON i.id = cr.inquiry_id
+    LEFT JOIN inquiry_specifications s ON s.id = cr.specification_id
+    WHERE cr.id = ?
+  `).get(id);
+}
+
+function generateCostingRequestCode() {
+  const day = now().slice(0, 10).replace(/-/g, '');
+  const prefix = `CR-${day}-`;
+  const row = db.prepare('SELECT costing_request_code FROM costing_requests WHERE costing_request_code LIKE ? ORDER BY costing_request_code DESC LIMIT 1').get(`${prefix}%`);
+  const last = row?.costing_request_code ? Number(String(row.costing_request_code).slice(prefix.length)) : 0;
+  return `${prefix}${String((Number.isFinite(last) ? last : 0) + 1).padStart(4, '0')}`;
+}
+
+function getLatestCostSnapshot(costingRequestId, inquiryId, specificationId) {
+  return db.prepare(`
+    SELECT *
+    FROM cost_snapshots
+    WHERE
+      (costing_request_id = ? AND ? > 0)
+      OR (inquiry_id = ? AND ? > 0)
+      OR (specification_id = ? AND ? > 0)
+    ORDER BY is_current DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `).get(costingRequestId, costingRequestId, inquiryId, inquiryId, specificationId, specificationId) || null;
+}
+
+router.post('/inquiries/:id/costing-requests', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    const inquiry = getInquiry(inquiryId);
+    if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const specificationId = Number(inquiry.latest_specification_id || 0);
+    if (!specificationId) return res.status(400).json({ ok: false, error: '请先创建规格版本，再发起成本核算请求' });
+    const specification = getSpecification(specificationId);
+    if (!specification) return res.status(400).json({ ok: false, error: '当前规格版本不存在' });
+    const customer = getCustomer(Number(inquiry.customer_id || 0));
+    if (!customer) return res.status(400).json({ ok: false, error: '客户不存在' });
+
+    const body = req.body || {};
+    const ts = now();
+    const tx = db.transaction(() => {
+      const code = generateCostingRequestCode();
+      const result = db.prepare(`
+        INSERT INTO costing_requests (
+          costing_request_code, customer_id, inquiry_id, specification_id, requested_by,
+          assigned_to, assigned_to_user_id, status, request_note, required_quote_terms,
+          required_currency, required_unit, target_margin, customer_target_price, urgency,
+          due_at, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        code,
+        Number(inquiry.customer_id || 0),
+        inquiryId,
+        specificationId,
+        req.user.userName,
+        text(body.assigned_to),
+        Number(body.assigned_to_user_id || 0) || null,
+        text(body.request_note),
+        text(body.required_quote_terms || 'EXW'),
+        text(body.required_currency || 'RMB'),
+        text(body.required_unit || 'pcs'),
+        text(body.target_margin),
+        text(body.customer_target_price || inquiry.customer_target_price),
+        text(body.urgency || 'normal'),
+        text(body.due_at),
+        ts,
+        ts
+      );
+      db.prepare("UPDATE inquiries SET costing_required = 1, status = 'costing', next_action = 'Waiting for costing', updated_at = ? WHERE id = ?").run(ts, inquiryId);
+      return { id: result.lastInsertRowid, code };
+    });
+
+    const created = tx();
+    const row = getCostingRequestRow(created.id);
+    crmAudit(req, 'create_costing_request', 'crm_costing_request', created.id, {
+      costing_request_id: created.id,
+      inquiry_id: inquiryId,
+      customer_id: inquiry.customer_id,
+      specification_id: specificationId,
+      old_status: '',
+      new_status: 'pending',
+      assigned_to: text(body.assigned_to),
+      assigned_to_user_id: Number(body.assigned_to_user_id || 0) || null
+    });
+    crmAudit(req, 'update_inquiry_costing_status', 'crm_inquiry', inquiryId, {
+      costing_request_id: created.id,
+      inquiry_id: inquiryId,
+      customer_id: inquiry.customer_id,
+      specification_id: specificationId,
+      old_status: inquiry.status,
+      new_status: 'costing'
+    });
+    res.json({
+      ok: true,
+      costing_request: row,
+      inquiry: getInquiry(inquiryId),
+      specification,
+      layers: specification.layers || []
+    });
+  } catch (err) {
+    handleError(res, err, '成本核算请求创建失败');
+  }
+});
+
+router.get('/costing-requests', (req, res) => {
+  try {
+    const params = [];
+    let where = 'WHERE 1 = 1';
+    if (isCostingUser(req)) {
+      where += ' AND (cr.assigned_to_user_id = ? OR cr.assigned_to = ?)';
+      params.push(Number(req.user.id || 0), String(req.user.userName || ''));
+    }
+    ['status', 'assigned_to', 'customer_id', 'inquiry_id', 'urgency'].forEach((key) => {
+      const value = text(req.query[key]);
+      if (!value) return;
+      where += ` AND cr.${key} = ?`;
+      params.push(key.endsWith('_id') ? Number(value) : value);
+    });
+    const q = text(req.query.q);
+    if (q) {
+      const like = `%${q}%`;
+      where += ' AND (cr.costing_request_code LIKE ? OR c.company_name LIKE ? OR c.name LIKE ? OR i.inquiry_title LIKE ?)';
+      params.push(like, like, like, like);
+    }
+    if (text(req.query.date_from)) {
+      where += ' AND cr.created_at >= ?';
+      params.push(text(req.query.date_from));
+    }
+    if (text(req.query.date_to)) {
+      where += ' AND cr.created_at <= ?';
+      params.push(text(req.query.date_to));
+    }
+
+    const rows = db.prepare(`
+      SELECT
+        cr.*,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未命名客户') AS customer_display_name,
+        c.country AS customer_country,
+        i.inquiry_title,
+        i.product_type,
+        i.quantity,
+        i.destination_country,
+        i.destination_port,
+        i.trade_term_requested,
+        i.next_action,
+        s.bag_type,
+        s.film_type,
+        s.size_width,
+        s.size_height,
+        s.gusset_size,
+        s.thickness_total,
+        s.thickness_unit,
+        s.material_structure_text
+      FROM costing_requests cr
+      LEFT JOIN customers c ON c.id = cr.customer_id
+      LEFT JOIN inquiries i ON i.id = cr.inquiry_id
+      LEFT JOIN inquiry_specifications s ON s.id = cr.specification_id
+      ${where}
+      ORDER BY cr.updated_at DESC, cr.id DESC
+      LIMIT 300
+    `).all(...params);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '成本核算请求列表读取失败');
+  }
+});
+
+router.get('/costing-requests/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const row = getCostingRequestRow(id);
+    if (!row) return res.status(404).json({ ok: false, error: '成本核算请求不存在' });
+    if (!assertCostingAssignment(req, row)) return res.status(403).json({ error: '无权限访问该成本核算请求' });
+    const customer = getCustomer(Number(row.customer_id || 0));
+    const inquiry = getInquiry(Number(row.inquiry_id || 0));
+    const specification = getSpecification(Number(row.specification_id || 0));
+    const layers = specification?.layers || [];
+    const latestCostSnapshot = getLatestCostSnapshot(id, Number(row.inquiry_id || 0), Number(row.specification_id || 0));
+    const auditLogs = db.prepare(`
+      SELECT *
+      FROM audit_logs
+      WHERE resource_type = 'crm_costing_request' AND resource_id = ?
+      ORDER BY id DESC
+      LIMIT 100
+    `).all(String(id));
+    res.json({
+      ok: true,
+      costing_request: row,
+      customer: safeCustomerSummary(customer || {}, !isCostingUser(req)),
+      inquiry,
+      current_specification: specification,
+      specification_layers: layers,
+      suggested_cost_input: buildSuggestedCostInput(inquiry || {}, specification || {}, layers, row),
+      latest_cost_snapshot: latestCostSnapshot,
+      audit_logs: auditLogs
+    });
+  } catch (err) {
+    handleError(res, err, '成本核算请求详情读取失败');
+  }
+});
+
+const COSTING_UPDATE_FIELDS = [
+  'request_note', 'assigned_to', 'assigned_to_user_id', 'required_quote_terms', 'required_currency',
+  'required_unit', 'target_margin', 'urgency', 'due_at', 'completed_at'
+];
+const STATUS_TRANSITIONS = {
+  pending: ['in_progress', 'rejected', 'cancelled'],
+  in_progress: ['completed', 'revision_needed', 'rejected', 'cancelled'],
+  revision_needed: ['in_progress', 'cancelled'],
+  completed: [],
+  rejected: [],
+  cancelled: []
+};
+
+router.patch('/costing-requests/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const oldRow = getCostingRequestRow(id);
+    if (!oldRow) return res.status(404).json({ ok: false, error: '成本核算请求不存在' });
+    if (!assertCostingAssignment(req, oldRow)) return res.status(403).json({ error: '无权限更新该成本核算请求' });
+    const body = req.body || {};
+    const ts = now();
+    const nextStatus = Object.prototype.hasOwnProperty.call(body, 'status') ? text(body.status) : '';
+    const oldStatus = text(oldRow.status || 'pending');
+    if (nextStatus && nextStatus !== oldStatus) {
+      const allowed = STATUS_TRANSITIONS[oldStatus] || [];
+      if (!allowed.includes(nextStatus)) return res.status(400).json({ ok: false, error: `状态不能从 ${oldStatus} 更新为 ${nextStatus}` });
+    }
+
+    const updateBody = { ...body };
+    if (nextStatus === 'completed' && !text(updateBody.completed_at)) updateBody.completed_at = ts;
+    const fields = [...COSTING_UPDATE_FIELDS];
+    if (nextStatus) fields.push('status');
+    updateByFields('costing_requests', id, updateBody, fields);
+    if (nextStatus === 'completed') {
+      db.prepare("UPDATE inquiries SET status = 'costing_completed', next_action = 'Review costing result', updated_at = ? WHERE id = ?").run(ts, oldRow.inquiry_id);
+    } else if (nextStatus === 'revision_needed') {
+      db.prepare("UPDATE inquiries SET status = 'costing', next_action = 'Revise specification or costing request', updated_at = ? WHERE id = ?").run(ts, oldRow.inquiry_id);
+    }
+
+    const action = nextStatus === 'completed'
+      ? 'complete_costing_request'
+      : nextStatus === 'rejected'
+        ? 'reject_costing_request'
+        : nextStatus === 'cancelled'
+          ? 'cancel_costing_request'
+          : (text(body.assigned_to) || Number(body.assigned_to_user_id || 0) ? 'assign_costing_request' : 'update_costing_request');
+    crmAudit(req, action, 'crm_costing_request', id, {
+      costing_request_id: id,
+      inquiry_id: oldRow.inquiry_id,
+      customer_id: oldRow.customer_id,
+      specification_id: oldRow.specification_id,
+      old_status: oldStatus,
+      new_status: nextStatus || oldStatus,
+      assigned_to: Object.prototype.hasOwnProperty.call(body, 'assigned_to') ? text(body.assigned_to) : oldRow.assigned_to,
+      assigned_to_user_id: Object.prototype.hasOwnProperty.call(body, 'assigned_to_user_id') ? Number(body.assigned_to_user_id || 0) : oldRow.assigned_to_user_id
+    });
+    res.json({ ok: true, costing_request: getCostingRequestRow(id) });
+  } catch (err) {
+    handleError(res, err, '成本核算请求更新失败');
+  }
+});
+
+router.get('/inquiries/:id/costing-prefill', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    const inquiry = getInquiry(inquiryId);
+    if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const assignedRequest = db.prepare(`
+      SELECT *
+      FROM costing_requests
+      WHERE inquiry_id = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(inquiryId);
+    if (isCostingUser(req) && !assertCostingAssignment(req, assignedRequest || {})) {
+      return res.status(403).json({ error: '无权限访问该询盘成本预填数据' });
+    }
+    const customer = getCustomer(Number(inquiry.customer_id || 0));
+    const specificationId = Number(inquiry.latest_specification_id || 0);
+    const specification = specificationId ? getSpecification(specificationId) : null;
+    const layers = specification?.layers || [];
+    res.json({
+      ok: true,
+      inquiry,
+      customer: safeCustomerSummary(customer || {}, !isCostingUser(req)),
+      current_specification: specification,
+      specification_layers: layers,
+      suggested_cost_input: buildSuggestedCostInput(inquiry, specification || {}, layers, assignedRequest || {})
+    });
+  } catch (err) {
+    handleError(res, err, '成本核算预填数据读取失败');
+  }
+});
+
 router.get('/audit-logs', (req, res) => {
   try {
     const resourceType = text(req.query.resourceType);
     const action = text(req.query.action);
     const user = text(req.query.user);
     const params = [];
-    let where = "WHERE (resource_type LIKE 'crm_%' OR action IN ('create_customer','update_customer','create_communication_log','create_inquiry','update_inquiry','create_specification_version','create_specification_layer','update_customer_latest_inquiry'))";
+    let where = "WHERE (resource_type LIKE 'crm_%' OR action IN ('create_customer','update_customer','create_communication_log','create_inquiry','update_inquiry','create_specification_version','create_specification_layer','update_customer_latest_inquiry','create_costing_request','update_costing_request','assign_costing_request','complete_costing_request','reject_costing_request','cancel_costing_request','update_inquiry_costing_status','update_cost_snapshot_crm_link'))";
     if (resourceType) {
       where += ' AND resource_type = ?';
       params.push(resourceType);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Layers, Plus, RefreshCcw, Save } from 'lucide-react';
+import { ArrowLeft, Calculator, Copy, Layers, Plus, RefreshCcw, Save } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
 
 type Props = {
@@ -12,6 +12,7 @@ const areaClass = 'min-h-[76px] px-3 py-2 rounded-lg border border-slate-200 bg-
 
 export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const [data, setData] = useState<any>(null);
+  const [costingRequests, setCostingRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [inquiryForm, setInquiryForm] = useState<any>({});
@@ -21,12 +22,25 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
     printing_colors: '', zipper_required: false, notes: ''
   });
   const [layerForm, setLayerForm] = useState({ material_name: '', material_code: '', thickness: '', thickness_unit: 'mic', layer_role: '' });
+  const [costingForm, setCostingForm] = useState({
+    assigned_to: '',
+    assigned_to_user_id: '',
+    required_quote_terms: 'EXW',
+    required_currency: 'RMB',
+    required_unit: 'pcs',
+    target_margin: '',
+    urgency: 'normal',
+    due_at: '',
+    request_note: '',
+  });
 
   const load = async () => {
     setLoading(true);
     try {
       const detail = await mockService.getCrmInquiry(inquiryId);
+      const costing = await mockService.listCostingRequests({ inquiry_id: inquiryId });
       setData(detail);
+      setCostingRequests(Array.isArray(costing?.rows) ? costing.rows : []);
       setInquiryForm({
         inquiry_title: detail.inquiry?.inquiry_title || '',
         status: detail.inquiry?.status || 'new',
@@ -82,12 +96,47 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
     }
   };
 
+  const createCostingRequest = async () => {
+    if (!data?.currentSpecification?.id) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'warning', message: '请先创建规格版本' } }));
+      return;
+    }
+    setSaving(true);
+    try {
+      await mockService.createCostingRequest(inquiryId, {
+        ...costingForm,
+        assigned_to_user_id: Number(costingForm.assigned_to_user_id || 0) || undefined,
+      });
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '成本核算请求已创建' } }));
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading) return <div className="p-8 text-sm font-bold text-slate-400">加载询盘详情...</div>;
   if (!data?.inquiry) return <div className="p-8 text-sm font-bold text-slate-400">询盘不存在</div>;
 
   const current = data.currentSpecification;
   const specifications = Array.isArray(data.specifications) ? data.specifications : [];
   const layers = Array.isArray(current?.layers) ? current.layers : [];
+  const latestCosting = costingRequests[0] || null;
+  const costingSummary = [
+    `客户简称：${data.inquiry.customer_display_name || '-'}`,
+    `询盘编号：${data.inquiry.inquiry_code || data.inquiry.id || '-'}`,
+    `产品：${data.inquiry.product_type || current?.product_type || '-'}`,
+    `袋型/膜型：${current?.bag_type || current?.film_type || '-'}`,
+    `尺寸：${[current?.size_width, current?.size_height, current?.gusset_size].filter(Boolean).join(' x ') || '-'}`,
+    `数量：${data.inquiry.quantity || '-'}`,
+    `材料结构：${current?.material_structure_text || '-'}`,
+    `材料层：${layers.map((l: any) => `${l.layer_order}.${l.material_name}${l.thickness ? ` ${l.thickness}${l.thickness_unit || ''}` : ''}`).join(' / ') || '-'}`,
+    `厚度：${current?.thickness_total || '-'} ${current?.thickness_unit || ''}`,
+    `印刷颜色：${current?.printing_colors || '-'}`,
+    `目的地：${[data.inquiry.destination_country, data.inquiry.destination_port].filter(Boolean).join(' / ') || '-'}`,
+    `贸易条款：${data.inquiry.trade_term_requested || costingForm.required_quote_terms || '-'}`,
+    `客户目标价：${data.inquiry.customer_target_price || '-'}`,
+    `备注：${costingForm.request_note || current?.notes || '-'}`,
+  ].join('\n');
 
   return (
     <div className="space-y-5">
@@ -206,7 +255,49 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
           ))}
         </section>
       </div>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-800 flex items-center gap-2"><Calculator className="w-4 h-4 text-indigo-600" /> 成本核算</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              当前规格：{current ? `V${current.version_no}` : '无'} · 材料层 {layers.length} 层 · 数量 {data.inquiry.quantity || '-'} · 贸易条款 {data.inquiry.trade_term_requested || costingForm.required_quote_terms}
+            </p>
+          </div>
+          <div className="text-xs font-bold text-slate-500">
+            {latestCosting ? `最近请求 ${latestCosting.costing_request_code} · ${latestCosting.status}` : '暂无成本核算请求'}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input className={inputClass} value={costingForm.assigned_to} onChange={e => setCostingForm(f => ({ ...f, assigned_to: e.target.value }))} placeholder="核价负责人用户名" />
+          <input className={inputClass} value={costingForm.assigned_to_user_id} onChange={e => setCostingForm(f => ({ ...f, assigned_to_user_id: e.target.value }))} placeholder="负责人用户 ID" />
+          <select className={inputClass} value={costingForm.required_quote_terms} onChange={e => setCostingForm(f => ({ ...f, required_quote_terms: e.target.value }))}>
+            <option value="EXW">EXW</option><option value="FOB">FOB</option><option value="CIF">CIF</option><option value="DDP">DDP</option>
+          </select>
+          <select className={inputClass} value={costingForm.required_currency} onChange={e => setCostingForm(f => ({ ...f, required_currency: e.target.value }))}>
+            <option value="RMB">RMB</option><option value="USD">USD</option><option value="EUR">EUR</option>
+          </select>
+          <input className={inputClass} value={costingForm.required_unit} onChange={e => setCostingForm(f => ({ ...f, required_unit: e.target.value }))} placeholder="单位 pcs/kg/roll" />
+          <input className={inputClass} value={costingForm.target_margin} onChange={e => setCostingForm(f => ({ ...f, target_margin: e.target.value }))} placeholder="目标利润" />
+          <select className={inputClass} value={costingForm.urgency} onChange={e => setCostingForm(f => ({ ...f, urgency: e.target.value }))}>
+            <option value="normal">normal</option><option value="urgent">urgent</option>
+          </select>
+          <input className={inputClass} value={costingForm.due_at} onChange={e => setCostingForm(f => ({ ...f, due_at: e.target.value }))} placeholder="截止时间" />
+        </div>
+        <textarea className={`${areaClass} w-full`} value={costingForm.request_note} onChange={e => setCostingForm(f => ({ ...f, request_note: e.target.value }))} placeholder="核价备注" />
+        <div className="flex flex-wrap gap-3">
+          <button disabled={saving || !current} onClick={createCostingRequest} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">发起成本核算请求</button>
+          <button onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(costingSummary);
+              window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '成本核算摘要已复制' } }));
+            } catch {
+              window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'warning', message: '复制失败，请手动复制摘要' } }));
+            }
+          }} className="h-9 px-4 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-black flex items-center gap-2"><Copy className="w-4 h-4" /> 复制成本核算摘要</button>
+        </div>
+        <pre className="whitespace-pre-wrap rounded-lg bg-slate-50 border border-slate-100 p-4 text-sm text-slate-700">{costingSummary}</pre>
+      </section>
     </div>
   );
 }
-

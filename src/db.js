@@ -249,6 +249,52 @@ function initDb() {
       updated_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS costing_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      costing_request_code TEXT UNIQUE,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      specification_id INTEGER,
+      requested_by TEXT,
+      assigned_to TEXT,
+      assigned_to_user_id INTEGER,
+      status TEXT DEFAULT 'pending',
+      request_note TEXT,
+      required_quote_terms TEXT,
+      required_currency TEXT,
+      required_unit TEXT,
+      target_margin TEXT,
+      customer_target_price TEXT,
+      urgency TEXT DEFAULT 'normal',
+      due_at TEXT,
+      completed_at TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS cost_sheet_lines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cost_sheet_id INTEGER,
+      cost_snapshot_id INTEGER,
+      costing_request_id INTEGER,
+      inquiry_id INTEGER,
+      specification_id INTEGER,
+      line_type TEXT,
+      item_name TEXT,
+      material_code TEXT,
+      layer_order INTEGER,
+      thickness TEXT,
+      quantity TEXT,
+      unit TEXT,
+      unit_price TEXT,
+      amount TEXT,
+      currency TEXT,
+      supplier TEXT,
+      notes TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS work_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_no TEXT NOT NULL UNIQUE,
@@ -458,7 +504,18 @@ function initDb() {
   const mpcols = db.prepare("PRAGMA table_info(material_prices)").all().map(c => c.name);
   if (!mpcols.includes('prop')) db.exec("ALTER TABLE material_prices ADD COLUMN prop REAL");
 
+  const cscols = db.prepare("PRAGMA table_info(cost_snapshots)").all().map(c => c.name);
+  if (!cscols.includes('customer_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN customer_id INTEGER");
+  if (!cscols.includes('inquiry_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN inquiry_id INTEGER");
+  if (!cscols.includes('specification_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN specification_id INTEGER");
+  if (!cscols.includes('costing_request_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN costing_request_id INTEGER");
+  if (!cscols.includes('version_no')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN version_no INTEGER DEFAULT 1");
+  if (!cscols.includes('is_current')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN is_current INTEGER DEFAULT 1");
+  if (!cscols.includes('crm_quote_status')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN crm_quote_status TEXT");
+  if (!cscols.includes('crm_notes')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN crm_notes TEXT");
+
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_user_kind ON cost_snapshots(user_name, kind, created_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_crm ON cost_snapshots(costing_request_id, inquiry_id, specification_id, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_salesperson ON customers(salesperson_id, active, name)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_stage ON customers(stage, priority, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_customer ON communication_logs(customer_id, received_at DESC, created_at DESC)");
@@ -467,6 +524,9 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status, priority, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiry_specifications_inquiry ON inquiry_specifications(inquiry_id, version_no DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_specification_layers_spec ON specification_layers(specification_id, layer_order)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_costing_requests_inquiry ON costing_requests(inquiry_id, created_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_costing_requests_assigned ON costing_requests(assigned_to_user_id, assigned_to, status, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_cost_sheet_lines_request ON cost_sheet_lines(costing_request_id, specification_id, id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_salesperson ON work_orders(salesperson_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_customer ON work_orders(customer_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_order_id ON work_orders(order_id)");

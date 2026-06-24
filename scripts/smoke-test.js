@@ -142,16 +142,22 @@ async function main() {
     method: 'POST',
     body: { username: 'crm_admin_guard', password: 'guard123', fullName: '外贸守护' }
   });
+  await httpJson('/api/auth/register', {
+    method: 'POST',
+    body: { username: 'father_costing_guard', password: 'guard123', fullName: '父亲核价' }
+  });
 
   const pending = await httpJson('/api/auth/users/pending', { token: adminToken });
   const costUser = pending.find(row => row.username === 'chenyongjie');
   const workerUser = pending.find(row => row.username === 'worker_print_guard');
   const scopedSalesUser = pending.find(row => row.username === 'sales_scope_guard');
   const crmAdminUser = pending.find(row => row.username === 'crm_admin_guard');
+  const costingUser = pending.find(row => row.username === 'father_costing_guard');
   assert(costUser, 'pending cost user should exist');
   assert(workerUser, 'pending worker user should exist');
   assert(scopedSalesUser, 'pending scoped sales user should exist');
   assert(crmAdminUser, 'pending crm admin user should exist');
+  assert(costingUser, 'pending costing user should exist');
 
   await httpJson(`/api/auth/users/${costUser.id}/approve`, {
     method: 'POST',
@@ -178,6 +184,11 @@ async function main() {
     token: adminToken,
     body: { role: 'foreign_trade_crm_admin' }
   });
+  await httpJson(`/api/auth/users/${costingUser.id}/approve`, {
+    method: 'POST',
+    token: adminToken,
+    body: { role: 'costing_user' }
+  });
 
   const costLogin = await login('chenyongjie', 'guard123');
   assert(costLogin?.token, 'cost user login should return token');
@@ -195,6 +206,11 @@ async function main() {
   assert.strictEqual(crmAdminMe.user.role, 'foreign_trade_crm_admin');
   assert.strictEqual(crmAdminMe.user.permissions.modules.crm, true, 'crm admin role should have crm module');
   assert.strictEqual(crmAdminMe.user.permissions.modules.orders, true, 'crm admin role should retain basic order visibility');
+  const costingLogin = await login('father_costing_guard', 'guard123');
+  assert(costingLogin?.token, 'costing user login should return token');
+  const costingMe = await httpJson('/api/auth/me', { token: costingLogin.token });
+  assert.strictEqual(costingMe.user.role, 'costing_user');
+  assert.strictEqual(costingMe.user.permissions.modules.crm, false, 'costing user should not have full crm menu module');
 
   await httpJson('/api/crm/customers', { token: scopedSalesLogin.token, expectedStatus: 403 });
 
@@ -331,6 +347,86 @@ async function main() {
   const crmAuditLogs = await httpJson('/api/crm/audit-logs?resourceType=crm_customer', { token: crmAdminLogin.token });
   assert(Array.isArray(crmAuditLogs.rows), 'crm audit logs should return rows');
   assert(crmAuditLogs.rows.some(row => row.action === 'create_customer'), 'crm audit logs should include create_customer');
+
+  const inquiryWithoutSpec = await httpJson('/api/crm/inquiries', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      customer_id: crmCustomerId,
+      inquiry_title: 'No spec inquiry',
+      product_type: 'film',
+      quantity: '1000'
+    }
+  });
+  await httpJson(`/api/crm/inquiries/${inquiryWithoutSpec.id}/costing-requests`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: { assigned_to: 'father_costing_guard' },
+    expectedStatus: 400
+  });
+
+  await httpJson('/api/crm/costing-requests', { token: adminToken });
+  await httpJson('/api/crm/costing-requests', { token: scopedSalesLogin.token, expectedStatus: 403 });
+
+  const costingRequest = await httpJson(`/api/crm/inquiries/${inquiryId}/costing-requests`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      assigned_to: 'father_costing_guard',
+      assigned_to_user_id: costingMe.user.id,
+      request_note: '请按 EXW 核价',
+      required_quote_terms: 'EXW',
+      required_currency: 'RMB',
+      required_unit: 'pcs',
+      target_margin: '12%',
+      urgency: 'urgent',
+      due_at: '2026-06-25 18:00:00'
+    }
+  });
+  assert.strictEqual(costingRequest.ok, true);
+  assert(Number(costingRequest.costing_request?.id) > 0, 'costing request id should be > 0');
+  assert.strictEqual(Number(costingRequest.costing_request.customer_id), crmCustomerId);
+  assert.strictEqual(Number(costingRequest.costing_request.inquiry_id), inquiryId);
+  assert.strictEqual(Number(costingRequest.costing_request.specification_id), Number(specTwo.id));
+  assert(Array.isArray(costingRequest.layers) && costingRequest.layers.length > 0, 'costing request should include specification layers');
+  const costingRequestId = Number(costingRequest.costing_request.id);
+
+  const inquiryAfterCosting = await httpJson(`/api/crm/inquiries/${inquiryId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(Number(inquiryAfterCosting.inquiry.costing_required), 1, 'inquiry should be marked costing_required');
+  assert.strictEqual(inquiryAfterCosting.inquiry.status, 'costing', 'inquiry should move to costing status');
+
+  const costingListForCrm = await httpJson('/api/crm/costing-requests?status=pending', { token: crmAdminLogin.token });
+  assert(costingListForCrm.rows.some(row => Number(row.id) === costingRequestId), 'crm admin should see created costing request');
+
+  const costingListForAssigned = await httpJson('/api/crm/costing-requests', { token: costingLogin.token });
+  assert(costingListForAssigned.rows.some(row => Number(row.id) === costingRequestId), 'assigned costing user should see own request');
+  assert(costingListForAssigned.rows.every(row => row.email === undefined && row.whatsapp === undefined && row.raw_content === undefined), 'costing list should hide sensitive fields');
+
+  const costingDetailForAssigned = await httpJson(`/api/crm/costing-requests/${costingRequestId}`, { token: costingLogin.token });
+  assert.strictEqual(Number(costingDetailForAssigned.costing_request.id), costingRequestId);
+  assert(Array.isArray(costingDetailForAssigned.specification_layers), 'costing detail should include specification layers');
+  assert(costingDetailForAssigned.specification_layers.some(row => row.material_name === 'PET'), 'costing detail should include material layer');
+  assert(!('email' in costingDetailForAssigned.customer), 'costing user customer summary should hide email');
+  assert(!('whatsapp' in costingDetailForAssigned.customer), 'costing user customer summary should hide whatsapp');
+  assert(!JSON.stringify(costingDetailForAssigned).includes('Need 50000 stand up pouches'), 'costing user detail should not include raw communication content');
+
+  const costingPrefill = await httpJson(`/api/crm/inquiries/${inquiryId}/costing-prefill`, { token: costingLogin.token });
+  assert.strictEqual(costingPrefill.suggested_cost_input.quantity, '50000');
+  assert.strictEqual(costingPrefill.suggested_cost_input.material_structure_text, 'PET12/NY15/PE100');
+  assert(Array.isArray(costingPrefill.suggested_cost_input.layers), 'costing prefill should include layers');
+
+  await httpJson(`/api/crm/costing-requests/${costingRequestId}`, {
+    method: 'PATCH',
+    token: costingLogin.token,
+    body: { status: 'in_progress' }
+  });
+  const completedCosting = await httpJson(`/api/crm/costing-requests/${costingRequestId}`, {
+    method: 'PATCH',
+    token: costingLogin.token,
+    body: { status: 'completed' }
+  });
+  assert.strictEqual(completedCosting.ok, true);
+  assert.strictEqual(completedCosting.costing_request.status, 'completed');
 
   const costCalc = await httpJson('/api/cost/calculate', {
     method: 'POST',

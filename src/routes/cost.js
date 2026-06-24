@@ -449,21 +449,60 @@ router.get('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales'), (req,
   })));
 });
 
-router.post('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res) => {
+router.post('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales', 'costing_user'), (req, res) => {
   const kind = String(req.body?.kind || '').trim();
   const name = String(req.body?.name || '').trim();
   const costType = String(req.body?.costType || '').trim();
   const input = req.body?.input || {};
   const result = req.body?.result ?? null;
+  const crm = req.body?.crm || {};
   if (!['case', 'history'].includes(kind)) return res.status(400).json({ error: 'kind 必须是 case/history' });
   if (!costType) return res.status(400).json({ error: 'costType 必填' });
   if (kind === 'case' && !name) return res.status(400).json({ error: '样例名称必填' });
 
   const ts = now();
   const ret = db.prepare(`
-    INSERT INTO cost_snapshots (user_name, kind, name, cost_type, input_json, result_json, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(req.user.userName, kind, name, costType, JSON.stringify(input || {}), result == null ? null : JSON.stringify(result), ts, ts);
+    INSERT INTO cost_snapshots (
+      user_name, kind, name, cost_type, input_json, result_json,
+      customer_id, inquiry_id, specification_id, costing_request_id,
+      version_no, is_current, crm_quote_status, crm_notes,
+      created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    req.user.userName,
+    kind,
+    name,
+    costType,
+    JSON.stringify(input || {}),
+    result == null ? null : JSON.stringify(result),
+    Number(crm.customer_id || req.body?.customer_id || 0) || null,
+    Number(crm.inquiry_id || req.body?.inquiry_id || 0) || null,
+    Number(crm.specification_id || req.body?.specification_id || 0) || null,
+    Number(crm.costing_request_id || req.body?.costing_request_id || 0) || null,
+    Number(crm.version_no || 1) || 1,
+    crm.is_current === 0 || crm.is_current === false ? 0 : 1,
+    String(crm.crm_quote_status || req.body?.crm_quote_status || ''),
+    String(crm.crm_notes || req.body?.crm_notes || ''),
+    ts,
+    ts
+  );
+
+  if (Number(crm.costing_request_id || req.body?.costing_request_id || 0) > 0) {
+    audit({
+      role: req.user.role,
+      userName: req.user.userName,
+      action: 'update_cost_snapshot_crm_link',
+      resourceType: 'crm_costing_request',
+      resourceId: Number(crm.costing_request_id || req.body?.costing_request_id || 0),
+      detail: JSON.stringify({
+        cost_snapshot_id: ret.lastInsertRowid,
+        costing_request_id: Number(crm.costing_request_id || req.body?.costing_request_id || 0),
+        inquiry_id: Number(crm.inquiry_id || req.body?.inquiry_id || 0) || null,
+        specification_id: Number(crm.specification_id || req.body?.specification_id || 0) || null
+      })
+    });
+  }
 
   res.json({ ok: true, id: ret.lastInsertRowid });
 });

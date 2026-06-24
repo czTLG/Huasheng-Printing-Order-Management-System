@@ -599,6 +599,38 @@ export const mockService = {
     return api<any>(`/api/crm/audit-logs?${search.toString()}`);
   },
 
+  async createCostingRequest(inquiryId: number | string, payload: any) {
+    return api<any>(`/api/crm/inquiries/${inquiryId}/costing-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listCostingRequests(params: { q?: string; status?: string; urgency?: string; assigned_to?: string; customer_id?: string | number; inquiry_id?: string | number } = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) search.set(key, String(value));
+    });
+    return api<any>(`/api/crm/costing-requests?${search.toString()}`);
+  },
+
+  async getCostingRequest(id: number | string) {
+    return api<any>(`/api/crm/costing-requests/${id}`);
+  },
+
+  async updateCostingRequest(id: number | string, payload: any) {
+    return api<any>(`/api/crm/costing-requests/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getCostingPrefill(inquiryId: number | string) {
+    return api<any>(`/api/crm/inquiries/${inquiryId}/costing-prefill`);
+  },
+
   async getBossDashboard() {
     return api('/api/orders/stats/boss-dashboard');
   },

@@ -208,9 +208,9 @@ P0 includes only:
 7. inquiries table - implemented in Phase 1-3 foundation
 8. inquiry_specifications table - implemented in Phase 1-3 foundation
 9. specification_layers table - implemented in Phase 1-3 foundation
-10. costing_requests table
+10. costing_requests table - implemented in Phase 4
 11. cost_sheets or cost_snapshots compatibility strategy
-12. cost_sheet_lines table
+12. cost_sheet_lines table - implemented in Phase 4 as reserved line table
 13. audit_logs reuse/enhancement - audit() reused for CRM write operations in Phase 1-3 foundation
 14. Customer list page - implemented in Phase 1-3 foundation
 15. Customer detail page - implemented in Phase 1-3 foundation
@@ -277,15 +277,15 @@ P0 tables:
 * inquiries - implemented
 * inquiry_specifications - implemented
 * specification_layers - implemented
-* costing_requests
-* cost_sheet_lines
+* costing_requests - implemented
+* cost_sheet_lines - implemented
 * audit_logs reuse or enhancement - audit() reused; field-level values are stored in detail JSON for Phase 1-3
 
 Existing tables that may need extension:
 
 * customers
 * orders
-* cost_snapshots / cost_sheets
+* cost_snapshots / cost_sheets - cost_snapshots extended with CRM association fields in Phase 4; formal cost_sheets still deferred
 
 ## 12. API Strategy
 
@@ -303,10 +303,11 @@ Suggested CRM APIs:
 * PATCH /api/crm/inquiries/:id - implemented
 * POST /api/crm/inquiries/:id/specifications - implemented
 * GET /api/crm/inquiries/:id/specifications - implemented
-* POST /api/crm/inquiries/:id/costing-requests
-* GET /api/crm/costing-requests
-* GET /api/crm/costing-requests/:id
-* PATCH /api/crm/costing-requests/:id
+* POST /api/crm/inquiries/:id/costing-requests - implemented
+* GET /api/crm/costing-requests - implemented
+* GET /api/crm/costing-requests/:id - implemented
+* PATCH /api/crm/costing-requests/:id - implemented
+* GET /api/crm/inquiries/:id/costing-prefill - implemented
 * GET /api/crm/specifications/:id - implemented
 * POST /api/crm/specifications/:id/layers - implemented
 * GET /api/crm/audit-logs - implemented
@@ -334,8 +335,8 @@ Suggested components:
 * CrmCustomerDetail.tsx - implemented
 * CrmInquiries.tsx - implemented
 * CrmInquiryDetail.tsx - implemented
-* CrmCostingRequests.tsx - not implemented in Phase 1-3
-* CrmCostingRequestDetail.tsx - not implemented in Phase 1-3
+* CrmCostingRequests.tsx - implemented in Phase 4
+* CrmCostingRequestDetail.tsx - implemented in Phase 4
 * CrmAuditLogs.tsx - implemented
 
 ## 14. Permission Implementation Strategy
@@ -349,7 +350,7 @@ Suggested components:
 * costing_user APIs need separate allowRoles handling plus assigned_to data filtering.
 * Field-level permissions must be handled at the API response layer by hiding email, whatsapp, and raw_content.
 
-Phase 1-3 implementation note: src/routes/crm.js currently protects the full CRM API with allowRoles('super_admin', 'foreign_trade_crm_admin'). costing_user and freight_user scoped APIs are intentionally not implemented until later phases. Field-level filtering for costing_user is deferred until costing_user API access exists.
+Phase 4 implementation note: src/routes/crm.js protects full CRM APIs with super_admin and foreign_trade_crm_admin. costing_user can access only assigned costing request APIs and costing-prefill data. costing_user cannot access the full customer or inquiry CRM APIs and does not receive customer email, WhatsApp, raw communication content, or full communication timeline.
 
 ## 15. Costing Integration Strategy
 
@@ -437,3 +438,37 @@ Still deferred:
 New implementation risk:
 
 * Root package.json has no npm run build script. Frontend build must currently be run from frontend-next with npm run build.
+
+## 20. Phase 4 Costing Request Integration Status
+
+Implemented on 2026-06-24:
+
+* costing_requests table with generated CR-YYYYMMDD-0001 style codes.
+* cost_sheet_lines table reserved for future line-level cost sheet detail.
+* cost_snapshots extended with customer_id, inquiry_id, specification_id, costing_request_id, version_no, is_current, crm_quote_status, and crm_notes.
+* POST /api/crm/inquiries/:id/costing-requests creates requests from the current inquiry specification and updates inquiry costing status.
+* GET /api/crm/costing-requests, GET /api/crm/costing-requests/:id, PATCH /api/crm/costing-requests/:id.
+* GET /api/crm/inquiries/:id/costing-prefill returns safe costing input data.
+* costing_user role added with crm=false and cost=true in permissions model.
+* costing_user can only see assigned costing requests by assigned_to_user_id or assigned_to username.
+* costing_user response filtering hides customer email, WhatsApp, raw_content, and communication timeline.
+* CrmCostingRequests and CrmCostingRequestDetail frontend pages.
+* CrmInquiryDetail can create costing requests and copy a costing input summary.
+* Existing Cost.tsx and 9 bag-type formulas were not changed.
+
+Costing handoff strategy:
+
+* Phase 4 does not push data directly into Cost.tsx.
+* The costing request detail page shows specification, material layers, quantity, destination, trade term, and request note.
+* A copyable costing summary is provided as the safe transition path for the boss/father to use with the existing Cost.tsx workflow.
+* cost_snapshots can now store optional CRM link fields when a costing result is saved with crm metadata, but the old snapshot save flow remains compatible.
+
+Still deferred:
+
+* Deep Cost.tsx prefill or state/query integration.
+* Formal versioned cost_sheets model.
+* Quotation versioning, freight/clearance charges, weekly reports, AI Inbox, IMAP, and order conversion.
+
+New implementation risk:
+
+* costing_user has API access to assigned costing requests but no dedicated frontend menu because crm module remains false by design. A later dedicated costing queue entry may be needed if costing_user should use the React UI directly.
