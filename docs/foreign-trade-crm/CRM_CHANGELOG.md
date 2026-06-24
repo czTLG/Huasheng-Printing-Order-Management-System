@@ -81,3 +81,89 @@
 * Next step:
   * 等确认后进入 Phase 1.1：权限模型扩展
 
+---
+
+## 2026-06-24 - Phase 1-3 Foundation - CRM permissions, customers, communications and inquiries
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: f476943
+* Scope:
+  * 实现 CRM Phase 1 权限与菜单基础
+  * 实现 CRM Phase 2 客户与沟通记录基础
+  * 实现 CRM Phase 3 询盘与规格版本基础
+  * 接入基础 audit log
+  * 增加 smoke test 覆盖 CRM 权限、CRUD、规格版本和材料层
+* Files changed:
+  * shared/permissions-model.json
+  * src/db.js
+  * src/middleware/auth.js
+  * src/routes/auth.js
+  * src/routes/crm.js
+  * src/server.js
+  * frontend-next/src/App.tsx
+  * frontend-next/src/components/Admin.tsx
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmCustomers.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * frontend-next/src/components/crm/CrmInquiries.tsx
+  * frontend-next/src/components/crm/CrmInquiryDetail.tsx
+  * frontend-next/src/components/crm/CrmAuditLogs.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * customers table safely extended through PRAGMA table_info checks
+  * Added communication_logs table
+  * Added inquiries table
+  * Added inquiry_specifications table
+  * Added specification_layers table
+  * Added CRM indexes for customer, communication, inquiry, specification, and layer lookups
+* Permission changes:
+  * Added crm module key
+  * Added foreign_trade_crm_admin role
+  * super_admin and foreign_trade_crm_admin can access full CRM API
+  * manager, ai_sales, worker, worker_print, worker_film, worker_bag, worker_ship, and default have crm=false
+  * CRM activeTab render path checks visibleModules.includes('crm')
+  * Unauthorized CRM API access returns 403 through allowRoles()
+* API changes:
+  * GET /api/crm/customers
+  * POST /api/crm/customers
+  * GET /api/crm/customers/:id
+  * PATCH /api/crm/customers/:id
+  * GET /api/crm/customers/:id/communications
+  * POST /api/crm/customers/:id/communications
+  * GET /api/crm/inquiries
+  * POST /api/crm/inquiries
+  * GET /api/crm/inquiries/:id
+  * PATCH /api/crm/inquiries/:id
+  * GET /api/crm/inquiries/:id/specifications
+  * POST /api/crm/inquiries/:id/specifications
+  * GET /api/crm/specifications/:id
+  * POST /api/crm/specifications/:id/layers
+  * GET /api/crm/audit-logs
+* Frontend changes:
+  * Added CRM 客户, CRM 询盘, CRM 日志 menu entries
+  * Added CRM customer list/detail pages
+  * Added communication timeline and manual communication creation
+  * Added inquiry list/detail pages
+  * Added specification version creation and material layer creation
+  * Added CRM audit log page
+  * Added CRM API methods to mockService
+* Build result:
+  * Root npm run build: FAILED because root package.json has no build script
+  * frontend-next npm run build: PASS
+* Test result:
+  * frontend-next npm run lint: PASS
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * costing_user field-level filtering is deferred because costing_user API access is not implemented in Phase 1-3
+  * Root build command mismatch should be kept visible in future verification notes
+* Decisions:
+  * Do not implement costing_requests in this round
+  * Do not modify Cost.tsx or 9 bag-type costing formulas
+  * Keep all CRM frontend navigation inside App.tsx activeTab mode
+  * Reuse audit() and store field-level changes in detail JSON
+* Next step:
+  * Phase 4: costing request association, without rewriting cost calculation formulas

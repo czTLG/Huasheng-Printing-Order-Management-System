@@ -25,16 +25,20 @@ import Board from './components/Board';
 import Cost from './components/Cost';
 import Admin from './components/Admin';
 import Stats from './components/Stats';
+import CrmCustomers from './components/crm/CrmCustomers';
+import CrmInquiries from './components/crm/CrmInquiries';
+import CrmAuditLogs from './components/crm/CrmAuditLogs';
 import { mockService } from './lib/mockService';
 import { getVisibleModuleKeys, MODULE_KEYS } from './lib/permissions';
 import { User } from './types';
 
 import Login from './components/Login';
 
-type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin';
+type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm_customers' | 'crm_inquiries' | 'crm_audit';
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin: '超级管理员', manager: '生产经理',
+  foreign_trade_crm_admin: '外贸客户管理负责人',
   ai_sales: '业务员', worker: '通用工人',
   worker_print: '印刷工人', worker_film: '复膜工人',
   worker_bag: '制袋工人', worker_ship: '发货工人',
@@ -157,6 +161,9 @@ const App: React.FC = () => {
     { id: 'workorders', label: '开单管理', icon: ClipboardList, requiredModule: 'workorder' },
     { id: 'board', label: '生产看板', icon: Activity, requiredModule: 'board' },
     { id: 'cost', label: '成本核算', icon: Calculator, requiredModule: 'cost' },
+    { id: 'crm_customers', label: 'CRM 客户', icon: MessageSquare, requiredModule: 'crm' },
+    { id: 'crm_inquiries', label: 'CRM 询盘', icon: ClipboardList, requiredModule: 'crm' },
+    { id: 'crm_audit', label: 'CRM 日志', icon: ShieldAlert, requiredModule: 'crm' },
     { id: 'stats', label: '统计分析', icon: BarChart3, requiredModule: 'stats' },
     { id: 'admin', label: '系统管理', icon: Shield, requiredModule: 'admin' },
   ];
@@ -177,11 +184,21 @@ const App: React.FC = () => {
   }
 
   const renderContent = () => {
+    const forbidden = (
+      <div className="min-h-[360px] bg-white border border-slate-200 rounded-lg flex flex-col items-center justify-center text-center p-8">
+        <ShieldAlert className="w-10 h-10 text-rose-500 mb-3" />
+        <h2 className="text-lg font-black text-slate-900">403 Forbidden</h2>
+        <p className="text-sm font-medium text-slate-500 mt-2">当前账号没有访问该模块的权限。</p>
+      </div>
+    );
     switch (activeTab) {
       case 'orders': return <Orders />;
       case 'workorders': return <WorkOrders />;
       case 'board': return <Board />;
       case 'cost': return <Cost />;
+      case 'crm_customers': return visibleModules.includes('crm') ? <CrmCustomers /> : forbidden;
+      case 'crm_inquiries': return visibleModules.includes('crm') ? <CrmInquiries /> : forbidden;
+      case 'crm_audit': return visibleModules.includes('crm') ? <CrmAuditLogs /> : forbidden;
       case 'stats': return <Stats />;
       case 'admin': return <Admin />;
       default: return <Orders />;

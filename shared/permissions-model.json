@@ -1,5 +1,5 @@
 {
-  "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin"],
+  "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin", "crm"],
   "defaultsByRole": {
     "super_admin": {
       "all": true
@@ -11,7 +11,21 @@
         "board": true,
         "cost": true,
         "stats": true,
-        "admin": false
+        "admin": false,
+        "crm": false
+      },
+      "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"]
+    },
+    "foreign_trade_crm_admin": {
+      "modules": {
+        "orders": true,
+        "workorder": true,
+        "board": false,
+        "cost": false,
+        "stats": false,
+        "admin": false,
+        "crm": true
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
       "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"]
@@ -23,7 +37,8 @@
         "board": false,
         "cost": true,
         "stats": true,
-        "admin": false
+        "admin": false,
+        "crm": false
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
       "boardStages": []
@@ -35,7 +50,8 @@
         "board": true,
         "cost": false,
         "stats": false,
-        "admin": false
+        "admin": false,
+        "crm": false
       },
       "ordersStages": ["印刷"],
       "boardStages": ["印刷"]
@@ -47,7 +63,8 @@
         "board": true,
         "cost": false,
         "stats": false,
-        "admin": false
+        "admin": false,
+        "crm": false
       },
       "ordersStages": ["复膜"],
       "boardStages": ["复膜"]
@@ -59,7 +76,8 @@
         "board": true,
         "cost": false,
         "stats": false,
-        "admin": false
+        "admin": false,
+        "crm": false
       },
       "ordersStages": ["制袋"],
       "boardStages": ["制袋"]
@@ -71,7 +89,8 @@
         "board": true,
         "cost": false,
         "stats": false,
-        "admin": false
+        "admin": false,
+        "crm": false
       },
       "ordersStages": ["发货"],
       "boardStages": ["发货"]
@@ -83,7 +102,8 @@
         "board": true,
         "cost": false,
         "stats": false,
-        "admin": false
+        "admin": false,
+        "crm": false
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货"],
       "boardStages": ["印刷", "复膜", "制袋", "发货"]
@@ -95,7 +115,8 @@
         "board": false,
         "cost": false,
         "stats": false,
-        "admin": false
+        "admin": false,
+        "crm": false
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
       "boardStages": []

@@ -199,26 +199,26 @@ Important: the existing system role is super_admin, not admin. CRM permissions m
 
 P0 includes only:
 
-1. foreign_trade_crm_admin role
-2. CRM menu permission
-3. CRM activeTab page permission
-4. CRM API permission
-5. customers table extension or compatibility strategy
-6. communication_logs table
-7. inquiries table
-8. inquiry_specifications table
-9. specification_layers table
+1. foreign_trade_crm_admin role - implemented in Phase 1-3 foundation
+2. CRM menu permission - implemented in Phase 1-3 foundation
+3. CRM activeTab page permission - implemented in Phase 1-3 foundation
+4. CRM API permission - implemented in Phase 1-3 foundation
+5. customers table extension or compatibility strategy - implemented in Phase 1-3 foundation
+6. communication_logs table - implemented in Phase 1-3 foundation
+7. inquiries table - implemented in Phase 1-3 foundation
+8. inquiry_specifications table - implemented in Phase 1-3 foundation
+9. specification_layers table - implemented in Phase 1-3 foundation
 10. costing_requests table
 11. cost_sheets or cost_snapshots compatibility strategy
 12. cost_sheet_lines table
-13. audit_logs reuse/enhancement
-14. Customer list page
-15. Customer detail page
-16. Inquiry list page
-17. Inquiry detail page
+13. audit_logs reuse/enhancement - audit() reused for CRM write operations in Phase 1-3 foundation
+14. Customer list page - implemented in Phase 1-3 foundation
+15. Customer detail page - implemented in Phase 1-3 foundation
+16. Inquiry list page - implemented in Phase 1-3 foundation
+17. Inquiry detail page - implemented in Phase 1-3 foundation
 18. Start costing request button
 19. Costing request detail
-20. Basic change log view
+20. Basic change log view - implemented in Phase 1-3 foundation
 
 P0 does not include:
 
@@ -273,13 +273,13 @@ Database rules:
 
 P0 tables:
 
-* communication_logs
-* inquiries
-* inquiry_specifications
-* specification_layers
+* communication_logs - implemented
+* inquiries - implemented
+* inquiry_specifications - implemented
+* specification_layers - implemented
 * costing_requests
 * cost_sheet_lines
-* audit_logs reuse or enhancement
+* audit_logs reuse or enhancement - audit() reused; field-level values are stored in detail JSON for Phase 1-3
 
 Existing tables that may need extension:
 
@@ -291,23 +291,25 @@ Existing tables that may need extension:
 
 Suggested CRM APIs:
 
-* GET /api/crm/customers
-* POST /api/crm/customers
-* GET /api/crm/customers/:id
-* PATCH /api/crm/customers/:id
-* GET /api/crm/customers/:id/communications
-* POST /api/crm/customers/:id/communications
-* GET /api/crm/inquiries
-* POST /api/crm/inquiries
-* GET /api/crm/inquiries/:id
-* PATCH /api/crm/inquiries/:id
-* POST /api/crm/inquiries/:id/specifications
-* GET /api/crm/inquiries/:id/specifications
+* GET /api/crm/customers - implemented
+* POST /api/crm/customers - implemented
+* GET /api/crm/customers/:id - implemented
+* PATCH /api/crm/customers/:id - implemented
+* GET /api/crm/customers/:id/communications - implemented
+* POST /api/crm/customers/:id/communications - implemented
+* GET /api/crm/inquiries - implemented
+* POST /api/crm/inquiries - implemented
+* GET /api/crm/inquiries/:id - implemented
+* PATCH /api/crm/inquiries/:id - implemented
+* POST /api/crm/inquiries/:id/specifications - implemented
+* GET /api/crm/inquiries/:id/specifications - implemented
 * POST /api/crm/inquiries/:id/costing-requests
 * GET /api/crm/costing-requests
 * GET /api/crm/costing-requests/:id
 * PATCH /api/crm/costing-requests/:id
-* GET /api/crm/audit-logs
+* GET /api/crm/specifications/:id - implemented
+* POST /api/crm/specifications/:id/layers - implemented
+* GET /api/crm/audit-logs - implemented
 
 API requirements:
 
@@ -328,13 +330,13 @@ API requirements:
 
 Suggested components:
 
-* CrmCustomers.tsx
-* CrmCustomerDetail.tsx
-* CrmInquiries.tsx
-* CrmInquiryDetail.tsx
-* CrmCostingRequests.tsx
-* CrmCostingRequestDetail.tsx
-* CrmAuditLogs.tsx
+* CrmCustomers.tsx - implemented
+* CrmCustomerDetail.tsx - implemented
+* CrmInquiries.tsx - implemented
+* CrmInquiryDetail.tsx - implemented
+* CrmCostingRequests.tsx - not implemented in Phase 1-3
+* CrmCostingRequestDetail.tsx - not implemented in Phase 1-3
+* CrmAuditLogs.tsx - implemented
 
 ## 14. Permission Implementation Strategy
 
@@ -346,6 +348,8 @@ Suggested components:
 * Protect full CRM APIs in src/routes/crm.js with allowRoles('super_admin', 'foreign_trade_crm_admin').
 * costing_user APIs need separate allowRoles handling plus assigned_to data filtering.
 * Field-level permissions must be handled at the API response layer by hiding email, whatsapp, and raw_content.
+
+Phase 1-3 implementation note: src/routes/crm.js currently protects the full CRM API with allowRoles('super_admin', 'foreign_trade_crm_admin'). costing_user and freight_user scoped APIs are intentionally not implemented until later phases. Field-level filtering for costing_user is deferred until costing_user API access exists.
 
 ## 15. Costing Integration Strategy
 
@@ -410,3 +414,26 @@ Suggested components:
 9. After each completion, update CRM_CONTEXT.md and CRM_CHANGELOG.md.
 10. If actual code differs from this documentation, report the difference first and do not continue directly.
 
+## 19. Phase 1-3 Foundation Implementation Status
+
+Implemented on 2026-06-24:
+
+* foreign_trade_crm_admin role and crm module key.
+* CRM menu entries: CRM 客户, CRM 询盘, CRM 日志.
+* activeTab permission checks for all CRM pages.
+* src/routes/crm.js mounted at /api/crm.
+* Full CRM API access limited to super_admin and foreign_trade_crm_admin.
+* customers compatibility columns added with PRAGMA table_info checks.
+* communication_logs, inquiries, inquiry_specifications, and specification_layers tables.
+* Customer list/detail, communication timeline, inquiry list/detail, specification version creation, and material layer creation.
+* Basic CRM audit log view and audit() calls for CRM write operations.
+
+Still deferred:
+
+* costing_requests and costing_user scoped access.
+* cost_sheet_lines and formal cost_sheets abstraction.
+* freight_user, production_user, freight/clearance records, quotation versions, weekly reports, AI Inbox, IMAP, and order conversion.
+
+New implementation risk:
+
+* Root package.json has no npm run build script. Frontend build must currently be run from frontend-next with npm run build.

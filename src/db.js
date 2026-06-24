@@ -146,6 +146,109 @@ function initDb() {
       UNIQUE(salesperson_id, name)
     );
 
+    CREATE TABLE IF NOT EXISTS communication_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      channel TEXT,
+      direction TEXT,
+      sender TEXT,
+      recipient TEXT,
+      subject TEXT,
+      raw_content TEXT,
+      ai_summary TEXT,
+      attachments_json TEXT,
+      message_id TEXT,
+      thread_id TEXT,
+      received_at TEXT,
+      created_by TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS inquiries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      inquiry_code TEXT,
+      customer_id INTEGER,
+      inquiry_title TEXT,
+      product_type TEXT,
+      application TEXT,
+      packaging_type TEXT,
+      status TEXT DEFAULT 'new',
+      priority TEXT DEFAULT 'C',
+      quantity TEXT,
+      destination_country TEXT,
+      destination_port TEXT,
+      destination_address TEXT,
+      trade_term_requested TEXT,
+      customer_target_price TEXT,
+      missing_info TEXT,
+      customer_questions TEXT,
+      technical_risks TEXT,
+      commercial_risks TEXT,
+      costing_required INTEGER DEFAULT 0,
+      latest_specification_id INTEGER,
+      latest_cost_sheet_id INTEGER,
+      latest_quote_id INTEGER,
+      order_id INTEGER,
+      next_action TEXT,
+      next_followup_at TEXT,
+      created_by TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS inquiry_specifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      inquiry_id INTEGER,
+      version_no INTEGER,
+      is_current INTEGER DEFAULT 1,
+      product_type TEXT,
+      bag_type TEXT,
+      film_type TEXT,
+      size_width TEXT,
+      size_height TEXT,
+      gusset_size TEXT,
+      roll_width TEXT,
+      roll_length TEXT,
+      repeat_length TEXT,
+      thickness_total TEXT,
+      thickness_unit TEXT,
+      material_structure_text TEXT,
+      printing_colors TEXT,
+      surface_finish TEXT,
+      zipper_required INTEGER DEFAULT 0,
+      valve_required INTEGER DEFAULT 0,
+      spout_required INTEGER DEFAULT 0,
+      tear_notch_required INTEGER DEFAULT 0,
+      window_required INTEGER DEFAULT 0,
+      filling_weight TEXT,
+      packing_machine_type TEXT,
+      artwork_status TEXT,
+      notes TEXT,
+      source_communication_id INTEGER,
+      created_by TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS specification_layers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      specification_id INTEGER,
+      layer_order INTEGER,
+      material_name TEXT,
+      material_code TEXT,
+      thickness TEXT,
+      thickness_unit TEXT,
+      layer_role TEXT,
+      is_customer_required INTEGER DEFAULT 0,
+      is_system_suggested INTEGER DEFAULT 0,
+      is_confirmed_by_costing INTEGER DEFAULT 0,
+      notes TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS work_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_no TEXT NOT NULL UNIQUE,
@@ -331,11 +434,39 @@ function initDb() {
   if (!ucols.includes('full_name')) db.exec("ALTER TABLE users ADD COLUMN full_name TEXT");
   if (!ucols.includes('permissions_json')) db.exec("ALTER TABLE users ADD COLUMN permissions_json TEXT");
 
+  const ccols = db.prepare("PRAGMA table_info(customers)").all().map(c => c.name);
+  if (!ccols.includes('customer_code')) db.exec("ALTER TABLE customers ADD COLUMN customer_code TEXT");
+  if (!ccols.includes('company_name')) db.exec("ALTER TABLE customers ADD COLUMN company_name TEXT");
+  if (!ccols.includes('country')) db.exec("ALTER TABLE customers ADD COLUMN country TEXT");
+  if (!ccols.includes('city')) db.exec("ALTER TABLE customers ADD COLUMN city TEXT");
+  if (!ccols.includes('contact_person')) db.exec("ALTER TABLE customers ADD COLUMN contact_person TEXT");
+  if (!ccols.includes('email')) db.exec("ALTER TABLE customers ADD COLUMN email TEXT");
+  if (!ccols.includes('whatsapp')) db.exec("ALTER TABLE customers ADD COLUMN whatsapp TEXT");
+  if (!ccols.includes('source_channel')) db.exec("ALTER TABLE customers ADD COLUMN source_channel TEXT");
+  if (!ccols.includes('priority')) db.exec("ALTER TABLE customers ADD COLUMN priority TEXT DEFAULT 'C'");
+  if (!ccols.includes('stage')) db.exec("ALTER TABLE customers ADD COLUMN stage TEXT DEFAULT 'new'");
+  if (!ccols.includes('owner_id')) db.exec("ALTER TABLE customers ADD COLUMN owner_id INTEGER");
+  if (!ccols.includes('latest_inquiry_id')) db.exec("ALTER TABLE customers ADD COLUMN latest_inquiry_id INTEGER");
+  if (!ccols.includes('latest_quote_id')) db.exec("ALTER TABLE customers ADD COLUMN latest_quote_id INTEGER");
+  if (!ccols.includes('latest_order_id')) db.exec("ALTER TABLE customers ADD COLUMN latest_order_id INTEGER");
+  if (!ccols.includes('ai_summary')) db.exec("ALTER TABLE customers ADD COLUMN ai_summary TEXT");
+  if (!ccols.includes('risk_notes')) db.exec("ALTER TABLE customers ADD COLUMN risk_notes TEXT");
+  if (!ccols.includes('next_action')) db.exec("ALTER TABLE customers ADD COLUMN next_action TEXT");
+  if (!ccols.includes('next_followup_at')) db.exec("ALTER TABLE customers ADD COLUMN next_followup_at TEXT");
+  if (!ccols.includes('last_contact_at')) db.exec("ALTER TABLE customers ADD COLUMN last_contact_at TEXT");
+
   const mpcols = db.prepare("PRAGMA table_info(material_prices)").all().map(c => c.name);
   if (!mpcols.includes('prop')) db.exec("ALTER TABLE material_prices ADD COLUMN prop REAL");
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_user_kind ON cost_snapshots(user_name, kind, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_salesperson ON customers(salesperson_id, active, name)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_stage ON customers(stage, priority, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_customer ON communication_logs(customer_id, received_at DESC, created_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_inquiry ON communication_logs(inquiry_id, received_at DESC, created_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_customer ON inquiries(customer_id, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status, priority, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_inquiry_specifications_inquiry ON inquiry_specifications(inquiry_id, version_no DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_specification_layers_spec ON specification_layers(specification_id, layer_order)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_salesperson ON work_orders(salesperson_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_customer ON work_orders(customer_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_order_id ON work_orders(order_id)");

@@ -177,6 +177,7 @@ router.delete('/users/:id', requireAuthAdmin, (req, res) => {
 function detectModuleByAudit(a = {}) {
   const action = String(a.action || '');
   const rt = String(a.resource_type || '');
+  if (action.includes('customer') || action.includes('inquiry') || action.includes('specification') || rt.startsWith('crm_')) return '外贸客户管理';
   if (action.includes('work_order') || rt === 'work_order' || rt === 'customer') return '开单管理';
   if (action.includes('cost') || rt === 'cost' || rt === 'material_price' || rt === 'cost_email_log') return '成本核算';
   if (action.includes('order') || rt === 'order' || rt === 'order_stage_log') return '订单管理/看板';

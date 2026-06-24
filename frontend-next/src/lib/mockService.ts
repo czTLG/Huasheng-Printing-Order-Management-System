@@ -501,6 +501,104 @@ export const mockService = {
     return api<any>('/api/cost/email-logs');
   },
 
+  async listCrmCustomers(params: { q?: string } = {}) {
+    const search = new URLSearchParams();
+    if (params.q) search.set('q', params.q);
+    return api<any>(`/api/crm/customers?${search.toString()}`);
+  },
+
+  async createCrmCustomer(payload: any) {
+    return api<any>('/api/crm/customers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getCrmCustomer(id: number | string) {
+    return api<any>(`/api/crm/customers/${id}`);
+  },
+
+  async updateCrmCustomer(id: number | string, payload: any) {
+    return api<any>(`/api/crm/customers/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listCustomerCommunications(id: number | string) {
+    return api<any>(`/api/crm/customers/${id}/communications`);
+  },
+
+  async createCustomerCommunication(id: number | string, payload: any) {
+    return api<any>(`/api/crm/customers/${id}/communications`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listCrmInquiries(params: { q?: string; status?: string; priority?: string } = {}) {
+    const search = new URLSearchParams();
+    if (params.q) search.set('q', params.q);
+    if (params.status) search.set('status', params.status);
+    if (params.priority) search.set('priority', params.priority);
+    return api<any>(`/api/crm/inquiries?${search.toString()}`);
+  },
+
+  async createCrmInquiry(payload: any) {
+    return api<any>('/api/crm/inquiries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getCrmInquiry(id: number | string) {
+    return api<any>(`/api/crm/inquiries/${id}`);
+  },
+
+  async updateCrmInquiry(id: number | string, payload: any) {
+    return api<any>(`/api/crm/inquiries/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listInquirySpecifications(id: number | string) {
+    return api<any>(`/api/crm/inquiries/${id}/specifications`);
+  },
+
+  async createInquirySpecification(id: number | string, payload: any) {
+    return api<any>(`/api/crm/inquiries/${id}/specifications`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getSpecification(id: number | string) {
+    return api<any>(`/api/crm/specifications/${id}`);
+  },
+
+  async createSpecificationLayer(id: number | string, payload: any) {
+    return api<any>(`/api/crm/specifications/${id}/layers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listCrmAuditLogs(params: { resourceType?: string; action?: string; user?: string } = {}) {
+    const search = new URLSearchParams();
+    if (params.resourceType) search.set('resourceType', params.resourceType);
+    if (params.action) search.set('action', params.action);
+    if (params.user) search.set('user', params.user);
+    return api<any>(`/api/crm/audit-logs?${search.toString()}`);
+  },
+
   async getBossDashboard() {
     return api('/api/orders/stats/boss-dashboard');
   },

@@ -16,6 +16,7 @@ const menuRouter = require('./routes/menu');
 const stocksRouter = require('./routes/stocks');
 const futuresRouter = require('./routes/futures');
 const statsRouter = require('./routes/stats');
+const crmRouter = require('./routes/crm');
 
 initDb();
 
@@ -90,6 +91,7 @@ app.use('/api/menu', menuRouter);
 app.use('/api/stocks', stocksRouter);
 app.use('/api/futures', futuresRouter);
 app.use('/api/stats', statsRouter);
+app.use('/api/crm', crmRouter);
 
 if (process.env.DISABLE_CRON !== '1') {
   // 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）

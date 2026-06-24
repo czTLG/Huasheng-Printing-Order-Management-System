@@ -138,14 +138,20 @@ async function main() {
     method: 'POST',
     body: { username: 'sales_scope_guard', password: 'guard123', fullName: '权限守护' }
   });
+  await httpJson('/api/auth/register', {
+    method: 'POST',
+    body: { username: 'crm_admin_guard', password: 'guard123', fullName: '外贸守护' }
+  });
 
   const pending = await httpJson('/api/auth/users/pending', { token: adminToken });
   const costUser = pending.find(row => row.username === 'chenyongjie');
   const workerUser = pending.find(row => row.username === 'worker_print_guard');
   const scopedSalesUser = pending.find(row => row.username === 'sales_scope_guard');
+  const crmAdminUser = pending.find(row => row.username === 'crm_admin_guard');
   assert(costUser, 'pending cost user should exist');
   assert(workerUser, 'pending worker user should exist');
   assert(scopedSalesUser, 'pending scoped sales user should exist');
+  assert(crmAdminUser, 'pending crm admin user should exist');
 
   await httpJson(`/api/auth/users/${costUser.id}/approve`, {
     method: 'POST',
@@ -167,16 +173,165 @@ async function main() {
       }
     }
   });
+  await httpJson(`/api/auth/users/${crmAdminUser.id}/approve`, {
+    method: 'POST',
+    token: adminToken,
+    body: { role: 'foreign_trade_crm_admin' }
+  });
 
   const costLogin = await login('chenyongjie', 'guard123');
   assert(costLogin?.token, 'cost user login should return token');
   const scopedSalesLogin = await login('sales_scope_guard', 'guard123');
   const scopedSalesMe = await httpJson('/api/auth/me', { token: scopedSalesLogin.token });
   assert.deepStrictEqual(scopedSalesMe.user.permissions, {
-    modules: { orders: true, workorder: true, board: false, cost: false, stats: false, admin: false },
+    modules: { orders: true, workorder: true, board: false, cost: false, stats: false, admin: false, crm: false },
     ordersStages: ['印刷', '复膜', '制袋', '发货', '完成', '全部'],
     boardStages: []
   });
+
+  const crmAdminLogin = await login('crm_admin_guard', 'guard123');
+  assert(crmAdminLogin?.token, 'crm admin login should return token');
+  const crmAdminMe = await httpJson('/api/auth/me', { token: crmAdminLogin.token });
+  assert.strictEqual(crmAdminMe.user.role, 'foreign_trade_crm_admin');
+  assert.strictEqual(crmAdminMe.user.permissions.modules.crm, true, 'crm admin role should have crm module');
+  assert.strictEqual(crmAdminMe.user.permissions.modules.orders, true, 'crm admin role should retain basic order visibility');
+
+  await httpJson('/api/crm/customers', { token: scopedSalesLogin.token, expectedStatus: 403 });
+
+  const crmCustomer = await httpJson('/api/crm/customers', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      company_name: 'CRM 守护客户',
+      contact_person: 'Alice',
+      email: 'alice@example.com',
+      whatsapp: '+8613800138000',
+      country: 'Thailand',
+      priority: 'A',
+      stage: 'qualified',
+      next_action: '确认规格'
+    }
+  });
+  assert.strictEqual(crmCustomer.ok, true);
+  const crmCustomerId = Number(crmCustomer.id);
+  assert(crmCustomerId > 0, 'created crm customer id should be > 0');
+
+  const crmCustomerList = await httpJson('/api/crm/customers?q=CRM', { token: crmAdminLogin.token });
+  assert(Array.isArray(crmCustomerList.rows), 'crm customer list should return rows');
+  assert(crmCustomerList.rows.some(row => Number(row.id) === crmCustomerId), 'created crm customer should be listed');
+
+  await httpJson(`/api/crm/customers/${crmCustomerId}`, {
+    method: 'PATCH',
+    token: crmAdminLogin.token,
+    body: { priority: 'B', risk_notes: '需要确认付款条款' }
+  });
+
+  const communication = await httpJson(`/api/crm/customers/${crmCustomerId}/communications`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      channel: 'whatsapp',
+      direction: 'inbound',
+      sender: 'Alice',
+      recipient: 'crm_admin_guard',
+      subject: 'Stand up pouch inquiry',
+      raw_content: 'Need 50000 stand up pouches with zipper.',
+      received_at: '2026-06-24 10:00:00'
+    }
+  });
+  assert.strictEqual(communication.ok, true);
+
+  const inquiry = await httpJson('/api/crm/inquiries', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      customer_id: crmCustomerId,
+      inquiry_title: '50000 zipper stand up pouches',
+      product_type: 'pouch',
+      packaging_type: 'stand_up_zipper_bag',
+      quantity: '50000',
+      destination_country: 'Thailand',
+      priority: 'A',
+      next_action: '发起规格确认'
+    }
+  });
+  assert.strictEqual(inquiry.ok, true);
+  const inquiryId = Number(inquiry.id);
+  assert(inquiryId > 0, 'created inquiry id should be > 0');
+
+  const customerDetail = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(Number(customerDetail.customer.latest_inquiry_id), inquiryId, 'customer should reference latest inquiry');
+  assert.strictEqual(Number(customerDetail.latestInquiry.id), inquiryId, 'customer detail should include latest inquiry');
+
+  const specOne = await httpJson(`/api/crm/inquiries/${inquiryId}/specifications`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      product_type: 'pouch',
+      bag_type: 'stand_up_zipper_bag',
+      size_width: '180',
+      size_height: '260',
+      gusset_size: '80',
+      thickness_total: '120',
+      thickness_unit: 'mic',
+      material_structure_text: 'PET12/AL7/PE100',
+      printing_colors: '6',
+      zipper_required: 1,
+      source_communication_id: communication.id
+    }
+  });
+  assert.strictEqual(specOne.ok, true);
+  assert.strictEqual(Number(specOne.version_no), 1);
+
+  const specTwo = await httpJson(`/api/crm/inquiries/${inquiryId}/specifications`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      product_type: 'pouch',
+      bag_type: 'stand_up_zipper_bag',
+      size_width: '190',
+      size_height: '270',
+      gusset_size: '80',
+      thickness_total: '130',
+      thickness_unit: 'mic',
+      material_structure_text: 'PET12/NY15/PE100',
+      printing_colors: '7',
+      zipper_required: 1
+    }
+  });
+  assert.strictEqual(specTwo.ok, true);
+  assert.strictEqual(Number(specTwo.version_no), 2);
+
+  const layer = await httpJson(`/api/crm/specifications/${specTwo.id}/layers`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      layer_order: 1,
+      material_name: 'PET',
+      material_code: 'PET',
+      thickness: '12',
+      thickness_unit: 'mic',
+      layer_role: 'print'
+    }
+  });
+  assert.strictEqual(layer.ok, true);
+
+  const specifications = await httpJson(`/api/crm/inquiries/${inquiryId}/specifications`, { token: crmAdminLogin.token });
+  assert.strictEqual(specifications.rows.length, 2, 'inquiry should list both specification versions');
+  const oldSpec = specifications.rows.find(row => Number(row.id) === Number(specOne.id));
+  const currentSpec = specifications.rows.find(row => Number(row.id) === Number(specTwo.id));
+  assert.strictEqual(Number(oldSpec.is_current), 0, 'old specification should no longer be current');
+  assert.strictEqual(Number(currentSpec.is_current), 1, 'new specification should be current');
+
+  const inquiryDetail = await httpJson(`/api/crm/inquiries/${inquiryId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(Number(inquiryDetail.inquiry.latest_specification_id), Number(specTwo.id), 'inquiry should reference latest specification');
+  assert(Array.isArray(inquiryDetail.currentSpecification.layers), 'current specification should include layers');
+  assert(inquiryDetail.currentSpecification.layers.some(row => row.material_name === 'PET'), 'current specification should include added layer');
+
+  const crmAuditLogs = await httpJson('/api/crm/audit-logs?resourceType=crm_customer', { token: crmAdminLogin.token });
+  assert(Array.isArray(crmAuditLogs.rows), 'crm audit logs should return rows');
+  assert(crmAuditLogs.rows.some(row => row.action === 'create_customer'), 'crm audit logs should include create_customer');
+
   const costCalc = await httpJson('/api/cost/calculate', {
     method: 'POST',
     token: costLogin.token,
@@ -315,7 +470,8 @@ async function main() {
       board: true,
       cost: false,
       stats: false,
-      admin: false
+      admin: false,
+      crm: false
     },
     ordersStages: ['印刷'],
     boardStages: ['印刷']
