@@ -344,6 +344,33 @@ function initDb() {
       updated_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS customer_research_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER,
+      source_type TEXT,
+      title TEXT,
+      research_summary TEXT,
+      customer_type TEXT,
+      industry TEXT,
+      main_products TEXT,
+      website TEXT,
+      country TEXT,
+      city TEXT,
+      company_size_note TEXT,
+      buyer_authenticity_note TEXT,
+      business_match_note TEXT,
+      risk_flags TEXT,
+      suggested_priority TEXT,
+      suggested_next_action TEXT,
+      sources_json TEXT,
+      raw_input TEXT,
+      parsed_json TEXT,
+      status TEXT DEFAULT 'active',
+      created_by TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS work_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_no TEXT NOT NULL UNIQUE,
@@ -549,6 +576,16 @@ function initDb() {
   if (!ccols.includes('next_action')) db.exec("ALTER TABLE customers ADD COLUMN next_action TEXT");
   if (!ccols.includes('next_followup_at')) db.exec("ALTER TABLE customers ADD COLUMN next_followup_at TEXT");
   if (!ccols.includes('last_contact_at')) db.exec("ALTER TABLE customers ADD COLUMN last_contact_at TEXT");
+  if (!ccols.includes('website')) db.exec("ALTER TABLE customers ADD COLUMN website TEXT");
+  if (!ccols.includes('customer_type')) db.exec("ALTER TABLE customers ADD COLUMN customer_type TEXT");
+  if (!ccols.includes('industry')) db.exec("ALTER TABLE customers ADD COLUMN industry TEXT");
+  if (!ccols.includes('main_product')) db.exec("ALTER TABLE customers ADD COLUMN main_product TEXT");
+  if (!ccols.includes('business_background')) db.exec("ALTER TABLE customers ADD COLUMN business_background TEXT");
+  if (!ccols.includes('company_size_note')) db.exec("ALTER TABLE customers ADD COLUMN company_size_note TEXT");
+  if (!ccols.includes('buyer_authenticity_note')) db.exec("ALTER TABLE customers ADD COLUMN buyer_authenticity_note TEXT");
+  if (!ccols.includes('source_notes')) db.exec("ALTER TABLE customers ADD COLUMN source_notes TEXT");
+  if (!ccols.includes('customer_summary')) db.exec("ALTER TABLE customers ADD COLUMN customer_summary TEXT");
+  if (!ccols.includes('priority_reason')) db.exec("ALTER TABLE customers ADD COLUMN priority_reason TEXT");
 
   const mpcols = db.prepare("PRAGMA table_info(material_prices)").all().map(c => c.name);
   if (!mpcols.includes('prop')) db.exec("ALTER TABLE material_prices ADD COLUMN prop REAL");
@@ -567,6 +604,7 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_crm ON cost_snapshots(costing_request_id, inquiry_id, specification_id, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_salesperson ON customers(salesperson_id, active, name)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_stage ON customers(stage, priority, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_priority ON customers(priority, stage, next_followup_at, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_customer ON communication_logs(customer_id, received_at DESC, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_inquiry ON communication_logs(inquiry_id, received_at DESC, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_customer ON inquiries(customer_id, updated_at DESC)");
@@ -579,6 +617,7 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_inquiry ON freight_quotes(inquiry_id, is_current DESC, version_no DESC, id DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_assigned ON freight_quotes(assigned_to_user_id, assigned_to, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_destination ON freight_quotes(destination_country, destination_port, shipping_mode, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_customer_research_notes_customer ON customer_research_notes(customer_id, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_salesperson ON work_orders(salesperson_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_customer ON work_orders(customer_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_order_id ON work_orders(order_id)");

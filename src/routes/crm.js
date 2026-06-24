@@ -100,12 +100,62 @@ const CUSTOMER_FIELDS = [
   'customer_code', 'company_name', 'country', 'city', 'contact_person', 'email', 'whatsapp',
   'source_channel', 'priority', 'stage', 'owner_id', 'ai_summary', 'risk_notes', 'next_action',
   'next_followup_at', 'last_contact_at', 'contact', 'phone', 'default_bag_type', 'default_spec',
-  'default_use_case', 'default_roller', 'notes'
+  'default_use_case', 'default_roller', 'notes', 'website', 'customer_type', 'industry',
+  'main_product', 'business_background', 'company_size_note', 'buyer_authenticity_note',
+  'source_notes', 'customer_summary', 'priority_reason'
 ];
+
+function getLatestResearchNote(customerId) {
+  return db.prepare(`
+    SELECT *
+    FROM customer_research_notes
+    WHERE customer_id = ? AND status != 'archived'
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `).get(customerId) || null;
+}
+
+function getCustomerOverview(customerId) {
+  const latestCosting = db.prepare(`
+    SELECT id, costing_request_code, status, urgency, updated_at
+    FROM costing_requests
+    WHERE customer_id = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `).get(customerId) || null;
+  const latestFreight = db.prepare(`
+    SELECT id, freight_quote_code, status, is_current, updated_at
+    FROM freight_quotes
+    WHERE customer_id = ?
+    ORDER BY is_current DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `).get(customerId) || null;
+  const summary = db.prepare(`
+    SELECT
+      SUM(CASE WHEN status IN ('pending', 'in_progress', 'revision_needed') THEN 1 ELSE 0 END) AS pending_costing_count,
+      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_costing_count
+    FROM costing_requests
+    WHERE customer_id = ?
+  `).get(customerId) || {};
+  const freightCount = db.prepare(`
+    SELECT COUNT(*) AS total_count
+    FROM freight_quotes
+    WHERE customer_id = ?
+  `).get(customerId) || {};
+  return {
+    latestCosting,
+    latestFreight,
+    pending_costing_count: Number(summary.pending_costing_count || 0),
+    completed_costing_count: Number(summary.completed_costing_count || 0),
+    freight_quote_count: Number(freightCount.total_count || 0),
+  };
+}
 
 router.get('/customers', (req, res) => {
   try {
     const q = text(req.query.q);
+    const sortBy = text(req.query.sortBy || 'priority');
+    const sortDirection = text(req.query.sortDirection || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
     const params = [];
     let where = 'WHERE COALESCE(c.active, 1) = 1';
     if (q) {
@@ -118,16 +168,57 @@ router.get('/customers', (req, res) => {
       `;
       params.push(like, like, like, like, like, like, like);
     }
+    const sortMap = {
+      priority: `CASE COALESCE(c.priority, 'D') WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 4 END ${sortDirection}`,
+      last_contact_at: `COALESCE(c.last_contact_at, c.updated_at, c.created_at) ${sortDirection}`,
+      next_followup_at: `COALESCE(c.next_followup_at, '9999-12-31 23:59:59') ${sortDirection}`,
+      latest_inquiry_status: `COALESCE(i.status, '') ${sortDirection}`,
+      pending_costing: `pending_costing_count ${sortDirection}`,
+      pending_freight: `pending_freight_count ${sortDirection}`,
+      updated_at: `COALESCE(c.updated_at, c.created_at) ${sortDirection}`
+    };
+    const orderBy = sortMap[sortBy] || sortMap.priority;
     const rows = db.prepare(`
       SELECT
         ${customerDisplaySelect('c')},
         i.inquiry_title AS latest_inquiry_title,
         i.status AS latest_inquiry_status,
-        i.updated_at AS latest_inquiry_updated_at
+        i.updated_at AS latest_inquiry_updated_at,
+        (
+          SELECT status
+          FROM costing_requests cr
+          WHERE cr.customer_id = c.id
+          ORDER BY cr.updated_at DESC, cr.id DESC
+          LIMIT 1
+        ) AS latest_costing_status,
+        (
+          SELECT COUNT(*)
+          FROM costing_requests cr
+          WHERE cr.customer_id = c.id AND cr.status IN ('pending', 'in_progress', 'revision_needed')
+        ) AS pending_costing_count,
+        (
+          SELECT status
+          FROM freight_quotes fq
+          WHERE fq.customer_id = c.id
+          ORDER BY fq.is_current DESC, fq.updated_at DESC, fq.id DESC
+          LIMIT 1
+        ) AS latest_freight_status,
+        (
+          SELECT COUNT(*)
+          FROM freight_quotes fq
+          WHERE fq.customer_id = c.id AND fq.status IN ('draft', 'requested', 'received')
+        ) AS pending_freight_count,
+        (
+          SELECT suggested_priority
+          FROM customer_research_notes rn
+          WHERE rn.customer_id = c.id AND rn.status = 'active'
+          ORDER BY rn.updated_at DESC, rn.id DESC
+          LIMIT 1
+        ) AS latest_suggested_priority
       FROM customers c
       LEFT JOIN inquiries i ON i.id = c.latest_inquiry_id
       ${where}
-      ORDER BY c.updated_at DESC, c.id DESC
+      ORDER BY ${orderBy}, c.updated_at DESC, c.id DESC
       LIMIT 300
     `).all(...params);
     res.json({ ok: true, rows });
@@ -196,9 +287,214 @@ router.get('/customers/:id', (req, res) => {
       : null;
     const inquiries = db.prepare('SELECT * FROM inquiries WHERE customer_id = ? ORDER BY updated_at DESC, id DESC LIMIT 100').all(id);
     const communications = db.prepare('SELECT * FROM communication_logs WHERE customer_id = ? ORDER BY COALESCE(received_at, created_at) DESC, id DESC LIMIT 100').all(id);
-    res.json({ ok: true, customer, latestInquiry, inquiries, communications });
+    const overview = getCustomerOverview(id);
+    const latestResearchNote = getLatestResearchNote(id);
+    const latestSpecification = latestInquiry?.latest_specification_id ? getSpecification(Number(latestInquiry.latest_specification_id)) : null;
+    const latestCommunication = communications[0] || null;
+    const auditLogs = db.prepare(`
+      SELECT *
+      FROM audit_logs
+      WHERE (resource_type = 'crm_customer' AND resource_id = ?)
+         OR (resource_type = 'crm_communication_log' AND resource_id IN (
+              SELECT CAST(id AS TEXT) FROM communication_logs WHERE customer_id = ?
+            ))
+         OR (resource_type = 'crm_inquiry' AND resource_id IN (
+              SELECT CAST(id AS TEXT) FROM inquiries WHERE customer_id = ?
+            ))
+      ORDER BY id DESC
+      LIMIT 100
+    `).all(String(id), id, id);
+    res.json({
+      ok: true,
+      customer,
+      latestInquiry,
+      latestSpecification,
+      latestCommunication,
+      inquiries,
+      communications,
+      latestResearchNote,
+      overview,
+      audit_logs: auditLogs
+    });
   } catch (err) {
     handleError(res, err, '客户详情读取失败');
+  }
+});
+
+router.get('/customers/:id/research-notes', (req, res) => {
+  try {
+    const customerId = idParam(req.params.id);
+    if (!getCustomer(customerId)) return res.status(404).json({ ok: false, error: '客户不存在' });
+    const rows = db.prepare(`
+      SELECT *
+      FROM customer_research_notes
+      WHERE customer_id = ?
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 200
+    `).all(customerId);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '客户调研资料读取失败');
+  }
+});
+
+router.post('/customers/:id/research-notes', (req, res) => {
+  try {
+    const customerId = idParam(req.params.id);
+    if (!getCustomer(customerId)) return res.status(404).json({ ok: false, error: '客户不存在' });
+    const body = req.body || {};
+    const title = text(body.title);
+    const summary = text(body.research_summary);
+    if (!title && !summary) return res.status(400).json({ ok: false, error: 'title 或 research_summary 必填' });
+    const ts = now();
+    const result = db.prepare(`
+      INSERT INTO customer_research_notes (
+        customer_id, source_type, title, research_summary, customer_type, industry, main_products,
+        website, country, city, company_size_note, buyer_authenticity_note, business_match_note,
+        risk_flags, suggested_priority, suggested_next_action, sources_json, raw_input, parsed_json,
+        status, created_by, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      customerId,
+      text(body.source_type || 'manual'),
+      title,
+      summary,
+      text(body.customer_type),
+      text(body.industry),
+      text(body.main_products),
+      text(body.website),
+      text(body.country),
+      text(body.city),
+      text(body.company_size_note),
+      text(body.buyer_authenticity_note),
+      text(body.business_match_note),
+      text(body.risk_flags),
+      text(body.suggested_priority),
+      text(body.suggested_next_action),
+      body.sources_json ? String(body.sources_json) : '',
+      text(body.raw_input),
+      body.parsed_json ? String(body.parsed_json) : '',
+      text(body.status || 'active'),
+      req.user.userName,
+      ts,
+      ts
+    );
+    crmAudit(req, 'create_customer_research_note', 'crm_customer_research_note', result.lastInsertRowid, {
+      customer_id: customerId,
+      source_type: text(body.source_type || 'manual'),
+      title,
+      suggested_priority: text(body.suggested_priority)
+    });
+    res.json({ ok: true, id: result.lastInsertRowid });
+  } catch (err) {
+    handleError(res, err, '客户调研资料创建失败');
+  }
+});
+
+router.patch('/customers/:id/research-notes/:noteId', (req, res) => {
+  try {
+    const customerId = idParam(req.params.id);
+    const noteId = idParam(req.params.noteId);
+    if (!getCustomer(customerId)) return res.status(404).json({ ok: false, error: '客户不存在' });
+    const oldRow = db.prepare('SELECT * FROM customer_research_notes WHERE id = ? AND customer_id = ?').get(noteId, customerId);
+    if (!oldRow) return res.status(404).json({ ok: false, error: '调研资料不存在' });
+    const fields = [
+      'source_type', 'title', 'research_summary', 'customer_type', 'industry', 'main_products',
+      'website', 'country', 'city', 'company_size_note', 'buyer_authenticity_note',
+      'business_match_note', 'risk_flags', 'suggested_priority', 'suggested_next_action',
+      'sources_json', 'raw_input', 'parsed_json', 'status'
+    ];
+    const body = req.body || {};
+    const changes = changesFrom(oldRow, body, fields);
+    updateByFields('customer_research_notes', noteId, body, fields);
+    crmAudit(req, 'update_customer_research_note', 'crm_customer_research_note', noteId, {
+      customer_id: customerId,
+      changes
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    handleError(res, err, '客户调研资料更新失败');
+  }
+});
+
+router.get('/customer-priority', (req, res) => {
+  try {
+    const params = [];
+    let where = 'WHERE COALESCE(c.active, 1) = 1';
+    ['priority', 'stage', 'country', 'owner_id'].forEach((key) => {
+      const value = text(req.query[key]);
+      if (!value) return;
+      where += ` AND c.${key} = ?`;
+      params.push(key === 'owner_id' ? Number(value) : value);
+    });
+    if (text(req.query.pending_costing) === '1') {
+      where += ` AND EXISTS (
+        SELECT 1 FROM costing_requests cr
+        WHERE cr.customer_id = c.id AND cr.status IN ('pending', 'in_progress', 'revision_needed')
+      )`;
+    }
+    if (text(req.query.pending_freight) === '1') {
+      where += ` AND EXISTS (
+        SELECT 1 FROM freight_quotes fq
+        WHERE fq.customer_id = c.id AND fq.status IN ('draft', 'requested', 'received')
+      )`;
+    }
+    const rows = db.prepare(`
+      SELECT
+        ${customerDisplaySelect('c')},
+        i.id AS latest_inquiry_id,
+        i.inquiry_code AS latest_inquiry_code,
+        i.inquiry_title AS latest_inquiry_title,
+        i.status AS latest_inquiry_status,
+        i.updated_at AS latest_inquiry_updated_at,
+        i.next_action AS latest_inquiry_next_action,
+        (
+          SELECT COUNT(*) FROM costing_requests cr
+          WHERE cr.customer_id = c.id AND cr.status IN ('pending', 'in_progress', 'revision_needed')
+        ) AS pending_costing_count,
+        (
+          SELECT COUNT(*) FROM freight_quotes fq
+          WHERE fq.customer_id = c.id AND fq.status IN ('draft', 'requested', 'received')
+        ) AS pending_freight_count,
+        (
+          SELECT status FROM costing_requests cr
+          WHERE cr.customer_id = c.id
+          ORDER BY cr.updated_at DESC, cr.id DESC
+          LIMIT 1
+        ) AS latest_costing_status,
+        (
+          SELECT status FROM freight_quotes fq
+          WHERE fq.customer_id = c.id
+          ORDER BY fq.is_current DESC, fq.updated_at DESC, fq.id DESC
+          LIMIT 1
+        ) AS latest_freight_status,
+        (
+          SELECT risk_flags FROM customer_research_notes rn
+          WHERE rn.customer_id = c.id AND rn.status = 'active'
+          ORDER BY rn.updated_at DESC, rn.id DESC
+          LIMIT 1
+        ) AS latest_research_risk_flags
+      FROM customers c
+      LEFT JOIN inquiries i ON i.id = c.latest_inquiry_id
+      ${where}
+      ORDER BY
+        CASE COALESCE(c.priority, 'D') WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 4 END ASC,
+        COALESCE(c.next_followup_at, '9999-12-31 23:59:59') ASC,
+        COALESCE(c.last_contact_at, c.updated_at, c.created_at) DESC,
+        c.updated_at DESC,
+        c.id DESC
+      LIMIT 300
+    `).all(...params);
+    const grouped = rows.reduce((acc, row) => {
+      const key = text(row.priority || 'D') || 'D';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(row);
+      return acc;
+    }, {});
+    res.json({ ok: true, rows, grouped });
+  } catch (err) {
+    handleError(res, err, '客户优先级列表读取失败');
   }
 });
 

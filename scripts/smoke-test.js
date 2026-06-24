@@ -295,6 +295,29 @@ async function main() {
   assert.strictEqual(Number(customerDetail.customer.latest_inquiry_id), inquiryId, 'customer should reference latest inquiry');
   assert.strictEqual(Number(customerDetail.latestInquiry.id), inquiryId, 'customer detail should include latest inquiry');
 
+  const researchNote = await httpJson(`/api/crm/customers/${crmCustomerId}/research-notes`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      source_type: 'codex_parsed',
+      title: 'Buyer background note',
+      research_summary: '客户主营宠物零食包装，重点关注高阻隔自立拉链袋。',
+      customer_type: 'brand_owner',
+      industry: 'pet_food',
+      main_products: 'pet snack pouch',
+      website: 'https://example.com',
+      risk_flags: '需确认付款习惯与采购决策链',
+      suggested_priority: 'A',
+      suggested_next_action: '继续确认规格和目标价'
+    }
+  });
+  assert.strictEqual(researchNote.ok, true);
+  const researchList = await httpJson(`/api/crm/customers/${crmCustomerId}/research-notes`, { token: crmAdminLogin.token });
+  assert(Array.isArray(researchList.rows), 'research notes should return rows');
+  assert(researchList.rows.some(row => Number(row.id) === Number(researchNote.id)), 'created research note should be listed');
+  await httpJson(`/api/crm/customers/${crmCustomerId}/research-notes`, { token: scopedSalesLogin.token, expectedStatus: 403 });
+  await httpJson('/api/crm/customer-priority', { token: scopedSalesLogin.token, expectedStatus: 403 });
+
   const specOne = await httpJson(`/api/crm/inquiries/${inquiryId}/specifications`, {
     method: 'POST',
     token: crmAdminLogin.token,
@@ -363,6 +386,9 @@ async function main() {
   const crmAuditLogs = await httpJson('/api/crm/audit-logs?resourceType=crm_customer', { token: crmAdminLogin.token });
   assert(Array.isArray(crmAuditLogs.rows), 'crm audit logs should return rows');
   assert(crmAuditLogs.rows.some(row => row.action === 'create_customer'), 'crm audit logs should include create_customer');
+  const customerPriority = await httpJson('/api/crm/customer-priority?pending_costing=0', { token: crmAdminLogin.token });
+  assert(Array.isArray(customerPriority.rows), 'customer priority should return rows');
+  assert(customerPriority.rows.some(row => Number(row.id) === crmCustomerId), 'customer priority should include crm customer');
 
   const inquiryWithoutSpec = await httpJson('/api/crm/inquiries', {
     method: 'POST',

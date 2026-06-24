@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Edit, MessageSquarePlus, Plus, RefreshCcw, Save } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Globe, MessageSquarePlus, Plus, RefreshCcw, Save } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
+import CrmCustomerResearchNotes from './CrmCustomerResearchNotes';
 
 type Props = {
   customerId: number;
@@ -10,6 +11,8 @@ type Props = {
 
 const fieldClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 const areaClass = 'min-h-[80px] px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
+
+const stageOptions = ['new', 'researching', 'spec_checking', 'costing', 'freight_checking', 'quoted', 'sample', 'order', 'paused', 'lost'];
 
 export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }: Props) {
   const [data, setData] = useState<any>(null);
@@ -31,8 +34,15 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
         whatsapp: detail.customer?.whatsapp || '',
         country: detail.customer?.country || '',
         city: detail.customer?.city || '',
+        website: detail.customer?.website || '',
+        customer_type: detail.customer?.customer_type || '',
+        industry: detail.customer?.industry || '',
+        main_product: detail.customer?.main_product || '',
         priority: detail.customer?.priority || 'C',
         stage: detail.customer?.stage || 'new',
+        customer_summary: detail.customer?.customer_summary || detail.customer?.ai_summary || '',
+        business_background: detail.customer?.business_background || '',
+        priority_reason: detail.customer?.priority_reason || '',
         next_action: detail.customer?.next_action || '',
         risk_notes: detail.customer?.risk_notes || '',
       });
@@ -84,8 +94,13 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
   if (!data?.customer) return <div className="p-8 text-sm font-bold text-slate-400">客户不存在</div>;
 
   const latest = data.latestInquiry;
+  const latestSpecification = data.latestSpecification;
+  const latestCommunication = data.latestCommunication;
+  const latestResearchNote = data.latestResearchNote;
+  const overview = data.overview || {};
   const inquiries = Array.isArray(data.inquiries) ? data.inquiries : [];
   const communications = Array.isArray(data.communications) ? data.communications : [];
+  const auditLogs = Array.isArray(data.audit_logs) ? data.audit_logs : [];
 
   return (
     <div className="space-y-5">
@@ -99,8 +114,77 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
       </div>
 
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <div className="xl:col-span-2 border border-slate-100 rounded-lg p-4 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-black text-slate-900">{data.customer.display_name}</h2>
+                <div className="text-xs text-slate-500 mt-1">{[data.customer.country, data.customer.city, data.customer.customer_type, data.customer.industry].filter(Boolean).join(' · ') || '客户基础标签待补充'}</div>
+              </div>
+              <div className="flex gap-2">
+                <span className="px-2.5 py-1 rounded bg-indigo-50 text-indigo-700 text-xs font-black">{data.customer.priority || 'C'}</span>
+                <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 text-xs font-black">{data.customer.stage || 'new'}</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="rounded-lg border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">最近询盘</div>
+                <div className="text-sm font-black text-slate-900 mt-1">{latest?.inquiry_title || '-'}</div>
+                <div className="text-xs text-slate-500 mt-1">{latest?.status || '-'} · {latest?.quantity || '-'}</div>
+              </div>
+              <div className="rounded-lg border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">最近核价</div>
+                <div className="text-sm font-black text-slate-900 mt-1">{overview.latestCosting?.costing_request_code || '-'}</div>
+                <div className="text-xs text-slate-500 mt-1">{overview.latestCosting?.status || '暂无'} · 待处理 {overview.pending_costing_count || 0}</div>
+              </div>
+              <div className="rounded-lg border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">最近物流</div>
+                <div className="text-sm font-black text-slate-900 mt-1">{overview.latestFreight?.freight_quote_code || '-'}</div>
+                <div className="text-xs text-slate-500 mt-1">{overview.latestFreight?.status || '暂无'} · 总计 {overview.freight_quote_count || 0}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">客户总览</div>
+                <div className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{data.customer.customer_summary || data.customer.ai_summary || data.customer.business_background || '暂无客户概览摘要'}</div>
+              </div>
+              <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">待处理事项</div>
+                <div className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{data.customer.next_action || latest?.next_action || '暂无下一步动作'}</div>
+                <div className="text-xs text-slate-500 mt-2">下次跟进：{data.customer.next_followup_at || '-'} / 最近联系：{data.customer.last_contact_at || '-'}</div>
+              </div>
+            </div>
+            {data.customer.risk_notes || latestResearchNote?.risk_flags ? (
+              <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-100 px-3 py-3 text-sm text-amber-800">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{data.customer.risk_notes || latestResearchNote?.risk_flags}</span>
+              </div>
+            ) : null}
+          </div>
+          <div className="border border-slate-100 rounded-lg p-4 space-y-3">
+            <div className="text-sm font-black text-slate-900">联系信息</div>
+            <div className="text-sm text-slate-600">联系人：{data.customer.contact_person || data.customer.contact || '-'}</div>
+            <div className="text-sm text-slate-600">Email：{data.customer.email || '-'}</div>
+            <div className="text-sm text-slate-600">WhatsApp：{data.customer.whatsapp || '-'}</div>
+            <div className="text-sm text-slate-600 flex items-center gap-2"><Globe className="w-4 h-4 text-slate-400" />{data.customer.website || latestResearchNote?.website || '-'}</div>
+            <div className="pt-2 border-t border-slate-100 text-xs text-slate-500 space-y-1">
+              <div>来源：{data.customer.source_channel || '-'}</div>
+              <div>负责人：{data.customer.owner_id || '-'}</div>
+              <div>最后更新：{data.customer.updated_at || '-'}</div>
+            </div>
+            {latestCommunication ? (
+              <div className="pt-2 border-t border-slate-100">
+                <div className="text-xs font-bold text-slate-400">最近沟通摘要</div>
+                <div className="text-sm text-slate-700 mt-1">{latestCommunication.ai_summary || latestCommunication.subject || latestCommunication.raw_content || '-'}</div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-black text-slate-900">{data.customer.display_name}</h2>
+          <h2 className="text-lg font-black text-slate-900">客户档案字段</h2>
           <button disabled={saving} onClick={saveCustomer} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black flex items-center gap-2 disabled:opacity-60">
             <Save className="w-4 h-4" /> 保存客户
           </button>
@@ -112,14 +196,24 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
           <input className={fieldClass} value={customerForm.whatsapp} onChange={e => updateField('whatsapp', e.target.value)} placeholder="WhatsApp" />
           <input className={fieldClass} value={customerForm.country} onChange={e => updateField('country', e.target.value)} placeholder="国家" />
           <input className={fieldClass} value={customerForm.city} onChange={e => updateField('city', e.target.value)} placeholder="城市" />
+          <input className={fieldClass} value={customerForm.website} onChange={e => updateField('website', e.target.value)} placeholder="网站" />
+          <input className={fieldClass} value={customerForm.customer_type} onChange={e => updateField('customer_type', e.target.value)} placeholder="客户类型" />
+          <input className={fieldClass} value={customerForm.industry} onChange={e => updateField('industry', e.target.value)} placeholder="行业" />
+          <input className={fieldClass} value={customerForm.main_product} onChange={e => updateField('main_product', e.target.value)} placeholder="主营产品" />
           <select className={fieldClass} value={customerForm.priority} onChange={e => updateField('priority', e.target.value)}>
-            <option value="A">A 优先</option><option value="B">B 跟进</option><option value="C">C 普通</option>
+            <option value="A">A 重点</option>
+            <option value="B">B 潜力</option>
+            <option value="C">C 普通</option>
+            <option value="D">D 暂缓</option>
           </select>
           <select className={fieldClass} value={customerForm.stage} onChange={e => updateField('stage', e.target.value)}>
-            <option value="new">新客户</option><option value="qualified">已确认需求</option><option value="quoted">已报价</option><option value="won">已转订单</option><option value="lost">暂停</option>
+            {stageOptions.map(item => <option key={item} value={item}>{item}</option>)}
           </select>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <textarea className={areaClass} value={customerForm.customer_summary} onChange={e => updateField('customer_summary', e.target.value)} placeholder="客户摘要 / 调研摘要" />
+          <textarea className={areaClass} value={customerForm.business_background} onChange={e => updateField('business_background', e.target.value)} placeholder="业务背景" />
+          <textarea className={areaClass} value={customerForm.priority_reason} onChange={e => updateField('priority_reason', e.target.value)} placeholder="优先级原因" />
           <textarea className={areaClass} value={customerForm.next_action} onChange={e => updateField('next_action', e.target.value)} placeholder="下一步动作" />
           <textarea className={areaClass} value={customerForm.risk_notes} onChange={e => updateField('risk_notes', e.target.value)} placeholder="风险备注" />
         </div>
@@ -128,16 +222,19 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
       <section className="bg-white border border-slate-200 rounded-lg p-5">
         <h3 className="text-sm font-black text-slate-800 mb-3">最近一单询盘</h3>
         {latest ? (
-          <button onClick={() => onOpenInquiry?.(Number(latest.id))} className="w-full text-left rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 hover:border-indigo-300">
+          <button onClick={() => onOpenInquiry?.(Number(latest.id))} className="w-full text-left rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 hover:border-indigo-300 space-y-1">
             <div className="text-sm font-black text-indigo-900">{latest.inquiry_title}</div>
-            <div className="text-xs font-bold text-indigo-600 mt-1">{latest.status} · {latest.priority} · {latest.quantity || '-'}</div>
+            <div className="text-xs font-bold text-indigo-600">{latest.status} · {latest.priority} · {latest.quantity || '-'}</div>
+            <div className="text-xs text-indigo-700">{latestSpecification ? `${latestSpecification.bag_type || latestSpecification.film_type || latestSpecification.product_type || '-'} · ${latestSpecification.material_structure_text || '-'}` : '暂无当前规格'}</div>
           </button>
         ) : <div className="text-sm text-slate-400">暂无询盘</div>}
       </section>
 
+      <CrmCustomerResearchNotes customerId={customerId} />
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
-          <h3 className="text-sm font-black text-slate-800 flex items-center gap-2"><MessageSquarePlus className="w-4 h-4 text-indigo-600" /> 添加沟通记录</h3>
+          <h3 className="text-sm font-black text-slate-800 flex items-center gap-2"><MessageSquarePlus className="w-4 h-4 text-indigo-600" /> 沟通记录</h3>
           <div className="grid grid-cols-2 gap-3">
             <select className={fieldClass} value={commForm.channel} onChange={e => setCommForm(f => ({ ...f, channel: e.target.value }))}>
               <option value="whatsapp">WhatsApp</option><option value="email">Email</option><option value="wechat">微信</option><option value="manual">手动记录</option>
@@ -156,14 +253,14 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
                   <span>{item.channel || 'manual'} · {item.direction || '-'}</span><span>{item.received_at || item.created_at}</span>
                 </div>
                 <div className="text-sm font-bold text-slate-800 mt-1">{item.subject || '-'}</div>
-                <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{item.raw_content || '-'}</div>
+                <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{item.ai_summary || item.raw_content || '-'}</div>
               </div>
             ))}
           </div>
         </section>
 
         <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
-          <h3 className="text-sm font-black text-slate-800 flex items-center gap-2"><Plus className="w-4 h-4 text-indigo-600" /> 创建询盘</h3>
+          <h3 className="text-sm font-black text-slate-800 flex items-center gap-2"><Plus className="w-4 h-4 text-indigo-600" /> 询盘项目</h3>
           <input className={`${fieldClass} w-full`} value={inquiryForm.inquiry_title} onChange={e => setInquiryForm(f => ({ ...f, inquiry_title: e.target.value }))} placeholder="询盘标题" />
           <div className="grid grid-cols-2 gap-3">
             <input className={fieldClass} value={inquiryForm.product_type} onChange={e => setInquiryForm(f => ({ ...f, product_type: e.target.value }))} placeholder="产品类型" />
@@ -177,13 +274,27 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             {inquiries.map((item: any) => (
               <button key={item.id} onClick={() => onOpenInquiry?.(Number(item.id))} className="block w-full text-left border border-slate-100 rounded-lg p-3 hover:border-indigo-200">
                 <div className="text-sm font-black text-slate-800">{item.inquiry_title}</div>
-                <div className="text-xs text-slate-500 mt-1">{item.status} · {item.priority} · {item.destination_country || '-'}</div>
+                <div className="text-xs text-slate-500 mt-1">{item.status} · {item.priority} · {item.destination_country || '-'} · {item.trade_term_requested || '-'}</div>
               </button>
             ))}
           </div>
         </section>
       </div>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        <h3 className="text-sm font-black text-slate-800">CRM 修改日志</h3>
+        {auditLogs.length === 0 ? (
+          <div className="text-sm text-slate-400">暂无 CRM 修改日志</div>
+        ) : auditLogs.slice(0, 8).map((log: any) => (
+          <div key={log.id} className="border border-slate-100 rounded-lg p-3">
+            <div className="flex justify-between gap-3 text-xs text-slate-400">
+              <span>{log.action}</span>
+              <span>{log.created_at}</span>
+            </div>
+            <div className="text-sm text-slate-700 mt-1 whitespace-pre-wrap">{log.detail || '-'}</div>
+          </div>
+        ))}
+      </section>
     </div>
   );
 }
-

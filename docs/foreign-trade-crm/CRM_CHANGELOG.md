@@ -244,7 +244,7 @@
 
 * Operator: Codex
 * Branch: feature/foreign-trade-crm
-* Commit: pending
+* Commit: 5ee400e
 * Scope:
   * 实现 CRM 询盘下物流、货代、清关、目的港、本地派送等费用记录
   * 新增 freight_quotes 表
@@ -302,3 +302,69 @@
   * Store fee items as TEXT and only sum parseable numeric values when total_freight_cost is empty
 * Next step:
   * Phase 6: quotation versions
+
+---
+
+## 2026-06-24 - CRM IA Update - Unified CRM module and customer profile display strategy
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 修正 CRM 定位，从“多一级菜单 + 偏表单录入”调整为“单一 CRM 模块 + 客户档案聚合展示”
+  * 合并顶层 CRM 菜单为一个“外贸 CRM”
+  * 增加 customer_research_notes 表与 research notes API
+  * 增加客户优先级聚合 API 与优先级页面
+  * 增强客户详情页，突出最近询盘、规格、核价、物流、调研资料与日志
+  * 明确不做 nightly AI research job，不做自动调研入库
+* Files changed:
+  * src/db.js
+  * src/routes/crm.js
+  * frontend-next/src/App.tsx
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmModule.tsx
+  * frontend-next/src/components/crm/CrmCustomers.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * frontend-next/src/components/crm/CrmCustomerPriority.tsx
+  * frontend-next/src/components/crm/CrmCustomerResearchNotes.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * customers safely extended with website, customer_type, industry, main_product, business_background, company_size_note, buyer_authenticity_note, source_notes, customer_summary, priority_reason
+  * Added customer_research_notes table
+  * Added customer priority and research-note indexes
+* Permission changes:
+  * Full CRM access rules unchanged: super_admin and foreign_trade_crm_admin only
+  * research notes API restricted to full CRM roles
+  * customer priority API restricted to full CRM roles
+  * costing_user and freight_user still cannot access research notes
+* API changes:
+  * GET /api/crm/customers/:id/research-notes
+  * POST /api/crm/customers/:id/research-notes
+  * PATCH /api/crm/customers/:id/research-notes/:noteId
+  * GET /api/crm/customer-priority
+  * GET /api/crm/customers enriched with latest costing/freight state and sorting support
+  * GET /api/crm/customers/:id enriched with overview, latest research note, latest specification, and audit log summary
+* Frontend changes:
+  * Replaced multiple top-level CRM menu entries with one 外贸 CRM entry
+  * Added CrmModule internal tabs: 客户档案, 询盘项目, 核价请求, 物流费用, 客户优先级, CRM 日志
+  * Added CrmCustomerPriority page
+  * Added CrmCustomerResearchNotes section and customer-profile-first detail layout
+  * Customer list emphasizes sorting and operational visibility over manual entry
+* Build result:
+  * frontend-next npm run build: PASS
+* Test result:
+  * frontend-next npm run lint: not run in this phase
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * customer detail remains in a single large component and may need later decomposition
+  * research notes currently support create/display flows first; richer edit UX can be added later without changing schema
+* Decisions:
+  * Do not implement nightly AI research jobs
+  * Do not implement automatic customer data overwrite
+  * Keep customer_research_notes as the only research storage table for now
+  * Keep tooltip/glossary as a later lightweight requirement
+* Next step:
+  * Phase 6: quotation versions after verifying the unified CRM module

@@ -25,18 +25,14 @@ import Board from './components/Board';
 import Cost from './components/Cost';
 import Admin from './components/Admin';
 import Stats from './components/Stats';
-import CrmCustomers from './components/crm/CrmCustomers';
-import CrmInquiries from './components/crm/CrmInquiries';
-import CrmAuditLogs from './components/crm/CrmAuditLogs';
-import CrmCostingRequests from './components/crm/CrmCostingRequests';
-import CrmFreightQuotes from './components/crm/CrmFreightQuotes';
+import CrmModule from './components/crm/CrmModule';
 import { mockService } from './lib/mockService';
 import { getVisibleModuleKeys, MODULE_KEYS } from './lib/permissions';
 import { User } from './types';
 
 import Login from './components/Login';
 
-type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm_customers' | 'crm_inquiries' | 'crm_costing_requests' | 'crm_freight_quotes' | 'crm_audit';
+type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm';
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin: '超级管理员', manager: '生产经理',
@@ -165,11 +161,7 @@ const App: React.FC = () => {
     { id: 'workorders', label: '开单管理', icon: ClipboardList, requiredModule: 'workorder' },
     { id: 'board', label: '生产看板', icon: Activity, requiredModule: 'board' },
     { id: 'cost', label: '成本核算', icon: Calculator, requiredModule: 'cost' },
-    { id: 'crm_customers', label: 'CRM 客户', icon: MessageSquare, requiredModule: 'crm' },
-    { id: 'crm_inquiries', label: 'CRM 询盘', icon: ClipboardList, requiredModule: 'crm' },
-    { id: 'crm_costing_requests', label: 'CRM 核价', icon: Calculator, requiredModule: 'crm' },
-    { id: 'crm_freight_quotes', label: 'CRM 物流', icon: Package, requiredModule: 'crm' },
-    { id: 'crm_audit', label: 'CRM 日志', icon: ShieldAlert, requiredModule: 'crm' },
+    { id: 'crm', label: '外贸 CRM', icon: MessageSquare, requiredModule: 'crm' },
     { id: 'stats', label: '统计分析', icon: BarChart3, requiredModule: 'stats' },
     { id: 'admin', label: '系统管理', icon: Shield, requiredModule: 'admin' },
   ];
@@ -202,11 +194,7 @@ const App: React.FC = () => {
       case 'workorders': return <WorkOrders />;
       case 'board': return <Board />;
       case 'cost': return <Cost />;
-      case 'crm_customers': return visibleModules.includes('crm') ? <CrmCustomers /> : forbidden;
-      case 'crm_inquiries': return visibleModules.includes('crm') ? <CrmInquiries /> : forbidden;
-      case 'crm_costing_requests': return visibleModules.includes('crm') ? <CrmCostingRequests /> : forbidden;
-      case 'crm_freight_quotes': return visibleModules.includes('crm') ? <CrmFreightQuotes /> : forbidden;
-      case 'crm_audit': return visibleModules.includes('crm') ? <CrmAuditLogs /> : forbidden;
+      case 'crm': return visibleModules.includes('crm') ? <CrmModule /> : forbidden;
       case 'stats': return <Stats />;
       case 'admin': return <Admin />;
       default: return <Orders />;

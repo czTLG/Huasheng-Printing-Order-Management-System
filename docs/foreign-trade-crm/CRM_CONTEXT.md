@@ -4,7 +4,9 @@
 
 This module adds a foreign trade customer communication and quotation management module inside the existing Huasheng order management system.
 
-The goal is not a generic CRM, not a website inquiry system, and not an SEO/content system. The goal is to connect the full foreign trade workflow from customer communication records to inquiries, specifications, costing, freight and clearance charges, quotation versions, weekly reporting, and eventual order conversion.
+The goal is not a generic CRM, not a website inquiry system, and not an SEO/content system. The goal is to clearly display and safely aggregate the full foreign trade workflow from customer communication records to inquiries, specifications, costing, freight and clearance charges, quotation versions, weekly reporting, and eventual order conversion.
+
+The CRM is not centered on employees manually filling forms. The CRM is centered on customer profile visibility, customer priority sorting, latest inquiry/specification visibility, costing and freight linkage, and later quotation visibility. Structured data may be written by users directly or by user-triggered AI/Codex parsing workflows, but the system itself does not automatically research or overwrite customer data.
 
 Core workflow:
 
@@ -23,6 +25,7 @@ Customer
 This project only covers:
 
 * Customer profiles
+* Customer research notes
 * Customer communication records
 * Inquiry/project records
 * Specification versions
@@ -316,6 +319,10 @@ Suggested CRM APIs:
 * GET /api/crm/inquiries/:id/freight-prefill - implemented in Phase 5
 * GET /api/crm/specifications/:id - implemented
 * POST /api/crm/specifications/:id/layers - implemented
+* GET /api/crm/customers/:id/research-notes - implemented in CRM IA update
+* POST /api/crm/customers/:id/research-notes - implemented in CRM IA update
+* PATCH /api/crm/customers/:id/research-notes/:noteId - implemented in CRM IA update
+* GET /api/crm/customer-priority - implemented in CRM IA update
 * GET /api/crm/audit-logs - implemented
 
 API requirements:
@@ -329,9 +336,9 @@ API requirements:
 ## 13. Frontend Strategy
 
 * The current frontend has no react-router and uses App.tsx activeTab.
-* New CRM pages must extend the activeTab type.
-* Add navItems with requiredModule: crm.
-* Each CRM case in renderContent() must check visibleModules.includes('crm').
+* CRM top-level navigation should stay as one module entry in App.tsx: `crm`.
+* CRM internal navigation should be handled inside a dedicated component such as `CrmModule.tsx` with local tab state.
+* App.tsx must still check visibleModules.includes('crm') before rendering the CRM module.
 * Unauthorized access must show Forbidden.
 * New component directory: frontend-next/src/components/crm/
 
@@ -346,6 +353,9 @@ Suggested components:
 * CrmFreightQuotes.tsx - implemented in Phase 5
 * CrmFreightQuoteDetail.tsx - implemented in Phase 5
 * CrmAuditLogs.tsx - implemented
+* CrmModule.tsx - implemented in CRM IA update
+* CrmCustomerPriority.tsx - implemented in CRM IA update
+* CrmCustomerResearchNotes.tsx - implemented in CRM IA update
 
 ## 14. Permission Implementation Strategy
 
@@ -411,6 +421,8 @@ Phase 5 implementation note: freight_user has crm=false and can access only assi
    * Strategy: first record old/new values in detail JSON, then upgrade table structure later if needed.
 10. CRM scope can easily expand.
     * Strategy: CRM_CONTEXT.md explicitly defines out-of-scope items. Do not build website inquiries, SEO, product images, or quotation floor price modules.
+11. AI research automation can easily become a hidden auto-write workflow.
+    * Strategy: do not implement nightly research jobs, auto crawling, or auto overwrite. Use customer_research_notes as display/storage only, and keep writes user-triggered.
 
 ## 18. Development Rules
 
@@ -528,3 +540,36 @@ Still deferred:
 New implementation risk:
 
 * freight_user assigned API access exists, but React navigation is still hidden because freight_user has crm=false. A later dedicated logistics queue may be needed.
+
+## 22. CRM IA Update and Customer Profile Display Strategy
+
+Implemented on 2026-06-24:
+
+* CRM top-level navigation is unified into one `外贸 CRM` entry instead of multiple first-level CRM menus.
+* `CrmModule.tsx` manages internal CRM tabs: customer profiles, inquiries, costing requests, freight charges, customer priority, and CRM audit logs.
+* `customers` was extended with profile-display fields including website, customer_type, industry, main_product, business_background, company_size_note, buyer_authenticity_note, source_notes, customer_summary, and priority_reason.
+* `customer_research_notes` was added as the only research-storage table in this phase.
+* Research notes store user-provided or user-triggered AI/Codex parsed structured content. They do not imply any automatic research job.
+* `GET/POST/PATCH /api/crm/customers/:id/research-notes` and `GET /api/crm/customer-priority` were added for CRM admin roles.
+* `CrmCustomerDetail.tsx` was repositioned as a customer profile page with overview, latest inquiry/specification, latest costing/freight status, research notes, communication summary, and audit logs.
+* `CrmCustomerPriority.tsx` provides grouped A/B/C/D visibility with pending costing and pending freight signals.
+
+Customer research notes strategy:
+
+* The system does not run nightly customer research jobs.
+* The system does not auto crawl websites or auto write customer data.
+* Users may ask AI/Codex to parse emails, chats, or manual research, then deliberately write the result into `customer_research_notes`.
+* Core customer fields in `customers` remain editable and auditable, but research notes preserve the source-level trace.
+
+Customer profile display strategy:
+
+* Customer list pages should emphasize sorting, filtering, latest inquiry, pending costing, pending freight, next action, and last update.
+* Customer detail pages should emphasize profile visibility first and forms second.
+* Empty profile fields should be displayed quietly without turning the page into a noisy data-entry surface.
+* raw_content remains sensitive and should continue to be restricted to full CRM roles only.
+
+Tooltip strategy:
+
+* Trade-term tooltip/glossary remains a valid later requirement.
+* Keep it lightweight: a frontend glossary map first, optional database storage later.
+* Do not implement tooltip database work in this phase.

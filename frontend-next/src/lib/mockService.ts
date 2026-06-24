@@ -501,9 +501,11 @@ export const mockService = {
     return api<any>('/api/cost/email-logs');
   },
 
-  async listCrmCustomers(params: { q?: string } = {}) {
+  async listCrmCustomers(params: { q?: string; sortBy?: string; sortDirection?: string } = {}) {
     const search = new URLSearchParams();
     if (params.q) search.set('q', params.q);
+    if (params.sortBy) search.set('sortBy', params.sortBy);
+    if (params.sortDirection) search.set('sortDirection', params.sortDirection);
     return api<any>(`/api/crm/customers?${search.toString()}`);
   },
 
@@ -537,6 +539,34 @@ export const mockService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+  },
+
+  async listCustomerResearchNotes(id: number | string) {
+    return api<any>(`/api/crm/customers/${id}/research-notes`);
+  },
+
+  async createCustomerResearchNote(id: number | string, payload: any) {
+    return api<any>(`/api/crm/customers/${id}/research-notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateCustomerResearchNote(customerId: number | string, noteId: number | string, payload: any) {
+    return api<any>(`/api/crm/customers/${customerId}/research-notes/${noteId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getCustomerPriority(params: Record<string, any> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) search.set(key, String(value));
+    });
+    return api<any>(`/api/crm/customer-priority?${search.toString()}`);
   },
 
   async listCrmInquiries(params: { q?: string; status?: string; priority?: string } = {}) {
