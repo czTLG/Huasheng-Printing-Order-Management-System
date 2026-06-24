@@ -368,3 +368,70 @@
   * Keep tooltip/glossary as a later lightweight requirement
 * Next step:
   * Phase 6: quotation versions after verifying the unified CRM module
+
+---
+
+## 2026-06-24 - Phase 7 - IMAP email import and CRM suggestion pipeline
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 增加阿里云企业邮箱 IMAP 只读同步能力
+  * 增加邮件存储、同步记录、解析建议管道
+  * 在 CRM 内增加邮件导入 / 待确认 tab
+  * 保持建议待确认，不自动覆盖 customers
+  * 不做自动发信，不修改远程邮件状态
+* Files changed:
+  * package.json
+  * package-lock.json
+  * .env.example
+  * src/db.js
+  * src/lib/imapSync.js
+  * src/lib/emailCrmParser.js
+  * src/routes/crm.js
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmModule.tsx
+  * frontend-next/src/components/crm/CrmEmailImport.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * Added email_sync_runs
+  * Added email_messages
+  * Added crm_import_suggestions
+  * Added email dedupe and lookup indexes
+* Permission changes:
+  * Email sync/message/import-suggestion APIs restricted to super_admin and foreign_trade_crm_admin
+  * ai_sales, costing_user, freight_user, and worker roles return 403
+* API changes:
+  * POST /api/crm/email/sync
+  * GET /api/crm/email/sync-runs
+  * GET /api/crm/email/messages
+  * GET /api/crm/email/messages/:id
+  * POST /api/crm/email/messages/:id/parse
+  * POST /api/crm/email/parse-unprocessed
+  * GET /api/crm/import-suggestions
+  * GET /api/crm/import-suggestions/:id
+  * PATCH /api/crm/import-suggestions/:id
+* Frontend changes:
+  * Added CRM 邮件导入 tab
+  * Added CrmEmailImport page
+  * Customer detail can show related email summaries
+* Build result:
+  * frontend-next npm run build: PASS
+* Test result:
+  * frontend-next npm run lint: not run in this phase
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * smoke test does not perform a real IMAP network sync
+  * first parser is rule-based and intentionally conservative
+* Decisions:
+  * Do not auto overwrite customer master data from mail parsing
+  * Do not send mail
+  * Do not store mailbox password in code or docs
+  * Keep IMAP sync manual-trigger only
+* Next step:
+  * Manual IMAP verification with runtime environment configured, then quotation version work

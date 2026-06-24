@@ -1,0 +1,272 @@
+import React, { useEffect, useState } from 'react';
+import { Mail, RefreshCcw, Wand2 } from 'lucide-react';
+import { mockService } from '../../lib/mockService';
+
+const inputClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
+const areaClass = 'min-h-[84px] px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
+
+export default function CrmEmailImport() {
+  const [configStatus, setConfigStatus] = useState<any>(null);
+  const [syncRuns, setSyncRuns] = useState<any[]>([]);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [selectedMessage, setSelectedMessage] = useState<any>(null);
+  const [selectedSuggestion, setSelectedSuggestion] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [filters, setFilters] = useState({ keyword: '', direction: '', processing_status: '' });
+  const [syncForm, setSyncForm] = useState({ folder: 'INBOX', days: 90, limit: 200 });
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [runs, emailRows, suggestionRows] = await Promise.all([
+        mockService.listCrmEmailSyncRuns(),
+        mockService.listCrmEmailMessages(filters),
+        mockService.listCrmImportSuggestions({ source_type: 'email' }),
+      ]);
+      setConfigStatus(runs?.config_status || emailRows?.config_status || null);
+      setSyncRuns(Array.isArray(runs?.rows) ? runs.rows : []);
+      setMessages(Array.isArray(emailRows?.rows) ? emailRows.rows : []);
+      setSuggestions(Array.isArray(suggestionRows?.rows) ? suggestionRows.rows : []);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load().catch(() => setLoading(false)); }, []);
+
+  const runSync = async () => {
+    setSyncing(true);
+    try {
+      const ret = await mockService.syncCrmEmail(syncForm);
+      setConfigStatus(ret?.config_status || null);
+      await load();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const parseMessage = async (id: number) => {
+    setParsing(true);
+    try {
+      await mockService.parseCrmEmailMessage(id);
+      const detail = await mockService.getCrmEmailMessage(id);
+      setSelectedMessage(detail);
+      await load();
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const parseUnprocessed = async () => {
+    setParsing(true);
+    try {
+      await mockService.parseUnprocessedCrmEmails(50);
+      await load();
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const openMessage = async (id: number) => {
+    const detail = await mockService.getCrmEmailMessage(id);
+    setSelectedMessage(detail);
+  };
+
+  const openSuggestion = async (id: number) => {
+    const detail = await mockService.getCrmImportSuggestion(id);
+    setSelectedSuggestion(detail?.suggestion || null);
+  };
+
+  const updateSuggestionStatus = async (id: number, status: string) => {
+    await mockService.updateCrmImportSuggestion(id, { status });
+    const detail = await mockService.getCrmImportSuggestion(id);
+    setSelectedSuggestion(detail?.suggestion || null);
+    await load();
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-black text-slate-900 flex items-center gap-2"><Mail className="w-5 h-5 text-indigo-600" /> 邮件导入 / 待确认</h2>
+          <p className="text-xs font-medium text-slate-500 mt-1">IMAP 只读同步、邮件解析建议、待确认导入。不会自动覆盖正式客户资料，也不会发邮件。</p>
+        </div>
+        <button onClick={load} className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-600 flex items-center gap-2">
+          <RefreshCcw className="w-4 h-4" /> 刷新
+        </button>
+      </div>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-4 space-y-4">
+        <div className="text-sm font-black text-slate-900">IMAP 配置状态</div>
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 text-sm">
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Host：{configStatus?.config?.host || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Port：{configStatus?.config?.port || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Secure：{String(configStatus?.config?.secure ?? '-')}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">User：{configStatus?.config?.user || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Days：{configStatus?.config?.syncDays || '-'}</div>
+          <div className="rounded-lg border border-slate-100 px-3 py-2">Limit：{configStatus?.config?.syncLimit || '-'}</div>
+        </div>
+        {!configStatus?.configured && (
+          <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-sm text-amber-800">
+            当前未完成 IMAP 配置：{Array.isArray(configStatus?.missing) ? configStatus.missing.join(', ') : 'unknown'}
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input className={inputClass} value={syncForm.folder} onChange={e => setSyncForm(f => ({ ...f, folder: e.target.value }))} placeholder="folder" />
+          <input className={inputClass} type="number" value={syncForm.days} onChange={e => setSyncForm(f => ({ ...f, days: Number(e.target.value || 0) }))} placeholder="days" />
+          <input className={inputClass} type="number" value={syncForm.limit} onChange={e => setSyncForm(f => ({ ...f, limit: Number(e.target.value || 0) }))} placeholder="limit" />
+          <button disabled={syncing} onClick={runSync} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">手动同步</button>
+        </div>
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 text-sm font-black text-slate-900">最近同步记录</div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
+              <tr>
+                <th className="px-4 py-3">时间</th><th className="px-4 py-3">Mailbox</th><th className="px-4 py-3">Folder</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">扫描/导入/跳过</th><th className="px-4 py-3">错误</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {syncRuns.slice(0, 10).map((row) => (
+                <tr key={row.id}>
+                  <td className="px-4 py-3 text-xs text-slate-500">{row.started_at || row.created_at}</td>
+                  <td className="px-4 py-3 text-sm text-slate-700">{row.mailbox || '-'}</td>
+                  <td className="px-4 py-3 text-sm text-slate-700">{row.folder || '-'}</td>
+                  <td className="px-4 py-3 text-sm font-bold text-slate-800">{row.status}</td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{row.scanned_count || 0} / {row.inserted_count || 0} / {row.skipped_count || 0}</td>
+                  <td className="px-4 py-3 text-xs text-rose-600">{row.error_message || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <input className={inputClass} value={filters.keyword} onChange={e => setFilters(f => ({ ...f, keyword: e.target.value }))} placeholder="关键词" />
+          <select className={inputClass} value={filters.direction} onChange={e => setFilters(f => ({ ...f, direction: e.target.value }))}>
+            <option value="">全部方向</option>
+            <option value="inbound">inbound</option>
+            <option value="outbound">outbound</option>
+            <option value="internal">internal</option>
+            <option value="unknown">unknown</option>
+          </select>
+          <select className={inputClass} value={filters.processing_status} onChange={e => setFilters(f => ({ ...f, processing_status: e.target.value }))}>
+            <option value="">全部处理状态</option>
+            <option value="new">new</option>
+            <option value="parsed">parsed</option>
+          </select>
+          <button onClick={load} className="h-9 px-4 rounded-lg bg-slate-900 text-white text-sm font-black">筛选邮件</button>
+          <button disabled={parsing} onClick={parseUnprocessed} className="h-9 px-4 rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-700 flex items-center justify-center gap-2 disabled:opacity-60">
+            <Wand2 className="w-4 h-4" /> 批量解析未处理
+          </button>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 text-sm font-black text-slate-900">邮件列表</div>
+          <div className="max-h-[520px] overflow-auto divide-y divide-slate-100">
+            {loading ? (
+              <div className="p-6 text-sm text-slate-400">加载中...</div>
+            ) : messages.length === 0 ? (
+              <div className="p-6 text-sm text-slate-400">暂无邮件</div>
+            ) : messages.map((row) => (
+              <button key={row.id} onClick={() => openMessage(Number(row.id))} className="w-full text-left px-4 py-3 hover:bg-slate-50">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-black text-slate-900 truncate">{row.subject || '(无主题)'}</div>
+                  <div className="text-xs text-slate-400">{row.received_at || '-'}</div>
+                </div>
+                <div className="text-xs text-slate-500 mt-1">{row.from_name || row.from_email || '-'} · {row.direction} · {row.processing_status}</div>
+                <div className="text-xs text-slate-400 mt-1 truncate">{row.cleaned_text || '-'}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="bg-white border border-slate-200 rounded-lg p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-black text-slate-900">邮件详情</div>
+            {selectedMessage?.message?.id ? (
+              <button disabled={parsing} onClick={() => parseMessage(Number(selectedMessage.message.id))} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">生成解析建议</button>
+            ) : null}
+          </div>
+          {!selectedMessage?.message ? (
+            <div className="text-sm text-slate-400">选择一封邮件查看详情</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg border border-slate-100 px-3 py-2">Subject：{selectedMessage.message.subject || '-'}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">From：{selectedMessage.message.from_name || selectedMessage.message.from_email || '-'}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">Matched Customer：{selectedMessage.message.matched_customer_name || '-'}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">Matched Inquiry：{selectedMessage.message.matched_inquiry_title || '-'}</div>
+              </div>
+              <textarea readOnly className={`${areaClass} w-full`} value={selectedMessage.message.cleaned_text || selectedMessage.message.text_body || ''} />
+              <div className="space-y-2">
+                <div className="text-sm font-black text-slate-900">该邮件解析建议</div>
+                {(selectedMessage.suggestions || []).length === 0 ? (
+                  <div className="text-sm text-slate-400">暂无建议</div>
+                ) : selectedMessage.suggestions.map((item: any) => (
+                  <button key={item.id} onClick={() => openSuggestion(Number(item.id))} className="block w-full text-left rounded-lg border border-slate-100 px-3 py-2 hover:bg-slate-50">
+                    <div className="text-sm font-bold text-slate-800">{item.suggestion_type}</div>
+                    <div className="text-xs text-slate-500 mt-1">{item.status} · {item.summary || '-'}</div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 text-sm font-black text-slate-900">待确认建议</div>
+          <div className="max-h-[420px] overflow-auto divide-y divide-slate-100">
+            {suggestions.length === 0 ? (
+              <div className="p-6 text-sm text-slate-400">暂无建议</div>
+            ) : suggestions.map((row) => (
+              <button key={row.id} onClick={() => openSuggestion(Number(row.id))} className="w-full text-left px-4 py-3 hover:bg-slate-50">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-black text-slate-900">{row.suggestion_type}</div>
+                  <div className="text-xs text-slate-400">{row.status}</div>
+                </div>
+                <div className="text-xs text-slate-500 mt-1">{row.summary || '-'}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="bg-white border border-slate-200 rounded-lg p-4 space-y-4">
+          <div className="text-sm font-black text-slate-900">建议详情</div>
+          {!selectedSuggestion ? (
+            <div className="text-sm text-slate-400">选择一条建议查看</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg border border-slate-100 px-3 py-2">类型：{selectedSuggestion.suggestion_type}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">状态：{selectedSuggestion.status}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">匹配客户：{selectedSuggestion.matched_customer_name || '-'}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">匹配询盘：{selectedSuggestion.matched_inquiry_title || '-'}</div>
+              </div>
+              <textarea readOnly className={`${areaClass} w-full`} value={selectedSuggestion.summary || ''} />
+              <textarea readOnly className={`${areaClass} w-full`} value={selectedSuggestion.extracted_json || ''} />
+              <div className="flex flex-wrap gap-2">
+                {['pending', 'needs_review', 'rejected', 'ignored', 'applied'].map((status) => (
+                  <button key={status} onClick={() => updateSuggestionStatus(Number(selectedSuggestion.id), status)} className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-700">
+                    {status}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}

@@ -573,3 +573,75 @@ Tooltip strategy:
 * Trade-term tooltip/glossary remains a valid later requirement.
 * Keep it lightweight: a frontend glossary map first, optional database storage later.
 * Do not implement tooltip database work in this phase.
+
+## 23. Phase 7 IMAP Email Import and Suggestion Pipeline
+
+Implemented on 2026-06-24:
+
+* Added read-only IMAP sync support for Aliyun enterprise mailbox configuration via environment variables only.
+* Added `email_sync_runs`, `email_messages`, and `crm_import_suggestions`.
+* Email sync is manual-trigger only. No cron job, no automatic crawling, and no automatic write-back to customer master data.
+* Sync stores message metadata, text/html body, cleaned text, header JSON, and attachment metadata only. Attachment binaries are not persisted.
+* Email parsing currently uses a rule-based parser to generate pending CRM suggestions.
+* Suggestions are stored separately and must be reviewed. They do not automatically update `customers`, `inquiries`, or `specifications`.
+* `CrmModule.tsx` now includes an internal `邮件导入` tab for CRM administrators.
+
+IMAP environment variables:
+
+* `ALIYUN_MAIL_IMAP_HOST`
+* `ALIYUN_MAIL_IMAP_PORT`
+* `ALIYUN_MAIL_IMAP_SECURE`
+* `ALIYUN_MAIL_USER`
+* `ALIYUN_MAIL_PASSWORD`
+* `ALIYUN_MAIL_SYNC_DAYS`
+* `ALIYUN_MAIL_SYNC_LIMIT`
+
+Default guidance:
+
+* `ALIYUN_MAIL_IMAP_HOST=imap.qiye.aliyun.com`
+* `ALIYUN_MAIL_IMAP_PORT=993`
+* `ALIYUN_MAIL_IMAP_SECURE=true`
+* `ALIYUN_MAIL_SYNC_DAYS=90`
+* `ALIYUN_MAIL_SYNC_LIMIT=200`
+
+Security rules:
+
+* Use only the third-party client app password, not the web login password.
+* Never hardcode mailbox credentials.
+* Never commit `.env`.
+* Do not send mail in this phase.
+* Do not delete, move, mark seen, or tag remote messages.
+* Do not auto overwrite official customer profile data from parsed mail.
+
+Email data strategy:
+
+* `email_sync_runs` records each manual sync attempt.
+* `email_messages` stores deduplicated message content and metadata.
+* `crm_import_suggestions` stores extracted customer-profile, communication, inquiry, specification, research-note, or follow-up suggestions.
+* `message_id` is used as the primary uniqueness key when present; otherwise `mailbox + folder + message_uid` is used.
+
+Email parsing strategy:
+
+* First version is rule-based and intentionally conservative.
+* Extract sender identity, domain, possible customer match, product keywords, quantity keywords, destination hints, and trade-term hints.
+* Store only the suggestion payload and summary in `crm_import_suggestions`.
+* Human review is required before any later write into formal CRM entities.
+
+User-to-Codex structured import flow:
+
+* A user may later send Codex raw customer notes, emails, or research text.
+* Codex should first read `CRM_CONTEXT.md` and `CRM_CHANGELOG.md`.
+* Codex should convert the content into structured JSON and write it to `crm_import_suggestions` with `status=pending`.
+* Only when the user explicitly confirms formal import should Codex update `customers`, `inquiries`, `specifications`, or `customer_research_notes`.
+* Any confirmed write must still use audit logs and avoid silently overwriting important fields.
+
+Permission rules:
+
+* IMAP sync, email messages, and import suggestions are restricted to `super_admin` and `foreign_trade_crm_admin`.
+* `costing_user`, `freight_user`, `ai_sales`, and `worker*` roles must not access these APIs.
+* Raw email text/html/body content remains sensitive and should not be exposed outside full CRM roles.
+
+New implementation risks:
+
+* IMAP sync depends on external mailbox configuration and third-party credentials, so smoke tests validate permission and missing-config behavior only.
+* Rule-based parsing is intentionally incomplete and should remain separate from future LLM-assisted parsing.

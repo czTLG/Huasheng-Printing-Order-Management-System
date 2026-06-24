@@ -100,6 +100,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
   const overview = data.overview || {};
   const inquiries = Array.isArray(data.inquiries) ? data.inquiries : [];
   const communications = Array.isArray(data.communications) ? data.communications : [];
+  const relatedEmails = Array.isArray(data.relatedEmails) ? data.relatedEmails : [];
   const auditLogs = Array.isArray(data.audit_logs) ? data.audit_logs : [];
 
   return (
@@ -280,6 +281,22 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
           </div>
         </section>
       </div>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        <h3 className="text-sm font-black text-slate-800">关联邮件</h3>
+        {relatedEmails.length === 0 ? (
+          <div className="text-sm text-slate-400">暂无关联邮件</div>
+        ) : relatedEmails.map((item: any) => (
+          <div key={item.id} className="border border-slate-100 rounded-lg p-3">
+            <div className="flex justify-between gap-3 text-xs text-slate-400">
+              <span>{item.from_name || item.from_email || '-'} · {item.direction || '-'}</span>
+              <span>{item.received_at || '-'}</span>
+            </div>
+            <div className="text-sm font-bold text-slate-800 mt-1">{item.subject || '(无主题)'}</div>
+            <div className="text-xs text-slate-500 mt-1">处理状态：{item.processing_status || 'new'}</div>
+          </div>
+        ))}
+      </section>
 
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
         <h3 className="text-sm font-black text-slate-800">CRM 修改日志</h3>

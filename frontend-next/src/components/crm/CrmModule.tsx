@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react';
-import { ClipboardList, FileSearch, Package, ShieldAlert, Truck, Users } from 'lucide-react';
+import { ClipboardList, FileSearch, Mail, Package, ShieldAlert, Truck, Users } from 'lucide-react';
 import CrmCustomers from './CrmCustomers';
 import CrmInquiries from './CrmInquiries';
 import CrmCostingRequests from './CrmCostingRequests';
 import CrmFreightQuotes from './CrmFreightQuotes';
 import CrmAuditLogs from './CrmAuditLogs';
 import CrmCustomerPriority from './CrmCustomerPriority';
+import CrmEmailImport from './CrmEmailImport';
 
-type CrmTab = 'customers' | 'inquiries' | 'costing' | 'freight' | 'priority' | 'audit';
+type CrmTab = 'customers' | 'inquiries' | 'costing' | 'freight' | 'priority' | 'email' | 'audit';
 
 const tabs: Array<{ id: CrmTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'customers', label: '客户档案', icon: Users },
@@ -15,6 +16,7 @@ const tabs: Array<{ id: CrmTab; label: string; icon: React.ComponentType<{ class
   { id: 'costing', label: '核价请求', icon: FileSearch },
   { id: 'freight', label: '物流费用', icon: Truck },
   { id: 'priority', label: '客户优先级', icon: Package },
+  { id: 'email', label: '邮件导入', icon: Mail },
   { id: 'audit', label: 'CRM 日志', icon: ShieldAlert },
 ];
 
@@ -28,6 +30,7 @@ export default function CrmModule() {
       case 'costing': return <CrmCostingRequests />;
       case 'freight': return <CrmFreightQuotes />;
       case 'priority': return <CrmCustomerPriority />;
+      case 'email': return <CrmEmailImport />;
       case 'audit': return <CrmAuditLogs />;
       default: return <CrmCustomers />;
     }

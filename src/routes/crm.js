@@ -1,6 +1,8 @@
 const express = require('express');
 const { db, now, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
+const { validateImapConfig, syncMailbox } = require('../lib/imapSync');
+const { createSuggestionFromEmail } = require('../lib/emailCrmParser');
 
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
@@ -291,6 +293,13 @@ router.get('/customers/:id', (req, res) => {
     const latestResearchNote = getLatestResearchNote(id);
     const latestSpecification = latestInquiry?.latest_specification_id ? getSpecification(Number(latestInquiry.latest_specification_id)) : null;
     const latestCommunication = communications[0] || null;
+    const relatedEmails = db.prepare(`
+      SELECT id, subject, from_email, from_name, received_at, direction, processing_status, matched_inquiry_id
+      FROM email_messages
+      WHERE matched_customer_id = ?
+      ORDER BY COALESCE(received_at, created_at) DESC, id DESC
+      LIMIT 20
+    `).all(id);
     const auditLogs = db.prepare(`
       SELECT *
       FROM audit_logs
@@ -312,6 +321,7 @@ router.get('/customers/:id', (req, res) => {
       latestCommunication,
       inquiries,
       communications,
+      relatedEmails,
       latestResearchNote,
       overview,
       audit_logs: auditLogs
@@ -925,6 +935,15 @@ function safeCustomerSummary(customer = {}, includeSensitive = false) {
     base.whatsapp = customer.whatsapp || '';
   }
   return base;
+}
+
+function safeEmailConfigStatus() {
+  const validation = validateImapConfig();
+  return {
+    configured: validation.ok,
+    missing: validation.missing,
+    config: validation.config
+  };
 }
 
 function buildSuggestedCostInput(inquiry = {}, specification = {}, layers = [], costingRequest = {}) {
@@ -1659,6 +1678,236 @@ router.get('/audit-logs', (req, res) => {
     res.json({ ok: true, rows });
   } catch (err) {
     handleError(res, err, 'CRM 日志读取失败');
+  }
+});
+
+router.post('/email/sync', async (req, res) => {
+  try {
+    const body = req.body || {};
+    crmAudit(req, 'email_sync_start', 'crm_email_sync', '', {
+      folder: text(body.folder || 'INBOX'),
+      days: Number(body.days || 0) || null,
+      limit: Number(body.limit || 0) || null
+    });
+    const result = await syncMailbox({
+      folder: text(body.folder || 'INBOX'),
+      days: Number(body.days || 0) || undefined,
+      limit: Number(body.limit || 0) || undefined,
+      operator: req.user.userName
+    });
+    crmAudit(req, 'email_sync_completed', 'crm_email_sync', result.id, result);
+    res.json({ ok: true, sync_run: result, config_status: safeEmailConfigStatus() });
+  } catch (err) {
+    crmAudit(req, 'email_sync_failed', 'crm_email_sync', err.runId || '', {
+      error: text(err.message || err)
+    });
+    const code = err.code === 'IMAP_ENV_MISSING' || err.code === 'IMAP_DEP_MISSING' ? 400 : 500;
+    res.status(code).json({
+      ok: false,
+      error: text(err.message || '邮件同步失败'),
+      config_status: safeEmailConfigStatus(),
+      run_id: err.runId || null
+    });
+  }
+});
+
+router.get('/email/sync-runs', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT *
+      FROM email_sync_runs
+      ORDER BY id DESC
+      LIMIT 100
+    `).all();
+    res.json({ ok: true, rows, config_status: safeEmailConfigStatus() });
+  } catch (err) {
+    handleError(res, err, '邮件同步记录读取失败');
+  }
+});
+
+router.get('/email/messages', (req, res) => {
+  try {
+    const params = [];
+    let where = 'WHERE 1 = 1';
+    const keyword = text(req.query.keyword);
+    if (keyword) {
+      const like = `%${keyword}%`;
+      where += ' AND (em.subject LIKE ? OR em.from_email LIKE ? OR em.from_name LIKE ? OR em.cleaned_text LIKE ?)';
+      params.push(like, like, like, like);
+    }
+    ['from_email', 'matched_customer_id', 'matched_inquiry_id', 'processing_status', 'direction'].forEach((key) => {
+      const value = text(req.query[key]);
+      if (!value) return;
+      where += ` AND em.${key} = ?`;
+      params.push(key.endsWith('_id') ? Number(value) : value);
+    });
+    if (text(req.query.date_from)) {
+      where += ' AND COALESCE(em.received_at, em.created_at) >= ?';
+      params.push(text(req.query.date_from));
+    }
+    if (text(req.query.date_to)) {
+      where += ' AND COALESCE(em.received_at, em.created_at) <= ?';
+      params.push(text(req.query.date_to));
+    }
+    const rows = db.prepare(`
+      SELECT
+        em.id, em.mailbox, em.folder, em.message_uid, em.message_id, em.thread_id, em.from_email, em.from_name,
+        em.to_emails, em.cc_emails, em.subject, em.cleaned_text, em.sent_at, em.received_at, em.direction,
+        em.processing_status, em.matched_customer_id, em.matched_inquiry_id, em.created_at, em.updated_at,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
+        i.inquiry_title AS matched_inquiry_title
+      FROM email_messages em
+      LEFT JOIN customers c ON c.id = em.matched_customer_id
+      LEFT JOIN inquiries i ON i.id = em.matched_inquiry_id
+      ${where}
+      ORDER BY COALESCE(em.received_at, em.created_at) DESC, em.id DESC
+      LIMIT 300
+    `).all(...params);
+    res.json({ ok: true, rows, config_status: safeEmailConfigStatus() });
+  } catch (err) {
+    handleError(res, err, '邮件列表读取失败');
+  }
+});
+
+router.get('/email/messages/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const row = db.prepare(`
+      SELECT
+        em.*,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
+        i.inquiry_title AS matched_inquiry_title
+      FROM email_messages em
+      LEFT JOIN customers c ON c.id = em.matched_customer_id
+      LEFT JOIN inquiries i ON i.id = em.matched_inquiry_id
+      WHERE em.id = ?
+    `).get(id);
+    if (!row) return res.status(404).json({ ok: false, error: '邮件不存在' });
+    const suggestions = db.prepare(`
+      SELECT *
+      FROM crm_import_suggestions
+      WHERE source_type = 'email' AND source_id = ?
+      ORDER BY id DESC
+    `).all(id);
+    res.json({ ok: true, message: row, suggestions });
+  } catch (err) {
+    handleError(res, err, '邮件详情读取失败');
+  }
+});
+
+router.post('/email/messages/:id/parse', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const message = db.prepare('SELECT * FROM email_messages WHERE id = ?').get(id);
+    if (!message) return res.status(404).json({ ok: false, error: '邮件不存在' });
+    const result = createSuggestionFromEmail(message, req.user.userName);
+    db.prepare("UPDATE email_messages SET processing_status = 'parsed', updated_at = ? WHERE id = ?").run(now(), id);
+    crmAudit(req, 'email_message_parsed', 'crm_email_message', id, {
+      suggestion_id: result.id,
+      created: result.created
+    });
+    crmAudit(req, 'crm_import_suggestion_created', 'crm_import_suggestion', result.id, {
+      source_type: 'email',
+      source_id: id,
+      suggestion_type: result.parsed.suggestionType
+    });
+    res.json({ ok: true, suggestion_id: result.id, created: result.created, parsed: result.parsed });
+  } catch (err) {
+    handleError(res, err, '邮件解析失败');
+  }
+});
+
+router.post('/email/parse-unprocessed', (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(200, Number(req.body?.limit || 50)));
+    const rows = db.prepare(`
+      SELECT *
+      FROM email_messages
+      WHERE processing_status IN ('new', 'imported', '')
+      ORDER BY COALESCE(received_at, created_at) DESC, id DESC
+      LIMIT ?
+    `).all(limit);
+    const results = rows.map((message) => {
+      const result = createSuggestionFromEmail(message, req.user.userName);
+      db.prepare("UPDATE email_messages SET processing_status = 'parsed', updated_at = ? WHERE id = ?").run(now(), message.id);
+      return { message_id: message.id, suggestion_id: result.id, created: result.created };
+    });
+    crmAudit(req, 'email_message_parsed', 'crm_email_batch', '', { count: results.length });
+    res.json({ ok: true, rows: results });
+  } catch (err) {
+    handleError(res, err, '批量邮件解析失败');
+  }
+});
+
+router.get('/import-suggestions', (req, res) => {
+  try {
+    const params = [];
+    let where = 'WHERE 1 = 1';
+    ['source_type', 'suggestion_type', 'status', 'matched_customer_id', 'matched_inquiry_id'].forEach((key) => {
+      const value = text(req.query[key]);
+      if (!value) return;
+      where += ` AND cis.${key} = ?`;
+      params.push(key.endsWith('_id') ? Number(value) : value);
+    });
+    const rows = db.prepare(`
+      SELECT
+        cis.*,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
+        i.inquiry_title AS matched_inquiry_title
+      FROM crm_import_suggestions cis
+      LEFT JOIN customers c ON c.id = cis.matched_customer_id
+      LEFT JOIN inquiries i ON i.id = cis.matched_inquiry_id
+      ${where}
+      ORDER BY cis.updated_at DESC, cis.id DESC
+      LIMIT 300
+    `).all(...params);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '导入建议列表读取失败');
+  }
+});
+
+router.get('/import-suggestions/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const row = db.prepare(`
+      SELECT
+        cis.*,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
+        i.inquiry_title AS matched_inquiry_title
+      FROM crm_import_suggestions cis
+      LEFT JOIN customers c ON c.id = cis.matched_customer_id
+      LEFT JOIN inquiries i ON i.id = cis.matched_inquiry_id
+      WHERE cis.id = ?
+    `).get(id);
+    if (!row) return res.status(404).json({ ok: false, error: '导入建议不存在' });
+    res.json({ ok: true, suggestion: row });
+  } catch (err) {
+    handleError(res, err, '导入建议详情读取失败');
+  }
+});
+
+router.patch('/import-suggestions/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const oldRow = db.prepare('SELECT * FROM crm_import_suggestions WHERE id = ?').get(id);
+    if (!oldRow) return res.status(404).json({ ok: false, error: '导入建议不存在' });
+    const status = text(req.body?.status);
+    if (!['pending', 'applied', 'rejected', 'ignored', 'needs_review'].includes(status)) {
+      return res.status(400).json({ ok: false, error: '无效的建议状态' });
+    }
+    db.prepare(`
+      UPDATE crm_import_suggestions
+      SET status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(status, req.user.userName, now(), now(), id);
+    crmAudit(req, 'crm_import_suggestion_status_updated', 'crm_import_suggestion', id, {
+      old_status: oldRow.status,
+      new_status: status
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    handleError(res, err, '导入建议状态更新失败');
   }
 });
 

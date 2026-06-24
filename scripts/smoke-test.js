@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const Database = require('better-sqlite3');
 
 const root = path.resolve(__dirname, '..');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'packaging-smoke-'));
@@ -389,6 +390,87 @@ async function main() {
   const customerPriority = await httpJson('/api/crm/customer-priority?pending_costing=0', { token: crmAdminLogin.token });
   assert(Array.isArray(customerPriority.rows), 'customer priority should return rows');
   assert(customerPriority.rows.some(row => Number(row.id) === crmCustomerId), 'customer priority should include crm customer');
+
+  await httpJson('/api/crm/email/sync-runs', { token: adminToken });
+  await httpJson('/api/crm/email/sync-runs', { token: crmAdminLogin.token });
+  await httpJson('/api/crm/email/sync-runs', { token: scopedSalesLogin.token, expectedStatus: 403 });
+  await httpJson('/api/crm/email/sync-runs', { token: costingLogin.token, expectedStatus: 403 });
+  await httpJson('/api/crm/email/sync-runs', { token: freightLogin.token, expectedStatus: 403 });
+  const emailSyncMissingEnv = await httpJson('/api/crm/email/sync', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    expectedStatus: 400,
+    body: { folder: 'INBOX', days: 7, limit: 10 }
+  });
+  assert.strictEqual(emailSyncMissingEnv.ok, false, 'email sync should fail clearly when env is missing');
+  assert(Array.isArray(emailSyncMissingEnv.config_status?.missing), 'missing env response should list missing variables');
+
+  const db = new Database(dbPath);
+  const seedTs = '2026-06-24 11:00:00';
+  const emailInsert = db.prepare(`
+    INSERT INTO email_messages (
+      mailbox, folder, message_uid, message_id, thread_id, in_reply_to, references_header,
+      from_email, from_name, to_emails, cc_emails, bcc_emails, subject, text_body, html_body,
+      cleaned_text, attachments_json, sent_at, received_at, direction, processing_status,
+      matched_customer_id, matched_inquiry_id, raw_headers_json, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'sales@example.com',
+    'INBOX',
+    '1001',
+    '<msg-1001@example.com>',
+    '<msg-1001@example.com>',
+    '',
+    '',
+    'alice@example.com',
+    'Alice',
+    'sales@example.com',
+    '',
+    '',
+    'Need 50000 pouch quotation',
+    'Hello, we need 50000 pouch pcs to Thailand CIF Bangkok.',
+    '',
+    'Hello, we need 50000 pouch pcs to Thailand CIF Bangkok.',
+    '[]',
+    seedTs,
+    seedTs,
+    'inbound',
+    'new',
+    crmCustomerId,
+    inquiryId,
+    '{}',
+    seedTs,
+    seedTs
+  );
+  const seededEmailId = Number(emailInsert.lastInsertRowid);
+  db.close();
+
+  const emailList = await httpJson('/api/crm/email/messages?matched_customer_id=' + crmCustomerId, { token: crmAdminLogin.token });
+  assert(emailList.rows.some(row => Number(row.id) === seededEmailId), 'email list should include seeded email');
+  await httpJson('/api/crm/email/messages', { token: scopedSalesLogin.token, expectedStatus: 403 });
+
+  const parsedEmail = await httpJson(`/api/crm/email/messages/${seededEmailId}/parse`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {}
+  });
+  assert.strictEqual(parsedEmail.ok, true, 'email parse should succeed');
+  const suggestionId = Number(parsedEmail.suggestion_id);
+  assert(suggestionId > 0, 'parsed email should create suggestion');
+
+  const suggestionDetailBefore = await httpJson(`/api/crm/import-suggestions/${suggestionId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(Number(suggestionDetailBefore.suggestion.matched_customer_id), crmCustomerId, 'suggestion should match customer');
+  await httpJson('/api/crm/import-suggestions', { token: scopedSalesLogin.token, expectedStatus: 403 });
+
+  const customerBeforeSuggestionStatus = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
+  await httpJson(`/api/crm/import-suggestions/${suggestionId}`, {
+    method: 'PATCH',
+    token: crmAdminLogin.token,
+    body: { status: 'rejected' }
+  });
+  const customerAfterSuggestionStatus = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(customerAfterSuggestionStatus.customer.company_name, customerBeforeSuggestionStatus.customer.company_name, 'suggestion status update must not overwrite customer profile');
 
   const inquiryWithoutSpec = await httpJson('/api/crm/inquiries', {
     method: 'POST',

@@ -371,6 +371,73 @@ function initDb() {
       updated_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS email_sync_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mailbox TEXT,
+      folder TEXT,
+      sync_type TEXT,
+      status TEXT DEFAULT 'pending',
+      started_at TEXT,
+      finished_at TEXT,
+      scanned_count INTEGER DEFAULT 0,
+      inserted_count INTEGER DEFAULT 0,
+      skipped_count INTEGER DEFAULT 0,
+      error_count INTEGER DEFAULT 0,
+      error_message TEXT,
+      created_by TEXT,
+      created_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS email_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mailbox TEXT,
+      folder TEXT,
+      message_uid TEXT,
+      message_id TEXT,
+      thread_id TEXT,
+      in_reply_to TEXT,
+      references_header TEXT,
+      from_email TEXT,
+      from_name TEXT,
+      to_emails TEXT,
+      cc_emails TEXT,
+      bcc_emails TEXT,
+      subject TEXT,
+      text_body TEXT,
+      html_body TEXT,
+      cleaned_text TEXT,
+      attachments_json TEXT,
+      sent_at TEXT,
+      received_at TEXT,
+      direction TEXT,
+      processing_status TEXT DEFAULT 'new',
+      matched_customer_id INTEGER,
+      matched_inquiry_id INTEGER,
+      raw_headers_json TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS crm_import_suggestions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT,
+      source_id INTEGER,
+      suggestion_type TEXT,
+      status TEXT DEFAULT 'pending',
+      confidence TEXT,
+      matched_customer_id INTEGER,
+      matched_inquiry_id INTEGER,
+      extracted_json TEXT,
+      suggested_updates_json TEXT,
+      risk_flags TEXT,
+      summary TEXT,
+      raw_input TEXT,
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS work_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_no TEXT NOT NULL UNIQUE,
@@ -618,6 +685,14 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_assigned ON freight_quotes(assigned_to_user_id, assigned_to, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_destination ON freight_quotes(destination_country, destination_port, shipping_mode, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customer_research_notes_customer ON customer_research_notes(customer_id, status, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_sync_runs_created ON email_sync_runs(created_at DESC, status)");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_message_id_unique ON email_messages(message_id) WHERE message_id IS NOT NULL AND message_id != ''");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_mailbox_folder_uid ON email_messages(mailbox, folder, message_uid)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_customer ON email_messages(matched_customer_id, received_at DESC, id DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_status ON email_messages(processing_status, direction, received_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_inquiry ON email_messages(matched_inquiry_id, received_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_crm_import_suggestions_source ON crm_import_suggestions(source_type, source_id, status, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_crm_import_suggestions_match ON crm_import_suggestions(matched_customer_id, matched_inquiry_id, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_salesperson ON work_orders(salesperson_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_customer ON work_orders(customer_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_order_id ON work_orders(order_id)");
