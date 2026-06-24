@@ -101,40 +101,39 @@ export default function Stats() {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-[100px]">
-      {/* 顶部筛选条 */}
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-20 px-4 py-4 md:px-8 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-4 max-w-[1600px] mx-auto">
-           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6">
-              <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
-                 <BarChart3 className="w-6 h-6 text-indigo-600" /> 统计分析
-              </h1>
-              <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
+      {/* 顶部筛选条 — 移动端更紧凑 */}
+      <div className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm">
+        <div className="px-3 py-2 md:px-8 md:py-4">
+          <div className="flex items-center justify-between gap-2 max-w-[1600px] mx-auto">
+             <div className="flex items-center gap-2 min-w-0">
+                <h1 className="text-sm md:text-xl font-black text-slate-900 flex items-center gap-1 md:gap-2 shrink-0">
+                   <BarChart3 className="w-4 h-4 md:w-6 md:h-6 text-indigo-600" /> 统计分析
+                </h1>
+                <div className="hidden sm:block h-6 w-px bg-slate-200 shrink-0"></div>
+                <div className="hidden sm:flex items-center border border-slate-200 rounded-xl bg-slate-50 px-2.5 h-7 md:px-3 md:h-9 text-[10px] md:text-xs font-bold text-slate-600 shrink-0">
+                   <Calendar className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2 text-slate-400" /> 实时数据
+                </div>
+             </div>
 
-              <div className="flex flex-wrap items-center gap-3">
-                 <div className="flex items-center border border-slate-200 rounded-xl bg-slate-50 px-3 h-9 text-xs font-bold text-slate-600">
-                    <Calendar className="w-4 h-4 mr-2 text-slate-400" /> 实时数据
-                 </div>
-              </div>
-           </div>
-
-           <div className="flex items-center gap-3">
-              <button onClick={fetchAll} className="px-4 h-9 bg-white border border-slate-200 rounded-xl text-xs font-black text-slate-600 flex items-center gap-2 hover:bg-slate-50 transition-colors">
-                <RefreshCcw className="w-4 h-4" /> 刷新
-              </button>
-              <button onClick={() => window.print()} className="px-4 h-9 bg-indigo-600 text-white rounded-xl text-xs font-black flex items-center gap-2 hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all active:scale-95">
-                <Download className="w-4 h-4" /> 导出报表
-              </button>
-           </div>
+             <div className="flex items-center gap-1.5 md:gap-3 shrink-0">
+                <button onClick={fetchAll} className="px-2.5 md:px-4 h-7 md:h-9 bg-white border border-slate-200 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black text-slate-600 flex items-center gap-1 md:gap-2 hover:bg-slate-50 transition-colors">
+                  <RefreshCcw className="w-3 h-3 md:w-4 md:h-4" /> <span className="hidden xs:inline">刷新</span>
+                </button>
+                <button onClick={() => window.print()} className="px-2.5 md:px-4 h-7 md:h-9 bg-indigo-600 text-white rounded-lg md:rounded-xl text-[10px] md:text-xs font-black flex items-center gap-1 md:gap-2 hover:bg-indigo-700 shadow-md md:shadow-lg shadow-indigo-200 transition-all active:scale-95">
+                  <Download className="w-3 h-3 md:w-4 md:h-4" /> <span className="hidden xs:inline">导出报表</span>
+                </button>
+             </div>
+          </div>
         </div>
 
         {/* 二级页签 */}
-        <div className="flex items-center gap-6 mt-6 max-w-[1600px] mx-auto overflow-x-auto no-scrollbar mask-gradient-right">
+        <div className="flex items-center gap-4 md:gap-6 max-w-[1600px] mx-auto overflow-x-auto no-scrollbar mask-gradient-right px-3 md:px-8">
            {TABS.map(tab => (
               <button
                  key={tab.id}
                  onClick={() => setActiveTab(tab.id)}
                  className={cn(
-                    "text-sm font-black pb-3 border-b-2 whitespace-nowrap transition-colors",
+                    "text-[11px] md:text-sm font-black pb-2 md:pb-3 border-b-2 whitespace-nowrap transition-colors shrink-0",
                     activeTab === tab.id
                       ? "text-indigo-600 border-indigo-600"
                       : "text-slate-400 border-transparent hover:text-slate-600 hover:border-slate-300"

@@ -16,10 +16,11 @@ const {
 
 const router = express.Router();
 
-const COST_USERS = new Set(['chenyongjie','gavin','chenrunyang']);
+const COST_USERS = new Set(['chenyongjie','gavin','chenrunyang','admin']);
 router.use((req, res, next) => {
   const u = String(req.user?.userName || '').trim();
-  if (COST_USERS.has(u)) return next();
+  const role = String(req.user?.role || '').trim();
+  if (COST_USERS.has(u) || role === 'super_admin') return next();
   return res.status(403).json({ error: '成本核算仅指定用户可访问' });
 });
 

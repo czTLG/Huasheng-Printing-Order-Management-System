@@ -1,6 +1,8 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const path = require('path');
+const bcrypt = require('bcryptjs');
 
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
@@ -369,10 +371,20 @@ function initDb() {
   if (!slcols.includes('extra_json')) db.exec("ALTER TABLE order_stage_logs ADD COLUMN extra_json TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_order_stage_logs_event ON order_stage_logs(order_id, stage, event_type, rolled_back, id DESC)");
 
-  const admin = db.prepare("SELECT id FROM users WHERE username = ?").get('admin');
+  const admin = db.prepare("SELECT id, password FROM users WHERE username = ?").get('admin');
   if (!admin) {
+    const pwd = crypto.randomBytes(12).toString('hex');
+    const hash = bcrypt.hashSync(pwd, 10);
     db.prepare("INSERT INTO users (username, password, role, status, created_at, approved_at) VALUES (?, ?, 'super_admin', 'active', ?, ?)")
-      .run('admin', 'admin', now(), now());
+      .run('admin', hash, now(), now());
+    console.log(`[db] Created default admin account. username=admin password=${pwd}`);
+    console.log('[db] CHANGE THIS PASSWORD immediately after first login.');
+  } else if (admin.password === 'admin') {
+    const pwd = crypto.randomBytes(12).toString('hex');
+    const hash = bcrypt.hashSync(pwd, 10);
+    db.prepare("UPDATE users SET password = ? WHERE username = 'admin'").run(hash);
+    console.log(`[db] DEFAULT ADMIN PASSWORD WAS UNSAFE - regenerated. username=admin password=${pwd}`);
+    console.log('[db] CHANGE THIS PASSWORD immediately.');
   }
 
   const spUpsert = db.prepare(`

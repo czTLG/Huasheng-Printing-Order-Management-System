@@ -129,6 +129,65 @@ function inferPrintFilmFields(p = {}) {
   }
   return { mold, size, qty, unit };
 }
+
+function getSpecLikeUi(row = {}) {
+  const summarySpec = String(row?.work_order_summary?.spec || row?.order_spec || '').trim();
+  if (summarySpec) return summarySpec;
+  const useCase = String(row?.use_case || '');
+  const useCaseMatch = useCase.match(/规格[:：]\s*([^；;\n]+)/);
+  if (useCaseMatch && useCaseMatch[1]) return String(useCaseMatch[1]).trim();
+  const legacy = parseLegacyRowJson(row);
+  return String(legacy.size || '').trim();
+}
+
+function getQtyLikeUi(row = {}) {
+  const summaryQty = row?.work_order_summary?.quantity ?? row?.order_qty ?? '';
+  return String(summaryQty || '').trim();
+}
+
+function getStayDays(row = {}) {
+  const startTime = new Date(row.start_time || row.created_at || Date.now()).getTime();
+  if (!Number.isFinite(startTime)) return 0;
+  return Math.max(0, Math.floor((Date.now() - startTime) / 86400000));
+}
+
+function isOrderAbnormalLikeUi(row = {}) {
+  const summary = row.work_order_summary || {};
+  const name = extractProductNameLikeLegacy(row);
+  const spec = getSpecLikeUi(row);
+  const qty = getQtyLikeUi(row);
+  return [
+    !name || name === '未定义品名',
+    /^备注[:：]/.test(String(name || '')),
+    !spec || spec === '--',
+    !qty,
+    row.status === '印刷' && !summary?.printMold && !row.wo_print_mold,
+    row.status === '印刷' && !summary?.printFilmSize && !row.wo_print_film_size,
+    row.status === '印刷' && !summary?.quantity && !row.wo_print_qty
+  ].some(Boolean);
+}
+
+function parseAdvancedOrderFilters(query = {}) {
+  const roller = String(query.roller || '').trim();
+  const urgentOnlyRaw = String(query.urgentOnly || '').trim().toLowerCase();
+  const abnormalRaw = String(query.abnormal || '').trim().toLowerCase();
+  return {
+    roller: roller && roller !== '全部压辊' ? roller : '',
+    urgentOnly: urgentOnlyRaw === '1' || urgentOnlyRaw === 'true' || urgentOnlyRaw === 'yes',
+    stayMinDays: Math.max(0, Number(query.stayMinDays || 0)),
+    abnormalOnly: abnormalRaw === '1' || abnormalRaw === 'true' || abnormalRaw === 'yes'
+  };
+}
+
+function applyAdvancedOrderFilters(rows = [], filters = {}) {
+  return (rows || []).filter((row) => {
+    if (filters.roller && extractRollerLikeLegacy(row) !== filters.roller) return false;
+    if (filters.urgentOnly && Number(row.urgency || 0) !== 1) return false;
+    if (filters.stayMinDays > 0 && getStayDays(row) < filters.stayMinDays) return false;
+    if (filters.abnormalOnly && !isOrderAbnormalLikeUi(row)) return false;
+    return true;
+  });
+}
 function maybeProductLikeCustomer(customer='', useCase=''){
   const c=normalizeTxt(customer);
   if(!c) return true;
@@ -165,6 +224,187 @@ function enrichCustomerDisplay(rows=[]){
     }
   });
   return out;
+}
+
+function buildOrderListScope(req = {}) {
+  const query = req.query || {};
+  const status = String(query.status || '').trim();
+  const q = String(query.q || '').trim();
+  const updatedFrom = String(query.updatedFrom || '').trim();
+  const sortBy = String(query.sortBy || 'priority').trim();
+  const sortOrder = String(query.sortOrder || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+  let where = '';
+  const params = [];
+
+  if (['worker','worker_print','worker_film','worker_bag','worker_ship'].includes(req.user?.role)) {
+    const worker = req.user.userName;
+    if (req.user.role === 'worker_print') { where = "status='印刷' AND assigned_print_worker=?"; params.push(worker); }
+    else if (req.user.role === 'worker_film') { where = "status='复膜' AND assigned_lamination_worker=?"; params.push(worker); }
+    else if (req.user.role === 'worker_bag') { where = "status='制袋' AND assigned_bagging_worker=?"; params.push(worker); }
+    else if (req.user.role === 'worker_ship') { where = "status='发货' AND assigned_shipping_worker=?"; params.push(worker); }
+    else {
+      where = "((status='印刷' AND assigned_print_worker=?) OR (status='复膜' AND assigned_lamination_worker=?) OR (status='制袋' AND assigned_bagging_worker=?) OR (status='发货' AND assigned_shipping_worker=?))";
+      params.push(worker, worker, worker, worker);
+    }
+  }
+
+  if (status) {
+    where = where ? `${where} AND status = ?` : 'status = ?';
+    params.push(status);
+  }
+
+  if (updatedFrom) {
+    where = where ? `${where} AND datetime(updated_at) >= datetime(?)` : 'datetime(updated_at) >= datetime(?)';
+    params.push(updatedFrom);
+  }
+
+  if (q) {
+    const kw = `%${q}%`;
+    const qSql = '(customer_name LIKE ? OR bag_type LIKE ? OR use_case LIKE ? OR order_spec LIKE ? OR order_qty LIKE ?)';
+    where = where ? `${where} AND ${qSql}` : qSql;
+    params.push(kw, kw, kw, kw, kw);
+  }
+
+  const whereSql = where ? `WHERE ${where}` : '';
+  const stageRankExpr = "CASE status WHEN '印刷' THEN 1 WHEN '复膜' THEN 2 WHEN '制袋' THEN 3 WHEN '发货' THEN 4 WHEN '完成' THEN 5 ELSE 99 END";
+  const completedTailExpr = "CASE WHEN status='完成' THEN 1 ELSE 0 END";
+  let orderSql = ` ORDER BY ${completedTailExpr} ASC, urgency DESC, ${stageRankExpr} ASC, priority DESC, datetime(updated_at) DESC, id DESC`;
+
+  if (sortBy === 'today_stage') {
+    orderSql = ` ORDER BY ${stageRankExpr} ASC, urgency DESC, priority DESC, datetime(updated_at) DESC, id DESC`;
+  } else if (sortBy === 'start_time') {
+    orderSql = ` ORDER BY ${completedTailExpr} ASC, urgency DESC, datetime(COALESCE(start_time, created_at)) ${sortOrder}, ${stageRankExpr} ASC, priority DESC, datetime(updated_at) DESC, id DESC`;
+  }
+
+  return { whereSql, params, orderSql };
+}
+
+function attachWoLite(rows = [], userName = '') {
+  const ids = rows.map(r => Number(r.id)).filter(Boolean);
+  if (!ids.length) return rows;
+  const marks = ids.map(() => '?').join(',');
+  const ws = db.prepare(`
+    SELECT order_id, work_no, customer_name, product_name, bag_type, spec, quantity, delivery_date, roller, remark, process_requirements_json, id
+    FROM work_orders
+    WHERE order_id IN (${marks})
+    ORDER BY id DESC
+  `).all(...ids);
+  const map = new Map();
+  const build = (w = {}, p = {}) => {
+    const pf = inferPrintFilmFields(p);
+    const summary = {
+      id: Number(w.id || 0),
+      workNo: String(w.work_no || ''),
+      customerName: String(w.customer_name || ''),
+      productName: String(w.product_name || ''),
+      bagType: String(w.bag_type || ''),
+      spec: String(w.spec || ''),
+      quantity: String(w.quantity || ''),
+      deliveryDate: String(w.delivery_date || ''),
+      roller: String(w.roller || ''),
+      remark: String(w.remark || ''),
+      printQty: String(p.printQty || p.print_qty || '').trim(),
+      printMold: String(pf.mold || '').trim(),
+      printFilmSize: String(pf.size || '').trim(),
+      printFilmQty: String(pf.qty || '').trim(),
+      printFilmUnit: String(pf.unit || '').trim(),
+      printShift: String(p.printShift || '').trim(),
+      refColor: String(p.refColor || '').trim(),
+      inkRequirement: String(p.inkRequirement || '').trim(),
+      filmType: String(p.filmType || '').trim(),
+      filmNote: String(p.filmNote || '').trim(),
+      layer1: { material: String(p.layer1 || '').trim(), size: String(p.l1Size || '').trim(), weight: String(p.l1Weight || '').trim() },
+      layer2: { material: String(p.layer2 || '').trim(), size: String(p.l2Size || '').trim(), weight: String(p.l2Weight || '').trim() },
+      layer3: { material: String(p.layer3 || '').trim(), size: String(p.l3Size || '').trim(), weight: String(p.l3Weight || '').trim() },
+      layer4: { material: String(p.layer4 || '').trim(), size: String(p.l4Size || '').trim(), weight: String(p.l4Weight || '').trim() },
+      outsource: String(p.outsource || '').trim(),
+      zipPos: String(p.zipPos || '').trim(),
+      tearPos: String(p.tearPos || '').trim(),
+      holePos: String(p.holePos || '').trim(),
+      holes: String(p.holes || '').trim(),
+      edges: String(p.edges || '').trim(),
+      edgeCm: String(p.edgeCm || '').trim(),
+      packType: String(p.packType || '').trim(),
+      boxSpec: String(p.boxSpec || '').trim(),
+      actualQty: String(p.actualQty || '').trim(),
+      packerSign: String(p.packerSign || '').trim(),
+      otherReq: String(p.otherReq || '').trim()
+    };
+    return {
+      source_work_no: String(w.work_no || '').trim(),
+      product_name: String(w.product_name || '').trim(),
+      bag_type: String(w.bag_type || '').trim(),
+      delivery_date: String(w.delivery_date || '').trim(),
+      roller: String(w.roller || '').trim(),
+      work_order_summary: summary,
+      wo_print_qty: String(p.printQty || p.print_qty || '').trim(),
+      wo_print_mold: String(pf.mold || '').trim(),
+      wo_print_film_size: String(pf.size || '').trim(),
+      wo_print_film_qty: String(pf.qty || '').trim(),
+      wo_print_film_unit: String(pf.unit || '').trim(),
+      wo_ink_requirement: String(p.inkRequirement || '').trim()
+    };
+  };
+  ws.forEach((w) => {
+    const oid = Number(w.order_id);
+    if (!oid || map.has(oid)) return;
+    let p = {};
+    try { p = JSON.parse(w.process_requirements_json || '{}'); } catch (_) { p = {}; }
+    map.set(oid, build(w, p));
+  });
+
+  const missing = rows.filter(r => !map.has(Number(r.id)));
+  if (missing.length) {
+    const fallbackRows = db.prepare(`
+      SELECT work_no, customer_name, product_name, bag_type, spec, quantity, delivery_date, roller, remark, process_requirements_json, id
+      FROM work_orders
+      WHERE customer_name IS NOT NULL AND spec IS NOT NULL
+      ORDER BY id DESC
+      LIMIT 5000
+    `).all();
+    const pairMap = new Map();
+    fallbackRows.forEach((w) => {
+      const key = `${String(w.customer_name || '').trim()}||${String(w.spec || '').trim()}`;
+      if (!key || pairMap.has(key)) return;
+      let p = {};
+      try { p = JSON.parse(w.process_requirements_json || '{}'); } catch (_) { p = {}; }
+      pairMap.set(key, build(w, p));
+    });
+    missing.forEach((r) => {
+      const key = `${String(r.customer_name || '').trim()}||${String(r.order_spec || '').trim()}`;
+      if (pairMap.has(key)) map.set(Number(r.id), pairMap.get(key));
+    });
+  }
+
+  const subRows = db.prepare(`SELECT order_id FROM order_subscriptions WHERE user_name=? AND order_id IN (${marks})`).all(String(userName || ''), ...ids);
+  const subSet = new Set(subRows.map(x => Number(x.order_id || 0)));
+
+  return rows.map((r) => {
+    const merged = { ...r, ...(map.get(Number(r.id)) || {}) };
+    return {
+      ...merged,
+      product_name: String(merged.product_name || '').trim() || extractProductNameLikeLegacy(merged),
+      roller: String(merged.roller || '').trim() || extractRollerLikeLegacy(merged),
+      my_subscribed: subSet.has(Number(r.id)) ? 1 : 0
+    };
+  });
+}
+
+function parseOrderSizeJson(row = {}) {
+  try {
+    return JSON.parse(row.size_json || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+
+function loadScopedOrders(req = {}) {
+  const { whereSql, params, orderSql } = buildOrderListScope(req);
+  const advancedFilters = parseAdvancedOrderFilters(req.query || {});
+  const rows = db.prepare(`SELECT * FROM orders ${whereSql}${orderSql}`).all(...params);
+  const enriched = enrichCustomerDisplay(attachWoLite(rows, req.user?.userName || ''));
+  return applyAdvancedOrderFilters(enriched, advancedFilters);
 }
 
 router.post('/', allowRoles('super_admin','manager'), (req, res) => {
@@ -229,180 +469,48 @@ router.post('/', allowRoles('super_admin','manager'), (req, res) => {
 });
 
 router.get('/', (req, res) => {
-  const status = req.query.status;
-  const q = String(req.query.q || '').trim();
-  const updatedFrom = String(req.query.updatedFrom || '').trim();
   const page = Number(req.query.page || 0);
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20)));
   const usePaging = page > 0;
-  const sortBy = String(req.query.sortBy || 'priority');
-  const sortOrder = String(req.query.sortOrder || 'desc').toLowerCase()==='asc' ? 'ASC' : 'DESC';
-
-  let where = '';
-  let params = [];
-
-  if (['worker','worker_print','worker_film','worker_bag','worker_ship'].includes(req.user.role)) {
-    const worker = req.user.userName;
-    if (req.user.role === 'worker_print') { where = "status='印刷' AND assigned_print_worker=?"; params=[worker]; }
-    else if (req.user.role === 'worker_film') { where = "status='复膜' AND assigned_lamination_worker=?"; params=[worker]; }
-    else if (req.user.role === 'worker_bag') { where = "status='制袋' AND assigned_bagging_worker=?"; params=[worker]; }
-    else if (req.user.role === 'worker_ship') { where = "status='发货' AND assigned_shipping_worker=?"; params=[worker]; }
-    else {
-      where = "((status='印刷' AND assigned_print_worker=?) OR (status='复膜' AND assigned_lamination_worker=?) OR (status='制袋' AND assigned_bagging_worker=?) OR (status='发货' AND assigned_shipping_worker=?))";
-      params=[worker,worker,worker,worker];
-    }
-  }
-
-  if (status) {
-    where = where ? `${where} AND status = ?` : 'status = ?';
-    params.push(status);
-  }
-
-  if (updatedFrom) {
-    where = where ? `${where} AND datetime(updated_at) >= datetime(?)` : 'datetime(updated_at) >= datetime(?)';
-    params.push(updatedFrom);
-  }
-
-  if (q) {
-    const kw = `%${q}%`;
-    const qSql = '(customer_name LIKE ? OR bag_type LIKE ? OR use_case LIKE ? OR order_spec LIKE ? OR order_qty LIKE ?)';
-    where = where ? `${where} AND ${qSql}` : qSql;
-    params.push(kw, kw, kw, kw, kw);
-  }
-
-  const whereSql = where ? `WHERE ${where}` : '';
-  let orderSql = ' ORDER BY priority DESC, urgency DESC, updated_at DESC';
-  if (sortBy === 'start_time') {
-    orderSql = ` ORDER BY datetime(COALESCE(start_time, created_at)) ${sortOrder}, priority DESC, urgency DESC`;
-  }
-
-  const attachWoLite = (rows=[]) => {
-    const ids = rows.map(r=>Number(r.id)).filter(Boolean);
-    if(!ids.length) return rows;
-    const marks = ids.map(()=>'?').join(',');
-    const ws = db.prepare(`
-      SELECT order_id, work_no, customer_name, product_name, bag_type, spec, quantity, delivery_date, roller, remark, process_requirements_json, id
-      FROM work_orders
-      WHERE order_id IN (${marks})
-      ORDER BY id DESC
-    `).all(...ids);
-    const map = new Map();
-    const build = (w={}, p={})=>{
-      const pf = inferPrintFilmFields(p);
-      const summary = {
-        id: Number(w.id || 0),
-        workNo: String(w.work_no || ''),
-        customerName: String(w.customer_name || ''),
-        productName: String(w.product_name || ''),
-        bagType: String(w.bag_type || ''),
-        spec: String(w.spec || ''),
-        quantity: String(w.quantity || ''),
-        deliveryDate: String(w.delivery_date || ''),
-        roller: String(w.roller || ''),
-        remark: String(w.remark || ''),
-        printQty: String(p.printQty || p.print_qty || '').trim(),
-        printMold: String(pf.mold || '').trim(),
-        printFilmSize: String(pf.size || '').trim(),
-        printFilmQty: String(pf.qty || '').trim(),
-        printFilmUnit: String(pf.unit || '').trim(),
-        printShift: String(p.printShift || '').trim(),
-        refColor: String(p.refColor || '').trim(),
-        inkRequirement: String(p.inkRequirement || '').trim(),
-        filmType: String(p.filmType || '').trim(),
-        filmNote: String(p.filmNote || '').trim(),
-        layer1: { material: String(p.layer1 || '').trim(), size: String(p.l1Size || '').trim(), weight: String(p.l1Weight || '').trim() },
-        layer2: { material: String(p.layer2 || '').trim(), size: String(p.l2Size || '').trim(), weight: String(p.l2Weight || '').trim() },
-        layer3: { material: String(p.layer3 || '').trim(), size: String(p.l3Size || '').trim(), weight: String(p.l3Weight || '').trim() },
-        layer4: { material: String(p.layer4 || '').trim(), size: String(p.l4Size || '').trim(), weight: String(p.l4Weight || '').trim() },
-        outsource: String(p.outsource || '').trim(),
-        zipPos: String(p.zipPos || '').trim(),
-        tearPos: String(p.tearPos || '').trim(),
-        holePos: String(p.holePos || '').trim(),
-        holes: String(p.holes || '').trim(),
-        edges: String(p.edges || '').trim(),
-        edgeCm: String(p.edgeCm || '').trim(),
-        packType: String(p.packType || '').trim(),
-        boxSpec: String(p.boxSpec || '').trim(),
-        actualQty: String(p.actualQty || '').trim(),
-        packerSign: String(p.packerSign || '').trim(),
-        otherReq: String(p.otherReq || '').trim()
-      };
-      return {
-        source_work_no: String(w.work_no || '').trim(),
-        product_name: String(w.product_name || '').trim(),
-        bag_type: String(w.bag_type || '').trim(),
-        delivery_date: String(w.delivery_date || '').trim(),
-        roller: String(w.roller || '').trim(),
-        work_order_summary: summary,
-        wo_print_qty: String(p.printQty||p.print_qty||'').trim(),
-        wo_print_mold: String(pf.mold||'').trim(),
-        wo_print_film_size: String(pf.size||'').trim(),
-        wo_print_film_qty: String(pf.qty||'').trim(),
-        wo_print_film_unit: String(pf.unit||'').trim(),
-        wo_ink_requirement: String(p.inkRequirement||'').trim()
-      };
-    };
-    ws.forEach(w=>{
-      const oid=Number(w.order_id);
-      if(!oid || map.has(oid)) return;
-      let p={};
-      try{ p=JSON.parse(w.process_requirements_json||'{}'); }catch(_){ p={}; }
-      map.set(oid, build(w, p));
-    });
-
-    const missing = rows.filter(r=>!map.has(Number(r.id)));
-    if(missing.length){
-      const fallbackRows = db.prepare(`
-        SELECT work_no, customer_name, product_name, bag_type, spec, quantity, delivery_date, roller, remark, process_requirements_json, id
-        FROM work_orders
-        WHERE customer_name IS NOT NULL AND spec IS NOT NULL
-        ORDER BY id DESC
-        LIMIT 5000
-      `).all();
-      const pairMap = new Map();
-      fallbackRows.forEach(w=>{
-        const key = `${String(w.customer_name||'').trim()}||${String(w.spec||'').trim()}`;
-        if(!key || pairMap.has(key)) return;
-        let p={};
-        try{ p=JSON.parse(w.process_requirements_json||'{}'); }catch(_){ p={}; }
-        pairMap.set(key, build(w, p));
-      });
-      missing.forEach(r=>{
-        const key = `${String(r.customer_name||'').trim()}||${String(r.order_spec||'').trim()}`;
-        if(pairMap.has(key)) map.set(Number(r.id), pairMap.get(key));
-      });
-    }
-
-    const subRows = db.prepare(`SELECT order_id FROM order_subscriptions WHERE user_name=? AND order_id IN (${marks})`).all(String(req.user?.userName||''), ...ids);
-    const subSet = new Set(subRows.map(x=>Number(x.order_id||0)));
-    return rows.map(r=>{
-      const merged = { ...r, ...(map.get(Number(r.id)) || {}) };
-      return {
-        ...merged,
-        product_name: String(merged.product_name || '').trim() || extractProductNameLikeLegacy(merged),
-        roller: String(merged.roller || '').trim() || extractRollerLikeLegacy(merged),
-        my_subscribed: subSet.has(Number(r.id)) ? 1 : 0
-      };
-    });
-  };
+  const filteredRows = loadScopedOrders(req);
 
   if (!usePaging) {
-    const rows = db.prepare(`SELECT * FROM orders ${whereSql}${orderSql}`).all(...params);
-    const fixed = enrichCustomerDisplay(attachWoLite(rows));
-    return res.json(fixed.map(r => ({ ...r, size_json: JSON.parse(r.size_json || '{}') })));
+    return res.json(filteredRows.map(r => ({ ...r, size_json: parseOrderSizeJson(r) })));
   }
 
-  const total = db.prepare(`SELECT count(*) AS c FROM orders ${whereSql}`).get(...params).c;
   const offset = (page - 1) * pageSize;
-  const rows = db.prepare(`SELECT * FROM orders ${whereSql}${orderSql} LIMIT ? OFFSET ?`).all(...params, pageSize, offset);
-  const fixed = enrichCustomerDisplay(attachWoLite(rows));
+  const pagedRows = filteredRows.slice(offset, offset + pageSize);
   res.json({
-    rows: fixed.map(r => ({ ...r, size_json: JSON.parse(r.size_json || '{}') })),
-    total,
+    rows: pagedRows.map(r => ({ ...r, size_json: parseOrderSizeJson(r) })),
+    total: filteredRows.length,
     page,
     pageSize,
-    totalPages: Math.max(1, Math.ceil(total / pageSize))
+    totalPages: Math.max(1, Math.ceil(filteredRows.length / pageSize))
   });
+});
+
+router.get('/summary', (req, res) => {
+  try {
+    const rows = loadScopedOrders(req);
+    const stageCounts = {};
+    rows.forEach((row) => {
+      const key = String(row.status || '');
+      stageCounts[key] = Number(stageCounts[key] || 0) + 1;
+    });
+    const stayDays = rows.map(getStayDays).filter(Number.isFinite);
+    const urgentCount = rows.filter(row => Number(row.urgency || 0) === 1).length;
+    const avgStayDays = stayDays.length
+      ? stayDays.reduce((sum, value) => sum + value, 0) / stayDays.length
+      : 0;
+    res.json({
+      total: rows.length,
+      urgentCount,
+      avgStayDays,
+      stageCounts
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/today-stage-completions', (req, res) => {
@@ -1655,6 +1763,7 @@ router.get('/:id/detail', allowRoles('super_admin','manager','ai_sales','worker'
     ...row,
     is_legacy_imported: isLegacyImported,
     customer_name_display: fixedCustomer,
+    my_subscribed: db.prepare('SELECT 1 FROM order_subscriptions WHERE order_id=? AND user_name=? LIMIT 1').get(id, String(req.user?.userName || '')) ? 1 : 0,
     image_can_delete: String(row.order_image_uploaded_by || '') === String(req.user?.userName || ''),
     size_json: JSON.parse(row.size_json || '{}'),
     legacy_json: legacy,

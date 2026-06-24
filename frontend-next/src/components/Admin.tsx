@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { mockService } from '../lib/mockService';
+import { MODULE_KEYS, defaultPermissionsByRole, normalizePermissions } from '../lib/permissions';
 
 const TABS = [
   { id: 'users', label: '用户管理', icon: Users },
@@ -41,6 +42,26 @@ export default function Admin() {
   const [editingUser, setEditingUser] = useState<any>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [userForm, setUserForm] = useState({ username: '', password: '', fullName: '', role: 'ai_sales' });
+  const [modulePerms, setModulePerms] = useState<Record<string, boolean>>({});
+
+  const ALL_MODULES: { key: string; label: string }[] = [
+    { key: 'orders', label: '订单中心' },
+    { key: 'workorder', label: '开单管理' },
+    { key: 'board', label: '生产看板' },
+    { key: 'cost', label: '成本核算' },
+    { key: 'stats', label: '统计分析' },
+    { key: 'admin', label: '系统管理' },
+  ];
+
+  const getDefaultRoleModules = (role: string) => {
+    const normalized = normalizePermissions(role, defaultPermissionsByRole(role));
+    const modules = normalized.modules || {};
+    const out: Record<string, boolean> = {};
+    MODULE_KEYS.forEach((key) => {
+      out[key] = !!modules[key];
+    });
+    return out;
+  };
 
   const filteredUsers = users.filter(u => {
     if (userRoleFilter && u.role !== userRoleFilter) return false;
@@ -86,7 +107,7 @@ export default function Admin() {
           </select>
           <button onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="搜账号/姓名"]')?.focus()} className="h-9 px-4 bg-slate-900 text-white rounded-xl text-[13px] font-bold">搜索</button>
         </div>
-        <button onClick={() => { setEditingUser(null); setUserForm({ username: '', password: '', fullName: '', role: 'ai_sales' }); setShowUserModal('new'); }} className="h-9 px-4 bg-indigo-600 text-white rounded-xl text-[13px] font-bold flex items-center gap-2">
+        <button onClick={() => { setEditingUser(null); setUserForm({ username: '', password: '', fullName: '', role: 'ai_sales' }); setModulePerms({ ...getDefaultRoleModules('ai_sales') }); setShowUserModal('new'); }} className="h-9 px-4 bg-indigo-600 text-white rounded-xl text-[13px] font-bold flex items-center gap-2">
           <UserPlus className="w-4 h-4" /> 新增用户
         </button>
       </div>
@@ -130,8 +151,38 @@ export default function Admin() {
                   </td>
                   <td className="py-3 px-4 text-[12px] text-slate-500">{u.created_at ? u.created_at.substring(0, 10) : '-'}</td>
                   <td className="py-3 px-4">
-                    <div className="flex items-center justify-end gap-2">
-                       <button onClick={() => { setEditingUser(u); setUserForm({ username: u.username, password: '', fullName: u.full_name || '', role: u.role || 'ai_sales' }); setShowUserModal('edit'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded"><Edit className="w-4 h-4" /></button>
+                    <div className="flex items-center justify-end gap-1">
+                       <button
+                         title="模拟此用户"
+                         onClick={() => {
+                           window.dispatchEvent(new CustomEvent('app-impersonate', {
+                             detail: {
+                               user: {
+                                 id: u.id,
+                                 username: u.username,
+                                 full_name: u.full_name || u.username,
+                                 role: u.role,
+                                 status: 'active',
+                                 permissions: {
+                                   all: !!u.permissions?.all,
+                                   modules: { ...(u.permissions?.modules || {}) }
+                                 }
+                               }
+                             }
+                           }));
+                         }}
+                         className="p-1.5 text-amber-600 hover:bg-amber-50 rounded"
+                       >
+                         <Users className="w-4 h-4" />
+                       </button>
+                       <button onClick={() => {
+                         const modules = u.permissions?.modules || {};
+                         const hasModules = Object.keys(modules).length > 0;
+                         setEditingUser(u);
+                         setUserForm({ username: u.username, password: '', fullName: u.full_name || '', role: u.role || 'ai_sales' });
+                         setModulePerms(hasModules ? { ...modules } : { ...getDefaultRoleModules(u.role || 'ai_sales') });
+                         setShowUserModal('edit');
+                       }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded"><Edit className="w-4 h-4" /></button>
                        <button onClick={async () => {
                          if (!confirm(`确认删除用户 ${u.username}？`)) return;
                          try {
@@ -178,9 +229,34 @@ export default function Admin() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <label className="text-[11px] font-black text-slate-500 uppercase">角色</label>
-                <select value={userForm.role} onChange={e => setUserForm(f => ({...f, role: e.target.value}))} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold w-full outline-none focus:border-indigo-500">
+                <select value={userForm.role} onChange={e => {
+                  const newRole = e.target.value;
+                  setUserForm(f => ({...f, role: newRole}));
+                  // when role changes, re-apply role default modules (unless user already had custom modules)
+                  const modules = editingUser?.permissions?.modules || {};
+                  const hasModules = Object.keys(modules).length > 0;
+                  if (!hasModules || showUserModal === 'new') {
+                    setModulePerms({ ...getDefaultRoleModules(newRole) });
+                  }
+                }} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold w-full outline-none focus:border-indigo-500">
                   {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[11px] font-black text-slate-500 uppercase">模块权限</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {ALL_MODULES.map(m => (
+                    <label key={m.key} className="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={!!modulePerms[m.key]}
+                        onChange={e => setModulePerms(p => ({...p, [m.key]: e.target.checked}))}
+                        className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <span className="text-[13px] font-medium text-slate-700 group-hover:text-indigo-600 transition-colors">{m.label}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-end gap-3">
@@ -196,8 +272,8 @@ export default function Admin() {
                     await mockService.registerUser(userForm.username, userForm.password, userForm.fullName);
                     window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户已创建，等待审批' } }));
                   } else if (editingUser) {
-                    await mockService.updateUserPermissions(editingUser.id, { role: userForm.role });
-                    window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户角色已更新' } }));
+                    await mockService.updateUserPermissions(editingUser.id, { role: userForm.role, permissions: { modules: modulePerms } });
+                    window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户角色和权限已更新' } }));
                   }
                   setShowUserModal(null);
                   const data = await mockService.getUsers();

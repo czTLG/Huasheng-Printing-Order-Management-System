@@ -1,4 +1,4 @@
-export type OrderStatus = '印刷' | '复膜' | '制袋' | '发货' | '完成' | '全部';
+export type OrderStatus = '印刷' | '复膜' | '制袋' | '发货' | '完成' | '全部' | '今日更新';
 
 export interface User {
   id: number;
@@ -9,6 +9,8 @@ export interface User {
   permissions: {
     all: boolean;
     modules: Record<string, boolean>;
+    ordersStages?: string[];
+    boardStages?: string[];
   };
 }
 
@@ -84,6 +86,11 @@ export interface WorkOrderSummary {
   holePos?: string;
   edges?: string;
   edgeCm?: string;
+  imageUrl?: string;
+  layer1Unit?: string;
+  layer2Unit?: string;
+  layer3Unit?: string;
+  layer4Unit?: string;
 }
 
 export interface Order {

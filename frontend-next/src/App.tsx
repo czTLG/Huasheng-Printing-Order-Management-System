@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Package, 
-  ClipboardList, 
-  BarChart3, 
+import {
+  Package,
+  ClipboardList,
+  BarChart3,
+  Calculator,
   MessageSquare,
   Search,
   Bell,
@@ -25,17 +26,26 @@ import Cost from './components/Cost';
 import Admin from './components/Admin';
 import Stats from './components/Stats';
 import { mockService } from './lib/mockService';
+import { getVisibleModuleKeys, MODULE_KEYS } from './lib/permissions';
 import { User } from './types';
 
 import Login from './components/Login';
 
 type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin';
 
+const ROLE_LABELS: Record<string, string> = {
+  super_admin: '超级管理员', manager: '生产经理',
+  ai_sales: '业务员', worker: '通用工人',
+  worker_print: '印刷工人', worker_film: '复膜工人',
+  worker_bag: '制袋工人', worker_ship: '发货工人',
+};
+
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('orders');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [originalUser, setOriginalUser] = useState<User | null>(null);
   const [notifications, setNotifications] = useState<{ id: string, type: 'error' | 'success' | 'warning' | 'info', message: string, code?: number }[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -85,6 +95,19 @@ const App: React.FC = () => {
     return () => window.removeEventListener('app-notification', handleNotification);
   }, []);
 
+  useEffect(() => {
+    const handleImpersonate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.user) {
+        setOriginalUser(user);
+        setUser(detail.user);
+        addNotification(`正在模拟用户: ${detail.user.full_name || detail.user.username}`, 'warning');
+      }
+    };
+    window.addEventListener('app-impersonate', handleImpersonate);
+    return () => window.removeEventListener('app-impersonate', handleImpersonate);
+  }, [user]);
+
   // ⌘+K / Ctrl+K shortcut to focus global search; ESC to close help
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -119,6 +142,12 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    if (originalUser) {
+      setUser(originalUser);
+      setOriginalUser(null);
+      addNotification('已退出模拟模式', 'info');
+      return;
+    }
     mockService.logout();
     setUser(null);
   };
@@ -127,23 +156,17 @@ const App: React.FC = () => {
     { id: 'orders', label: '订单中心', icon: Package, requiredModule: 'orders' },
     { id: 'workorders', label: '开单管理', icon: ClipboardList, requiredModule: 'workorder' },
     { id: 'board', label: '生产看板', icon: Activity, requiredModule: 'board' },
-    { id: 'cost', label: '成本核算', icon: BarChart3, requiredModule: 'cost' },
+    { id: 'cost', label: '成本核算', icon: Calculator, requiredModule: 'cost' },
     { id: 'stats', label: '统计分析', icon: BarChart3, requiredModule: 'stats' },
     { id: 'admin', label: '系统管理', icon: Shield, requiredModule: 'admin' },
   ];
 
   function getVisibleModules(currentUser: User | null) {
     if (!currentUser) return [] as string[];
-    if (currentUser.role === 'super_admin' || currentUser.permissions?.all) {
-      return ['orders', 'workorder', 'board', 'cost', 'stats', 'admin'];
-    }
-    const modules = currentUser.permissions?.modules || {};
-    const allowed = Object.keys(modules).filter(k => modules[k]);
-    if (mockService.canUseCost()) allowed.push('cost');
-    if (currentUser.role === 'super_admin' || ['chenyongjie', 'gavin'].includes(currentUser.username)) {
-      allowed.push('admin');
-    }
-    return [...new Set(allowed)];
+    const visible = getVisibleModuleKeys(currentUser);
+    if (visible.length > 0) return visible;
+    if (currentUser.role === 'super_admin' || currentUser.permissions?.all) return [...MODULE_KEYS];
+    return [];
   }
 
   const visibleModules = getVisibleModules(user);
@@ -297,6 +320,9 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1 md:gap-3 shrink-0">
+             <a href="https://gdhspack.com/" target="_blank" rel="noopener noreferrer" className="inline-flex px-1.5 sm:px-2.5 md:px-3 h-6 sm:h-7 md:h-8 items-center gap-1 md:gap-1.5 bg-white border border-slate-200 hover:border-indigo-200 rounded-lg text-[9px] sm:text-[10px] md:text-xs font-bold text-slate-600 hover:text-indigo-600 transition-all hover:shadow-sm shrink-0">
+                <Package className="w-3 h-3 md:w-3.5 md:h-3.5" /> 华胜官网
+             </a>
              <div className="relative">
                 <button onClick={() => setShowNotifications(!showNotifications)} className="relative p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-all" title="查看通知">
                    <Bell className="w-4 h-4 md:w-4.5 md:h-4.5" />
@@ -368,8 +394,30 @@ const App: React.FC = () => {
           </div>
         </header>
 
+        {/* Impersonation Banner */}
+        {originalUser && (
+          <div className="bg-amber-500/90 backdrop-blur-md px-3 md:px-6 py-2 flex items-center justify-between shrink-0 text-white text-xs font-bold">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4" />
+              <span>模拟模式 · 当前模拟: <span className="underline underline-offset-2">{user?.full_name || user?.username}</span>
+                {user?.role && <span className="ml-1 opacity-70">({ROLE_LABELS[user.role] || user.role})</span>}
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                setUser(originalUser);
+                setOriginalUser(null);
+                addNotification('已退出模拟模式', 'info');
+              }}
+              className="flex items-center gap-1 px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
+            >
+              <X className="w-3.5 h-3.5" /> 退出模拟
+            </button>
+          </div>
+        )}
+
         {/* Content Area */}
-        <div className="flex-1 overflow-x-hidden overflow-y-auto px-2 py-4 md:px-4 md:py-6 lg:p-8 custom-scrollbar bg-slate-50/50">
+        <div className="flex-1 overflow-y-auto overflow-x-auto px-2 py-4 md:px-4 md:py-6 lg:p-8 custom-scrollbar bg-slate-50/50">
            <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -431,7 +479,6 @@ const App: React.FC = () => {
                     <p><span className="font-bold">订单中心</span> — 订单搜索 / 分页 / 状态流转</p>
                     <p><span className="font-bold">开单管理</span> — 工单创建 / 排产 / PDF导出</p>
                     <p><span className="font-bold">生产看板</span> — 实时工序流转 TV模式</p>
-                    <p><span className="font-bold">成本核算</span> — 材料成本快速估价</p>
                     <p><span className="font-bold">统计分析</span> — 趋势 / 客户排名 / 袋型分布</p>
                     <p><span className="font-bold">系统管理</span> — 用户 / 角色 / 日志 / 打包</p>
                   </div>

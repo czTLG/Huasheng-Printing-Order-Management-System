@@ -1,0 +1,1486 @@
+{
+  "ar": {
+    "food-packaging-roll-film": {
+      "material": "خيارات هيكل المواد لأفلام تغليف المواد الغذائية بشكل لفات",
+      "applications": "توصيات التطبيق",
+      "machine": "توافق الماكينة",
+      "moq": "ملاحظات حول الحد الأدنى للطلب والتكلفة",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر",
+      "quality": "الجودة والشهادات",
+      "related": "المنتجات ذات الصلة"
+    },
+    "spout-pouches": {
+      "material": "خيارات هيكل المواد لأكياس الفوهة",
+      "applications": "توصيات التطبيق",
+      "accessories": "خيارات الفوهة والغطاء والتركيبات",
+      "qc": "نقاط مراقبة التسرب والجودة",
+      "moq": "ملاحظات حول الحد الأدنى للطلب والتكلفة",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر",
+      "quality": "الجودة والشهادات",
+      "related": "المنتجات ذات الصلة"
+    },
+    "coffee-bags-with-valve": {
+      "material": "خيارات هيكل المواد لأكياس القهوة",
+      "applications": "توصيات التطبيق",
+      "accessories": "خيارات الصمام والسحاب ونمط الكيس",
+      "qc": "حاجز الرائحة ونقاط مراقبة الجودة",
+      "moq": "ملاحظات حول الحد الأدنى للطلب والتكلفة",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر",
+      "quality": "الجودة والشهادات",
+      "related": "المنتجات ذات الصلة"
+    },
+    "flat-bottom-pouches": {
+      "material": "خيارات هيكل المواد للأكياس ذات القاعدة المسطحة",
+      "applications": "توصيات التطبيق",
+      "accessories": "هيكل القاعدة المسطحة والسحاب وعرض الرف",
+      "qc": "الحاجز ونقاط مراقبة الجودة",
+      "moq": "ملاحظات حول الحد الأدنى للطلب والتكلفة",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر",
+      "quality": "الجودة والشهادات",
+      "related": "المنتجات ذات الصلة"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "خيارات هيكل المواد للأكياس القائمة بسحاب",
+      "applications": "توصيات التطبيق",
+      "accessories": "الهيكل القائم والسحاب وعرض الرف",
+      "qc": "الحاجز ونقاط مراقبة الجودة",
+      "moq": "ملاحظات حول الحد الأدنى للطلب والتكلفة",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر",
+      "quality": "الجودة والشهادات",
+      "related": "المنتجات ذات الصلة"
+    },
+    "retort-pouches": {
+      "material": "خيارات هيكل المواد لأكياس الريتورت",
+      "applications": "توصيات التطبيق",
+      "accessories": "ملاحظات حول معالجة الريتورت ومقاومة الحرارة",
+      "qc": "نقاط مراقبة الإغلاق والتسرب والجودة",
+      "moq": "ملاحظات حول الحد الأدنى للطلب والتكلفة",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر",
+      "quality": "الجودة والشهادات",
+      "related": "المنتجات ذات الصلة"
+    },
+    "side-gusset-bag": {
+      "material": "خيارات هيكل المواد لأكياس الجوانب القابلة للتوسيع",
+      "applications": "توصيات التطبيق لأكياس الجوانب القابلة للتوسيع",
+      "qc": "نقاط مراقبة الجودة لأكياس الجوانب القابلة للتوسيع",
+      "moq": "ملاحظات الحد الأدنى للطلب والتكلفة لأكياس الجوانب",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر لأكياس الجوانب",
+      "quality": "الجودة والشهادة — Huasheng Packaging معتمدة ISO22000",
+      "related": "المنتجات ذات الصلة — أكياس القهوة بصمام، الأكياس ذات القاعدة المسطحة، أكياس تغليف ورق الكرافت، الأكياس رباعية الختم، أكياس أغذية الحيوانات الأليفة"
+    },
+    "quad-seal-pouches": {
+      "material": "خيارات هيكل المواد للأكياس رباعية الختم",
+      "applications": "توصيات التطبيق للأكياس رباعية الختم",
+      "qc": "نقاط مراقبة الجودة للأكياس رباعية الختم",
+      "moq": "ملاحظات الحد الأدنى للطلب والتكلفة للأكياس رباعية الختم",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر للأكياس رباعية الختم",
+      "quality": "الجودة والشهادة — Huasheng Packaging معتمدة ISO22000",
+      "related": "المنتجات ذات الصلة — أكياس القهوة بصمام، الأكياس ذات القاعدة المسطحة، أكياس تغليف ورق الكرافت، أكياس الجوانب القابلة للتوسيع، أكياس أغذية الحيوانات الأليفة"
+    },
+    "three-side-seal-pouches": {
+      "material": "خيارات هيكل المواد لأكياس الجوانب القابلة للتوسيع",
+      "applications": "توصيات التطبيق لأكياس الجوانب القابلة للتوسيع",
+      "qc": "نقاط مراقبة الجودة لأكياس الجوانب القابلة للتوسيع",
+      "moq": "ملاحظات الحد الأدنى للطلب والتكلفة لأكياس الجوانب",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر لأكياس الجوانب",
+      "quality": "الجودة والشهادة — Huasheng Packaging معتمدة ISO22000",
+      "related": "المنتجات ذات الصلة — أكياس القهوة بصمام، الأكياس ذات القاعدة المسطحة، أكياس تغليف ورق الكرافت، الأكياس رباعية الختم، أكياس أغذية الحيوانات الأليفة"
+    },
+    "easy-peel-sealing-film": {
+      "material": "خيارات هيكل المواد لأكياس الجوانب القابلة للتوسيع",
+      "applications": "توصيات التطبيق لأكياس الجوانب القابلة للتوسيع",
+      "qc": "نقاط مراقبة الجودة لأكياس الجوانب القابلة للتوسيع",
+      "moq": "ملاحظات الحد الأدنى للطلب والتكلفة لأكياس الجوانب",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر لأكياس الجوانب",
+      "quality": "الجودة والشهادة — Huasheng Packaging معتمدة ISO22000",
+      "related": "المنتجات ذات الصلة — أكياس القهوة بصمام، الأكياس ذات القاعدة المسطحة، أكياس تغليف ورق الكرافت، الأكياس رباعية الختم، أكياس أغذية الحيوانات الأليفة"
+    },
+    "pet-food-packaging-bags": {
+      "material": "خيارات هيكل المواد لأكياس الجوانب القابلة للتوسيع",
+      "applications": "توصيات التطبيق لأكياس الجوانب القابلة للتوسيع",
+      "qc": "نقاط مراقبة الجودة لأكياس الجوانب القابلة للتوسيع",
+      "moq": "ملاحظات الحد الأدنى للطلب والتكلفة لأكياس الجوانب",
+      "checklist": "ما يجب تحضيره قبل طلب عرض سعر لأكياس الجوانب",
+      "quality": "الجودة والشهادة — Huasheng Packaging معتمدة ISO22000",
+      "related": "المنتجات ذات الصلة — أكياس القهوة بصمام، الأكياس ذات القاعدة المسطحة، أكياس تغليف ورق الكرافت، الأكياس رباعية الختم، أكياس أغذية الحيوانات الأليفة"
+    }
+  },
+  "ur": {
+    "food-packaging-roll-film": {
+      "material": "فوڈ پیکیجنگ رول فلم کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "استعمال کی سفارشات",
+      "machine": "مشین کی مطابقت",
+      "moq": "کم از کم آرڈر اور لاگت کے نوٹس",
+      "checklist": "کوٹیشن کی درخواست سے پہلے تیار کرنے کی چیزیں",
+      "quality": "معیار اور سرٹیفیکیشن",
+      "related": "متعلقہ مصنوعات"
+    },
+    "spout-pouches": {
+      "material": "سپاؤٹ پاؤچز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "استعمال کی سفارشات",
+      "accessories": "سپاؤٹ، کیپ اور فٹمنٹ کے اختیارات",
+      "qc": "لیکیج اور کوالٹی کنٹرول کے نکات",
+      "moq": "کم از کم آرڈر اور لاگت کے نوٹس",
+      "checklist": "کوٹیشن کی درخواست سے پہلے تیار کرنے کی چیزیں",
+      "quality": "معیار اور سرٹیفیکیشن",
+      "related": "متعلقہ مصنوعات"
+    },
+    "coffee-bags-with-valve": {
+      "material": "کافی بیگز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "استعمال کی سفارشات",
+      "accessories": "والو، زپر اور بیگ سٹائل کے اختیارات",
+      "qc": "خوشبو کی رکاوٹ اور کوالٹی کنٹرول کے نکات",
+      "moq": "کم از کم آرڈر اور لاگت کے نوٹس",
+      "checklist": "کوٹیشن کی درخواست سے پہلے تیار کرنے کی چیزیں",
+      "quality": "معیار اور سرٹیفیکیشن",
+      "related": "متعلقہ مصنوعات"
+    },
+    "flat-bottom-pouches": {
+      "material": "فلیٹ باٹم پاؤچز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "استعمال کی سفارشات",
+      "accessories": "فلیٹ باٹم سٹرکچر، زپر اور شیلف ڈسپلے",
+      "qc": "بیریئر اور کوالٹی کنٹرول کے نکات",
+      "moq": "کم از کم آرڈر اور لاگت کے نوٹس",
+      "checklist": "کوٹیشن کی درخواست سے پہلے تیار کرنے کی چیزیں",
+      "quality": "معیار اور سرٹیفیکیشن",
+      "related": "متعلقہ مصنوعات"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "سٹینڈ اپ زپر پاؤچز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "استعمال کی سفارشات",
+      "accessories": "سٹینڈ اپ سٹرکچر، زپر اور شیلف ڈسپلے",
+      "qc": "بیریئر اور کوالٹی کنٹرول کے نکات",
+      "moq": "کم از کم آرڈر اور لاگت کے نوٹس",
+      "checklist": "کوٹیشن کی درخواست سے پہلے تیار کرنے کی چیزیں",
+      "quality": "معیار اور سرٹیفیکیشن",
+      "related": "متعلقہ مصنوعات"
+    },
+    "retort-pouches": {
+      "material": "ریٹارٹ پاؤچز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "استعمال کی سفارشات",
+      "accessories": "ریٹارٹ پروسیسنگ اور حرارت مزاحمت کے نوٹس",
+      "qc": "سیلنگ، لیکیج اور کوالٹی کنٹرول کے نکات",
+      "moq": "کم از کم آرڈر اور لاگت کے نوٹس",
+      "checklist": "کوٹیشن کی درخواست سے پہلے تیار کرنے کی چیزیں",
+      "quality": "معیار اور سرٹیفیکیشن",
+      "related": "متعلقہ مصنوعات"
+    },
+    "side-gusset-bag": {
+      "material": "سائیڈ گسٹ بیگز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "سائیڈ گسٹ بیگز کے لیے درخواست کی سفارشات",
+      "qc": "سائیڈ گسٹ بیگز کے لیے کوالٹی کنٹرول پوائنٹس",
+      "moq": "سائیڈ گسٹ بیگز کے لیے MOQ اور لاگت کے نوٹس",
+      "checklist": "سائیڈ گسٹ بیگز کا کوٹیشن مانگنے سے پہلے کیا تیار کریں",
+      "quality": "کوالٹی اور سرٹیفیکیشن — Huasheng Packaging ISO22000 مصدقہ",
+      "related": "متعلقہ مصنوعات — کافی بیگز مع والو، فلیٹ باٹم پاؤچز، کرافٹ پیپر پیکیجنگ بیگز، کواڈ سیل پاؤچز، پیٹ فوڈ پیکیجنگ بیگز"
+    },
+    "quad-seal-pouches": {
+      "material": "کواڈ سیل پاؤچز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "کواڈ سیل پاؤچز کے لیے درخواست کی سفارشات",
+      "qc": "کواڈ سیل پاؤچز کے لیے کوالٹی کنٹرول پوائنٹس",
+      "moq": "کواڈ سیل پاؤچز کے لیے MOQ اور لاگت کے نوٹس",
+      "checklist": "کواڈ سیل پاؤچز کا کوٹیشن مانگنے سے پہلے کیا تیار کریں",
+      "quality": "کوالٹی اور سرٹیفیکیشن — Huasheng Packaging ISO22000 مصدقہ",
+      "related": "متعلقہ مصنوعات — کافی بیگز مع والو، فلیٹ باٹم پاؤچز، کرافٹ پیپر پیکیجنگ بیگز، سائیڈ گسٹ بیگز، پیٹ فوڈ پیکیجنگ بیگز"
+    },
+    "three-side-seal-pouches": {
+      "material": "سائیڈ گسٹ بیگز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "سائیڈ گسٹ بیگز کے لیے درخواست کی سفارشات",
+      "qc": "سائیڈ گسٹ بیگز کے لیے کوالٹی کنٹرول پوائنٹس",
+      "moq": "سائیڈ گسٹ بیگز کے لیے MOQ اور لاگت کے نوٹس",
+      "checklist": "سائیڈ گسٹ بیگز کا کوٹیشن مانگنے سے پہلے کیا تیار کریں",
+      "quality": "کوالٹی اور سرٹیفیکیشن — Huasheng Packaging ISO22000 مصدقہ",
+      "related": "متعلقہ مصنوعات — کافی بیگز مع والو، فلیٹ باٹم پاؤچز، کرافٹ پیپر پیکیجنگ بیگز، کواڈ سیل پاؤچز، پیٹ فوڈ پیکیجنگ بیگز"
+    },
+    "easy-peel-sealing-film": {
+      "material": "سائیڈ گسٹ بیگز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "سائیڈ گسٹ بیگز کے لیے درخواست کی سفارشات",
+      "qc": "سائیڈ گسٹ بیگز کے لیے کوالٹی کنٹرول پوائنٹس",
+      "moq": "سائیڈ گسٹ بیگز کے لیے MOQ اور لاگت کے نوٹس",
+      "checklist": "سائیڈ گسٹ بیگز کا کوٹیشن مانگنے سے پہلے کیا تیار کریں",
+      "quality": "کوالٹی اور سرٹیفیکیشن — Huasheng Packaging ISO22000 مصدقہ",
+      "related": "متعلقہ مصنوعات — کافی بیگز مع والو، فلیٹ باٹم پاؤچز، کرافٹ پیپر پیکیجنگ بیگز، کواڈ سیل پاؤچز، پیٹ فوڈ پیکیجنگ بیگز"
+    },
+    "pet-food-packaging-bags": {
+      "material": "سائیڈ گسٹ بیگز کے لیے میٹیریل سٹرکچر کے اختیارات",
+      "applications": "سائیڈ گسٹ بیگز کے لیے درخواست کی سفارشات",
+      "qc": "سائیڈ گسٹ بیگز کے لیے کوالٹی کنٹرول پوائنٹس",
+      "moq": "سائیڈ گسٹ بیگز کے لیے MOQ اور لاگت کے نوٹس",
+      "checklist": "سائیڈ گسٹ بیگز کا کوٹیشن مانگنے سے پہلے کیا تیار کریں",
+      "quality": "کوالٹی اور سرٹیفیکیشن — Huasheng Packaging ISO22000 مصدقہ",
+      "related": "متعلقہ مصنوعات — کافی بیگز مع والو، فلیٹ باٹم پاؤچز، کرافٹ پیپر پیکیجنگ بیگز، کواڈ سیل پاؤچز، پیٹ فوڈ پیکیجنگ بیگز"
+    }
+  },
+  "es": {
+    "food-packaging-roll-film": {
+      "material": "Opciones de Estructura de Materiales para Film en Rollo de Envasado de Alimentos",
+      "applications": "Recomendaciones de Aplicación",
+      "machine": "Compatibilidad con Máquinas",
+      "moq": "Notas sobre MOQ y Costes",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización",
+      "quality": "Calidad y Certificación",
+      "related": "Productos Relacionados"
+    },
+    "spout-pouches": {
+      "material": "Opciones de Estructura de Materiales para Bolsas con Pico Vertedor",
+      "applications": "Recomendaciones de Aplicación",
+      "accessories": "Opciones de Pico, Tapa y Accesorios",
+      "qc": "Puntos de Control de Fugas y Calidad",
+      "moq": "Notas sobre MOQ y Costes",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización",
+      "quality": "Calidad y Certificación",
+      "related": "Productos Relacionados"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Opciones de Estructura de Materiales para Bolsas de Café",
+      "applications": "Recomendaciones de Aplicación",
+      "accessories": "Opciones de Válvula, Cierre Zip y Estilo de Bolsa",
+      "qc": "Barrera de Aroma y Puntos de Control de Calidad",
+      "moq": "Notas sobre MOQ y Costes",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización",
+      "quality": "Calidad y Certificación",
+      "related": "Productos Relacionados"
+    },
+    "flat-bottom-pouches": {
+      "material": "Opciones de Estructura de Materiales para Bolsas de Fondo Plano",
+      "applications": "Recomendaciones de Aplicación",
+      "accessories": "Estructura de Fondo Plano, Cierre Zip y Exhibición en Estante",
+      "qc": "Barrera y Puntos de Control de Calidad",
+      "moq": "Notas sobre MOQ y Costes",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización",
+      "quality": "Calidad y Certificación",
+      "related": "Productos Relacionados"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Opciones de Estructura de Materiales para Bolsas Autoportantes con Cierre Zip",
+      "applications": "Recomendaciones de Aplicación",
+      "accessories": "Estructura Autoportante, Cierre Zip y Exhibición en Estante",
+      "qc": "Barrera y Puntos de Control de Calidad",
+      "moq": "Notas sobre MOQ y Costes",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización",
+      "quality": "Calidad y Certificación",
+      "related": "Productos Relacionados"
+    },
+    "retort-pouches": {
+      "material": "Opciones de Estructura de Materiales para Bolsas Retort",
+      "applications": "Recomendaciones de Aplicación",
+      "accessories": "Notas sobre Procesamiento Retort y Resistencia al Calor",
+      "qc": "Puntos de Control de Sellado, Fugas y Calidad",
+      "moq": "Notas sobre MOQ y Costes",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización",
+      "quality": "Calidad y Certificación",
+      "related": "Productos Relacionados"
+    },
+    "side-gusset-bag": {
+      "material": "Opciones de Estructura de Materiales para Bolsas con Fuelle Lateral",
+      "applications": "Recomendaciones de Aplicación para Bolsas con Fuelle Lateral",
+      "qc": "Puntos de Control de Calidad para Bolsas con Fuelle Lateral",
+      "moq": "Notas de MOQ y Coste para Bolsas con Fuelle Lateral",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización para Bolsas con Fuelle Lateral",
+      "quality": "Calidad y Certificación — Huasheng Packaging certificado ISO22000",
+      "related": "Productos Relacionados — Bolsas de Café con Válvula, Bolsas de Fondo Plano, Bolsas de Papel Kraft, Bolsas de Cuatro Sellos, Bolsas para Alimentos de Mascotas"
+    },
+    "quad-seal-pouches": {
+      "material": "Opciones de Estructura de Materiales para Bolsas de Cuatro Sellos",
+      "applications": "Recomendaciones de Aplicación para Bolsas de Cuatro Sellos",
+      "qc": "Puntos de Control de Calidad para Bolsas de Cuatro Sellos",
+      "moq": "Notas de MOQ y Coste para Bolsas de Cuatro Sellos",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización para Bolsas de Cuatro Sellos",
+      "quality": "Calidad y Certificación — Huasheng Packaging certificado ISO22000",
+      "related": "Productos Relacionados — Bolsas de Café con Válvula, Bolsas de Fondo Plano, Bolsas de Papel Kraft, Bolsas con Fuelle Lateral, Bolsas para Alimentos de Mascotas"
+    },
+    "three-side-seal-pouches": {
+      "material": "Opciones de Estructura de Materiales para Bolsas con Fuelle Lateral",
+      "applications": "Recomendaciones de Aplicación para Bolsas con Fuelle Lateral",
+      "qc": "Puntos de Control de Calidad para Bolsas con Fuelle Lateral",
+      "moq": "Notas de MOQ y Coste para Bolsas con Fuelle Lateral",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización para Bolsas con Fuelle Lateral",
+      "quality": "Calidad y Certificación — Huasheng Packaging certificado ISO22000",
+      "related": "Productos Relacionados — Bolsas de Café con Válvula, Bolsas de Fondo Plano, Bolsas de Papel Kraft, Bolsas de Cuatro Sellos, Bolsas para Alimentos de Mascotas"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Opciones de Estructura de Materiales para Bolsas con Fuelle Lateral",
+      "applications": "Recomendaciones de Aplicación para Bolsas con Fuelle Lateral",
+      "qc": "Puntos de Control de Calidad para Bolsas con Fuelle Lateral",
+      "moq": "Notas de MOQ y Coste para Bolsas con Fuelle Lateral",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización para Bolsas con Fuelle Lateral",
+      "quality": "Calidad y Certificación — Huasheng Packaging certificado ISO22000",
+      "related": "Productos Relacionados — Bolsas de Café con Válvula, Bolsas de Fondo Plano, Bolsas de Papel Kraft, Bolsas de Cuatro Sellos, Bolsas para Alimentos de Mascotas"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Opciones de Estructura de Materiales para Bolsas con Fuelle Lateral",
+      "applications": "Recomendaciones de Aplicación para Bolsas con Fuelle Lateral",
+      "qc": "Puntos de Control de Calidad para Bolsas con Fuelle Lateral",
+      "moq": "Notas de MOQ y Coste para Bolsas con Fuelle Lateral",
+      "checklist": "Qué Preparar Antes de Solicitar una Cotización para Bolsas con Fuelle Lateral",
+      "quality": "Calidad y Certificación — Huasheng Packaging certificado ISO22000",
+      "related": "Productos Relacionados — Bolsas de Café con Válvula, Bolsas de Fondo Plano, Bolsas de Papel Kraft, Bolsas de Cuatro Sellos, Bolsas para Alimentos de Mascotas"
+    }
+  },
+  "fr": {
+    "food-packaging-roll-film": {
+      "material": "Options de Structure de Matériaux pour Film d'Emballage Alimentaire en Rouleau",
+      "applications": "Recommandations d'Application",
+      "machine": "Compatibilité avec les Machines",
+      "moq": "Notes sur le MOQ et les Coûts",
+      "checklist": "Ce Qu'il Faut Préparer Avant de Demander un Devis",
+      "quality": "Qualité et Certification",
+      "related": "Produits Associés"
+    },
+    "spout-pouches": {
+      "material": "Options de Structure de Matériaux pour Sachets à Bec Verseur",
+      "applications": "Recommandations d'Application",
+      "accessories": "Options de Bec, Bouchon et Accessoires",
+      "qc": "Points de Contrôle des Fuites et de la Qualité",
+      "moq": "Notes sur le MOQ et les Coûts",
+      "checklist": "Ce Qu'il Faut Préparer Avant de Demander un Devis",
+      "quality": "Qualité et Certification",
+      "related": "Produits Associés"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Options de Structure de Matériaux pour Sachets de Café",
+      "applications": "Recommandations d'Application",
+      "accessories": "Options de Valve, Fermeture Zip et Style de Sachet",
+      "qc": "Barrière d'Arôme et Points de Contrôle de la Qualité",
+      "moq": "Notes sur le MOQ et les Coûts",
+      "checklist": "Ce Qu'il Faut Préparer Avant de Demander un Devis",
+      "quality": "Qualité et Certification",
+      "related": "Produits Associés"
+    },
+    "flat-bottom-pouches": {
+      "material": "Options de Structure de Matériaux pour Sachets à Fond Plat",
+      "applications": "Recommandations d'Application",
+      "accessories": "Structure à Fond Plat, Fermeture Zip et Présentation en Rayon",
+      "qc": "Barrière et Points de Contrôle de la Qualité",
+      "moq": "Notes sur le MOQ et les Coûts",
+      "checklist": "Ce Qu'il Faut Préparer Avant de Demander un Devis",
+      "quality": "Qualité et Certification",
+      "related": "Produits Associés"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Options de Structure de Matériaux pour Sachets Autoportants avec Zip",
+      "applications": "Recommandations d'Application",
+      "accessories": "Structure Autoportante, Fermeture Zip et Présentation en Rayon",
+      "qc": "Barrière et Points de Contrôle de la Qualité",
+      "moq": "Notes sur le MOQ et les Coûts",
+      "checklist": "Ce Qu'il Faut Préparer Avant de Demander un Devis",
+      "quality": "Qualité et Certification",
+      "related": "Produits Associés"
+    },
+    "retort-pouches": {
+      "material": "Options de Structure de Matériaux pour Sachets Retort",
+      "applications": "Recommandations d'Application",
+      "accessories": "Notes sur le Traitement Retort et la Résistance à la Chaleur",
+      "qc": "Points de Contrôle du Scellage, des Fuites et de la Qualité",
+      "moq": "Notes sur le MOQ et les Coûts",
+      "checklist": "Ce Qu'il Faut Préparer Avant de Demander un Devis",
+      "quality": "Qualité et Certification",
+      "related": "Produits Associés"
+    },
+    "side-gusset-bag": {
+      "material": "Options de Structure de Matériaux pour Sachets à Soufflet Latéral",
+      "applications": "Recommandations d'Application pour Sachets à Soufflet Latéral",
+      "qc": "Points de Contrôle Qualité pour Sachets à Soufflet Latéral",
+      "moq": "Notes sur le MOQ et les Coûts pour Sachets à Soufflet Latéral",
+      "checklist": "Ce qu'il Faut Préparer Avant de Demander un Devis pour Sachets à Soufflet Latéral",
+      "quality": "Qualité et Certification — Huasheng Packaging certifié ISO22000",
+      "related": "Produits Associés — Sachets de Café avec Valve, Sachets à Fond Plat, Sachets en Papier Kraft, Sachets Quadri-Soudés, Sachets pour Aliments pour Animaux"
+    },
+    "quad-seal-pouches": {
+      "material": "Options de Structure de Matériaux pour Sachets Quadri-Soudés",
+      "applications": "Recommandations d'Application pour Sachets Quadri-Soudés",
+      "qc": "Points de Contrôle Qualité pour Sachets Quadri-Soudés",
+      "moq": "Notes sur le MOQ et les Coûts pour Sachets Quadri-Soudés",
+      "checklist": "Ce qu'il Faut Préparer Avant de Demander un Devis pour Sachets Quadri-Soudés",
+      "quality": "Qualité et Certification — Huasheng Packaging certifié ISO22000",
+      "related": "Produits Associés — Sachets de Café avec Valve, Sachets à Fond Plat, Sachets en Papier Kraft, Sachets à Soufflet Latéral, Sachets pour Aliments pour Animaux"
+    },
+    "three-side-seal-pouches": {
+      "material": "Options de Structure de Matériaux pour Sachets à Soufflet Latéral",
+      "applications": "Recommandations d'Application pour Sachets à Soufflet Latéral",
+      "qc": "Points de Contrôle Qualité pour Sachets à Soufflet Latéral",
+      "moq": "Notes sur le MOQ et les Coûts pour Sachets à Soufflet Latéral",
+      "checklist": "Ce qu'il Faut Préparer Avant de Demander un Devis pour Sachets à Soufflet Latéral",
+      "quality": "Qualité et Certification — Huasheng Packaging certifié ISO22000",
+      "related": "Produits Associés — Sachets de Café avec Valve, Sachets à Fond Plat, Sachets en Papier Kraft, Sachets Quadri-Soudés, Sachets pour Aliments pour Animaux"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Options de Structure de Matériaux pour Sachets à Soufflet Latéral",
+      "applications": "Recommandations d'Application pour Sachets à Soufflet Latéral",
+      "qc": "Points de Contrôle Qualité pour Sachets à Soufflet Latéral",
+      "moq": "Notes sur le MOQ et les Coûts pour Sachets à Soufflet Latéral",
+      "checklist": "Ce qu'il Faut Préparer Avant de Demander un Devis pour Sachets à Soufflet Latéral",
+      "quality": "Qualité et Certification — Huasheng Packaging certifié ISO22000",
+      "related": "Produits Associés — Sachets de Café avec Valve, Sachets à Fond Plat, Sachets en Papier Kraft, Sachets Quadri-Soudés, Sachets pour Aliments pour Animaux"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Options de Structure de Matériaux pour Sachets à Soufflet Latéral",
+      "applications": "Recommandations d'Application pour Sachets à Soufflet Latéral",
+      "qc": "Points de Contrôle Qualité pour Sachets à Soufflet Latéral",
+      "moq": "Notes sur le MOQ et les Coûts pour Sachets à Soufflet Latéral",
+      "checklist": "Ce qu'il Faut Préparer Avant de Demander un Devis pour Sachets à Soufflet Latéral",
+      "quality": "Qualité et Certification — Huasheng Packaging certifié ISO22000",
+      "related": "Produits Associés — Sachets de Café avec Valve, Sachets à Fond Plat, Sachets en Papier Kraft, Sachets Quadri-Soudés, Sachets pour Aliments pour Animaux"
+    }
+  },
+  "ru": {
+    "food-packaging-roll-film": {
+      "material": "Варианты Структуры Материалов для Рулонной Пленки для Упаковки Пищевых Продуктов",
+      "applications": "Рекомендации по Применению",
+      "machine": "Совместимость с Оборудованием",
+      "moq": "Примечания по MOQ и Стоимости",
+      "checklist": "Что Подготовить Перед Запросом Коммерческого Предложения",
+      "quality": "Качество и Сертификация",
+      "related": "Сопутствующие Товары"
+    },
+    "spout-pouches": {
+      "material": "Варианты Структуры Материалов для Пакетов с Носиком",
+      "applications": "Рекомендации по Применению",
+      "accessories": "Варианты Носика, Крышки и Фитингов",
+      "qc": "Контроль Герметичности и Качества",
+      "moq": "Примечания по MOQ и Стоимости",
+      "checklist": "Что Подготовить Перед Запросом Коммерческого Предложения",
+      "quality": "Качество и Сертификация",
+      "related": "Сопутствующие Товары"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Варианты Структуры Материалов для Кофейных Пакетов",
+      "applications": "Рекомендации по Применению",
+      "accessories": "Варианты Клапана, Замка Zip и Стиля Пакета",
+      "qc": "Ароматический Барьер и Контроль Качества",
+      "moq": "Примечания по MOQ и Стоимости",
+      "checklist": "Что Подготовить Перед Запросом Коммерческого Предложения",
+      "quality": "Качество и Сертификация",
+      "related": "Сопутствующие Товары"
+    },
+    "flat-bottom-pouches": {
+      "material": "Варианты Структуры Материалов для Пакетов с Плоским Дном",
+      "applications": "Рекомендации по Применению",
+      "accessories": "Конструкция Плоского Дна, Замок Zip и Выкладка на Полке",
+      "qc": "Барьерные Свойства и Контроль Качества",
+      "moq": "Примечания по MOQ и Стоимости",
+      "checklist": "Что Подготовить Перед Запросом Коммерческого Предложения",
+      "quality": "Качество и Сертификация",
+      "related": "Сопутствующие Товары"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Варианты Структуры Материалов для Стоячих Пакетов с Замком Zip",
+      "applications": "Рекомендации по Применению",
+      "accessories": "Стоячая Конструкция, Замок Zip и Выкладка на Полке",
+      "qc": "Барьерные Свойства и Контроль Качества",
+      "moq": "Примечания по MOQ и Стоимости",
+      "checklist": "Что Подготовить Перед Запросом Коммерческого Предложения",
+      "quality": "Качество и Сертификация",
+      "related": "Сопутствующие Товары"
+    },
+    "retort-pouches": {
+      "material": "Варианты Структуры Материалов для Реторт-Пакетов",
+      "applications": "Рекомендации по Применению",
+      "accessories": "Примечания по Реторт-Обработке и Термостойкости",
+      "qc": "Контроль Герметизации, Герметичности и Качества",
+      "moq": "Примечания по MOQ и Стоимости",
+      "checklist": "Что Подготовить Перед Запросом Коммерческого Предложения",
+      "quality": "Качество и Сертификация",
+      "related": "Сопутствующие Товары"
+    },
+    "side-gusset-bag": {
+      "material": "Варианты Структуры Материалов для Боковых Пакетов с Фальцами",
+      "applications": "Рекомендации по Применению Боковых Пакетов с Фальцами",
+      "qc": "Пункты Контроля Качества для Боковых Пакетов с Фальцами",
+      "moq": "Примечания по MOQ и Стоимости для Боковых Пакетов",
+      "checklist": "Что Подготовить Перед Запросом Котировки на Боковые Пакеты",
+      "quality": "Качество и Сертификация — Huasheng Packaging сертифицирован ISO22000",
+      "related": "Сопутствующие Товары — Кофейные пакеты с клапаном, Пакеты с плоским дном, Крафт-бумажные пакеты, Четырехшовные пакеты, Пакеты для кормов"
+    },
+    "quad-seal-pouches": {
+      "material": "Варианты Структуры Материалов для Четырехшовных Пакетов",
+      "applications": "Рекомендации по Применению Четырехшовных Пакетов",
+      "qc": "Пункты Контроля Качества для Четырехшовных Пакетов",
+      "moq": "Примечания по MOQ и Стоимости для Четырехшовных Пакетов",
+      "checklist": "Что Подготовить Перед Запросом Котировки на Четырехшовные Пакеты",
+      "quality": "Качество и Сертификация — Huasheng Packaging сертифицирован ISO22000",
+      "related": "Сопутствующие Товары — Кофейные пакеты с клапаном, Пакеты с плоским дном, Крафт-бумажные пакеты, Боковые пакеты, Пакеты для кормов"
+    },
+    "three-side-seal-pouches": {
+      "material": "Варианты Структуры Материалов для Боковых Пакетов с Фальцами",
+      "applications": "Рекомендации по Применению Боковых Пакетов с Фальцами",
+      "qc": "Пункты Контроля Качества для Боковых Пакетов с Фальцами",
+      "moq": "Примечания по MOQ и Стоимости для Боковых Пакетов",
+      "checklist": "Что Подготовить Перед Запросом Котировки на Боковые Пакеты",
+      "quality": "Качество и Сертификация — Huasheng Packaging сертифицирован ISO22000",
+      "related": "Сопутствующие Товары — Кофейные пакеты с клапаном, Пакеты с плоским дном, Крафт-бумажные пакеты, Четырехшовные пакеты, Пакеты для кормов"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Варианты Структуры Материалов для Боковых Пакетов с Фальцами",
+      "applications": "Рекомендации по Применению Боковых Пакетов с Фальцами",
+      "qc": "Пункты Контроля Качества для Боковых Пакетов с Фальцами",
+      "moq": "Примечания по MOQ и Стоимости для Боковых Пакетов",
+      "checklist": "Что Подготовить Перед Запросом Котировки на Боковые Пакеты",
+      "quality": "Качество и Сертификация — Huasheng Packaging сертифицирован ISO22000",
+      "related": "Сопутствующие Товары — Кофейные пакеты с клапаном, Пакеты с плоским дном, Крафт-бумажные пакеты, Четырехшовные пакеты, Пакеты для кормов"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Варианты Структуры Материалов для Боковых Пакетов с Фальцами",
+      "applications": "Рекомендации по Применению Боковых Пакетов с Фальцами",
+      "qc": "Пункты Контроля Качества для Боковых Пакетов с Фальцами",
+      "moq": "Примечания по MOQ и Стоимости для Боковых Пакетов",
+      "checklist": "Что Подготовить Перед Запросом Котировки на Боковые Пакеты",
+      "quality": "Качество и Сертификация — Huasheng Packaging сертифицирован ISO22000",
+      "related": "Сопутствующие Товары — Кофейные пакеты с клапаном, Пакеты с плоским дном, Крафт-бумажные пакеты, Четырехшовные пакеты, Пакеты для кормов"
+    }
+  },
+  "pt": {
+    "food-packaging-roll-film": {
+      "material": "Opções de Estrutura de Material para Food Packaging Roll Film",
+      "applications": "Recomendações de Aplicação",
+      "machine": "Compatibilidade com Máquinas",
+      "moq": "Observações sobre MOQ e Custos",
+      "checklist": "O que Preparar Antes de Solicitar um Orçamento",
+      "quality": "Qualidade e Certificação",
+      "related": "Produtos Relacionados"
+    },
+    "spout-pouches": {
+      "material": "Opções de Estrutura de Material para Spout Pouches",
+      "applications": "Recomendações de Aplicação",
+      "accessories": "Opções de Spout, Tampa e Conexões",
+      "qc": "Pontos de Controle de Vazamento e Qualidade",
+      "moq": "Observações sobre MOQ e Custos",
+      "checklist": "O que Preparar Antes de Solicitar um Orçamento",
+      "quality": "Qualidade e Certificação",
+      "related": "Produtos Relacionados"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Opções de Estrutura de Material para Coffee Bags",
+      "applications": "Recomendações de Aplicação",
+      "accessories": "Opções de Válvula, Zipper e Estilo de Embalagem",
+      "qc": "Pontos de Barreira de Aroma e Controle de Qualidade",
+      "moq": "Observações sobre MOQ e Custos",
+      "checklist": "O que Preparar Antes de Solicitar um Orçamento",
+      "quality": "Qualidade e Certificação",
+      "related": "Produtos Relacionados"
+    },
+    "flat-bottom-pouches": {
+      "material": "Opções de Estrutura de Material para Flat Bottom Bags",
+      "applications": "Recomendações de Aplicação",
+      "accessories": "Estrutura Flat Bottom, Zipper e Exposição em Prateleira",
+      "qc": "Pontos de Barreira e Controle de Qualidade",
+      "moq": "Observações sobre MOQ e Custos",
+      "checklist": "O que Preparar Antes de Solicitar um Orçamento",
+      "quality": "Qualidade e Certificação",
+      "related": "Produtos Relacionados"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Opções de Estrutura de Material para Stand Up Pouches",
+      "applications": "Recomendações de Aplicação",
+      "accessories": "Estrutura Stand Up, Zipper e Exposição em Prateleira",
+      "qc": "Pontos de Barreira e Controle de Qualidade",
+      "moq": "Observações sobre MOQ e Custos",
+      "checklist": "O que Preparar Antes de Solicitar um Orçamento",
+      "quality": "Qualidade e Certificação",
+      "related": "Produtos Relacionados"
+    },
+    "retort-pouches": {
+      "material": "Opções de Estrutura de Material para Retort Pouches",
+      "applications": "Recomendações de Aplicação",
+      "accessories": "Notas sobre Processamento Retort e Resistência ao Calor",
+      "qc": "Pontos de Selagem, Vazamento e Controle de Qualidade",
+      "moq": "Observações sobre MOQ e Custos",
+      "checklist": "O que Preparar Antes de Solicitar um Orçamento",
+      "quality": "Qualidade e Certificação",
+      "related": "Produtos Relacionados"
+    },
+    "side-gusset-bag": {
+      "material": "Opções de Estrutura de Material para Sacos com Fole Lateral",
+      "applications": "Recomendações de Aplicação para Sacos com Fole Lateral",
+      "qc": "Pontos de Controle de Qualidade para Sacos com Fole Lateral",
+      "moq": "Notas de MOQ e Custo para Sacos com Fole Lateral",
+      "checklist": "O que Preparar Antes de Solicitar uma Cotação para Sacos com Fole Lateral",
+      "quality": "Qualidade e Certificação — Huasheng Packaging certificado ISO22000",
+      "related": "Produtos Relacionados — Sacos de Café com Válvula, Sacos de Fundo Plano, Sacos de Papel Kraft, Sacos de Quatro Selos, Sacos para Alimentos de Animais"
+    },
+    "quad-seal-pouches": {
+      "material": "Opções de Estrutura de Material para Bolsas de Quatro Selos",
+      "applications": "Recomendações de Aplicação para Bolsas de Quatro Selos",
+      "qc": "Pontos de Controle de Qualidade para Bolsas de Quatro Selos",
+      "moq": "Notas de MOQ e Custo para Bolsas de Quatro Selos",
+      "checklist": "O que Preparar Antes de Solicitar uma Cotação para Bolsas de Quatro Selos",
+      "quality": "Qualidade e Certificação — Huasheng Packaging certificado ISO22000",
+      "related": "Produtos Relacionados — Sacos de Café com Válvula, Sacos de Fundo Plano, Sacos de Papel Kraft, Sacos com Fole Lateral, Sacos para Alimentos de Animais"
+    },
+    "three-side-seal-pouches": {
+      "material": "Opções de Estrutura de Material para Sacos com Fole Lateral",
+      "applications": "Recomendações de Aplicação para Sacos com Fole Lateral",
+      "qc": "Pontos de Controle de Qualidade para Sacos com Fole Lateral",
+      "moq": "Notas de MOQ e Custo para Sacos com Fole Lateral",
+      "checklist": "O que Preparar Antes de Solicitar uma Cotação para Sacos com Fole Lateral",
+      "quality": "Qualidade e Certificação — Huasheng Packaging certificado ISO22000",
+      "related": "Produtos Relacionados — Sacos de Café com Válvula, Sacos de Fundo Plano, Sacos de Papel Kraft, Sacos de Quatro Selos, Sacos para Alimentos de Animais"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Opções de Estrutura de Material para Sacos com Fole Lateral",
+      "applications": "Recomendações de Aplicação para Sacos com Fole Lateral",
+      "qc": "Pontos de Controle de Qualidade para Sacos com Fole Lateral",
+      "moq": "Notas de MOQ e Custo para Sacos com Fole Lateral",
+      "checklist": "O que Preparar Antes de Solicitar uma Cotação para Sacos com Fole Lateral",
+      "quality": "Qualidade e Certificação — Huasheng Packaging certificado ISO22000",
+      "related": "Produtos Relacionados — Sacos de Café com Válvula, Sacos de Fundo Plano, Sacos de Papel Kraft, Sacos de Quatro Selos, Sacos para Alimentos de Animais"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Opções de Estrutura de Material para Sacos com Fole Lateral",
+      "applications": "Recomendações de Aplicação para Sacos com Fole Lateral",
+      "qc": "Pontos de Controle de Qualidade para Sacos com Fole Lateral",
+      "moq": "Notas de MOQ e Custo para Sacos com Fole Lateral",
+      "checklist": "O que Preparar Antes de Solicitar uma Cotação para Sacos com Fole Lateral",
+      "quality": "Qualidade e Certificação — Huasheng Packaging certificado ISO22000",
+      "related": "Produtos Relacionados — Sacos de Café com Válvula, Sacos de Fundo Plano, Sacos de Papel Kraft, Sacos de Quatro Selos, Sacos para Alimentos de Animais"
+    }
+  },
+  "de": {
+    "food-packaging-roll-film": {
+      "material": "Materialstruktur-Optionen für Food Packaging Roll Film",
+      "applications": "Anwendungsempfehlungen",
+      "machine": "Maschinenkompatibilität",
+      "moq": "Hinweise zu MOQ und Kosten",
+      "checklist": "Vorbereitung vor der Angebotsanfrage",
+      "quality": "Qualität und Zertifizierung",
+      "related": "Verwandte Produkte"
+    },
+    "spout-pouches": {
+      "material": "Materialstruktur-Optionen für Spout Pouches",
+      "applications": "Anwendungsempfehlungen",
+      "accessories": "Spout-, Verschluss- und Anschlussoptionen",
+      "qc": "Dichtheits- und Qualitätskontrollpunkte",
+      "moq": "Hinweise zu MOQ und Kosten",
+      "checklist": "Vorbereitung vor der Angebotsanfrage",
+      "quality": "Qualität und Zertifizierung",
+      "related": "Verwandte Produkte"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Materialstruktur-Optionen für Coffee Bags",
+      "applications": "Anwendungsempfehlungen",
+      "accessories": "Ventil-, Zipper- und Beutelstil-Optionen",
+      "qc": "Aromabarriere- und Qualitätskontrollpunkte",
+      "moq": "Hinweise zu MOQ und Kosten",
+      "checklist": "Vorbereitung vor der Angebotsanfrage",
+      "quality": "Qualität und Zertifizierung",
+      "related": "Verwandte Produkte"
+    },
+    "flat-bottom-pouches": {
+      "material": "Materialstruktur-Optionen für Flat Bottom Bags",
+      "applications": "Anwendungsempfehlungen",
+      "accessories": "Flat Bottom-Struktur, Zipper und Regalpräsentation",
+      "qc": "Barriere- und Qualitätskontrollpunkte",
+      "moq": "Hinweise zu MOQ und Kosten",
+      "checklist": "Vorbereitung vor der Angebotsanfrage",
+      "quality": "Qualität und Zertifizierung",
+      "related": "Verwandte Produkte"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Materialstruktur-Optionen für Stand Up Pouches",
+      "applications": "Anwendungsempfehlungen",
+      "accessories": "Stand Up-Struktur, Zipper und Regalpräsentation",
+      "qc": "Barriere- und Qualitätskontrollpunkte",
+      "moq": "Hinweise zu MOQ und Kosten",
+      "checklist": "Vorbereitung vor der Angebotsanfrage",
+      "quality": "Qualität und Zertifizierung",
+      "related": "Verwandte Produkte"
+    },
+    "retort-pouches": {
+      "material": "Materialstruktur-Optionen für Retort Pouches",
+      "applications": "Anwendungsempfehlungen",
+      "accessories": "Hinweise zu Retort-Verarbeitung und Hitzebeständigkeit",
+      "qc": "Siegel-, Dichtheits- und Qualitätskontrollpunkte",
+      "moq": "Hinweise zu MOQ und Kosten",
+      "checklist": "Vorbereitung vor der Angebotsanfrage",
+      "quality": "Qualität und Zertifizierung",
+      "related": "Verwandte Produkte"
+    },
+    "side-gusset-bag": {
+      "material": "Materialstruktur-Optionen für Seitenfaltenbeutel",
+      "applications": "Anwendungsempfehlungen für Seitenfaltenbeutel",
+      "qc": "Qualitätskontrollpunkte für Seitenfaltenbeutel",
+      "moq": "MOQ- und Kostenhinweise für Seitenfaltenbeutel",
+      "checklist": "Vorbereitung vor der Angebotsanfrage für Seitenfaltenbeutel",
+      "quality": "Qualität und Zertifizierung — Huasheng Packaging ISO22000-zertifiziert",
+      "related": "Verwandte Produkte — Kaffeebeutel mit Ventil, Flachbodenbeutel, Kraftpapier-Verpackungsbeutel, Viersiegelbeutel, Tiernahrungsbeutel"
+    },
+    "quad-seal-pouches": {
+      "material": "Materialstruktur-Optionen für Viersiegelbeutel",
+      "applications": "Anwendungsempfehlungen für Viersiegelbeutel",
+      "qc": "Qualitätskontrollpunkte für Viersiegelbeutel",
+      "moq": "MOQ- und Kostenhinweise für Viersiegelbeutel",
+      "checklist": "Vorbereitung vor der Angebotsanfrage für Viersiegelbeutel",
+      "quality": "Qualität und Zertifizierung — Huasheng Packaging ISO22000-zertifiziert",
+      "related": "Verwandte Produkte — Kaffeebeutel mit Ventil, Flachbodenbeutel, Kraftpapier-Beutel, Seitenfaltenbeutel, Tiernahrungsbeutel"
+    },
+    "three-side-seal-pouches": {
+      "material": "Materialstruktur-Optionen für Seitenfaltenbeutel",
+      "applications": "Anwendungsempfehlungen für Seitenfaltenbeutel",
+      "qc": "Qualitätskontrollpunkte für Seitenfaltenbeutel",
+      "moq": "MOQ- und Kostenhinweise für Seitenfaltenbeutel",
+      "checklist": "Vorbereitung vor der Angebotsanfrage für Seitenfaltenbeutel",
+      "quality": "Qualität und Zertifizierung — Huasheng Packaging ISO22000-zertifiziert",
+      "related": "Verwandte Produkte — Kaffeebeutel mit Ventil, Flachbodenbeutel, Kraftpapier-Verpackungsbeutel, Viersiegelbeutel, Tiernahrungsbeutel"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Materialstruktur-Optionen für Seitenfaltenbeutel",
+      "applications": "Anwendungsempfehlungen für Seitenfaltenbeutel",
+      "qc": "Qualitätskontrollpunkte für Seitenfaltenbeutel",
+      "moq": "MOQ- und Kostenhinweise für Seitenfaltenbeutel",
+      "checklist": "Vorbereitung vor der Angebotsanfrage für Seitenfaltenbeutel",
+      "quality": "Qualität und Zertifizierung — Huasheng Packaging ISO22000-zertifiziert",
+      "related": "Verwandte Produkte — Kaffeebeutel mit Ventil, Flachbodenbeutel, Kraftpapier-Verpackungsbeutel, Viersiegelbeutel, Tiernahrungsbeutel"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Materialstruktur-Optionen für Seitenfaltenbeutel",
+      "applications": "Anwendungsempfehlungen für Seitenfaltenbeutel",
+      "qc": "Qualitätskontrollpunkte für Seitenfaltenbeutel",
+      "moq": "MOQ- und Kostenhinweise für Seitenfaltenbeutel",
+      "checklist": "Vorbereitung vor der Angebotsanfrage für Seitenfaltenbeutel",
+      "quality": "Qualität und Zertifizierung — Huasheng Packaging ISO22000-zertifiziert",
+      "related": "Verwandte Produkte — Kaffeebeutel mit Ventil, Flachbodenbeutel, Kraftpapier-Verpackungsbeutel, Viersiegelbeutel, Tiernahrungsbeutel"
+    }
+  },
+  "vi": {
+    "food-packaging-roll-film": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Food Packaging Roll Film",
+      "applications": "Khuyến Nghị Ứng Dụng",
+      "machine": "Khả Năng Tương Thích với Máy Móc",
+      "moq": "Ghi Chú về MOQ và Chi Phí",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá",
+      "quality": "Chất Lượng và Chứng Nhận",
+      "related": "Sản Phẩm Liên Quan"
+    },
+    "spout-pouches": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Spout Pouches",
+      "applications": "Khuyến Nghị Ứng Dụng",
+      "accessories": "Tùy Chọn Spout, Nắp và Phụ Kiện Kết Nối",
+      "qc": "Điểm Kiểm Soát Rò Rỉ và Chất Lượng",
+      "moq": "Ghi Chú về MOQ và Chi Phí",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá",
+      "quality": "Chất Lượng và Chứng Nhận",
+      "related": "Sản Phẩm Liên Quan"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Coffee Bags",
+      "applications": "Khuyến Nghị Ứng Dụng",
+      "accessories": "Tùy Chọn Van, Zipper và Kiểu Dáng Túi",
+      "qc": "Điểm Kiểm Soát Rào Cản Hương Liệu và Chất Lượng",
+      "moq": "Ghi Chú về MOQ và Chi Phí",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá",
+      "quality": "Chất Lượng và Chứng Nhận",
+      "related": "Sản Phẩm Liên Quan"
+    },
+    "flat-bottom-pouches": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Flat Bottom Bags",
+      "applications": "Khuyến Nghị Ứng Dụng",
+      "accessories": "Cấu Trúc Flat Bottom, Zipper và Trưng Bày Kệ Hàng",
+      "qc": "Điểm Kiểm Soát Rào Cản và Chất Lượng",
+      "moq": "Ghi Chú về MOQ và Chi Phí",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá",
+      "quality": "Chất Lượng và Chứng Nhận",
+      "related": "Sản Phẩm Liên Quan"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Stand Up Pouches",
+      "applications": "Khuyến Nghị Ứng Dụng",
+      "accessories": "Cấu Trúc Stand Up, Zipper và Trưng Bày Kệ Hàng",
+      "qc": "Điểm Kiểm Soát Rào Cản và Chất Lượng",
+      "moq": "Ghi Chú về MOQ và Chi Phí",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá",
+      "quality": "Chất Lượng và Chứng Nhận",
+      "related": "Sản Phẩm Liên Quan"
+    },
+    "retort-pouches": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Retort Pouches",
+      "applications": "Khuyến Nghị Ứng Dụng",
+      "accessories": "Ghi Chú về Xử Lý Retort và Khả Năng Chịu Nhiệt",
+      "qc": "Điểm Kiểm Soát Hàn Kín, Rò Rỉ và Chất Lượng",
+      "moq": "Ghi Chú về MOQ và Chi Phí",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá",
+      "quality": "Chất Lượng và Chứng Nhận",
+      "related": "Sản Phẩm Liên Quan"
+    },
+    "side-gusset-bag": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Túi Gấp Bên",
+      "applications": "Khuyến Nghị Ứng Dụng cho Túi Gấp Bên",
+      "qc": "Điểm Kiểm Soát Chất Lượng cho Túi Gấp Bên",
+      "moq": "Ghi Chú về MOQ và Chi Phí cho Túi Gấp Bên",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá cho Túi Gấp Bên",
+      "quality": "Chất Lượng và Chứng Nhận — Huasheng Packaging được chứng nhận ISO22000",
+      "related": "Sản Phẩm Liên Quan — Túi Cà Phê Có Van, Túi Đáy Phẳng, Túi Giấy Kraft, Túi Bốn Cạnh, Túi Thức Ăn Thú Cưng"
+    },
+    "quad-seal-pouches": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Túi Bốn Cạnh",
+      "applications": "Khuyến Nghị Ứng Dụng cho Túi Bốn Cạnh",
+      "qc": "Điểm Kiểm Soát Chất Lượng cho Túi Bốn Cạnh",
+      "moq": "Ghi Chú về MOQ và Chi Phí cho Túi Bốn Cạnh",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá cho Túi Bốn Cạnh",
+      "quality": "Chất Lượng và Chứng Nhận — Huasheng Packaging được chứng nhận ISO22000",
+      "related": "Sản Phẩm Liên Quan — Túi Cà Phê Có Van, Túi Đáy Phẳng, Túi Giấy Kraft, Túi Gấp Bên, Túi Thức Ăn Thú Cưng"
+    },
+    "three-side-seal-pouches": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Túi Gấp Bên",
+      "applications": "Khuyến Nghị Ứng Dụng cho Túi Gấp Bên",
+      "qc": "Điểm Kiểm Soát Chất Lượng cho Túi Gấp Bên",
+      "moq": "Ghi Chú về MOQ và Chi Phí cho Túi Gấp Bên",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá cho Túi Gấp Bên",
+      "quality": "Chất Lượng và Chứng Nhận — Huasheng Packaging được chứng nhận ISO22000",
+      "related": "Sản Phẩm Liên Quan — Túi Cà Phê Có Van, Túi Đáy Phẳng, Túi Giấy Kraft, Túi Bốn Cạnh, Túi Thức Ăn Thú Cưng"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Túi Gấp Bên",
+      "applications": "Khuyến Nghị Ứng Dụng cho Túi Gấp Bên",
+      "qc": "Điểm Kiểm Soát Chất Lượng cho Túi Gấp Bên",
+      "moq": "Ghi Chú về MOQ và Chi Phí cho Túi Gấp Bên",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá cho Túi Gấp Bên",
+      "quality": "Chất Lượng và Chứng Nhận — Huasheng Packaging được chứng nhận ISO22000",
+      "related": "Sản Phẩm Liên Quan — Túi Cà Phê Có Van, Túi Đáy Phẳng, Túi Giấy Kraft, Túi Bốn Cạnh, Túi Thức Ăn Thú Cưng"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Tùy Chọn Cấu Trúc Vật Liệu cho Túi Gấp Bên",
+      "applications": "Khuyến Nghị Ứng Dụng cho Túi Gấp Bên",
+      "qc": "Điểm Kiểm Soát Chất Lượng cho Túi Gấp Bên",
+      "moq": "Ghi Chú về MOQ và Chi Phí cho Túi Gấp Bên",
+      "checklist": "Những Gì Cần Chuẩn Bị Trước Khi Yêu Cầu Báo Giá cho Túi Gấp Bên",
+      "quality": "Chất Lượng và Chứng Nhận — Huasheng Packaging được chứng nhận ISO22000",
+      "related": "Sản Phẩm Liên Quan — Túi Cà Phê Có Van, Túi Đáy Phẳng, Túi Giấy Kraft, Túi Bốn Cạnh, Túi Thức Ăn Thú Cưng"
+    }
+  },
+  "id": {
+    "food-packaging-roll-film": {
+      "material": "Opsi Struktur Material untuk Food Packaging Roll Film",
+      "applications": "Rekomendasi Aplikasi",
+      "machine": "Kompatibilitas Mesin",
+      "moq": "Catatan MOQ dan Biaya",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran",
+      "quality": "Kualitas dan Sertifikasi",
+      "related": "Produk Terkait"
+    },
+    "spout-pouches": {
+      "material": "Opsi Struktur Material untuk Spout Pouches",
+      "applications": "Rekomendasi Aplikasi",
+      "accessories": "Opsi Spout, Tutup dan Fitment",
+      "qc": "Titik Kontrol Kebocoran dan Kualitas",
+      "moq": "Catatan MOQ dan Biaya",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran",
+      "quality": "Kualitas dan Sertifikasi",
+      "related": "Produk Terkait"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Opsi Struktur Material untuk Coffee Bags",
+      "applications": "Rekomendasi Aplikasi",
+      "accessories": "Opsi Valve, Zipper dan Gaya Kemasan",
+      "qc": "Titik Kontrol Rintangan Aroma dan Kualitas",
+      "moq": "Catatan MOQ dan Biaya",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran",
+      "quality": "Kualitas dan Sertifikasi",
+      "related": "Produk Terkait"
+    },
+    "flat-bottom-pouches": {
+      "material": "Opsi Struktur Material untuk Flat Bottom Bags",
+      "applications": "Rekomendasi Aplikasi",
+      "accessories": "Struktur Flat Bottom, Zipper dan Tampilan Rak",
+      "qc": "Titik Kontrol Rintangan dan Kualitas",
+      "moq": "Catatan MOQ dan Biaya",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran",
+      "quality": "Kualitas dan Sertifikasi",
+      "related": "Produk Terkait"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Opsi Struktur Material untuk Stand Up Pouches",
+      "applications": "Rekomendasi Aplikasi",
+      "accessories": "Struktur Stand Up, Zipper dan Tampilan Rak",
+      "qc": "Titik Kontrol Rintangan dan Kualitas",
+      "moq": "Catatan MOQ dan Biaya",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran",
+      "quality": "Kualitas dan Sertifikasi",
+      "related": "Produk Terkait"
+    },
+    "retort-pouches": {
+      "material": "Opsi Struktur Material untuk Retort Pouches",
+      "applications": "Rekomendasi Aplikasi",
+      "accessories": "Catatan Pemrosesan Retort dan Ketahanan Panas",
+      "qc": "Titik Kontrol Penyegelan, Kebocoran dan Kualitas",
+      "moq": "Catatan MOQ dan Biaya",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran",
+      "quality": "Kualitas dan Sertifikasi",
+      "related": "Produk Terkait"
+    },
+    "side-gusset-bag": {
+      "material": "Opsi Struktur Material untuk Kantong Gusset Samping",
+      "applications": "Rekomendasi Aplikasi untuk Kantong Gusset Samping",
+      "qc": "Poin Kontrol Kualitas untuk Kantong Gusset Samping",
+      "moq": "Catatan MOQ dan Biaya untuk Kantong Gusset Samping",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran untuk Kantong Gusset Samping",
+      "quality": "Kualitas dan Sertifikasi — Huasheng Packaging bersertifikat ISO22000",
+      "related": "Produk Terkait — Kantong Kopi dengan Katup, Kantong Alas Datar, Kantong Kertas Kraft, Kantong Empat Segel, Kantong Makanan Hewan"
+    },
+    "quad-seal-pouches": {
+      "material": "Opsi Struktur Material untuk Kantong Empat Segel",
+      "applications": "Rekomendasi Aplikasi untuk Kantong Empat Segel",
+      "qc": "Poin Kontrol Kualitas untuk Kantong Empat Segel",
+      "moq": "Catatan MOQ dan Biaya untuk Kantong Empat Segel",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran untuk Kantong Empat Segel",
+      "quality": "Kualitas dan Sertifikasi — Huasheng Packaging bersertifikat ISO22000",
+      "related": "Produk Terkait — Kantong Kopi dengan Katup, Kantong Alas Datar, Kantong Kertas Kraft, Kantong Gusset Samping, Kantong Makanan Hewan"
+    },
+    "three-side-seal-pouches": {
+      "material": "Opsi Struktur Material untuk Kantong Gusset Samping",
+      "applications": "Rekomendasi Aplikasi untuk Kantong Gusset Samping",
+      "qc": "Poin Kontrol Kualitas untuk Kantong Gusset Samping",
+      "moq": "Catatan MOQ dan Biaya untuk Kantong Gusset Samping",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran untuk Kantong Gusset Samping",
+      "quality": "Kualitas dan Sertifikasi — Huasheng Packaging bersertifikat ISO22000",
+      "related": "Produk Terkait — Kantong Kopi dengan Katup, Kantong Alas Datar, Kantong Kertas Kraft, Kantong Empat Segel, Kantong Makanan Hewan"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Opsi Struktur Material untuk Kantong Gusset Samping",
+      "applications": "Rekomendasi Aplikasi untuk Kantong Gusset Samping",
+      "qc": "Poin Kontrol Kualitas untuk Kantong Gusset Samping",
+      "moq": "Catatan MOQ dan Biaya untuk Kantong Gusset Samping",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran untuk Kantong Gusset Samping",
+      "quality": "Kualitas dan Sertifikasi — Huasheng Packaging bersertifikat ISO22000",
+      "related": "Produk Terkait — Kantong Kopi dengan Katup, Kantong Alas Datar, Kantong Kertas Kraft, Kantong Empat Segel, Kantong Makanan Hewan"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Opsi Struktur Material untuk Kantong Gusset Samping",
+      "applications": "Rekomendasi Aplikasi untuk Kantong Gusset Samping",
+      "qc": "Poin Kontrol Kualitas untuk Kantong Gusset Samping",
+      "moq": "Catatan MOQ dan Biaya untuk Kantong Gusset Samping",
+      "checklist": "Yang Perlu Disiapkan Sebelum Meminta Penawaran untuk Kantong Gusset Samping",
+      "quality": "Kualitas dan Sertifikasi — Huasheng Packaging bersertifikat ISO22000",
+      "related": "Produk Terkait — Kantong Kopi dengan Katup, Kantong Alas Datar, Kantong Kertas Kraft, Kantong Empat Segel, Kantong Makanan Hewan"
+    }
+  },
+  "tr": {
+    "food-packaging-roll-film": {
+      "material": "Food Packaging Roll Film için Malzeme Yapısı Seçenekleri",
+      "applications": "Uygulama Önerileri",
+      "machine": "Makine Uyumluluğu",
+      "moq": "MOQ ve Maliyet Notları",
+      "checklist": "Teklif Talep Etmeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon",
+      "related": "İlgili Ürünler"
+    },
+    "spout-pouches": {
+      "material": "Spout Pouches için Malzeme Yapısı Seçenekleri",
+      "applications": "Uygulama Önerileri",
+      "accessories": "Spout, Kapak ve Bağlantı Seçenekleri",
+      "qc": "Sızdırmazlık ve Kalite Kontrol Noktaları",
+      "moq": "MOQ ve Maliyet Notları",
+      "checklist": "Teklif Talep Etmeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon",
+      "related": "İlgili Ürünler"
+    },
+    "coffee-bags-with-valve": {
+      "material": "Coffee Bags için Malzeme Yapısı Seçenekleri",
+      "applications": "Uygulama Önerileri",
+      "accessories": "Valf, Zipper ve Poşet Stili Seçenekleri",
+      "qc": "Aroma Bariyeri ve Kalite Kontrol Noktaları",
+      "moq": "MOQ ve Maliyet Notları",
+      "checklist": "Teklif Talep Etmeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon",
+      "related": "İlgili Ürünler"
+    },
+    "flat-bottom-pouches": {
+      "material": "Flat Bottom Bags için Malzeme Yapısı Seçenekleri",
+      "applications": "Uygulama Önerileri",
+      "accessories": "Flat Bottom Yapısı, Zipper ve Raf Teşhiri",
+      "qc": "Bariyer ve Kalite Kontrol Noktaları",
+      "moq": "MOQ ve Maliyet Notları",
+      "checklist": "Teklif Talep Etmeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon",
+      "related": "İlgili Ürünler"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "Stand Up Pouches için Malzeme Yapısı Seçenekleri",
+      "applications": "Uygulama Önerileri",
+      "accessories": "Stand Up Yapısı, Zipper ve Raf Teşhiri",
+      "qc": "Bariyer ve Kalite Kontrol Noktaları",
+      "moq": "MOQ ve Maliyet Notları",
+      "checklist": "Teklif Talep Etmeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon",
+      "related": "İlgili Ürünler"
+    },
+    "retort-pouches": {
+      "material": "Retort Pouches için Malzeme Yapısı Seçenekleri",
+      "applications": "Uygulama Önerileri",
+      "accessories": "Retort İşleme ve Isı Dayanıklılığı Notları",
+      "qc": "Sızdırmazlık, Kaçak ve Kalite Kontrol Noktaları",
+      "moq": "MOQ ve Maliyet Notları",
+      "checklist": "Teklif Talep Etmeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon",
+      "related": "İlgili Ürünler"
+    },
+    "side-gusset-bag": {
+      "material": "Yan Körüklü Poşetler için Malzeme Yapısı Seçenekleri",
+      "applications": "Yan Körüklü Poşetler için Uygulama Önerileri",
+      "qc": "Yan Körüklü Poşetler için Kalite Kontrol Noktaları",
+      "moq": "Yan Körüklü Poşetler için MOQ ve Maliyet Notları",
+      "checklist": "Yan Körüklü Poşetler için Teklif İstemeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon — Huasheng Packaging ISO22000 sertifikalı",
+      "related": "İlgili Ürünler — Valfili Kahve Poşetleri, Düz Tabanlı Poşetler, Kraft Kağıt Ambalaj Poşetleri, Dört Contalı Poşetler, Evcil Hayvan Maması Poşetleri"
+    },
+    "quad-seal-pouches": {
+      "material": "Dört Contalı Poşetler için Malzeme Yapısı Seçenekleri",
+      "applications": "Dört Contalı Poşetler için Uygulama Önerileri",
+      "qc": "Dört Contalı Poşetler için Kalite Kontrol Noktaları",
+      "moq": "Dört Contalı Poşetler için MOQ ve Maliyet Notları",
+      "checklist": "Dört Contalı Poşetler için Teklif İstemeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon — Huasheng Packaging ISO22000 sertifikalı",
+      "related": "İlgili Ürünler — Valfili Kahve Poşetleri, Düz Tabanlı Poşetler, Kraft Kağıt Poşetler, Yan Körüklü Poşetler, Evcil Hayvan Maması Poşetleri"
+    },
+    "three-side-seal-pouches": {
+      "material": "Yan Körüklü Poşetler için Malzeme Yapısı Seçenekleri",
+      "applications": "Yan Körüklü Poşetler için Uygulama Önerileri",
+      "qc": "Yan Körüklü Poşetler için Kalite Kontrol Noktaları",
+      "moq": "Yan Körüklü Poşetler için MOQ ve Maliyet Notları",
+      "checklist": "Yan Körüklü Poşetler için Teklif İstemeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon — Huasheng Packaging ISO22000 sertifikalı",
+      "related": "İlgili Ürünler — Valfili Kahve Poşetleri, Düz Tabanlı Poşetler, Kraft Kağıt Ambalaj Poşetleri, Dört Contalı Poşetler, Evcil Hayvan Maması Poşetleri"
+    },
+    "easy-peel-sealing-film": {
+      "material": "Yan Körüklü Poşetler için Malzeme Yapısı Seçenekleri",
+      "applications": "Yan Körüklü Poşetler için Uygulama Önerileri",
+      "qc": "Yan Körüklü Poşetler için Kalite Kontrol Noktaları",
+      "moq": "Yan Körüklü Poşetler için MOQ ve Maliyet Notları",
+      "checklist": "Yan Körüklü Poşetler için Teklif İstemeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon — Huasheng Packaging ISO22000 sertifikalı",
+      "related": "İlgili Ürünler — Valfili Kahve Poşetleri, Düz Tabanlı Poşetler, Kraft Kağıt Ambalaj Poşetleri, Dört Contalı Poşetler, Evcil Hayvan Maması Poşetleri"
+    },
+    "pet-food-packaging-bags": {
+      "material": "Yan Körüklü Poşetler için Malzeme Yapısı Seçenekleri",
+      "applications": "Yan Körüklü Poşetler için Uygulama Önerileri",
+      "qc": "Yan Körüklü Poşetler için Kalite Kontrol Noktaları",
+      "moq": "Yan Körüklü Poşetler için MOQ ve Maliyet Notları",
+      "checklist": "Yan Körüklü Poşetler için Teklif İstemeden Önce Hazırlanması Gerekenler",
+      "quality": "Kalite ve Sertifikasyon — Huasheng Packaging ISO22000 sertifikalı",
+      "related": "İlgili Ürünler — Valfili Kahve Poşetleri, Düz Tabanlı Poşetler, Kraft Kağıt Ambalaj Poşetleri, Dört Contalı Poşetler, Evcil Hayvan Maması Poşetleri"
+    }
+  },
+  "ja": {
+    "food-packaging-roll-film": {
+      "material": "食品包装ロールフィルムの材料構成オプション",
+      "applications": "用途推奨",
+      "machine": "機械適合性",
+      "moq": "MOQとコストに関する注意事項",
+      "checklist": "お見積り依頼前にご準備いただくもの",
+      "quality": "品質と認証",
+      "related": "関連製品"
+    },
+    "spout-pouches": {
+      "material": "スパウトパウチの材料構成オプション",
+      "applications": "用途推奨",
+      "accessories": "スパウト、キャップ、フィットメントオプション",
+      "qc": "漏れ防止と品質管理ポイント",
+      "moq": "MOQとコストに関する注意事項",
+      "checklist": "お見積り依頼前にご準備いただくもの",
+      "quality": "品質と認証",
+      "related": "関連製品"
+    },
+    "coffee-bags-with-valve": {
+      "material": "コーヒーバッグの材料構成オプション",
+      "applications": "用途推奨",
+      "accessories": "バルブ、ジッパー、バッグスタイルオプション",
+      "qc": "香気バリアと品質管理ポイント",
+      "moq": "MOQとコストに関する注意事項",
+      "checklist": "お見積り依頼前にご準備いただくもの",
+      "quality": "品質と認証",
+      "related": "関連製品"
+    },
+    "flat-bottom-pouches": {
+      "material": "フラットボトムパウチの材料構成オプション",
+      "applications": "用途推奨",
+      "accessories": "フラットボトム構造、ジッパー、棚陳列",
+      "qc": "バリア性と品質管理ポイント",
+      "moq": "MOQとコストに関する注意事項",
+      "checklist": "お見積り依頼前にご準備いただくもの",
+      "quality": "品質と認証",
+      "related": "関連製品"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "スタンドアップパウチの材料構成オプション",
+      "applications": "用途推奨",
+      "accessories": "スタンドアップ構造、ジッパー、棚陳列",
+      "qc": "バリア性と品質管理ポイント",
+      "moq": "MOQとコストに関する注意事項",
+      "checklist": "お見積り依頼前にご準備いただくもの",
+      "quality": "品質と認証",
+      "related": "関連製品"
+    },
+    "retort-pouches": {
+      "material": "レトルトパウチの材料構成オプション",
+      "applications": "用途推奨",
+      "accessories": "レトルト処理と耐熱性に関する注意事項",
+      "qc": "シール、漏れ防止と品質管理ポイント",
+      "moq": "MOQとコストに関する注意事項",
+      "checklist": "お見積り依頼前にご準備いただくもの",
+      "quality": "品質と認証",
+      "related": "関連製品"
+    },
+    "side-gusset-bag": {
+      "material": "サイドガセット袋の材料構成オプション",
+      "applications": "サイドガセット袋の用途推奨",
+      "qc": "サイドガセット袋の品質管理ポイント",
+      "moq": "サイドガセット袋のMOQとコストに関する注意事項",
+      "checklist": "サイドガセット袋の見積依頼前に準備するもの",
+      "quality": "品質と認証 — Huasheng PackagingはISO22000認証取得",
+      "related": "関連製品 — バルブ付きコーヒーバッグ、フラットボトムパウチ、クラフト紙包装袋、クワッドシールパウチ、ペットフード包装袋"
+    },
+    "quad-seal-pouches": {
+      "material": "クワッドシールパウチの材料構成オプション",
+      "applications": "クワッドシールパウチの用途推奨",
+      "qc": "クワッドシールパウチの品質管理ポイント",
+      "moq": "クワッドシールパウチのMOQとコストに関する注意事項",
+      "checklist": "クワッドシールパウチの見積依頼前に準備するもの",
+      "quality": "品質と認証 — Huasheng PackagingはISO22000認証取得",
+      "related": "関連製品 — バルブ付きコーヒーバッグ、フラットボトムパウチ、クラフト紙包装袋、サイドガセット袋、ペットフード包装袋"
+    },
+    "three-side-seal-pouches": {
+      "material": "サイドガセット袋の材料構成オプション",
+      "applications": "サイドガセット袋の用途推奨",
+      "qc": "サイドガセット袋の品質管理ポイント",
+      "moq": "サイドガセット袋のMOQとコストに関する注意事項",
+      "checklist": "サイドガセット袋の見積依頼前に準備するもの",
+      "quality": "品質と認証 — Huasheng PackagingはISO22000認証取得",
+      "related": "関連製品 — バルブ付きコーヒーバッグ、フラットボトムパウチ、クラフト紙包装袋、クワッドシールパウチ、ペットフード包装袋"
+    },
+    "easy-peel-sealing-film": {
+      "material": "サイドガセット袋の材料構成オプション",
+      "applications": "サイドガセット袋の用途推奨",
+      "qc": "サイドガセット袋の品質管理ポイント",
+      "moq": "サイドガセット袋のMOQとコストに関する注意事項",
+      "checklist": "サイドガセット袋の見積依頼前に準備するもの",
+      "quality": "品質と認証 — Huasheng PackagingはISO22000認証取得",
+      "related": "関連製品 — バルブ付きコーヒーバッグ、フラットボトムパウチ、クラフト紙包装袋、クワッドシールパウチ、ペットフード包装袋"
+    },
+    "pet-food-packaging-bags": {
+      "material": "サイドガセット袋の材料構成オプション",
+      "applications": "サイドガセット袋の用途推奨",
+      "qc": "サイドガセット袋の品質管理ポイント",
+      "moq": "サイドガセット袋のMOQとコストに関する注意事項",
+      "checklist": "サイドガセット袋の見積依頼前に準備するもの",
+      "quality": "品質と認証 — Huasheng PackagingはISO22000認証取得",
+      "related": "関連製品 — バルブ付きコーヒーバッグ、フラットボトムパウチ、クラフト紙包装袋、クワッドシールパウチ、ペットフード包装袋"
+    }
+  },
+  "ko": {
+    "food-packaging-roll-film": {
+      "material": "식품 포장 롤 필름의 소재 구조 옵션",
+      "applications": "적용 권장 사항",
+      "machine": "기계 호환성",
+      "moq": "MOQ 및 비용 참고 사항",
+      "checklist": "견적 요청 전 준비 사항",
+      "quality": "품질 및 인증",
+      "related": "관련 제품"
+    },
+    "spout-pouches": {
+      "material": "스파우트 파우치의 소재 구조 옵션",
+      "applications": "적용 권장 사항",
+      "accessories": "스파우트, 캡 및 피트먼트 옵션",
+      "qc": "누출 및 품질 관리 포인트",
+      "moq": "MOQ 및 비용 참고 사항",
+      "checklist": "견적 요청 전 준비 사항",
+      "quality": "품질 및 인증",
+      "related": "관련 제품"
+    },
+    "coffee-bags-with-valve": {
+      "material": "커피백의 소재 구조 옵션",
+      "applications": "적용 권장 사항",
+      "accessories": "밸브, 지퍼 및 백 스타일 옵션",
+      "qc": "향기 차단 및 품질 관리 포인트",
+      "moq": "MOQ 및 비용 참고 사항",
+      "checklist": "견적 요청 전 준비 사항",
+      "quality": "품질 및 인증",
+      "related": "관련 제품"
+    },
+    "flat-bottom-pouches": {
+      "material": "플랫 보텀 파우치의 소재 구조 옵션",
+      "applications": "적용 권장 사항",
+      "accessories": "플랫 보텀 구조, 지퍼 및 진열대 디스플레이",
+      "qc": "차단성 및 품질 관리 포인트",
+      "moq": "MOQ 및 비용 참고 사항",
+      "checklist": "견적 요청 전 준비 사항",
+      "quality": "품질 및 인증",
+      "related": "관련 제품"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "스탠드업 파우치의 소재 구조 옵션",
+      "applications": "적용 권장 사항",
+      "accessories": "스탠드업 구조, 지퍼 및 진열대 디스플레이",
+      "qc": "차단성 및 품질 관리 포인트",
+      "moq": "MOQ 및 비용 참고 사항",
+      "checklist": "견적 요청 전 준비 사항",
+      "quality": "품질 및 인증",
+      "related": "관련 제품"
+    },
+    "retort-pouches": {
+      "material": "레토르트 파우치의 소재 구조 옵션",
+      "applications": "적용 권장 사항",
+      "accessories": "레토르트 처리 및 내열성 참고 사항",
+      "qc": "실링, 누출 및 품질 관리 포인트",
+      "moq": "MOQ 및 비용 참고 사항",
+      "checklist": "견적 요청 전 준비 사항",
+      "quality": "품질 및 인증",
+      "related": "관련 제품"
+    },
+    "side-gusset-bag": {
+      "material": "사이드 거싯 백의 소재 구조 옵션",
+      "applications": "사이드 거싯 백의 적용 권장 사항",
+      "qc": "사이드 거싯 백의 품질 관리 포인트",
+      "moq": "사이드 거싯 백의 MOQ 및 비용 참고 사항",
+      "checklist": "사이드 거싯 백 견적 요청 전 준비 사항",
+      "quality": "품질 및 인증 — Huasheng Packaging ISO22000 인증",
+      "related": "관련 제품 — 밸브 커피백, 플랫 보텀 파우치, 크라프트 종이 포장백, 쿼드 실 파우치, 펫푸드 포장백"
+    },
+    "quad-seal-pouches": {
+      "material": "쿼드 실 파우치의 소재 구조 옵션",
+      "applications": "쿼드 실 파우치의 적용 권장 사항",
+      "qc": "쿼드 실 파우치의 품질 관리 포인트",
+      "moq": "쿼드 실 파우치의 MOQ 및 비용 참고 사항",
+      "checklist": "쿼드 실 파우치 견적 요청 전 준비 사항",
+      "quality": "품질 및 인증 — Huasheng Packaging ISO22000 인증",
+      "related": "관련 제품 — 밸브 커피백, 플랫 보텀 파우치, 크라프트 종이 포장백, 사이드 거싯 백, 펫푸드 포장백"
+    },
+    "three-side-seal-pouches": {
+      "material": "사이드 거싯 백의 소재 구조 옵션",
+      "applications": "사이드 거싯 백의 적용 권장 사항",
+      "qc": "사이드 거싯 백의 품질 관리 포인트",
+      "moq": "사이드 거싯 백의 MOQ 및 비용 참고 사항",
+      "checklist": "사이드 거싯 백 견적 요청 전 준비 사항",
+      "quality": "품질 및 인증 — Huasheng Packaging ISO22000 인증",
+      "related": "관련 제품 — 밸브 커피백, 플랫 보텀 파우치, 크라프트 종이 포장백, 쿼드 실 파우치, 펫푸드 포장백"
+    },
+    "easy-peel-sealing-film": {
+      "material": "사이드 거싯 백의 소재 구조 옵션",
+      "applications": "사이드 거싯 백의 적용 권장 사항",
+      "qc": "사이드 거싯 백의 품질 관리 포인트",
+      "moq": "사이드 거싯 백의 MOQ 및 비용 참고 사항",
+      "checklist": "사이드 거싯 백 견적 요청 전 준비 사항",
+      "quality": "품질 및 인증 — Huasheng Packaging ISO22000 인증",
+      "related": "관련 제품 — 밸브 커피백, 플랫 보텀 파우치, 크라프트 종이 포장백, 쿼드 실 파우치, 펫푸드 포장백"
+    },
+    "pet-food-packaging-bags": {
+      "material": "사이드 거싯 백의 소재 구조 옵션",
+      "applications": "사이드 거싯 백의 적용 권장 사항",
+      "qc": "사이드 거싯 백의 품질 관리 포인트",
+      "moq": "사이드 거싯 백의 MOQ 및 비용 참고 사항",
+      "checklist": "사이드 거싯 백 견적 요청 전 준비 사항",
+      "quality": "품질 및 인증 — Huasheng Packaging ISO22000 인증",
+      "related": "관련 제품 — 밸브 커피백, 플랫 보텀 파우치, 크라프트 종이 포장백, 쿼드 실 파우치, 펫푸드 포장백"
+    }
+  },
+  "th": {
+    "food-packaging-roll-film": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับฟิล์มม้วนบรรจุอาหาร",
+      "applications": "คำแนะนำการใช้งาน",
+      "machine": "ความเข้ากันได้กับเครื่องจักร",
+      "moq": "หมายเหตุเกี่ยวกับ MOQ และต้นทุน",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคา",
+      "quality": "คุณภาพและการรับรอง",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง"
+    },
+    "spout-pouches": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับซองสเปาต์",
+      "applications": "คำแนะนำการใช้งาน",
+      "accessories": "ตัวเลือกสเปาต์ ฝาปิด และฟิตเมนต์",
+      "qc": "จุดควบคุมการรั่วซึมและคุณภาพ",
+      "moq": "หมายเหตุเกี่ยวกับ MOQ และต้นทุน",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคา",
+      "quality": "คุณภาพและการรับรอง",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง"
+    },
+    "coffee-bags-with-valve": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับถุงกาแฟ",
+      "applications": "คำแนะนำการใช้งาน",
+      "accessories": "ตัวเลือกวาล์ว ซิป และรูปแบบถุง",
+      "qc": "จุดควบคุมการกั้นกลิ่นและคุณภาพ",
+      "moq": "หมายเหตุเกี่ยวกับ MOQ และต้นทุน",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคา",
+      "quality": "คุณภาพและการรับรอง",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง"
+    },
+    "flat-bottom-pouches": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับซองก้นแบน",
+      "applications": "คำแนะนำการใช้งาน",
+      "accessories": "โครงสร้างก้นแบน ซิป และการจัดแสดงบนชั้นวาง",
+      "qc": "จุดควบคุมคุณสมบัติกั้นและคุณภาพ",
+      "moq": "หมายเหตุเกี่ยวกับ MOQ และต้นทุน",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคา",
+      "quality": "คุณภาพและการรับรอง",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับซองตั้งได้",
+      "applications": "คำแนะนำการใช้งาน",
+      "accessories": "โครงสร้างซองตั้งได้ ซิป และการจัดแสดงบนชั้นวาง",
+      "qc": "จุดควบคุมคุณสมบัติกั้นและคุณภาพ",
+      "moq": "หมายเหตุเกี่ยวกับ MOQ และต้นทุน",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคา",
+      "quality": "คุณภาพและการรับรอง",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง"
+    },
+    "retort-pouches": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับซองรีทอร์ต",
+      "applications": "คำแนะนำการใช้งาน",
+      "accessories": "หมายเหตุการประมวลผลรีทอร์ตและความทนทานต่อความร้อน",
+      "qc": "จุดควบคุมการซีล การรั่วซึม และคุณภาพ",
+      "moq": "หมายเหตุเกี่ยวกับ MOQ และต้นทุน",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคา",
+      "quality": "คุณภาพและการรับรอง",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง"
+    },
+    "side-gusset-bag": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับถุงข้างสามมิติ",
+      "applications": "คำแนะนำการใช้งานสำหรับถุงข้างสามมิติ",
+      "qc": "จุดควบคุมคุณภาพสำหรับถุงข้างสามมิติ",
+      "moq": "หมายเหตุ MOQ และต้นทุนสำหรับถุงข้างสามมิติ",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคาสำหรับถุงข้างสามมิติ",
+      "quality": "คุณภาพและการรับรอง — Huasheng Packaging ได้รับการรับรอง ISO22000",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง — ถุงกาแฟมีวาล์ว ถุงก้นแบน ถุงกระดาษคราฟท์ ถุงสี่ซีล ถุงอาหารสัตว์เลี้ยง"
+    },
+    "quad-seal-pouches": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับซองสี่ซีล",
+      "applications": "คำแนะนำการใช้งานสำหรับซองสี่ซีล",
+      "qc": "จุดควบคุมคุณภาพสำหรับซองสี่ซีล",
+      "moq": "หมายเหตุ MOQ และต้นทุนสำหรับซองสี่ซีล",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคาสำหรับซองสี่ซีล",
+      "quality": "คุณภาพและการรับรอง — Huasheng Packaging ได้รับการรับรอง ISO22000",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง — ถุงกาแฟมีวาล์ว ถุงก้นแบน ถุงกระดาษคราฟท์ ถุงข้างสามมิติ ถุงอาหารสัตว์เลี้ยง"
+    },
+    "three-side-seal-pouches": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับถุงข้างสามมิติ",
+      "applications": "คำแนะนำการใช้งานสำหรับถุงข้างสามมิติ",
+      "qc": "จุดควบคุมคุณภาพสำหรับถุงข้างสามมิติ",
+      "moq": "หมายเหตุ MOQ และต้นทุนสำหรับถุงข้างสามมิติ",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคาสำหรับถุงข้างสามมิติ",
+      "quality": "คุณภาพและการรับรอง — Huasheng Packaging ได้รับการรับรอง ISO22000",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง — ถุงกาแฟมีวาล์ว ถุงก้นแบน ถุงกระดาษคราฟท์ ถุงสี่ซีล ถุงอาหารสัตว์เลี้ยง"
+    },
+    "easy-peel-sealing-film": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับถุงข้างสามมิติ",
+      "applications": "คำแนะนำการใช้งานสำหรับถุงข้างสามมิติ",
+      "qc": "จุดควบคุมคุณภาพสำหรับถุงข้างสามมิติ",
+      "moq": "หมายเหตุ MOQ และต้นทุนสำหรับถุงข้างสามมิติ",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคาสำหรับถุงข้างสามมิติ",
+      "quality": "คุณภาพและการรับรอง — Huasheng Packaging ได้รับการรับรอง ISO22000",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง — ถุงกาแฟมีวาล์ว ถุงก้นแบน ถุงกระดาษคราฟท์ ถุงสี่ซีล ถุงอาหารสัตว์เลี้ยง"
+    },
+    "pet-food-packaging-bags": {
+      "material": "ตัวเลือกโครงสร้างวัสดุสำหรับถุงข้างสามมิติ",
+      "applications": "คำแนะนำการใช้งานสำหรับถุงข้างสามมิติ",
+      "qc": "จุดควบคุมคุณภาพสำหรับถุงข้างสามมิติ",
+      "moq": "หมายเหตุ MOQ และต้นทุนสำหรับถุงข้างสามมิติ",
+      "checklist": "สิ่งที่ต้องเตรียมก่อนขอใบเสนอราคาสำหรับถุงข้างสามมิติ",
+      "quality": "คุณภาพและการรับรอง — Huasheng Packaging ได้รับการรับรอง ISO22000",
+      "related": "ผลิตภัณฑ์ที่เกี่ยวข้อง — ถุงกาแฟมีวาล์ว ถุงก้นแบน ถุงกระดาษคราฟท์ ถุงสี่ซีล ถุงอาหารสัตว์เลี้ยง"
+    }
+  },
+  "hi": {
+    "food-packaging-roll-film": {
+      "material": "खाद्य पैकेजिंग रोल फिल्म के लिए सामग्री संरचना विकल्प",
+      "applications": "अनुप्रयोग अनुशंसाएँ",
+      "machine": "मशीन अनुकूलता",
+      "moq": "MOQ और लागत नोट्स",
+      "checklist": "कोटेशन अनुरोध से पहले तैयारी",
+      "quality": "गुणवत्ता और प्रमाणन",
+      "related": "संबंधित उत्पाद"
+    },
+    "spout-pouches": {
+      "material": "स्पाउट पाउच के लिए सामग्री संरचना विकल्प",
+      "applications": "अनुप्रयोग अनुशंसाएँ",
+      "accessories": "स्पाउट, कैप और फिटमेंट विकल्प",
+      "qc": "रिसाव और गुणवत्ता नियंत्रण बिंदु",
+      "moq": "MOQ और लागत नोट्स",
+      "checklist": "कोटेशन अनुरोध से पहले तैयारी",
+      "quality": "गुणवत्ता और प्रमाणन",
+      "related": "संबंधित उत्पाद"
+    },
+    "coffee-bags-with-valve": {
+      "material": "कॉफी बैग के लिए सामग्री संरचना विकल्प",
+      "applications": "अनुप्रयोग अनुशंसाएँ",
+      "accessories": "वाल्व, ज़िपर और बैग शैली विकल्प",
+      "qc": "सुगंध बैरियर और गुणवत्ता नियंत्रण बिंदु",
+      "moq": "MOQ और लागत नोट्स",
+      "checklist": "कोटेशन अनुरोध से पहले तैयारी",
+      "quality": "गुणवत्ता और प्रमाणन",
+      "related": "संबंधित उत्पाद"
+    },
+    "flat-bottom-pouches": {
+      "material": "फ्लैट बॉटम पाउच के लिए सामग्री संरचना विकल्प",
+      "applications": "अनुप्रयोग अनुशंसाएँ",
+      "accessories": "फ्लैट बॉटम संरचना, ज़िपर और शेल्फ डिस्प्ले",
+      "qc": "बैरियर और गुणवत्ता नियंत्रण बिंदु",
+      "moq": "MOQ और लागत नोट्स",
+      "checklist": "कोटेशन अनुरोध से पहले तैयारी",
+      "quality": "गुणवत्ता और प्रमाणन",
+      "related": "संबंधित उत्पाद"
+    },
+    "stand-up-zipper-pouches": {
+      "material": "स्टैंड अप पाउच के लिए सामग्री संरचना विकल्प",
+      "applications": "अनुप्रयोग अनुशंसाएँ",
+      "accessories": "स्टैंड अप संरचना, ज़िपर और शेल्फ डिस्प्ले",
+      "qc": "बैरियर और गुणवत्ता नियंत्रण बिंदु",
+      "moq": "MOQ और लागत नोट्स",
+      "checklist": "कोटेशन अनुरोध से पहले तैयारी",
+      "quality": "गुणवत्ता और प्रमाणन",
+      "related": "संबंधित उत्पाद"
+    },
+    "retort-pouches": {
+      "material": "रिटॉर्ट पाउच के लिए सामग्री संरचना विकल्प",
+      "applications": "अनुप्रयोग अनुशंसाएँ",
+      "accessories": "रिटॉर्ट प्रसंस्करण और ताप प्रतिरोध नोट्स",
+      "qc": "सीलिंग, रिसाव और गुणवत्ता नियंत्रण बिंदु",
+      "moq": "MOQ और लागत नोट्स",
+      "checklist": "कोटेशन अनुरोध से पहले तैयारी",
+      "quality": "गुणवत्ता और प्रमाणन",
+      "related": "संबंधित उत्पाद"
+    },
+    "side-gusset-bag": {
+      "material": "साइड गसेट बैग के लिए सामग्री संरचना विकल्प",
+      "applications": "साइड गसेट बैग के लिए अनुप्रयोग अनुशंसाएँ",
+      "qc": "साइड गसेट बैग के लिए गुणवत्ता नियंत्रण बिंदु",
+      "moq": "साइड गसेट बैग के लिए MOQ और लागत नोट्स",
+      "checklist": "साइड गसेट बैग के लिए कोटेशन अनुरोध से पहले क्या तैयार करें",
+      "quality": "गुणवत्ता और प्रमाणन — Huasheng Packaging ISO22000 प्रमाणित",
+      "related": "संबंधित उत्पाद — वाल्व के साथ कॉफी बैग, फ्लैट बॉटम पाउच, क्राफ्ट पेपर पैकेजिंग बैग, क्वाड सील पाउच, पेट फूड पैकेजिंग बैग"
+    },
+    "quad-seal-pouches": {
+      "material": "क्वाड सील पाउच के लिए सामग्री संरचना विकल्प",
+      "applications": "क्वाड सील पाउच के लिए अनुप्रयोग अनुशंसाएँ",
+      "qc": "क्वाड सील पाउच के लिए गुणवत्ता नियंत्रण बिंदु",
+      "moq": "क्वाड सील पाउच के लिए MOQ और लागत नोट्स",
+      "checklist": "क्वाड सील पाउच के लिए कोटेशन अनुरोध से पहले क्या तैयार करें",
+      "quality": "गुणवत्ता और प्रमाणन — Huasheng Packaging ISO22000 प्रमाणित",
+      "related": "संबंधित उत्पाद — वाल्व के साथ कॉफी बैग, फ्लैट बॉटम पाउच, क्राफ्ट पेपर बैग, साइड गसेट बैग, पेट फूड बैग"
+    },
+    "three-side-seal-pouches": {
+      "material": "साइड गसेट बैग के लिए सामग्री संरचना विकल्प",
+      "applications": "साइड गसेट बैग के लिए अनुप्रयोग अनुशंसाएँ",
+      "qc": "साइड गसेट बैग के लिए गुणवत्ता नियंत्रण बिंदु",
+      "moq": "साइड गसेट बैग के लिए MOQ और लागत नोट्स",
+      "checklist": "साइड गसेट बैग के लिए कोटेशन अनुरोध से पहले क्या तैयार करें",
+      "quality": "गुणवत्ता और प्रमाणन — Huasheng Packaging ISO22000 प्रमाणित",
+      "related": "संबंधित उत्पाद — वाल्व के साथ कॉफी बैग, फ्लैट बॉटम पाउच, क्राफ्ट पेपर पैकेजिंग बैग, क्वाड सील पाउच, पेट फूड पैकेजिंग बैग"
+    },
+    "easy-peel-sealing-film": {
+      "material": "साइड गसेट बैग के लिए सामग्री संरचना विकल्प",
+      "applications": "साइड गसेट बैग के लिए अनुप्रयोग अनुशंसाएँ",
+      "qc": "साइड गसेट बैग के लिए गुणवत्ता नियंत्रण बिंदु",
+      "moq": "साइड गसेट बैग के लिए MOQ और लागत नोट्स",
+      "checklist": "साइड गसेट बैग के लिए कोटेशन अनुरोध से पहले क्या तैयार करें",
+      "quality": "गुणवत्ता और प्रमाणन — Huasheng Packaging ISO22000 प्रमाणित",
+      "related": "संबंधित उत्पाद — वाल्व के साथ कॉफी बैग, फ्लैट बॉटम पाउच, क्राफ्ट पेपर पैकेजिंग बैग, क्वाड सील पाउच, पेट फूड पैकेजिंग बैग"
+    },
+    "pet-food-packaging-bags": {
+      "material": "साइड गसेट बैग के लिए सामग्री संरचना विकल्प",
+      "applications": "साइड गसेट बैग के लिए अनुप्रयोग अनुशंसाएँ",
+      "qc": "साइड गसेट बैग के लिए गुणवत्ता नियंत्रण बिंदु",
+      "moq": "साइड गसेट बैग के लिए MOQ और लागत नोट्स",
+      "checklist": "साइड गसेट बैग के लिए कोटेशन अनुरोध से पहले क्या तैयार करें",
+      "quality": "गुणवत्ता और प्रमाणन — Huasheng Packaging ISO22000 प्रमाणित",
+      "related": "संबंधित उत्पाद — वाल्व के साथ कॉफी बैग, फ्लैट बॉटम पाउच, क्राफ्ट पेपर पैकेजिंग बैग, क्वाड सील पाउच, पेट फूड पैकेजिंग बैग"
+    }
+  }
+}

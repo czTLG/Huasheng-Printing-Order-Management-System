@@ -1,0 +1,1272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Huasheng Packaging | Home V2</title>
+    <meta
+      name="description"
+      content="Huasheng Packaging custom flexible packaging bags and roll stock film manufacturer."
+    />
+    <style>
+      :root {
+        --bg: #f4f0ea;
+        --surface: rgba(255, 255, 255, 0.82);
+        --surface-strong: #ffffff;
+        --surface-dark: #102535;
+        --text: #17212b;
+        --text-soft: #4e5f6c;
+        --text-inverse: #f7f5f1;
+        --line: rgba(23, 33, 43, 0.12);
+        --line-strong: rgba(23, 33, 43, 0.2);
+        --brand: #0e5a64;
+        --brand-strong: #083e46;
+        --accent: #c98635;
+        --accent-soft: rgba(201, 134, 53, 0.14);
+        --shadow: 0 24px 64px rgba(16, 37, 53, 0.12);
+        --radius-xl: 32px;
+        --radius-lg: 24px;
+        --radius-md: 16px;
+        --radius-sm: 999px;
+        --container: min(1180px, calc(100vw - 32px));
+        --space-section: clamp(64px, 8vw, 112px);
+        --font-display: Georgia, "Times New Roman", serif;
+        --font-body: "Segoe UI", Arial, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      section[id] {
+        scroll-margin-top: 108px;
+      }
+
+      body {
+        margin: 0;
+        font-family: var(--font-body);
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(201, 134, 53, 0.14), transparent 28%),
+          linear-gradient(180deg, #f7f2eb 0%, #f4f0ea 42%, #edf3f2 100%);
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      img {
+        max-width: 100%;
+      }
+
+      button,
+      select {
+        font: inherit;
+      }
+
+      .page-shell {
+        position: relative;
+        overflow: clip;
+      }
+
+      .page-shell::before,
+      .page-shell::after {
+        content: "";
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+        filter: blur(10px);
+      }
+
+      .page-shell::before {
+        top: -140px;
+        right: -90px;
+        width: 360px;
+        height: 360px;
+        background: rgba(14, 90, 100, 0.1);
+      }
+
+      .page-shell::after {
+        left: -120px;
+        top: 540px;
+        width: 280px;
+        height: 280px;
+        background: rgba(201, 134, 53, 0.11);
+      }
+
+      .container {
+        width: var(--container);
+        margin: 0 auto;
+      }
+
+      .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        backdrop-filter: blur(20px);
+        background: rgba(244, 240, 234, 0.84);
+        border-bottom: 1px solid rgba(23, 33, 43, 0.08);
+      }
+
+      .header-inner {
+        min-height: 88px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 0;
+      }
+
+      .brand-mark {
+        width: 52px;
+        height: 52px;
+        border-radius: 18px;
+        padding: 10px;
+        background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(232, 241, 239, 0.84));
+        border: 1px solid rgba(255, 255, 255, 0.9);
+        box-shadow: 0 18px 38px rgba(16, 37, 53, 0.1);
+        flex: 0 0 auto;
+      }
+
+      .brand-copy {
+        min-width: 0;
+      }
+
+      .brand-kicker {
+        margin: 0 0 3px;
+        font-size: 11px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: var(--text-soft);
+      }
+
+      .brand-name {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: clamp(1.2rem, 1.2vw + 0.95rem, 1.7rem);
+        line-height: 1.1;
+      }
+
+      .main-nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        flex-wrap: wrap;
+      }
+
+      .main-nav a {
+        padding: 10px 14px;
+        border-radius: 999px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-soft);
+        transition: background-color 0.2s ease, color 0.2s ease;
+      }
+
+      .main-nav a:hover,
+      .main-nav a:focus-visible {
+        background: rgba(14, 90, 100, 0.08);
+        color: var(--brand-strong);
+        outline: none;
+      }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 0 0 auto;
+      }
+
+      .lang-switcher {
+        appearance: none;
+        min-width: 118px;
+        padding: 11px 40px 11px 14px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(242, 247, 246, 0.92));
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 48px;
+        padding: 0 22px;
+        border-radius: var(--radius-sm);
+        border: 1px solid transparent;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease,
+          background-color 0.2s ease,
+          color 0.2s ease,
+          border-color 0.2s ease;
+      }
+
+      .button:hover,
+      .button:focus-visible {
+        transform: translateY(-1px);
+        outline: none;
+      }
+
+      .button-primary {
+        color: var(--text-inverse);
+        background: linear-gradient(135deg, var(--brand), var(--brand-strong));
+        box-shadow: 0 16px 30px rgba(8, 62, 70, 0.2);
+      }
+
+      .button-primary:hover,
+      .button-primary:focus-visible {
+        box-shadow: 0 18px 34px rgba(8, 62, 70, 0.28);
+      }
+
+      .button-secondary {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.78);
+        border-color: rgba(255, 255, 255, 0.72);
+        backdrop-filter: blur(12px);
+      }
+
+      .button-secondary:hover,
+      .button-secondary:focus-visible {
+        border-color: rgba(23, 33, 43, 0.18);
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      .hero-section {
+        padding: 28px 0 0;
+      }
+
+      .hero-card {
+        position: relative;
+        min-height:680px;
+        display: flex;
+        align-items: stretch;
+        overflow: hidden;
+        border-radius: var(--radius-xl);
+        background:
+          linear-gradient(102deg, rgba(16, 37, 53, 0.9) 0%, rgba(16, 37, 53, 0.78) 36%, rgba(16, 37, 53, 0.45) 70%, rgba(16, 37, 53, 0.72) 100%),
+          url("/overseas-b2b/assets/real3/file_190---c6188b6f-cc9e-4325-9d58-be53825a258b.jpg") center/cover no-repeat;
+        box-shadow: var(--shadow);
+      }
+
+      .hero-card::after {
+        content: "";
+        position: absolute;
+        inset: auto -100px -110px auto;
+        width: 320px;
+        height: 320px;
+        border-radius: 50%;
+        background: rgba(201, 134, 53, 0.16);
+        filter: blur(4px);
+      }
+
+      .hero-grid {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+        gap: 28px;
+        padding: clamp(32px, 5vw, 56px);
+      }
+
+      .hero-copy {
+        align-self: center;
+        max-width: 720px;
+      }
+
+      .hero-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 22px;
+        padding: 8px 14px;
+        border-radius: var(--radius-sm);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(247, 245, 241, 0.88);
+        font-size: 0.78rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .hero-title {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: clamp(2.9rem, 3.6vw, 4.8rem);
+        line-height: 0.98;
+        letter-spacing: -0.03em;
+        color: var(--text-inverse);
+      }
+
+      .hero-subtitle {
+        margin: 24px 0 0;
+        max-width: 640px;
+        font-size: clamp(1.02rem, 1vw + 0.88rem, 1.24rem);
+        line-height: 1.72;
+        color: rgba(247, 245, 241, 0.84);
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-top: 32px;
+      }
+
+      .hero-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 32px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .hero-tags li {
+        padding: 10px 16px;
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        color: var(--text-inverse);
+        font-size: 0.92rem;
+        font-weight: 600;
+      }
+
+      .hero-side {
+        align-self: end;
+      }
+
+      .hero-panel,
+      .placeholder-card {
+        border-radius: var(--radius-lg);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(16px);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.1);
+      }
+
+      .hero-panel {
+        padding: 24px;
+        color: var(--text-inverse);
+      }
+
+      .hero-panel-title {
+        margin: 0 0 16px;
+        font-size: 0.82rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(247, 245, 241, 0.72);
+      }
+
+      .hero-panel-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 14px;
+      }
+
+      .hero-panel-list li {
+        padding-bottom: 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+      }
+
+      .hero-panel-list li:last-child {
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
+
+      .hero-panel strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 1rem;
+      }
+
+      .hero-panel span {
+        display: block;
+        font-size: 0.94rem;
+        line-height: 1.65;
+        color: rgba(247, 245, 241, 0.78);
+      }
+
+      .stats-strip-section {
+        padding: 18px 0 0;
+      }
+
+      .stats-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .stat-card {
+        min-height: 112px;
+        padding: 20px 22px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 247, 246, 0.82));
+        box-shadow: 0 18px 36px rgba(16, 37, 53, 0.08);
+      }
+
+      .stat-card-label {
+        margin: 0 0 12px;
+        font-size: 0.76rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--brand);
+      }
+
+      .stat-card-value {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 1.34rem;
+        line-height: 1.18;
+      }
+
+      main section:not(.hero-section) {
+        padding: var(--space-section) 0 0;
+      }
+
+      .section-copy {
+        max-width: 720px;
+        margin-bottom: 24px;
+      }
+
+      .section-kicker {
+        margin: 0 0 12px;
+        font-size: 0.8rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--brand);
+      }
+
+      .section-title {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: clamp(2rem, 2vw + 1.3rem, 3.3rem);
+        line-height: 1.05;
+      }
+
+      .section-subtitle {
+        margin: 14px 0 0;
+        font-size: 1.02rem;
+        line-height: 1.75;
+        color: var(--text-soft);
+      }
+
+      .placeholder-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 20px;
+      }
+
+      .product-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 20px;
+      }
+
+      .product-card {
+        min-height: 280px;
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        box-shadow: 0 18px 36px rgba(16, 37, 53, 0.08);
+      }
+
+      .product-card-media {
+        position: relative;
+        height: 164px;
+        overflow: hidden;
+        background: linear-gradient(145deg, rgba(14, 90, 100, 0.12), rgba(201, 134, 53, 0.18));
+      }
+
+      .product-card-media::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, rgba(16, 37, 53, 0.02), rgba(16, 37, 53, 0.28));
+      }
+
+      .product-card-media img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .product-card-body {
+        padding: 20px 20px 22px;
+      }
+
+      .product-card-title {
+        margin: 0;
+        font-size: 1.08rem;
+      }
+
+      .product-card-text {
+        margin: 10px 0 0;
+        font-size: 0.96rem;
+        line-height: 1.68;
+        color: var(--text-soft);
+      }
+
+      .placeholder-card {
+        min-height: 208px;
+        padding: 24px;
+        border-color: var(--line);
+        background: var(--surface);
+        color: var(--text);
+        box-shadow: 0 18px 36px rgba(16, 37, 53, 0.08);
+      }
+
+      .placeholder-card h3 {
+        margin: 0 0 12px;
+        font-size: 1.08rem;
+      }
+
+      .placeholder-card p {
+        margin: 0;
+        line-height: 1.7;
+        color: var(--text-soft);
+      }
+
+      .site-footer {
+        padding: 56px 0 72px;
+      }
+
+      .site-footer .container {
+        padding-top: 28px;
+        border-top: 1px solid var(--line);
+        color: var(--text-soft);
+        font-size: 0.95rem;
+      }
+
+      @media (max-width: 1080px) {
+        .header-inner {
+          flex-wrap: wrap;
+          justify-content: center;
+          padding: 16px 0;
+        }
+
+        .main-nav {
+          order: 3;
+          flex-basis: 100%;
+        }
+
+        .hero-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-side {
+          align-self: stretch;
+        }
+
+        .stats-strip,
+        .product-grid,
+        .placeholder-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 720px) {
+        :root {
+          --container: min(100vw - 20px, 100%);
+        }
+
+        .site-header {
+          position: static;
+        }
+
+        .header-inner {
+          min-height: auto;
+        }
+
+        .brand {
+          width: 100%;
+          justify-content: center;
+        }
+
+        .main-nav {
+          gap: 4px;
+        }
+
+        .main-nav a {
+          padding: 9px 10px;
+          font-size: 0.9rem;
+        }
+
+        .header-actions {
+          width: 100%;
+          justify-content: center;
+          flex-wrap: wrap;
+        }
+
+        .hero-card {
+          min-height:520px;
+        }
+
+        .hero-grid {
+          padding: 26px 22px;
+        }
+
+        .hero-title {
+          font-size: clamp(2.2rem, 10vw, 3.2rem);
+        }
+
+        .hero-subtitle {
+          line-height: 1.62;
+        }
+
+        .hero-actions,
+        .hero-tags {
+          gap: 10px;
+        }
+
+        .button {
+          width: 100%;
+        }
+
+        .stats-strip,
+        .product-grid,
+        .placeholder-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .stat-card {
+          min-height: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header">
+        <div class="container header-inner">
+          <a class="brand" href="#hero" aria-label="Huasheng Packaging home" data-i18n-aria-label="brandAriaLabel">
+            <img
+              class="brand-mark"
+              src="/overseas-b2b/assets/brand/logo.svg"
+              alt="Huasheng Packaging logo"
+            />
+            <div class="brand-copy">
+              <p class="brand-kicker" data-i18n="brandKicker">Flexible Packaging</p>
+              <p class="brand-name">Huasheng Packaging</p>
+            </div>
+          </a>
+
+          <nav class="main-nav" aria-label="Primary" data-i18n-aria-label="primaryNavAriaLabel">
+            <a href="#hero" data-i18n="navHome">Home</a>
+            <a href="#products" data-i18n="navProducts">Products</a>
+            <a href="#industries" data-i18n="navIndustries">Industries</a>
+            <a href="#capabilities" data-i18n="navCapabilities">Capabilities</a>
+            <a href="#quality" data-i18n="navQuality">Quality Control</a>
+            <a href="#contact" data-i18n="navContact">Contact</a>
+          </nav>
+
+          <div class="header-actions">
+            <select
+              class="lang-switcher"
+              aria-label="Language Switcher"
+              data-i18n-aria-label="languageSwitcherAriaLabel"
+              id="language-switcher"
+            >
+              <option value="en">English</option>
+              <option value="zh">中文</option>
+            </select>
+            <a class="button button-primary" href="#contact" data-i18n="headerCta">Get a Quote</a>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero-section" id="hero">
+          <div class="container">
+            <div class="hero-card">
+              <div class="hero-grid">
+                <div class="hero-copy">
+                  <div class="hero-eyebrow" data-i18n="heroEyebrow">
+                    Factory-direct custom packaging solutions
+                  </div>
+                  <h1 class="hero-title" data-i18n="heroTitle">
+                    Custom Flexible Packaging Bags &amp; Roll Stock Film Manufacturer
+                  </h1>
+                  <p class="hero-subtitle" data-i18n="heroSubtitle">
+                    Factory-direct custom printed pouches and laminated roll stock film for food,
+                    coffee, snacks, liquids, pet food and daily-use products.
+                  </p>
+                  <div class="hero-actions">
+                    <a class="button button-primary" href="#contact" data-i18n="heroPrimaryCta"
+                      >Get a Quote</a
+                    >
+                    <a
+                      class="button button-secondary"
+                      href="#products"
+                      data-i18n="heroSecondaryCta"
+                      >View Products</a
+                    >
+                  </div>
+                  <ul class="hero-tags" aria-label="Selling points" data-i18n-aria-label="sellingPointsAriaLabel">
+                    <li data-i18n="tag1">Custom Printing</li>
+                    <li data-i18n="tag2">Food-grade Packaging</li>
+                    <li data-i18n="tag3">Factory Direct Supply</li>
+                    <li data-i18n="tag4">Roll Stock Film</li>
+                  </ul>
+                </div>
+
+                <aside class="hero-side">
+                  <div class="hero-panel">
+                    <p class="hero-panel-title" data-i18n="panelTitle">What you can source</p>
+                    <ul class="hero-panel-list">
+                      <li>
+                        <strong data-i18n="panelItem1Title">Pouches and bags</strong>
+                        <span data-i18n="panelItem1Text"
+                          >Stand-up, flat bottom, zipper, side gusset and shaped packaging
+                          formats.</span
+                        >
+                      </li>
+                      <li>
+                        <strong data-i18n="panelItem2Title">Roll stock film</strong>
+                        <span data-i18n="panelItem2Text"
+                          >Laminated structures for automatic filling lines and high-volume
+                          conversion.</span
+                        >
+                      </li>
+                      <li>
+                        <strong data-i18n="panelItem3Title">Export-ready support</strong>
+                        <span data-i18n="panelItem3Text"
+                          >Artwork alignment, material guidance and quotation communication in two
+                          languages.</span
+                        >
+                      </li>
+                    </ul>
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="stats-strip-section" aria-label="Company highlights">
+          <div class="container">
+            <div class="stats-strip">
+              <article class="stat-card">
+                <p class="stat-card-label" data-i18n="statsLabel1">Heritage</p>
+                <p class="stat-card-value" data-i18n="statsValue1">Since 1997</p>
+              </article>
+              <article class="stat-card">
+                <p class="stat-card-label" data-i18n="statsLabel2">Service</p>
+                <p class="stat-card-value" data-i18n="statsValue2">Custom Printing</p>
+              </article>
+              <article class="stat-card">
+                <p class="stat-card-label" data-i18n="statsLabel3">Process</p>
+                <p class="stat-card-value" data-i18n="statsValue3">Lamination &amp; Bag Making</p>
+              </article>
+              <article class="stat-card">
+                <p class="stat-card-label" data-i18n="statsLabel4">Focus</p>
+                <p class="stat-card-value" data-i18n="statsValue4">Food Packaging Experience</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="products">
+          <div class="container">
+            <div class="section-copy">
+              <p class="section-kicker" data-i18n="productsKicker">Core products</p>
+              <h2 class="section-title" data-i18n="productsTitle">Packaging formats built for export-ready custom supply</h2>
+              <p class="section-subtitle" data-i18n="productsSubtitle">
+                Explore six core flexible packaging formats commonly sourced for food, beverage,
+                coffee and daily-use applications.
+              </p>
+            </div>
+            <div class="product-grid">
+              <article class="product-card">
+                <div class="product-card-media">
+                  <img
+                    src="/overseas-b2b/assets/real/r1.jpg"
+                    alt="Stand up pouch packaging example"
+                  />
+                </div>
+                <div class="product-card-body">
+                  <h3 class="product-card-title" data-i18n="productsCard1Title">Stand Up Pouches</h3>
+                  <p class="product-card-text" data-i18n="productsCard1Text">
+                    Flexible shelf-ready pouches for snacks, dry food and daily-use products with
+                    custom print support.
+                  </p>
+                </div>
+              </article>
+              <article class="product-card">
+                <div class="product-card-media">
+                  <img
+                    src="/overseas-b2b/assets/real/r3.jpg"
+                    alt="Flat bottom pouch packaging example"
+                  />
+                </div>
+                <div class="product-card-body">
+                  <h3 class="product-card-title" data-i18n="productsCard2Title">Flat Bottom Pouches</h3>
+                  <p class="product-card-text" data-i18n="productsCard2Text">
+                    Stable box-style formats that improve shelf presentation and storage efficiency
+                    for larger fills.
+                  </p>
+                </div>
+              </article>
+              <article class="product-card">
+                <div class="product-card-media">
+                  <img
+                    src="/overseas-b2b/assets/real/r8.jpg"
+                    alt="Spout pouch packaging example"
+                  />
+                </div>
+                <div class="product-card-body">
+                  <h3 class="product-card-title" data-i18n="productsCard3Title">Spout Pouches</h3>
+                  <p class="product-card-text" data-i18n="productsCard3Text">
+                    Portable liquid packaging with resealable dispensing for beverages, concentrates
+                    and refill applications.
+                  </p>
+                </div>
+              </article>
+              <article class="product-card">
+                <div class="product-card-media">
+                  <img
+                    src="/overseas-b2b/assets/real/r2.jpg"
+                    alt="Coffee bag packaging example"
+                  />
+                </div>
+                <div class="product-card-body">
+                  <h3 class="product-card-title" data-i18n="productsCard4Title">Coffee Bags</h3>
+                  <p class="product-card-text" data-i18n="productsCard4Text">
+                    Side-gusset and flat-bottom coffee packaging options suitable for valves, zippers
+                    and aroma retention.
+                  </p>
+                </div>
+              </article>
+              <article class="product-card">
+                <div class="product-card-media">
+                  <img
+                    src="/overseas-b2b/assets/generated/huasheng_mock_06.svg"
+                    alt="Roll stock film packaging example"
+                  />
+                </div>
+                <div class="product-card-body">
+                  <h3 class="product-card-title" data-i18n="productsCard5Title">Roll Stock Film</h3>
+                  <p class="product-card-text" data-i18n="productsCard5Text">
+                    Laminated roll film structures developed for automatic packing lines and
+                    high-volume conversion.
+                  </p>
+                </div>
+              </article>
+              <article class="product-card">
+                <div class="product-card-media">
+                  <img
+                    src="/overseas-b2b/assets/bags/irregular_zipper_bag.svg"
+                    alt="Custom shaped pouch example"
+                  />
+                </div>
+                <div class="product-card-body">
+                  <h3 class="product-card-title" data-i18n="productsCard6Title">Custom Shaped Pouches</h3>
+                  <p class="product-card-text" data-i18n="productsCard6Text">
+                    Distinctive silhouette packaging for promotional launches, children&apos;s
+                    products and brand-driven formats.
+                  </p>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="industries">
+          <div class="container">
+            <div class="section-copy">
+              <p class="section-kicker" data-i18n="industriesKicker">Placeholder</p>
+              <h2 class="section-title" data-i18n="industriesTitle">
+                Industries section placeholder
+              </h2>
+              <p class="section-subtitle" data-i18n="industriesSubtitle">
+                Kept intentionally lightweight until the later module build.
+              </p>
+            </div>
+            <div class="placeholder-grid">
+              <article class="placeholder-card">
+                <h3 data-i18n="industriesCard1Title">Food</h3>
+                <p data-i18n="industriesCard1Text">
+                  Placeholder for category-specific packaging use cases and proof points.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="industriesCard2Title">Coffee &amp; Snacks</h3>
+                <p data-i18n="industriesCard2Text">
+                  Reserved for shelf-impact packaging stories and film structure guidance.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="industriesCard3Title">Pet Food &amp; Daily-use</h3>
+                <p data-i18n="industriesCard3Text">
+                  Future content slot for cross-industry requirements and manufacturing fit.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="capabilities">
+          <div class="container">
+            <div class="section-copy">
+              <p class="section-kicker" data-i18n="capabilitiesKicker">Placeholder</p>
+              <h2 class="section-title" data-i18n="capabilitiesTitle">
+                Capabilities section placeholder
+              </h2>
+              <p class="section-subtitle" data-i18n="capabilitiesSubtitle">
+                Style foundation only in this task. Detailed capability modules remain for later.
+              </p>
+            </div>
+            <div class="placeholder-grid">
+              <article class="placeholder-card">
+                <h3 data-i18n="capabilitiesCard1Title">Printing</h3>
+                <p data-i18n="capabilitiesCard1Text">
+                  Reserved for process highlights, equipment visuals and finish options.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="capabilitiesCard2Title">Lamination</h3>
+                <p data-i18n="capabilitiesCard2Text">
+                  Placeholder for material combinations, barrier performance and structure notes.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="capabilitiesCard3Title">Converting</h3>
+                <p data-i18n="capabilitiesCard3Text">
+                  Future module slot for bag-making, slitting and packing capability details.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="quality">
+          <div class="container">
+            <div class="section-copy">
+              <p class="section-kicker" data-i18n="qualityKicker">Placeholder</p>
+              <h2 class="section-title" data-i18n="qualityTitle">
+                Quality Control section placeholder
+              </h2>
+              <p class="section-subtitle" data-i18n="qualitySubtitle">
+                The section exists for navigation and hierarchy, with detailed content deferred.
+              </p>
+            </div>
+            <div class="placeholder-grid">
+              <article class="placeholder-card">
+                <h3 data-i18n="qualityCard1Title">Incoming materials</h3>
+                <p data-i18n="qualityCard1Text">
+                  Placeholder for substrate checks, supplier control and material traceability.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="qualityCard2Title">In-process inspection</h3>
+                <p data-i18n="qualityCard2Text">
+                  Reserved for color control, lamination monitoring and conversion checkpoints.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="qualityCard3Title">Shipment release</h3>
+                <p data-i18n="qualityCard3Text">
+                  Future content slot for final approval and export packaging standards.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="contact">
+          <div class="container">
+            <div class="section-copy">
+              <p class="section-kicker" data-i18n="contactKicker">Placeholder</p>
+              <h2 class="section-title" data-i18n="contactTitle">Contact section placeholder</h2>
+              <p class="section-subtitle" data-i18n="contactSubtitle">
+                Contact form and full business details are intentionally deferred. Buttons stay
+                anchored here only.
+              </p>
+            </div>
+            <div class="placeholder-grid">
+              <article class="placeholder-card">
+                <h3 data-i18n="contactCard1Title">Quote request</h3>
+                <p data-i18n="contactCard1Text">
+                  Future module for requirements capture without any real backend connection.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="contactCard2Title">Direct contact</h3>
+                <p data-i18n="contactCard2Text">
+                  Reserved for email, messaging and service-hour content.
+                </p>
+              </article>
+              <article class="placeholder-card">
+                <h3 data-i18n="contactCard3Title">Attachment flow</h3>
+                <p data-i18n="contactCard3Text">
+                  Placeholder for artwork upload guidance in a later task.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <div class="container" data-i18n="footerCopy">
+          Huasheng Packaging visual foundation draft for Home V2.
+        </div>
+      </footer>
+    </div>
+
+    <script>
+      const translations = {
+        en: {
+          brandAriaLabel: "Huasheng Packaging home",
+          primaryNavAriaLabel: "Primary",
+          languageSwitcherAriaLabel: "Language Switcher",
+          sellingPointsAriaLabel: "Selling points",
+          brandKicker: "Flexible Packaging",
+          navHome: "Home",
+          navProducts: "Products",
+          navIndustries: "Industries",
+          navCapabilities: "Capabilities",
+          navQuality: "Quality Control",
+          navContact: "Contact",
+          headerCta: "Get a Quote",
+          heroEyebrow: "Factory-direct custom packaging solutions",
+          heroTitle: "Custom Flexible Packaging Bags & Roll Stock Film Manufacturer",
+          heroSubtitle:
+            "Factory-direct custom printed pouches and laminated roll stock film for food, coffee, snacks, liquids, pet food and daily-use products.",
+          heroPrimaryCta: "Get a Quote",
+          heroSecondaryCta: "View Products",
+          tag1: "Custom Printing",
+          tag2: "Food-grade Packaging",
+          tag3: "Factory Direct Supply",
+          tag4: "Roll Stock Film",
+          statsLabel1: "Heritage",
+          statsValue1: "Since 1997",
+          statsLabel2: "Service",
+          statsValue2: "Custom Printing",
+          statsLabel3: "Process",
+          statsValue3: "Lamination & Bag Making",
+          statsLabel4: "Focus",
+          statsValue4: "Food Packaging Experience",
+          panelTitle: "What you can source",
+          panelItem1Title: "Pouches and bags",
+          panelItem1Text:
+            "Stand-up, flat bottom, zipper, side gusset and shaped packaging formats.",
+          panelItem2Title: "Roll stock film",
+          panelItem2Text:
+            "Laminated structures for automatic filling lines and high-volume conversion.",
+          panelItem3Title: "Export-ready support",
+          panelItem3Text:
+            "Artwork alignment, material guidance and quotation communication in two languages.",
+          productsKicker: "Core products",
+          productsTitle: "Packaging formats built for export-ready custom supply",
+          productsSubtitle:
+            "Explore six core flexible packaging formats commonly sourced for food, beverage, coffee and daily-use applications.",
+          productsCard1Title: "Stand Up Pouches",
+          productsCard1Text:
+            "Flexible shelf-ready pouches for snacks, dry food and daily-use products with custom print support.",
+          productsCard2Title: "Flat Bottom Pouches",
+          productsCard2Text:
+            "Stable box-style formats that improve shelf presentation and storage efficiency for larger fills.",
+          productsCard3Title: "Spout Pouches",
+          productsCard3Text:
+            "Portable liquid packaging with resealable dispensing for beverages, concentrates and refill applications.",
+          productsCard4Title: "Coffee Bags",
+          productsCard4Text:
+            "Side-gusset and flat-bottom coffee packaging options suitable for valves, zippers and aroma retention.",
+          productsCard5Title: "Roll Stock Film",
+          productsCard5Text:
+            "Laminated roll film structures developed for automatic packing lines and high-volume conversion.",
+          productsCard6Title: "Custom Shaped Pouches",
+          productsCard6Text:
+            "Distinctive silhouette packaging for promotional launches, children's products and brand-driven formats.",
+          industriesKicker: "Placeholder",
+          industriesTitle: "Industries section placeholder",
+          industriesSubtitle: "Kept intentionally lightweight until the later module build.",
+          industriesCard1Title: "Food",
+          industriesCard1Text:
+            "Placeholder for category-specific packaging use cases and proof points.",
+          industriesCard2Title: "Coffee & Snacks",
+          industriesCard2Text:
+            "Reserved for shelf-impact packaging stories and film structure guidance.",
+          industriesCard3Title: "Pet Food & Daily-use",
+          industriesCard3Text:
+            "Future content slot for cross-industry requirements and manufacturing fit.",
+          capabilitiesKicker: "Placeholder",
+          capabilitiesTitle: "Capabilities section placeholder",
+          capabilitiesSubtitle:
+            "Style foundation only in this task. Detailed capability modules remain for later.",
+          capabilitiesCard1Title: "Printing",
+          capabilitiesCard1Text:
+            "Reserved for process highlights, equipment visuals and finish options.",
+          capabilitiesCard2Title: "Lamination",
+          capabilitiesCard2Text:
+            "Placeholder for material combinations, barrier performance and structure notes.",
+          capabilitiesCard3Title: "Converting",
+          capabilitiesCard3Text:
+            "Future module slot for bag-making, slitting and packing capability details.",
+          qualityKicker: "Placeholder",
+          qualityTitle: "Quality Control section placeholder",
+          qualitySubtitle:
+            "The section exists for navigation and hierarchy, with detailed content deferred.",
+          qualityCard1Title: "Incoming materials",
+          qualityCard1Text:
+            "Placeholder for substrate checks, supplier control and material traceability.",
+          qualityCard2Title: "In-process inspection",
+          qualityCard2Text:
+            "Reserved for color control, lamination monitoring and conversion checkpoints.",
+          qualityCard3Title: "Shipment release",
+          qualityCard3Text:
+            "Future content slot for final approval and export packaging standards.",
+          contactKicker: "Placeholder",
+          contactTitle: "Contact section placeholder",
+          contactSubtitle:
+            "Contact form and full business details are intentionally deferred. Buttons stay anchored here only.",
+          contactCard1Title: "Quote request",
+          contactCard1Text:
+            "Future module for requirements capture without any real backend connection.",
+          contactCard2Title: "Direct contact",
+          contactCard2Text: "Reserved for email, messaging and service-hour content.",
+          contactCard3Title: "Attachment flow",
+          contactCard3Text: "Placeholder for artwork upload guidance in a later task.",
+          footerCopy: "Huasheng Packaging visual foundation draft for Home V2."
+        },
+        zh: {
+          brandAriaLabel: "华晟包装首页",
+          primaryNavAriaLabel: "主导航",
+          languageSwitcherAriaLabel: "语言切换",
+          sellingPointsAriaLabel: "卖点标签",
+          brandKicker: "软包装制造",
+          navHome: "首页",
+          navProducts: "产品",
+          navIndustries: "行业应用",
+          navCapabilities: "生产能力",
+          navQuality: "质量控制",
+          navContact: "联系我们",
+          headerCta: "立即询价",
+          heroEyebrow: "工厂直供定制包装方案",
+          heroTitle: "定制软包装袋与卷膜制造商",
+          heroSubtitle:
+            "面向食品、咖啡、零食、液体、宠物食品与日化产品，提供工厂直供的定制印刷袋和复合卷膜。",
+          heroPrimaryCta: "立即询价",
+          heroSecondaryCta: "查看产品",
+          tag1: "定制印刷",
+          tag2: "食品级包装",
+          tag3: "工厂直供",
+          tag4: "卷膜方案",
+          statsLabel1: "经验沉淀",
+          statsValue1: "始于 1997",
+          statsLabel2: "服务方向",
+          statsValue2: "定制印刷",
+          statsLabel3: "核心工序",
+          statsValue3: "复合与制袋",
+          statsLabel4: "应用重点",
+          statsValue4: "食品包装经验",
+          panelTitle: "可采购内容",
+          panelItem1Title: "包装袋与袋型",
+          panelItem1Text: "支持自立袋、平底袋、拉链袋、侧风琴袋与异形袋等结构。",
+          panelItem2Title: "卷膜",
+          panelItem2Text: "适用于自动灌装设备和大批量生产的复合卷膜结构。",
+          panelItem3Title: "双语支持",
+          panelItem3Text: "提供图稿沟通、材料建议和中英双语询盘配合。",
+          productsKicker: "核心产品",
+          productsTitle: "面向出口定制采购的主要包装形式",
+          productsSubtitle: "展示 6 类核心软包装产品，覆盖食品、饮品、咖啡与日化等常见应用。",
+          productsCard1Title: "自立袋",
+          productsCard1Text: "适用于零食、干货和日化类产品的陈列型软包装，支持定制印刷。",
+          productsCard2Title: "平底袋",
+          productsCard2Text: "更稳定的盒型结构，适合大规格内容物与更强的货架展示效果。",
+          productsCard3Title: "吸嘴袋",
+          productsCard3Text: "适用于饮品、浓缩液和补充装等场景，便于重复开启与倒取。",
+          productsCard4Title: "咖啡袋",
+          productsCard4Text: "适配排气阀、拉链和平底结构，兼顾香气保持与货架表现。",
+          productsCard5Title: "卷膜",
+          productsCard5Text: "适用于自动包装线和大批量生产的复合卷膜结构方案。",
+          productsCard6Title: "异形袋",
+          productsCard6Text: "适合新品推广、儿童产品和品牌化外形包装的差异化袋型。",
+          industriesKicker: "占位区块",
+          industriesTitle: "行业应用模块占位",
+          industriesSubtitle: "当前只保留结构位置，详细内容在后续模块任务中完成。",
+          industriesCard1Title: "食品",
+          industriesCard1Text: "预留给食品行业包装案例与需求说明。",
+          industriesCard2Title: "咖啡与零食",
+          industriesCard2Text: "预留给咖啡与零食类的包装展示和结构建议。",
+          industriesCard3Title: "宠物食品与日化",
+          industriesCard3Text: "预留给宠物食品与日化产品的适配说明。",
+          capabilitiesKicker: "占位区块",
+          capabilitiesTitle: "生产能力模块占位",
+          capabilitiesSubtitle: "本任务仅做风格基础，不扩展完整模块内容。",
+          capabilitiesCard1Title: "印刷能力",
+          capabilitiesCard1Text: "预留给工艺亮点、设备展示和表面处理内容。",
+          capabilitiesCard2Title: "复合能力",
+          capabilitiesCard2Text: "后续用于展示材料组合、阻隔表现和结构建议。",
+          capabilitiesCard3Title: "制袋能力",
+          capabilitiesCard3Text: "预留给制袋、分切和包装能力说明。",
+          qualityKicker: "占位区块",
+          qualityTitle: "质量控制模块占位",
+          qualitySubtitle: "当前用于建立导航和视觉层级，详细内容后续补全。",
+          qualityCard1Title: "来料检查",
+          qualityCard1Text: "预留给基材检查、供应商管理和追溯信息。",
+          qualityCard2Title: "过程质检",
+          qualityCard2Text: "后续展示色彩控制、复合监控和制袋检验节点。",
+          qualityCard3Title: "出货放行",
+          qualityCard3Text: "预留给成品复核和出口包装标准说明。",
+          contactKicker: "占位区块",
+          contactTitle: "联系模块占位",
+          contactSubtitle: "表单和完整商务信息后续再做，本任务仅保留按钮锚点。",
+          contactCard1Title: "询价入口",
+          contactCard1Text: "后续可在不连接真实后端的前提下补充询价流程。",
+          contactCard2Title: "联系方式",
+          contactCard2Text: "预留给邮箱、即时通讯和服务时间内容。",
+          contactCard3Title: "附件说明",
+          contactCard3Text: "后续补充图稿上传和需求整理说明。",
+          footerCopy: "华晟包装首页 V2 视觉基础稿。"
+        }
+      };
+
+      const applyLanguage = (lang) => {
+        const dict = translations[lang] || translations.en;
+        document.documentElement.lang = lang;
+        document.querySelectorAll("[data-i18n]").forEach((node) => {
+          const key = node.dataset.i18n;
+          if (dict[key]) {
+            node.textContent = dict[key];
+          }
+        });
+        document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
+          const key = node.dataset.i18nAriaLabel;
+          if (dict[key]) {
+            node.setAttribute("aria-label", dict[key]);
+          }
+        });
+      };
+
+      const switcher = document.getElementById("language-switcher");
+      switcher.addEventListener("change", (event) => applyLanguage(event.target.value));
+      applyLanguage("en");
+    </script>
+  </body>
+</html>

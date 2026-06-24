@@ -1,4 +1,5 @@
 import { Order, User, WorkOrder } from '../types';
+import { normalizePermissions as normalizePermissionModel } from './permissions';
 
 const USER_STORAGE_KEY = 'newUi.user.v1';
 
@@ -58,12 +59,12 @@ function canUseCost(user?: User | null) {
 }
 
 function normalizePermissions(user: any): User['permissions'] {
-  const raw = user?.permissions || {};
-  const modules = { ...(raw.modules || {}) } as Record<string, boolean>;
-  if (modules.workorder && !modules.workorders) modules.workorders = true;
+  const normalized = normalizePermissionModel(String(user?.role || 'ai_sales'), user?.permissions || {});
   return {
-    all: !!raw.all,
-    modules,
+    all: !!normalized.all,
+    modules: { ...(normalized.modules || {}) },
+    ordersStages: Array.isArray(normalized.ordersStages) ? normalized.ordersStages : [],
+    boardStages: Array.isArray(normalized.boardStages) ? normalized.boardStages : [],
   };
 }
 
@@ -95,9 +96,12 @@ function loadUser(): User | null {
 }
 
 function mapOperationLog(log: any) {
+  const operator = String(log?.operated_by || log?.operator || log?.user_name || '系统').trim() || '系统';
   return {
     type: String(log?.event_type || log?.type || '').toUpperCase() || 'EDIT',
-    operator: String(log?.operated_by || log?.operator || log?.user_name || '系统'),
+    operator,
+    operator_name: operator,
+    operated_by: operator,
     time: String(log?.created_at || log?.time || ''),
     detail: String(log?.detail || log?.note || ''),
     source: log?.source ? String(log.source) : undefined,
@@ -105,6 +109,21 @@ function mapOperationLog(log: any) {
     unit: log?.unit ? String(log.unit) : undefined,
     reason: log?.reason ? String(log.reason) : undefined,
     is_rolled_back: Number(log?.rolled_back || 0) === 1 || !!log?.is_rolled_back,
+  };
+}
+
+function mapAuditLog(log: any) {
+  const username = String(log?.username || log?.user_name || log?.user || log?.operated_by || '').trim();
+  const role = String(log?.role || '').trim();
+  return {
+    ...log,
+    id: Number(log?.id || 0),
+    username: username || role || '系统',
+    user: username || role || '系统',
+    detail: String(log?.detail || log?.description || ''),
+    action: String(log?.action || log?.event_type || ''),
+    ip: String(log?.ip || log?.ip_address || ''),
+    created_at: String(log?.created_at || ''),
   };
 }
 
@@ -195,12 +214,54 @@ export const mockService = {
     return rows.map(mapOrder);
   },
 
+  async getBoardPanel(): Promise<{ rows: Order[]; summary: Array<{ status: string; total: number; urgent: number }>; cachedSeconds: number }> {
+    const data = await api<any>('/api/orders/board/panel');
+    const rows = Array.isArray(data?.rows) ? data.rows.map(mapOrder) : [];
+    const summary = Array.isArray(data?.summary) ? data.summary.map((item: any) => ({
+      status: String(item?.status || ''),
+      total: Number(item?.total || 0),
+      urgent: Number(item?.urgent || 0),
+    })) : [];
+    return {
+      rows,
+      summary,
+      cachedSeconds: Number(data?.cachedSeconds || 0),
+    };
+  },
+
+  async getBoardSummary(): Promise<Array<{ status: string; total: number; urgent: number }>> {
+    const data = await api<any>('/api/orders/board/summary');
+    return Array.isArray(data) ? data.map((item: any) => ({
+      status: String(item?.status || ''),
+      total: Number(item?.total || 0),
+      urgent: Number(item?.urgent || 0),
+    })) : [];
+  },
+
   async getTodayStageCompletions(): Promise<Record<string, number>> {
     const data = await api<any>('/api/orders/today-stage-completions');
     return data || {};
   },
 
-  async getOrdersPage(params: { q?: string; page?: number; pageSize?: number; sortBy?: string; sortOrder?: 'asc' | 'desc'; status?: string; updatedFrom?: string } = {}) {
+  async getOrderSummary(params: { q?: string; status?: string; updatedFrom?: string; roller?: string; urgentOnly?: boolean; stayMinDays?: number; abnormal?: boolean } = {}) {
+    const search = new URLSearchParams();
+    if (params.q) search.set('q', params.q);
+    if (params.status) search.set('status', params.status);
+    if (params.updatedFrom) search.set('updatedFrom', params.updatedFrom);
+    if (params.roller) search.set('roller', params.roller);
+    if (params.urgentOnly) search.set('urgentOnly', 'true');
+    if (params.stayMinDays) search.set('stayMinDays', String(params.stayMinDays));
+    if (params.abnormal) search.set('abnormal', 'true');
+    const data = await api<any>(`/api/orders/summary?${search.toString()}`);
+    return {
+      total: Number(data?.total || 0),
+      urgentCount: Number(data?.urgentCount || 0),
+      avgStayDays: Number(data?.avgStayDays || 0),
+      stageCounts: data?.stageCounts || {},
+    };
+  },
+
+  async getOrdersPage(params: { q?: string; page?: number; pageSize?: number; sortBy?: string; sortOrder?: 'asc' | 'desc'; status?: string; updatedFrom?: string; roller?: string; urgentOnly?: boolean; stayMinDays?: number; abnormal?: boolean } = {}) {
     const search = new URLSearchParams();
     if (params.q) search.set('q', params.q);
     if (params.page) search.set('page', String(params.page));
@@ -209,6 +270,10 @@ export const mockService = {
     if (params.sortOrder) search.set('sortOrder', params.sortOrder);
     if (params.status) search.set('status', params.status);
     if (params.updatedFrom) search.set('updatedFrom', params.updatedFrom);
+    if (params.roller) search.set('roller', params.roller);
+    if (params.urgentOnly) search.set('urgentOnly', 'true');
+    if (params.stayMinDays) search.set('stayMinDays', String(params.stayMinDays));
+    if (params.abnormal) search.set('abnormal', 'true');
     const data = await api<any>(`/api/orders?${search.toString()}`);
     return {
       rows: Array.isArray(data?.rows) ? data.rows.map(mapOrder) : [],
@@ -340,6 +405,46 @@ export const mockService = {
     });
   },
 
+  async searchWorkOrderProducts(q: string, mode: 'all' | 'any' = 'all') {
+    return api<any>(`/api/work-orders/product-search?q=${encodeURIComponent(q)}&mode=${mode}`);
+  },
+
+  async addMaterialOption(name: string) {
+    return api<any>('/api/work-orders/material-options', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  async deleteMaterialOption(name: string) {
+    return api<any>('/api/work-orders/material-options/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  async createWorkOrderCustomer(data: { salespersonId: number; customerName: string; productName?: string }) {
+    return api<any>('/api/work-orders/customers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  },
+
+  async renameWorkOrderCustomer(id: number, name: string) {
+    return api<any>(`/api/work-orders/customers/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  async previewWorkOrderExcel(id: number | string) {
+    return apiBlob(`/api/work-orders/${id}/preview.xls`);
+  },
+
   async getMaterialPrices() {
     return api<any[]>('/api/cost/material-prices');
   },
@@ -366,6 +471,14 @@ export const mockService = {
 
   async deleteCostSnapshot(id: number | string) {
     return api<any>(`/api/cost/snapshots/${id}`, { method: 'DELETE' });
+  },
+
+  async renameCostSnapshot(id: number | string, name: string) {
+    return api<any>(`/api/cost/snapshots/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
   },
 
   async exportCost(format: 'pdf' | 'xls', payload: { costType: string; input: any; result: any }) {
@@ -421,7 +534,8 @@ export const mockService = {
   },
 
   async getAuditLogs() {
-    return api<any[]>('/api/system/audit-logs');
+    const data = await api<any[]>('/api/system/audit-logs');
+    return Array.isArray(data) ? data.map(mapAuditLog) : [];
   },
 
   async getPackageConfig() {

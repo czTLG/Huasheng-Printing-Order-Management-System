@@ -1,0 +1,104 @@
+{
+  "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin"],
+  "defaultsByRole": {
+    "super_admin": {
+      "all": true
+    },
+    "manager": {
+      "modules": {
+        "orders": true,
+        "workorder": true,
+        "board": true,
+        "cost": true,
+        "stats": true,
+        "admin": false
+      },
+      "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"]
+    },
+    "ai_sales": {
+      "modules": {
+        "orders": true,
+        "workorder": true,
+        "board": false,
+        "cost": true,
+        "stats": true,
+        "admin": false
+      },
+      "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "boardStages": []
+    },
+    "worker_print": {
+      "modules": {
+        "orders": true,
+        "workorder": false,
+        "board": true,
+        "cost": false,
+        "stats": false,
+        "admin": false
+      },
+      "ordersStages": ["印刷"],
+      "boardStages": ["印刷"]
+    },
+    "worker_film": {
+      "modules": {
+        "orders": true,
+        "workorder": false,
+        "board": true,
+        "cost": false,
+        "stats": false,
+        "admin": false
+      },
+      "ordersStages": ["复膜"],
+      "boardStages": ["复膜"]
+    },
+    "worker_bag": {
+      "modules": {
+        "orders": true,
+        "workorder": false,
+        "board": true,
+        "cost": false,
+        "stats": false,
+        "admin": false
+      },
+      "ordersStages": ["制袋"],
+      "boardStages": ["制袋"]
+    },
+    "worker_ship": {
+      "modules": {
+        "orders": true,
+        "workorder": false,
+        "board": true,
+        "cost": false,
+        "stats": false,
+        "admin": false
+      },
+      "ordersStages": ["发货"],
+      "boardStages": ["发货"]
+    },
+    "worker": {
+      "modules": {
+        "orders": true,
+        "workorder": false,
+        "board": true,
+        "cost": false,
+        "stats": false,
+        "admin": false
+      },
+      "ordersStages": ["印刷", "复膜", "制袋", "发货"],
+      "boardStages": ["印刷", "复膜", "制袋", "发货"]
+    },
+    "default": {
+      "modules": {
+        "orders": true,
+        "workorder": false,
+        "board": false,
+        "cost": false,
+        "stats": false,
+        "admin": false
+      },
+      "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "boardStages": []
+    }
+  }
+}

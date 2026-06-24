@@ -36,11 +36,13 @@ export default function Board() {
   const containerRef = React.useRef<HTMLDivElement>(null);
 
   const [orders, setOrders] = useState<Order[]>([]);
+  const [boardSummary, setBoardSummary] = useState<Array<{ status: string; total: number; urgent: number }>>([]);
 
   const loadOrders = async () => {
     try {
-      const rows = await mockService.getOrders();
-      setOrders(rows);
+      const panel = await mockService.getBoardPanel();
+      setOrders(Array.isArray(panel?.rows) ? panel.rows : []);
+      setBoardSummary(Array.isArray(panel?.summary) ? panel.summary : []);
     } catch (err: any) {
       window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '生产看板加载失败' } }));
     }
@@ -67,6 +69,31 @@ export default function Board() {
     }
     return true;
   });
+
+  const summaryByStage = React.useMemo(() => {
+    const map = new Map<string, { total: number; urgent: number }>();
+    boardSummary.forEach((item) => {
+      map.set(String(item.status || ''), {
+        total: Number(item.total || 0),
+        urgent: Number(item.urgent || 0),
+      });
+    });
+    return map;
+  }, [boardSummary]);
+
+  const urgentCount = React.useMemo(() => (
+    boardSummary.reduce((sum, item) => sum + Number(item.urgent || 0), 0)
+  ), [boardSummary]);
+
+  const completedCount = React.useMemo(() => (
+    Number(summaryByStage.get('完成')?.total || 0)
+  ), [summaryByStage]);
+
+  const activeCount = React.useMemo(() => (
+    boardSummary
+      .filter(item => item.status !== '完成')
+      .reduce((sum, item) => sum + Number(item.total || 0), 0)
+  ), [boardSummary]);
 
   useEffect(() => {
     if (!isAutoRefresh) return;
@@ -126,7 +153,7 @@ export default function Board() {
               <div className="flex flex-col">
                  <span className={cn("text-[10px] font-black uppercase tracking-widest", isDark ? "text-slate-400" : "text-slate-500")}>加急任务</span>
                  <span className={cn("text-xl font-black leading-none", isDark ? "text-orange-400" : "text-orange-600")}>
-                    {orders.filter(o => o.urgency > 0).length}
+                    {urgentCount}
                  </span>
               </div>
            </div>
@@ -138,7 +165,7 @@ export default function Board() {
               <div className="flex flex-col">
                  <span className={cn("text-[10px] font-black uppercase tracking-widest", isDark ? "text-slate-400" : "text-slate-500")}>今日完工</span>
                  <span className={cn("text-xl font-black leading-none", isDark ? "text-emerald-400" : "text-emerald-600")}>
-                    {orders.filter(o => o.status === '完成').length}
+                    {completedCount}
                  </span>
               </div>
            </div>
@@ -150,7 +177,7 @@ export default function Board() {
               <div className="flex flex-col">
                  <span className={cn("text-[10px] font-black uppercase tracking-widest", isDark ? "text-slate-400" : "text-slate-500")}>在制流转</span>
                  <span className={cn("text-xl font-black leading-none", isDark ? "text-blue-400" : "text-blue-600")}>
-                    {orders.filter(o => o.status !== '完成').length}
+                    {activeCount}
                  </span>
               </div>
            </div>
@@ -202,6 +229,7 @@ export default function Board() {
          <div className="flex h-full gap-4 min-w-max pb-2">
             {STAGES.map(stage => {
                const stageOrders = filteredOrders.filter(o => o.status === stage.label);
+               const stageSummary = summaryByStage.get(stage.label) || { total: 0, urgent: 0 };
                return (
                  <div key={stage.label} className={cn(
                    "flex flex-col w-[320px] rounded-2xl border shrink-0 overflow-hidden",
@@ -221,6 +249,10 @@ export default function Board() {
                          )}>
                             {stageOrders.length}
                          </div>
+                       </div>
+                       <div className={cn("text-[10px] font-black tracking-widest uppercase flex items-center justify-between", isDark ? "text-slate-500" : "text-slate-400")}>
+                         <span>当前加载 {stageOrders.length}</span>
+                         <span>总数 {stageSummary.total}{stageSummary.urgent > 0 ? ` / 加急 ${stageSummary.urgent}` : ''}</span>
                        </div>
                        <div className="w-full h-1 mt-2.5 rounded-full overflow-hidden bg-slate-200/50" style={{ opacity: isDark ? 0.2 : 1 }}>
                          <div className={cn("h-full", stage.color)} style={{ width: stageOrders.length > 0 ? '100%' : '0%', transition: 'width 0.5s' }} />

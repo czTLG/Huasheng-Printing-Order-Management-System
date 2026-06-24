@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { db, now, audit } = require('../db');
+const { defaultPermissionsByRole, normalizePermissions } = require('../lib/permissions');
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';
@@ -12,37 +13,6 @@ function requireAuthAdmin(req, res, next) {
   const u = String(req.user?.userName || '');
   if (req.user?.role === 'super_admin' || AUTH_ADMIN_USERS.has(u)) return next();
   return res.status(403).json({ error: '仅授权管理员可访问' });
-}
-
-function defaultPermissionsByRole(role='ai_sales') {
-  if (role === 'super_admin') return { all: true };
-  if (role === 'manager') return {
-    modules: { orders: true, board: true, workorder: true, cost: true, stats: true },
-    ordersStages: ['印刷','复膜','制袋','发货','完成','全部'],
-    boardStages: ['印刷','复膜','制袋','发货','完成','全部']
-  };
-  if (role === 'ai_sales') return {
-    modules: { orders: true, workorder: true, cost: true, stats: true },
-    ordersStages: ['印刷','复膜','制袋','发货','完成','全部'],
-    boardStages: []
-  };
-  if (role === 'worker_print') return { modules: { orders: true, board: true }, ordersStages: ['印刷'], boardStages: ['印刷'] };
-  if (role === 'worker_film') return { modules: { orders: true, board: true }, ordersStages: ['复膜'], boardStages: ['复膜'] };
-  if (role === 'worker_bag') return { modules: { orders: true, board: true }, ordersStages: ['制袋'], boardStages: ['制袋'] };
-  if (role === 'worker_ship') return { modules: { orders: true, board: true }, ordersStages: ['发货'], boardStages: ['发货'] };
-  if (role === 'worker') return { modules: { orders: true, board: true }, ordersStages: ['印刷','复膜','制袋','发货'], boardStages: ['印刷','复膜','制袋','发货'] };
-  return { modules: { orders: true }, ordersStages: ['印刷','复膜','制袋','发货','完成','全部'], boardStages: [] };
-}
-
-function normalizePermissions(role='ai_sales', p) {
-  const d = defaultPermissionsByRole(role);
-  if (!p || typeof p !== 'object') return d;
-  if (p.all) return { all: true };
-  const modules = Object.assign({}, d.modules || {}, p.modules || {});
-  const uniq = (arr=[]) => [...new Set(arr.filter(Boolean))];
-  const ordersStages = uniq(Array.isArray(p.ordersStages) ? p.ordersStages : (d.ordersStages || []));
-  const boardStages = uniq(Array.isArray(p.boardStages) ? p.boardStages : (d.boardStages || []));
-  return { modules, ordersStages, boardStages };
 }
 
 function isHashedPassword(pwd = '') {
@@ -92,7 +62,8 @@ router.post('/register', (req, res) => {
 
 router.get('/me', (req, res) => {
   if (!req.user) return res.status(401).json({ ok: false, error: '请先登录' });
-  res.json({ ok: true, user: { id: req.user.id, username: req.user.userName, role: req.user.role, name: req.user.fullName || req.user.userName, permissions: req.user.permissions || null } });
+  const permissions = req.user.permissions || defaultPermissionsByRole(req.user.role);
+  res.json({ ok: true, user: { id: req.user.id, username: req.user.userName, role: req.user.role, name: req.user.fullName || req.user.userName, permissions } });
 });
 
 router.post('/change-password', (req, res) => {

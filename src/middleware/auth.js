@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { db } = require('../db');
+const { defaultPermissionsByRole } = require('../lib/permissions');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';
 
@@ -19,7 +20,7 @@ function fakeAuth(req, res, next) {
       const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
       if (u && u.status === 'active') {
         let permissions = null;
-        try { permissions = u.permissions_json ? JSON.parse(u.permissions_json) : null; } catch(_) { permissions = null; }
+        try { permissions = u.permissions_json ? JSON.parse(u.permissions_json) : defaultPermissionsByRole(u.role); } catch(_) { permissions = defaultPermissionsByRole(u.role); }
         req.user = { id: u.id, role: u.role, userName: u.username, fullName: u.full_name || '', permissions };
 
         const viewAs = req.header('x-view-as-role');
@@ -41,7 +42,7 @@ function fakeAuth(req, res, next) {
       const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
       if (u && u.status === 'active') {
         let permissions = null;
-        try { permissions = u.permissions_json ? JSON.parse(u.permissions_json) : null; } catch(_) { permissions = null; }
+        try { permissions = u.permissions_json ? JSON.parse(u.permissions_json) : defaultPermissionsByRole(u.role); } catch(_) { permissions = defaultPermissionsByRole(u.role); }
         req.user = { id: u.id, role: u.role, userName: u.username, fullName: u.full_name || '', permissions };
         return next();
       }
