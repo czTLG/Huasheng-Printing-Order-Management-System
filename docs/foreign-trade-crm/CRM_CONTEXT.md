@@ -1,0 +1,412 @@
+# Huasheng Foreign Trade CRM Context
+
+## 1. Project Purpose
+
+This module adds a foreign trade customer communication and quotation management module inside the existing Huasheng order management system.
+
+The goal is not a generic CRM, not a website inquiry system, and not an SEO/content system. The goal is to connect the full foreign trade workflow from customer communication records to inquiries, specifications, costing, freight and clearance charges, quotation versions, weekly reporting, and eventual order conversion.
+
+Core workflow:
+
+Customer
+-> Communication Log
+-> Inquiry
+-> Specification Version
+-> Costing Request
+-> Cost Sheet
+-> Freight / Clearance Charges
+-> Quotation Version
+-> Order
+
+## 2. Strict Scope
+
+This project only covers:
+
+* Customer profiles
+* Customer communication records
+* Inquiry/project records
+* Specification versions
+* Material layer records
+* Costing requests
+* Cost sheet association
+* Cost line items
+* Freight, forwarder, clearance, and miscellaneous fee records
+* Quotation versions
+* Change logs
+* Weekly report synchronization
+* Later AI Inbox / email organization
+* Later order conversion
+
+## 3. Explicitly Out of Scope
+
+Do not build:
+
+* Website inquiry module
+* Product image management
+* Platform profile/material management
+* SEO
+* Blog content assets
+* Quotation floor price / pricing policy module
+* Feishu / Airtable / Notion / n8n integrations
+* Alibaba International Station materials
+* Product images / media asset library
+* Automatic email sending
+* Automatic quotation
+* Automatic delivery lead time commitments
+* Automatic compliance commitments
+
+## 4. Current Baseline
+
+* Branch before CRM: main
+* CRM branch: feature/foreign-trade-crm
+* Latest clean baseline commit: df5ddfd
+* Build: PASS
+* Smoke test: PASS
+* GitHub: pushed
+* Git status before CRM implementation: clean
+
+## 5. Phase 0 Findings
+
+### Tech Stack
+
+* React 18 + TypeScript + Vite 5 + Tailwind CSS
+* Express.js CommonJS
+* SQLite / better-sqlite3
+* JWT auth
+* No react-router
+* App.tsx activeTab switching
+* src/server.js backend entry
+* src/db.js initDb() schema initialization
+
+### Existing Core Tables
+
+Current core tables include:
+
+* orders
+* work_orders
+* customers
+* salespersons
+* cost_snapshots
+* audit_logs
+* users
+* order_stage_logs
+* material_prices
+* quote_sheets
+
+The system currently has 20 tables in total.
+
+### Existing Permission System
+
+Current roles:
+
+* super_admin
+* manager
+* ai_sales
+* worker
+* worker_print
+* worker_film
+* worker_bag
+* worker_ship
+* default fallback
+
+Current permission mechanisms:
+
+* Menu permission: App.tsx visibleNavItems
+* API permission: src/middleware/auth.js allowRoles()
+* Field-level permission: currently does not exist
+* URL route permission: currently does not exist because the frontend has no react-router
+
+### Existing Order Module
+
+* orders table already has production fields including customer_name, bag_type, order_spec, order_qty, size_json, and status.
+* Missing foreign trade workflow links: inquiry_id, quotation_id, specification_id, and cost_sheet_id.
+* Later order conversion must extend the order module with minimal intrusion. Do not rewrite the existing order module.
+
+### Existing Cost Module
+
+* The cost module already has 9 bag-type calculators.
+* cost_snapshots are snapshots, not formal versioned cost sheets.
+* Missing customer_id, inquiry_id, and specification_id associations.
+* Missing cost_sheet_lines.
+* COST_USERS is a hard-coded allowlist and must be migrated cautiously if replaced by role permissions later.
+* Do not break existing costing logic.
+
+### Existing Audit Log
+
+* audit_logs table already exists.
+* audit() function already exists.
+* Need to evaluate whether audit logging should be extended to field-level change logs.
+* All key CRM write operations must write audit logs.
+
+## 6. Required Permission Role
+
+Required new role:
+
+foreign_trade_crm_admin
+
+Chinese meaning:
+
+外贸客户管理负责人
+
+Permission requirements:
+
+* Only super_admin and foreign_trade_crm_admin can see the full "Foreign Trade Customer Management" module.
+* Normal users cannot see the menu.
+* Normal users cannot access CRM pages.
+* Normal users cannot access CRM APIs.
+* Unauthorized access must return 403.
+* costing_user can only see assigned costing requests.
+* costing_user must not see customer email, WhatsApp, or original raw customer communication content by default.
+* freight_user can only see assigned freight and clearance charges.
+* production_user can only see production information after order conversion.
+* All permission changes must write audit logs.
+
+Four permission layers must be implemented:
+
+1. Menu permission
+2. Page activeTab permission
+3. Backend API permission
+4. Data field permission
+
+## 7. Role Plan
+
+Recommended roles:
+
+* super_admin
+* foreign_trade_crm_admin
+* costing_user
+* freight_user
+* production_user
+* viewer / normal_user
+
+Important: the existing system role is super_admin, not admin. CRM permissions must use super_admin and must not mistakenly use admin.
+
+## 8. Core Business Requirements
+
+1. The system must clearly show the latest order/inquiry raised by each customer.
+2. Every inquiry/order specification must be fully recorded.
+3. Every specification change must create a new version.
+4. Costing must be bound to customer, inquiry, and specification.
+5. When the boss/father reviews costing, the system must automatically bring in customer specifications, material layers, thickness, and quantity.
+6. The boss/father can modify materials, thickness, profit, and fees, then generate an EXW quotation.
+7. Forwarder quotation, clearance fee, port miscellaneous charges, and local charges must be entered item by item.
+8. Quotations must be versioned. Old quotations must not be overwritten.
+9. Any key modification must write an audit log.
+10. Weekly reports must be sent/synchronized to designated people according to permissions.
+11. AI only organizes and suggests. Final confirmation must be done by a human.
+
+## 9. P0 Scope
+
+P0 includes only:
+
+1. foreign_trade_crm_admin role
+2. CRM menu permission
+3. CRM activeTab page permission
+4. CRM API permission
+5. customers table extension or compatibility strategy
+6. communication_logs table
+7. inquiries table
+8. inquiry_specifications table
+9. specification_layers table
+10. costing_requests table
+11. cost_sheets or cost_snapshots compatibility strategy
+12. cost_sheet_lines table
+13. audit_logs reuse/enhancement
+14. Customer list page
+15. Customer detail page
+16. Inquiry list page
+17. Inquiry detail page
+18. Start costing request button
+19. Costing request detail
+20. Basic change log view
+
+P0 does not include:
+
+* IMAP email synchronization
+* Real AI Inbox
+* Automatic email sending
+* Automatic weekly report sending
+* Complete quotation export
+* Order conversion
+* Website inquiry
+* Product images
+* SEO
+* Quotation floor price
+* Content assets
+
+## 10. Planned Phases
+
+Phase 0: read-only review of the current system
+
+Phase 1: permission and menu foundation
+
+Phase 2: customers and communication records
+
+Phase 3: inquiries and specification versions
+
+Phase 4: costing integration
+
+Phase 5: freight, clearance, and miscellaneous fee records
+
+Phase 6: quotation versions
+
+Phase 7: AI Inbox and email organization
+
+Phase 8: Audit Log change history
+
+Phase 9: Weekly Reports synchronization
+
+Phase 10: order conversion
+
+## 11. P0 Database Strategy
+
+The project uses SQLite and currently has no standalone migration framework. Schema initialization and incremental changes are handled in src/db.js initDb() with CREATE TABLE and PRAGMA table_info plus ALTER TABLE ADD COLUMN checks.
+
+Database rules:
+
+* New tables should be created in src/db.js initDb().
+* Existing table extensions must check PRAGMA table_info before ALTER TABLE ADD COLUMN.
+* Do not break the existing data/app.db.
+* Do not rename or delete old fields.
+* The customers table already exists. Prefer compatible extension and do not blindly create a conflicting table.
+* cost_sheets may not currently exist. In P0, first confirm whether to create cost_sheets or extend/associate cost_snapshots.
+
+P0 tables:
+
+* communication_logs
+* inquiries
+* inquiry_specifications
+* specification_layers
+* costing_requests
+* cost_sheet_lines
+* audit_logs reuse or enhancement
+
+Existing tables that may need extension:
+
+* customers
+* orders
+* cost_snapshots / cost_sheets
+
+## 12. API Strategy
+
+Suggested CRM APIs:
+
+* GET /api/crm/customers
+* POST /api/crm/customers
+* GET /api/crm/customers/:id
+* PATCH /api/crm/customers/:id
+* GET /api/crm/customers/:id/communications
+* POST /api/crm/customers/:id/communications
+* GET /api/crm/inquiries
+* POST /api/crm/inquiries
+* GET /api/crm/inquiries/:id
+* PATCH /api/crm/inquiries/:id
+* POST /api/crm/inquiries/:id/specifications
+* GET /api/crm/inquiries/:id/specifications
+* POST /api/crm/inquiries/:id/costing-requests
+* GET /api/crm/costing-requests
+* GET /api/crm/costing-requests/:id
+* PATCH /api/crm/costing-requests/:id
+* GET /api/crm/audit-logs
+
+API requirements:
+
+* All CRM APIs must pass through permission middleware.
+* super_admin and foreign_trade_crm_admin can access the full CRM API.
+* costing_user can only access assigned costing_request APIs.
+* Unauthorized access returns 403.
+* All write operations write audit logs.
+
+## 13. Frontend Strategy
+
+* The current frontend has no react-router and uses App.tsx activeTab.
+* New CRM pages must extend the activeTab type.
+* Add navItems with requiredModule: crm.
+* Each CRM case in renderContent() must check visibleModules.includes('crm').
+* Unauthorized access must show Forbidden.
+* New component directory: frontend-next/src/components/crm/
+
+Suggested components:
+
+* CrmCustomers.tsx
+* CrmCustomerDetail.tsx
+* CrmInquiries.tsx
+* CrmInquiryDetail.tsx
+* CrmCostingRequests.tsx
+* CrmCostingRequestDetail.tsx
+* CrmAuditLogs.tsx
+
+## 14. Permission Implementation Strategy
+
+* Add crm module key to shared/permissions-model.json.
+* Update frontend-next/src/lib/permissions.ts if synchronization is needed.
+* Add foreign_trade_crm_admin to the role list in src/routes/auth.js.
+* Add foreign_trade_crm_admin to role selection in Admin.tsx.
+* Reuse the existing allowRoles() capability in src/middleware/auth.js.
+* Protect full CRM APIs in src/routes/crm.js with allowRoles('super_admin', 'foreign_trade_crm_admin').
+* costing_user APIs need separate allowRoles handling plus assigned_to data filtering.
+* Field-level permissions must be handled at the API response layer by hiding email, whatsapp, and raw_content.
+
+## 15. Costing Integration Strategy
+
+* Do not rewrite the core costing logic.
+* First pass CRM inquiry/specification data to costing through costing_requests.
+* Costing requests should automatically include:
+  * customer_id
+  * inquiry_id
+  * specification_id
+  * product_type
+  * bag_type / film_type
+  * material_structure_text
+  * specification_layers
+  * quantity
+  * thickness
+* The boss/father can continue costing based on existing Cost.tsx logic.
+* Later phases can consider upgrading cost_snapshots into formal cost_sheets.
+* P0 must connect conservatively and must not rewrite the 9 bag-type calculators in Cost.tsx.
+
+## 16. Audit Log Strategy
+
+* Reuse the existing audit() function.
+* If current audit_logs fields are insufficient, put field_name, old_value, and new_value into detail JSON first.
+* Do not break the audit() function signature.
+* All CRM write operations must call audit().
+* Permission changes must be audited.
+* Specification versions, material layers, costing requests, and customer information changes must be audited.
+
+## 17. Hard Problems / Risk Register
+
+1. Existing customers table may conflict with CRM customer requirements.
+   * Strategy: prefer compatible extension and do not create a conflicting same-name table.
+2. No field-level permission exists.
+   * Strategy: in P0, filter sensitive fields at the API response layer.
+3. No react-router exists.
+   * Strategy: use activeTab plus renderContent permission checks and avoid a major routing refactor.
+4. The costing module is complex.
+   * Strategy: P0 only adds association and data prefill. Do not rewrite costing calculations.
+5. cost_snapshots are not formal versioned cost sheets.
+   * Strategy: document a compatibility plan in P0 and abstract cost_sheets in a later phase.
+6. COST_USERS is hard-coded.
+   * Strategy: do not rush a refactor in P0. Add a costing_user compatibility layer first, then replace later.
+7. SQLite has no migration framework.
+   * Strategy: all DDL must go through safe checks in initDb() to avoid breaking data/app.db.
+8. Permissions must be enforced by the backend.
+   * Strategy: do not rely only on hidden menus. APIs must return 403 for unauthorized access.
+9. audit log may not be field-level enough.
+   * Strategy: first record old/new values in detail JSON, then upgrade table structure later if needed.
+10. CRM scope can easily expand.
+    * Strategy: CRM_CONTEXT.md explicitly defines out-of-scope items. Do not build website inquiries, SEO, product images, or quotation floor price modules.
+
+## 18. Development Rules
+
+1. Each Phase must be committed separately.
+2. After each Phase, build, tests, and smoke test must be run.
+3. Do not make large all-at-once changes.
+4. Do not rewrite the existing order system.
+5. Do not break existing costing functionality.
+6. Database changes must be clear and reviewable.
+7. New APIs must include permission checks.
+8. Key write operations must write audit logs.
+9. After each completion, update CRM_CONTEXT.md and CRM_CHANGELOG.md.
+10. If actual code differs from this documentation, report the difference first and do not continue directly.
+
