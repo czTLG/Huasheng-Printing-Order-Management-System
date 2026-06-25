@@ -101,7 +101,10 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
   const inquiries = Array.isArray(data.inquiries) ? data.inquiries : [];
   const communications = Array.isArray(data.communications) ? data.communications : [];
   const relatedEmails = Array.isArray(data.relatedEmails) ? data.relatedEmails : [];
+  const emailConversations = Array.isArray(data.emailConversations) ? data.emailConversations : [];
+  const importSuggestions = Array.isArray(data.importSuggestions) ? data.importSuggestions : [];
   const auditLogs = Array.isArray(data.audit_logs) ? data.audit_logs : [];
+  const quoteSuggestions = importSuggestions.filter((item: any) => item.suggestion_type === 'quotation_draft');
 
   return (
     <div className="space-y-5">
@@ -294,6 +297,23 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
       </div>
 
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        <h3 className="text-sm font-black text-slate-800">邮件线程</h3>
+        {emailConversations.length === 0 ? (
+          <div className="text-sm text-slate-400">暂无邮件线程</div>
+        ) : emailConversations.map((item: any) => (
+          <div key={`${item.conversation_key}-${item.latest_at}`} className="border border-slate-100 rounded-lg p-3">
+            <div className="flex justify-between gap-3 text-xs text-slate-400">
+              <span>{item.latest_from_name || item.latest_from_email || '-'} · {item.latest_direction || '-'}</span>
+              <span>{item.latest_at || '-'}</span>
+            </div>
+            <div className="text-sm font-bold text-slate-800 mt-1">{item.latest_subject || '(无主题)'}</div>
+            <div className="text-xs text-slate-500 mt-1">线程 {item.conversation_key || '未分组'} · {item.message_count || 0} 封</div>
+            <div className="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{item.latest_preview || '未记录'}</div>
+          </div>
+        ))}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
         <h3 className="text-sm font-black text-slate-800">关联邮件</h3>
         {relatedEmails.length === 0 ? (
           <div className="text-sm text-slate-400">暂无关联邮件</div>
@@ -305,9 +325,52 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             </div>
             <div className="text-sm font-bold text-slate-800 mt-1">{item.subject || '(无主题)'}</div>
             <div className="text-xs text-slate-500 mt-1">处理状态：{item.processing_status || 'new'}</div>
+            <div className="text-xs text-slate-500 mt-1">线程：{item.conversation_key || '未分组'} · 报价 {Number(item.quote_detected || 0) ? '是' : '否'} · 询盘 {Number(item.inquiry_detected || 0) ? '是' : '否'}</div>
             <div className="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{item.preview || '未记录'}</div>
           </div>
         ))}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        <h3 className="text-sm font-black text-slate-800">待确认建议</h3>
+        {importSuggestions.length === 0 ? (
+          <div className="text-sm text-slate-400">暂无待确认建议</div>
+        ) : importSuggestions.slice(0, 12).map((item: any) => (
+          <div key={item.id} className="border border-slate-100 rounded-lg p-3">
+            <div className="flex justify-between gap-3 text-xs text-slate-400">
+              <span>{item.suggestion_type}</span>
+              <span>{item.status || 'pending'} · {item.confidence || '-'}</span>
+            </div>
+            <div className="text-sm text-slate-700 mt-1">{item.summary || '未记录'}</div>
+            <div className="text-xs text-slate-500 mt-1">来源邮件：{item.source_email_subject || '未记录'}</div>
+          </div>
+        ))}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        <h3 className="text-sm font-black text-slate-800">报价线索</h3>
+        {quoteSuggestions.length === 0 ? (
+          <div className="text-sm text-slate-400">暂无报价线索</div>
+        ) : quoteSuggestions.map((item: any) => {
+          let extracted: any = {};
+          try { extracted = JSON.parse(item.extracted_json || '{}'); } catch {}
+          return (
+            <div key={item.id} className="border border-indigo-100 rounded-lg bg-indigo-50 p-3">
+              <div className="flex justify-between gap-3 text-xs text-indigo-600">
+                <span>{extracted.trade_term || '未识别条款'} · {extracted.quote_currency || '-'} · {item.confidence || '-'}</span>
+                <span>{item.status || 'pending'}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2 text-sm text-indigo-900">
+                <div>单价：{extracted.unit_price || extracted.exw_price || extracted.fob_price || extracted.cif_price || '-'}</div>
+                <div>总价：{extracted.total_amount || '-'}</div>
+                <div>数量：{extracted.quantity || '-'}</div>
+                <div>付款：{extracted.payment_terms || '-'}</div>
+                <div>交期：{extracted.lead_time || '-'}</div>
+                <div>来源邮件：{item.source_email_subject || '-'}</div>
+              </div>
+            </div>
+          );
+        })}
       </section>
 
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">

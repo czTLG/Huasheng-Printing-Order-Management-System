@@ -513,3 +513,62 @@
   * Keep email import suggestion flow review-only
 * Next step:
   * Finalize smoke/build evidence, then move into quotation foundation only after this batch is stable
+
+---
+
+## 2026-06-25 - Email Import Extraction Upgrade
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 提升邮件导入为真正可用的数据入口
+  * 支持 INBOX 与 Sent/已发送类 folder 同步
+  * 增强 email_messages 线程归并、客户匹配、报价检测字段
+  * 从邮件提取客户信息、询盘信息、规格信息、报价信息
+  * 全部写入 pending 的 crm_import_suggestions
+  * 增强邮件导入页与客户档案页展示
+* Files changed:
+  * src/db.js
+  * src/lib/imapSync.js
+  * src/lib/emailCrmParser.js
+  * src/routes/crm.js
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmEmailImport.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * email_messages added normalized_subject, conversation_key, email_domain, contact_email, contact_name
+  * email_messages added quote_detected, inquiry_detected, customer_detected, parsed_at
+  * added conversation and quote-related indexes for email_messages
+* API changes:
+  * Enhanced POST /api/crm/email/sync to preserve folder and stable sync summary
+  * Enhanced GET /api/crm/email/messages
+  * Enhanced GET /api/crm/email/messages/:id
+  * Added GET /api/crm/email/messages/:id/thread
+  * Enhanced POST /api/crm/email/messages/:id/parse
+  * Enhanced POST /api/crm/email/parse-unprocessed
+  * Added GET /api/crm/email/quote-suggestions
+  * Added GET /api/crm/customers/:id/import-suggestions
+  * Added GET /api/crm/customers/:id/email-conversations
+* Frontend changes:
+  * Email import page now shows INBOX sync, Sent sync, custom folder sync, richer run status, thread info, quote flags, grouped suggestions
+  * Customer detail now shows email threads, pending suggestions, and quotation clues
+* Parser changes:
+  * Rule-based parser now emits customer_profile, inquiry, specification, and quotation_draft suggestions
+  * Customer matching uses email, domain, company/contact text hints
+  * Material structure extraction preserves raw structure when layer parsing is uncertain
+* Build result:
+  * frontend-next npm run build: PASS
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * Real IMAP server folder names still need deployment-server validation
+  * Parser remains rule-based and conservative; extracted quote/spec fields still require human review
+* Decisions:
+  * quotation_draft stays as pending suggestion only
+  * no automatic customer update and no automatic formal quotation creation
+* Next step:
+  * On a deployment server with real IMAP connectivity, verify INBOX and Sent folder behavior against the actual Aliyun mailbox, then evaluate whether a controlled “apply suggestion” flow is needed

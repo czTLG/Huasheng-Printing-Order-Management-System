@@ -419,6 +419,14 @@ async function main() {
   assert(!String(emailSyncMissingEnv.error || '').includes('undefined'), 'email sync failure should not expose undefined.length style errors');
   assert(emailSyncMissingEnv.sync_run, 'email sync failure should include structured sync run summary');
   assert(Array.isArray(emailSyncMissingEnv.config_status?.missing), 'missing env response should list missing variables');
+  const emailSyncSentMissingEnv = await httpJson('/api/crm/email/sync', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    expectedStatus: 400,
+    body: { folder: 'Sent', days: 7, limit: 10 }
+  });
+  assert.strictEqual(emailSyncSentMissingEnv.ok, false, 'sent folder sync should also fail clearly when env is missing');
+  assert(emailSyncSentMissingEnv.sync_run?.folder === 'Sent', 'sent folder sync should preserve requested folder in summary');
 
   const db = new Database(dbPath);
   const seedTs = '2026-06-24 11:00:00';
@@ -427,9 +435,11 @@ async function main() {
       mailbox, folder, message_uid, message_id, thread_id, in_reply_to, references_header,
       from_email, from_name, to_emails, cc_emails, bcc_emails, subject, text_body, html_body,
       cleaned_text, attachments_json, sent_at, received_at, direction, processing_status,
+      normalized_subject, conversation_key, email_domain, contact_email, contact_name,
+      quote_detected, inquiry_detected, customer_detected, parsed_at,
       matched_customer_id, matched_inquiry_id, raw_headers_json, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     'sales@example.com',
     'INBOX',
@@ -452,6 +462,15 @@ async function main() {
     seedTs,
     'inbound',
     'new',
+    'need 50000 pouch quotation',
+    'thread:<msg-1001@example.com>',
+    'example.com',
+    'alice@example.com',
+    'Alice',
+    0,
+    0,
+    0,
+    '',
     crmCustomerId,
     inquiryId,
     '{}',
@@ -471,11 +490,16 @@ async function main() {
     body: {}
   });
   assert.strictEqual(parsedEmail.ok, true, 'email parse should succeed');
-  const suggestionId = Number(parsedEmail.suggestion_id);
-  assert(suggestionId > 0, 'parsed email should create suggestion');
+  assert(Array.isArray(parsedEmail.suggestion_ids), 'email parse should return suggestion ids');
+  assert(parsedEmail.suggestion_ids.length > 0, 'email parse should create suggestions');
+  const suggestionId = Number(parsedEmail.suggestion_ids[0]);
 
   const suggestionDetailBefore = await httpJson(`/api/crm/import-suggestions/${suggestionId}`, { token: crmAdminLogin.token });
   assert.strictEqual(Number(suggestionDetailBefore.suggestion.matched_customer_id), crmCustomerId, 'suggestion should match customer');
+  const quoteSuggestions = await httpJson('/api/crm/email/quote-suggestions', { token: crmAdminLogin.token });
+  assert(quoteSuggestions.rows.some(row => Number(row.source_id) === seededEmailId), 'quote suggestion list should include parsed quotation draft');
+  const emailThread = await httpJson(`/api/crm/email/messages/${seededEmailId}/thread`, { token: crmAdminLogin.token });
+  assert(Array.isArray(emailThread.rows), 'email thread should return rows');
   await httpJson('/api/crm/import-suggestions', { token: scopedSalesLogin.token, expectedStatus: 403 });
 
   const customerBeforeSuggestionStatus = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
@@ -486,6 +510,8 @@ async function main() {
   });
   const customerAfterSuggestionStatus = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
   assert.strictEqual(customerAfterSuggestionStatus.customer.company_name, customerBeforeSuggestionStatus.customer.company_name, 'suggestion status update must not overwrite customer profile');
+  assert(Array.isArray(customerAfterSuggestionStatus.relatedEmails), 'customer detail should include related emails');
+  assert(Array.isArray(customerAfterSuggestionStatus.importSuggestions), 'customer detail should include related suggestions');
 
   const inquiryWithoutSpec = await httpJson('/api/crm/inquiries', {
     method: 'POST',

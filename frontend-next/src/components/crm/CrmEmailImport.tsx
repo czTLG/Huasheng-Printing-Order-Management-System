@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Mail, RefreshCcw, Wand2 } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
 
@@ -21,12 +21,13 @@ export default function CrmEmailImport() {
   const load = async () => {
     setLoading(true);
     try {
-      const [runs, emailRows, suggestionRows] = await Promise.all([
+      const [config, runs, emailRows, suggestionRows] = await Promise.all([
+        mockService.getCrmEmailConfigStatus().catch((err: any) => err?.message ? { ok: false } : null),
         mockService.listCrmEmailSyncRuns(),
         mockService.listCrmEmailMessages(filters),
         mockService.listCrmImportSuggestions({ source_type: 'email' }),
       ]);
-      setConfigStatus(runs?.config_status || emailRows?.config_status || null);
+      setConfigStatus((config && typeof config === 'object' ? config : null) || runs?.config_status || emailRows?.config_status || null);
       setSyncRuns(Array.isArray(runs?.rows) ? runs.rows : []);
       setMessages(Array.isArray(emailRows?.rows) ? emailRows.rows : []);
       setSuggestions(Array.isArray(suggestionRows?.rows) ? suggestionRows.rows : []);
@@ -47,6 +48,28 @@ export default function CrmEmailImport() {
       setSyncing(false);
     }
   };
+
+  const runSyncWithFolder = async (folder: string) => {
+    setSyncing(true);
+    try {
+      const payload = { ...syncForm, folder };
+      setSyncForm(payload);
+      const ret = await mockService.syncCrmEmail(payload);
+      setConfigStatus(ret?.config_status || null);
+      await load();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const groupedSuggestions = useMemo(() => {
+    return suggestions.reduce((acc: Record<string, any[]>, row: any) => {
+      const key = row.suggestion_type || 'other';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(row);
+      return acc;
+    }, {});
+  }, [suggestions]);
 
   const parseMessage = async (id: number) => {
     setParsing(true);
@@ -115,12 +138,14 @@ export default function CrmEmailImport() {
           </div>
         )}
         {configStatus?.note && <div className="text-xs text-slate-500">{configStatus.note}</div>}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <input className={inputClass} value={syncForm.folder} onChange={e => setSyncForm(f => ({ ...f, folder: e.target.value }))} placeholder="folder" />
           <input className={inputClass} type="number" value={syncForm.days} onChange={e => setSyncForm(f => ({ ...f, days: Number(e.target.value || 0) }))} placeholder="days" />
           <input className={inputClass} type="number" value={syncForm.limit} onChange={e => setSyncForm(f => ({ ...f, limit: Number(e.target.value || 0) }))} placeholder="limit" />
-          <button disabled={syncing} onClick={runSync} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">手动同步</button>
+          <button disabled={syncing} onClick={() => runSyncWithFolder('INBOX')} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">同步收件箱</button>
+          <button disabled={syncing} onClick={() => runSyncWithFolder('Sent')} className="h-9 px-4 rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-700 disabled:opacity-60">同步已发送</button>
         </div>
+        <button disabled={syncing} onClick={runSync} className="h-9 px-4 rounded-lg bg-slate-900 text-white text-sm font-black disabled:opacity-60">自定义 folder 同步</button>
       </section>
 
       <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
@@ -129,17 +154,18 @@ export default function CrmEmailImport() {
           <table className="w-full text-left">
             <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
               <tr>
-                <th className="px-4 py-3">时间</th><th className="px-4 py-3">Mailbox</th><th className="px-4 py-3">Folder</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">扫描/导入/跳过</th><th className="px-4 py-3">错误</th>
+                <th className="px-4 py-3">时间</th><th className="px-4 py-3">Folder</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">扫描</th><th className="px-4 py-3">导入</th><th className="px-4 py-3">跳过</th><th className="px-4 py-3">错误</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {syncRuns.slice(0, 10).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-xs text-slate-500">{row.started_at || row.created_at}</td>
-                  <td className="px-4 py-3 text-sm text-slate-700">{row.mailbox || '-'}</td>
+                  <td className="px-4 py-3 text-xs text-slate-500">{row.started_at || row.created_at}<div>{row.finished_at || '-'}</div></td>
                   <td className="px-4 py-3 text-sm text-slate-700">{row.folder || '-'}</td>
                   <td className="px-4 py-3 text-sm font-bold text-slate-800">{row.status}</td>
-                  <td className="px-4 py-3 text-sm text-slate-600">{row.scanned_count || 0} / {row.inserted_count || 0} / {row.skipped_count || 0}</td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{row.scanned_count || 0}</td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{row.inserted_count || 0}</td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{row.skipped_count || 0}</td>
                   <td className="px-4 py-3 text-xs text-rose-600">{row.error_message || '-'}</td>
                 </tr>
               ))}
@@ -149,7 +175,7 @@ export default function CrmEmailImport() {
       </section>
 
       <section className="bg-white border border-slate-200 rounded-lg p-4">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
           <input className={inputClass} value={filters.keyword} onChange={e => setFilters(f => ({ ...f, keyword: e.target.value }))} placeholder="关键词" />
           <select className={inputClass} value={filters.direction} onChange={e => setFilters(f => ({ ...f, direction: e.target.value }))}>
             <option value="">全部方向</option>
@@ -167,6 +193,7 @@ export default function CrmEmailImport() {
           <button disabled={parsing} onClick={parseUnprocessed} className="h-9 px-4 rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-700 flex items-center justify-center gap-2 disabled:opacity-60">
             <Wand2 className="w-4 h-4" /> 批量解析未处理
           </button>
+          <button disabled={parsing} onClick={async () => { setParsing(true); try { const rows = await mockService.listCrmEmailMessages({ keyword: 'quote', processing_status: 'new' }); const first = Array.isArray(rows?.rows) ? rows.rows.slice(0, 20) : []; for (const row of first) { await mockService.parseCrmEmailMessage(row.id); } await load(); } finally { setParsing(false); } }} className="h-9 px-4 rounded-lg border border-indigo-200 bg-indigo-50 text-sm font-bold text-indigo-700 disabled:opacity-60">只解析报价邮件</button>
         </div>
       </section>
 
@@ -184,10 +211,11 @@ export default function CrmEmailImport() {
                   <div className="text-sm font-black text-slate-900 truncate">{row.subject || '(无主题)'}</div>
                   <div className="text-xs text-slate-400">{row.received_at || '-'}</div>
                 </div>
-                <div className="text-xs text-slate-500 mt-1">{row.from_name || row.from_email || '-'} · {row.direction} · {row.processing_status}</div>
-                <div className="text-xs text-slate-400 mt-1 truncate">{row.cleaned_text || '-'}</div>
-              </button>
-            ))}
+                  <div className="text-xs text-slate-500 mt-1">{row.from_name || row.from_email || '-'} · {row.direction} · {row.processing_status}</div>
+                  <div className="text-xs text-slate-500 mt-1">客户 {row.matched_customer_name || '-'} · 询盘 {row.matched_inquiry_title || '-'} · 报价 {Number(row.quote_detected || 0) ? '是' : '否'} · 询盘 {Number(row.inquiry_detected || 0) ? '是' : '否'}</div>
+                  <div className="text-xs text-slate-400 mt-1 truncate">{row.cleaned_text || '-'}</div>
+                </button>
+              ))}
           </div>
         </section>
 
@@ -207,8 +235,26 @@ export default function CrmEmailImport() {
                 <div className="rounded-lg border border-slate-100 px-3 py-2">From：{selectedMessage.message.from_name || selectedMessage.message.from_email || '-'}</div>
                 <div className="rounded-lg border border-slate-100 px-3 py-2">Matched Customer：{selectedMessage.message.matched_customer_name || '-'}</div>
                 <div className="rounded-lg border border-slate-100 px-3 py-2">Matched Inquiry：{selectedMessage.message.matched_inquiry_title || '-'}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">Thread：{selectedMessage.message.conversation_key || '-'}</div>
+                <div className="rounded-lg border border-slate-100 px-3 py-2">报价线索：{Number(selectedMessage.message.quote_detected || 0) ? '是' : '否'}</div>
               </div>
               <textarea readOnly className={`${areaClass} w-full`} value={selectedMessage.message.cleaned_text || selectedMessage.message.text_body || ''} />
+              <textarea readOnly className={`${areaClass} w-full`} value={selectedMessage.message.attachments_json || '[]'} />
+              {Array.isArray(selectedMessage.thread) && selectedMessage.thread.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-sm font-black text-slate-900">邮件线程</div>
+                  {selectedMessage.thread.map((item: any) => (
+                    <div key={item.id} className="rounded-lg border border-slate-100 px-3 py-2">
+                      <div className="flex justify-between gap-3 text-xs text-slate-400">
+                        <span>{item.from_name || item.from_email || '-'} · {item.direction || '-'}</span>
+                        <span>{item.received_at || '-'}</span>
+                      </div>
+                      <div className="text-sm font-bold text-slate-800 mt-1">{item.subject || '(无主题)'}</div>
+                      <div className="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{item.preview || '-'}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="space-y-2">
                 <div className="text-sm font-black text-slate-900">该邮件解析建议</div>
                 {(selectedMessage.suggestions || []).length === 0 ? (
@@ -231,14 +277,19 @@ export default function CrmEmailImport() {
           <div className="max-h-[420px] overflow-auto divide-y divide-slate-100">
             {suggestions.length === 0 ? (
               <div className="p-6 text-sm text-slate-400">暂无建议</div>
-            ) : suggestions.map((row) => (
-              <button key={row.id} onClick={() => openSuggestion(Number(row.id))} className="w-full text-left px-4 py-3 hover:bg-slate-50">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-black text-slate-900">{row.suggestion_type}</div>
-                  <div className="text-xs text-slate-400">{row.status}</div>
-                </div>
-                <div className="text-xs text-slate-500 mt-1">{row.summary || '-'}</div>
-              </button>
+            ) : Object.entries(groupedSuggestions).map(([group, rows]) => (
+              <div key={group}>
+                <div className={`px-4 py-2 text-xs font-black ${group === 'quotation_draft' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-50 text-slate-600'}`}>{group} ({rows.length})</div>
+                {rows.map((row: any) => (
+                  <button key={row.id} onClick={() => openSuggestion(Number(row.id))} className="w-full text-left px-4 py-3 hover:bg-slate-50">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-black text-slate-900">{row.suggestion_type}</div>
+                      <div className="text-xs text-slate-400">{row.status}</div>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">{row.summary || '-'}</div>
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         </section>

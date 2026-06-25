@@ -683,3 +683,64 @@ Still deferred after this batch:
 * Quotation foundation tables and pages were intentionally deferred in this batch to avoid destabilizing build/test quality.
 * Dedicated costing_user and freight_user frontend queue entries remain deferred.
 * Formal quotation rollup, export, and order conversion remain later phases.
+
+## 25. Email Import Extraction Upgrade
+
+Implemented on 2026-06-25:
+
+* Email sync remains read-only and manual-triggered.
+* Sync now supports both `INBOX` and sent-mail style folders through folder aliases:
+  * `Sent`
+  * `Sent Messages`
+  * `Sent Mail`
+  * `已发送`
+  * `已发送邮件`
+* Sync results must always return stable counts and status fields even when a folder is missing or IMAP connectivity fails.
+
+Email message structuring:
+
+* `email_messages` now stores:
+  * `normalized_subject`
+  * `conversation_key`
+  * `email_domain`
+  * `contact_email`
+  * `contact_name`
+  * `quote_detected`
+  * `inquiry_detected`
+  * `customer_detected`
+  * `parsed_at`
+* `conversation_key` priority:
+  1. `thread_id`
+  2. `references_header` / `in_reply_to`
+  3. `normalized_subject + contact_email`
+  4. `normalized_subject + email_domain`
+* `normalized_subject` strips prefixes such as `Re:`, `Fwd:`, `回复：`, `转发：`, and `答复：`.
+
+Customer matching strategy:
+
+* First try exact `customers.email` matching.
+* Then try domain matching against `customers.email` or `customers.website`.
+* Then try weak body/subject matching against `company_name`, `name`, and `contact_person`.
+* If matching remains uncertain, keep the result only in `crm_import_suggestions`.
+* The system must not auto overwrite `customers`.
+
+Inquiry, specification, and quotation extraction strategy:
+
+* Rule-based parsing now extracts customer profile hints, inquiry hints, specification hints, and quotation hints into separate pending suggestions.
+* Suggestion types currently used from email parsing:
+  * `customer_profile`
+  * `inquiry`
+  * `specification`
+  * `quotation_draft`
+* `quotation_draft` is only a pending suggestion. It is not a formal quotation record and does not create `quotations`.
+* Material structure parsing should stay conservative. If layer parsing is uncertain, preserve the original `material_structure_text` instead of forcing a broken layer split.
+
+Customer profile display rules:
+
+* Customer detail should show related email threads, recent related emails, pending import suggestions, and quotation clues from `quotation_draft` suggestions.
+* Raw HTML email content should not be expanded by default.
+
+Safety rules:
+
+* No automatic update of `customers`, `inquiries`, `specifications`, or future `quotations` from parsed email.
+* No SMTP, no outgoing send, no remote delete, no remote move, no mark-as-read.

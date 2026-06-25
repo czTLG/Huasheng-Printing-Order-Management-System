@@ -581,6 +581,10 @@ export const mockService = {
     return api<any>('/api/crm/email/sync-runs');
   },
 
+  async getCrmEmailConfigStatus() {
+    return api<any>('/api/crm/email/config-status');
+  },
+
   async listCrmEmailMessages(params: Record<string, any> = {}) {
     const search = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
@@ -591,6 +595,10 @@ export const mockService = {
 
   async getCrmEmailMessage(id: number | string) {
     return api<any>(`/api/crm/email/messages/${id}`);
+  },
+
+  async getCrmEmailThread(id: number | string) {
+    return api<any>(`/api/crm/email/messages/${id}/thread`);
   },
 
   async parseCrmEmailMessage(id: number | string) {
@@ -621,6 +629,10 @@ export const mockService = {
     return api<any>(`/api/crm/import-suggestions/${id}`);
   },
 
+  async listCrmQuoteSuggestions() {
+    return api<any>('/api/crm/email/quote-suggestions');
+  },
+
   async updateCrmImportSuggestion(id: number | string, payload: any) {
     return api<any>(`/api/crm/import-suggestions/${id}`, {
       method: 'PATCH',
@@ -647,6 +659,14 @@ export const mockService = {
 
   async getCrmInquiry(id: number | string) {
     return api<any>(`/api/crm/inquiries/${id}`);
+  },
+
+  async listCustomerImportSuggestions(customerId: number | string) {
+    return api<any>(`/api/crm/customers/${customerId}/import-suggestions`);
+  },
+
+  async listCustomerEmailConversations(customerId: number | string) {
+    return api<any>(`/api/crm/customers/${customerId}/email-conversations`);
   },
 
   async updateCrmInquiry(id: number | string, payload: any) {

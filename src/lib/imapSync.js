@@ -63,6 +63,9 @@ function validateImapConfig(config = getImapConfig()) {
 function classifyImapError(err) {
   const code = text(err?.code).toUpperCase();
   const message = text(err?.message).toLowerCase();
+  if (code === 'IMAP_FOLDER_NOT_FOUND' || message.includes('does not exist') || message.includes('mailbox folder not found')) {
+    return 'IMAP folder not found. Please verify the folder name on the deployment server.';
+  }
   if (code === 'ENOTFOUND') {
     return 'IMAP DNS lookup failed. Please verify IMAP host or run this on the deployment server with external DNS access.';
   }
@@ -114,6 +117,45 @@ function cleanMessageText(textBody = '') {
     .trim();
 }
 
+function extractDomain(email) {
+  const value = text(email).toLowerCase();
+  const parts = value.split('@');
+  return parts.length === 2 ? parts[1] : '';
+}
+
+function normalizeSubject(value) {
+  return text(value)
+    .replace(/^(re|fw|fwd)\s*:\s*/ig, '')
+    .replace(/^(回复|答复|转发)\s*[:：]\s*/ig, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function firstContactEmail(message = {}, mailbox = '') {
+  const mailboxLower = text(mailbox).toLowerCase();
+  const candidates = []
+    .concat(text(message.from_email).split(','))
+    .concat(text(message.to_emails).split(','))
+    .concat(text(message.cc_emails).split(','))
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return candidates.find((item) => item !== mailboxLower) || text(message.from_email).toLowerCase();
+}
+
+function computeConversationKey(message = {}) {
+  const threadId = text(message.thread_id);
+  if (threadId) return `thread:${threadId.slice(0, 255)}`;
+  const ref = text(message.references_header || message.in_reply_to);
+  if (ref) return `ref:${ref.slice(0, 255)}`;
+  const normalizedSubject = normalizeSubject(message.subject);
+  const contactEmail = firstContactEmail(message, message.mailbox || '');
+  const domain = extractDomain(contactEmail);
+  if (normalizedSubject && contactEmail) return `subject-contact:${normalizedSubject}::${contactEmail}`;
+  if (normalizedSubject && domain) return `subject-domain:${normalizedSubject}::${domain}`;
+  return normalizedSubject ? `subject:${normalizedSubject}` : '';
+}
+
 function buildThreadId(message) {
   const header = text(message.references_header || message.in_reply_to || message.message_id);
   return header ? header.slice(0, 255) : '';
@@ -128,6 +170,34 @@ function findMatchedCustomer(fromEmail) {
     WHERE LOWER(COALESCE(email, '')) = ?
     LIMIT 1
   `).get(email)?.id || null;
+}
+
+function findMatchedInquiry(customerId, subject, cleanedText) {
+  const normalizedCustomerId = Number(customerId || 0);
+  if (!normalizedCustomerId) return null;
+  const source = `${text(subject)}\n${text(cleanedText)}`.toLowerCase();
+  const inquiries = db.prepare(`
+    SELECT id, inquiry_title, product_type, packaging_type, destination_country
+    FROM inquiries
+    WHERE customer_id = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 50
+  `).all(normalizedCustomerId);
+  const matched = inquiries.find((row) => {
+    return [row.inquiry_title, row.product_type, row.packaging_type, row.destination_country]
+      .filter(Boolean)
+      .some((part) => source.includes(String(part).toLowerCase()));
+  });
+  return matched?.id || null;
+}
+
+function deriveFlags(message = {}) {
+  const source = `${text(message.subject)}\n${text(message.cleaned_text || message.text_body)}`.toLowerCase();
+  return {
+    quote_detected: /\b(usd|rmb|cny|eur|gbp|unit price|total amount|price|quotation|quote|报价|单价|总价|exw|fob|cif|cfr|ddp|dap)\b/i.test(source) ? 1 : 0,
+    inquiry_detected: /\b(inquiry|spec|specification|size|thickness|material|qty|quantity|pcs|roll film|pouch|bag|询盘|规格|厚度|材料)\b/i.test(source) ? 1 : 0,
+    customer_detected: /\b(company|website|whatsapp|phone|address|buyer|contact|联系人|公司|网站)\b/i.test(source) ? 1 : 0
+  };
 }
 
 function upsertEmailMessage(mailbox, folder, rawMessage) {
@@ -154,10 +224,27 @@ function upsertEmailMessage(mailbox, folder, rawMessage) {
     received_at: text(rawMessage.received_at || rawMessage.sent_at || ts),
     direction: deriveDirection(rawMessage, mailbox),
     processing_status: text(rawMessage.processing_status || 'new'),
+    normalized_subject: normalizeSubject(rawMessage.subject),
+    email_domain: extractDomain(rawMessage.from_email),
+    contact_email: firstContactEmail(rawMessage, mailbox),
+    contact_name: text(rawMessage.contact_name || rawMessage.from_name),
     matched_customer_id: rawMessage.matched_customer_id || findMatchedCustomer(rawMessage.from_email),
     matched_inquiry_id: rawMessage.matched_inquiry_id || null,
     raw_headers_json: text(rawMessage.raw_headers_json || '{}'),
+    conversation_key: text(rawMessage.conversation_key),
+    quote_detected: Number(rawMessage.quote_detected || 0),
+    inquiry_detected: Number(rawMessage.inquiry_detected || 0),
+    customer_detected: Number(rawMessage.customer_detected || 0),
+    parsed_at: text(rawMessage.parsed_at),
   };
+  if (!normalized.conversation_key) normalized.conversation_key = computeConversationKey({ ...normalized, mailbox });
+  if (!normalized.matched_inquiry_id && normalized.matched_customer_id) {
+    normalized.matched_inquiry_id = findMatchedInquiry(normalized.matched_customer_id, normalized.subject, normalized.cleaned_text);
+  }
+  const derivedFlags = deriveFlags(normalized);
+  normalized.quote_detected = normalized.quote_detected || derivedFlags.quote_detected;
+  normalized.inquiry_detected = normalized.inquiry_detected || derivedFlags.inquiry_detected;
+  normalized.customer_detected = normalized.customer_detected || derivedFlags.customer_detected;
 
   let existing = null;
   if (normalized.message_id) {
@@ -177,14 +264,18 @@ function upsertEmailMessage(mailbox, folder, rawMessage) {
       SET thread_id = ?, in_reply_to = ?, references_header = ?, from_email = ?, from_name = ?,
           to_emails = ?, cc_emails = ?, bcc_emails = ?, subject = ?, text_body = ?, html_body = ?,
           cleaned_text = ?, attachments_json = ?, sent_at = ?, received_at = ?, direction = ?,
-          processing_status = ?, matched_customer_id = ?, matched_inquiry_id = ?, raw_headers_json = ?, updated_at = ?
+          processing_status = ?, normalized_subject = ?, conversation_key = ?, email_domain = ?, contact_email = ?, contact_name = ?,
+          quote_detected = ?, inquiry_detected = ?, customer_detected = ?, parsed_at = ?,
+          matched_customer_id = ?, matched_inquiry_id = ?, raw_headers_json = ?, updated_at = ?
       WHERE id = ?
     `).run(
       normalized.thread_id, normalized.in_reply_to, normalized.references_header, normalized.from_email,
       normalized.from_name, normalized.to_emails, normalized.cc_emails, normalized.bcc_emails,
       normalized.subject, normalized.text_body, normalized.html_body, normalized.cleaned_text,
       normalized.attachments_json, normalized.sent_at, normalized.received_at, normalized.direction,
-      normalized.processing_status, normalized.matched_customer_id, normalized.matched_inquiry_id,
+      normalized.processing_status, normalized.normalized_subject, normalized.conversation_key, normalized.email_domain,
+      normalized.contact_email, normalized.contact_name, normalized.quote_detected, normalized.inquiry_detected,
+      normalized.customer_detected, normalized.parsed_at, normalized.matched_customer_id, normalized.matched_inquiry_id,
       normalized.raw_headers_json, ts, existing.id
     );
     return { id: existing.id, inserted: false, normalized };
@@ -194,19 +285,49 @@ function upsertEmailMessage(mailbox, folder, rawMessage) {
     INSERT INTO email_messages (
       mailbox, folder, message_uid, message_id, thread_id, in_reply_to, references_header,
       from_email, from_name, to_emails, cc_emails, bcc_emails, subject, text_body, html_body,
-      cleaned_text, attachments_json, sent_at, received_at, direction, processing_status,
+      cleaned_text, attachments_json, sent_at, received_at, direction, processing_status, normalized_subject,
+      conversation_key, email_domain, contact_email, contact_name, quote_detected, inquiry_detected, customer_detected, parsed_at,
       matched_customer_id, matched_inquiry_id, raw_headers_json, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     normalized.mailbox, normalized.folder, normalized.message_uid, normalized.message_id, normalized.thread_id,
     normalized.in_reply_to, normalized.references_header, normalized.from_email, normalized.from_name,
     normalized.to_emails, normalized.cc_emails, normalized.bcc_emails, normalized.subject, normalized.text_body,
     normalized.html_body, normalized.cleaned_text, normalized.attachments_json, normalized.sent_at,
-    normalized.received_at, normalized.direction, normalized.processing_status, normalized.matched_customer_id,
-    normalized.matched_inquiry_id, normalized.raw_headers_json, ts, ts
+    normalized.received_at, normalized.direction, normalized.processing_status, normalized.normalized_subject,
+    normalized.conversation_key, normalized.email_domain, normalized.contact_email, normalized.contact_name,
+    normalized.quote_detected, normalized.inquiry_detected, normalized.customer_detected, normalized.parsed_at,
+    normalized.matched_customer_id, normalized.matched_inquiry_id, normalized.raw_headers_json, ts, ts
   );
   return { id: result.lastInsertRowid, inserted: true, normalized };
+}
+
+function resolveFolderName(folder) {
+  const value = text(folder || 'INBOX');
+  const lowered = value.toLowerCase();
+  if (lowered === 'sent' || lowered === 'sent messages' || lowered === 'sent mail' || lowered === '已发送' || lowered === '已发送邮件') {
+    return ['Sent', 'Sent Messages', 'Sent Mail', '已发送', '已发送邮件'];
+  }
+  return [value];
+}
+
+async function openMailboxWithFallback(client, folder) {
+  const candidates = resolveFolderName(folder);
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const mailboxInfo = await client.mailboxOpen(candidate);
+      return { folder: candidate, mailboxInfo };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) {
+    lastError.code = lastError.code || 'IMAP_FOLDER_NOT_FOUND';
+    lastError.message = text(lastError.message || `Mailbox folder not found: ${folder}`);
+  }
+  throw lastError || new Error(`Mailbox folder not found: ${folder}`);
 }
 
 async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' } = {}) {
@@ -279,7 +400,8 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
 
   try {
     await client.connect();
-    await client.mailboxOpen(text(folder || 'INBOX'));
+    const opened = await openMailboxWithFallback(client, folder);
+    result.folder = opened.folder;
     const searchResultsRaw = await client.search({ since: sinceDate });
     const searchResults = Array.isArray(searchResultsRaw) ? searchResultsRaw : [];
     const uids = searchResults.slice(-maxItems).reverse();
@@ -324,7 +446,8 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
             messageId: parsed.messageId || '',
             inReplyTo: parsed.inReplyTo || '',
             references: parsed.references || '',
-          })
+          }),
+          parsed_at: now()
         });
         result.messages.push({ id: imported.id, message_id: imported.normalized.message_id, subject: imported.normalized.subject });
         if (imported.inserted) {
@@ -387,6 +510,10 @@ module.exports = {
   maskMailboxUser,
   classifyImapError,
   cleanMessageText,
+  computeConversationKey,
+  extractDomain,
+  normalizeSubject,
+  resolveFolderName,
   upsertEmailMessage,
   sanitizeErrorMessage,
   syncMailbox

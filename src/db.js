@@ -411,6 +411,15 @@ function initDb() {
       received_at TEXT,
       direction TEXT,
       processing_status TEXT DEFAULT 'new',
+      normalized_subject TEXT,
+      conversation_key TEXT,
+      email_domain TEXT,
+      contact_email TEXT,
+      contact_name TEXT,
+      quote_detected INTEGER DEFAULT 0,
+      inquiry_detected INTEGER DEFAULT 0,
+      customer_detected INTEGER DEFAULT 0,
+      parsed_at TEXT,
       matched_customer_id INTEGER,
       matched_inquiry_id INTEGER,
       raw_headers_json TEXT,
@@ -657,6 +666,17 @@ function initDb() {
   const mpcols = db.prepare("PRAGMA table_info(material_prices)").all().map(c => c.name);
   if (!mpcols.includes('prop')) db.exec("ALTER TABLE material_prices ADD COLUMN prop REAL");
 
+  const emcols = db.prepare("PRAGMA table_info(email_messages)").all().map(c => c.name);
+  if (!emcols.includes('normalized_subject')) db.exec("ALTER TABLE email_messages ADD COLUMN normalized_subject TEXT");
+  if (!emcols.includes('conversation_key')) db.exec("ALTER TABLE email_messages ADD COLUMN conversation_key TEXT");
+  if (!emcols.includes('email_domain')) db.exec("ALTER TABLE email_messages ADD COLUMN email_domain TEXT");
+  if (!emcols.includes('contact_email')) db.exec("ALTER TABLE email_messages ADD COLUMN contact_email TEXT");
+  if (!emcols.includes('contact_name')) db.exec("ALTER TABLE email_messages ADD COLUMN contact_name TEXT");
+  if (!emcols.includes('quote_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN quote_detected INTEGER DEFAULT 0");
+  if (!emcols.includes('inquiry_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN inquiry_detected INTEGER DEFAULT 0");
+  if (!emcols.includes('customer_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN customer_detected INTEGER DEFAULT 0");
+  if (!emcols.includes('parsed_at')) db.exec("ALTER TABLE email_messages ADD COLUMN parsed_at TEXT");
+
   const cscols = db.prepare("PRAGMA table_info(cost_snapshots)").all().map(c => c.name);
   if (!cscols.includes('customer_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN customer_id INTEGER");
   if (!cscols.includes('inquiry_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN inquiry_id INTEGER");
@@ -691,6 +711,8 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_customer ON email_messages(matched_customer_id, received_at DESC, id DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_status ON email_messages(processing_status, direction, received_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_inquiry ON email_messages(matched_inquiry_id, received_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_conversation ON email_messages(conversation_key, received_at DESC, id DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_quote ON email_messages(quote_detected, inquiry_detected, processing_status, received_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_crm_import_suggestions_source ON crm_import_suggestions(source_type, source_id, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_crm_import_suggestions_match ON crm_import_suggestions(matched_customer_id, matched_inquiry_id, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_salesperson ON work_orders(salesperson_id, created_at)");

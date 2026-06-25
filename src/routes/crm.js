@@ -2,7 +2,7 @@ const express = require('express');
 const { db, now, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
 const { validateImapConfig, syncMailbox } = require('../lib/imapSync');
-const { createSuggestionFromEmail } = require('../lib/emailCrmParser');
+const { createSuggestionsFromEmail } = require('../lib/emailCrmParser');
 
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
@@ -168,6 +168,40 @@ function getCustomerOverview(customerId) {
   };
 }
 
+function getCustomerImportSuggestions(customerId) {
+  return db.prepare(`
+    SELECT
+      cis.*,
+      em.subject AS source_email_subject,
+      em.received_at AS source_email_received_at,
+      em.conversation_key AS source_email_conversation_key
+    FROM crm_import_suggestions cis
+    LEFT JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+    WHERE cis.matched_customer_id = ?
+    ORDER BY cis.updated_at DESC, cis.id DESC
+    LIMIT 100
+  `).all(customerId);
+}
+
+function getCustomerEmailConversations(customerId) {
+  return db.prepare(`
+    SELECT
+      COALESCE(conversation_key, '') AS conversation_key,
+      COUNT(*) AS message_count,
+      MAX(COALESCE(received_at, created_at)) AS latest_at,
+      MAX(subject) AS latest_subject,
+      MAX(direction) AS latest_direction,
+      MAX(from_email) AS latest_from_email,
+      MAX(from_name) AS latest_from_name,
+      MAX(SUBSTR(COALESCE(cleaned_text, text_body, ''), 1, 240)) AS latest_preview
+    FROM email_messages
+    WHERE matched_customer_id = ?
+    GROUP BY COALESCE(conversation_key, '')
+    ORDER BY latest_at DESC, message_count DESC
+    LIMIT 50
+  `).all(customerId);
+}
+
 router.get('/customers', (req, res) => {
   try {
     const q = text(req.query.q);
@@ -316,12 +350,15 @@ router.get('/customers/:id', (req, res) => {
     const latestCommunication = communications[0] || null;
     const relatedEmails = db.prepare(`
       SELECT id, subject, from_email, from_name, received_at, direction, processing_status, matched_inquiry_id,
+             conversation_key, quote_detected, inquiry_detected,
              SUBSTR(COALESCE(cleaned_text, text_body, ''), 1, 240) AS preview
       FROM email_messages
       WHERE matched_customer_id = ?
       ORDER BY COALESCE(received_at, created_at) DESC, id DESC
       LIMIT 20
     `).all(id);
+    const importSuggestions = getCustomerImportSuggestions(id);
+    const emailConversations = getCustomerEmailConversations(id);
     const auditLogs = db.prepare(`
       SELECT *
       FROM audit_logs
@@ -344,6 +381,8 @@ router.get('/customers/:id', (req, res) => {
       inquiries,
       communications,
       relatedEmails,
+      emailConversations,
+      importSuggestions,
       latestResearchNote,
       overview,
       pendingImportSuggestionCount: Number(overview.pending_import_suggestion_count || 0),
@@ -368,6 +407,28 @@ router.get('/customers/:id/research-notes', (req, res) => {
     res.json({ ok: true, rows });
   } catch (err) {
     handleError(res, err, '客户调研资料读取失败');
+  }
+});
+
+router.get('/customers/:id/import-suggestions', (req, res) => {
+  try {
+    const customerId = idParam(req.params.id);
+    if (!getCustomer(customerId)) return res.status(404).json({ ok: false, error: '客户不存在' });
+    const rows = getCustomerImportSuggestions(customerId);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '客户导入建议读取失败');
+  }
+});
+
+router.get('/customers/:id/email-conversations', (req, res) => {
+  try {
+    const customerId = idParam(req.params.id);
+    if (!getCustomer(customerId)) return res.status(404).json({ ok: false, error: '客户不存在' });
+    const rows = getCustomerEmailConversations(customerId);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '客户邮件线程读取失败');
   }
 });
 
@@ -1750,7 +1811,15 @@ router.post('/email/sync', async (req, res) => {
       operator: req.user.userName
     });
     crmAudit(req, 'email_sync_completed', 'crm_email_sync', result.id, result);
-    res.json({ ok: true, sync_run: result, config_status: safeEmailConfigStatus() });
+    res.json({
+      ok: true,
+      sync_run: {
+        ...result,
+        run_id: result.id,
+        error_message: '',
+      },
+      config_status: safeEmailConfigStatus()
+    });
   } catch (err) {
     crmAudit(req, 'email_sync_failed', 'crm_email_sync', err.runId || '', {
       error: text(err.message || err)
@@ -1759,7 +1828,11 @@ router.post('/email/sync', async (req, res) => {
     res.status(code).json({
       ok: false,
       error: text(err.message || '邮件同步失败'),
-      sync_run: err.summary || null,
+      sync_run: err.summary ? {
+        ...err.summary,
+        run_id: err.summary.id,
+        error_message: text(err.message || '邮件同步失败')
+      } : null,
       config_status: safeEmailConfigStatus(),
       run_id: err.runId || null
     });
@@ -1806,11 +1879,17 @@ router.get('/email/messages', (req, res) => {
       where += ' AND (em.subject LIKE ? OR em.from_email LIKE ? OR em.from_name LIKE ? OR em.cleaned_text LIKE ?)';
       params.push(like, like, like, like);
     }
-    ['from_email', 'matched_customer_id', 'matched_inquiry_id', 'processing_status', 'direction'].forEach((key) => {
+    ['from_email', 'matched_customer_id', 'matched_inquiry_id', 'processing_status', 'direction', 'folder'].forEach((key) => {
       const value = text(req.query[key]);
       if (!value) return;
       where += ` AND em.${key} = ?`;
       params.push(key.endsWith('_id') ? Number(value) : value);
+    });
+    ['quote_detected', 'inquiry_detected', 'customer_detected'].forEach((key) => {
+      const value = text(req.query[key]);
+      if (value !== '0' && value !== '1') return;
+      where += ` AND em.${key} = ?`;
+      params.push(Number(value));
     });
     if (text(req.query.date_from)) {
       where += ' AND COALESCE(em.received_at, em.created_at) >= ?';
@@ -1822,9 +1901,10 @@ router.get('/email/messages', (req, res) => {
     }
     const rows = db.prepare(`
       SELECT
-        em.id, em.mailbox, em.folder, em.message_uid, em.message_id, em.thread_id, em.from_email, em.from_name,
-        em.to_emails, em.cc_emails, em.subject, em.cleaned_text, em.sent_at, em.received_at, em.direction,
-        em.processing_status, em.matched_customer_id, em.matched_inquiry_id, em.created_at, em.updated_at,
+        em.id, em.mailbox, em.folder, em.message_uid, em.message_id, em.thread_id, em.conversation_key,
+        em.from_email, em.from_name, em.contact_email, em.contact_name, em.to_emails, em.cc_emails, em.subject,
+        em.cleaned_text, em.sent_at, em.received_at, em.direction, em.processing_status, em.quote_detected,
+        em.inquiry_detected, em.customer_detected, em.matched_customer_id, em.matched_inquiry_id, em.created_at, em.updated_at,
         COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
         i.inquiry_title AS matched_inquiry_title
       FROM email_messages em
@@ -1854,15 +1934,44 @@ router.get('/email/messages/:id', (req, res) => {
       WHERE em.id = ?
     `).get(id);
     if (!row) return res.status(404).json({ ok: false, error: '邮件不存在' });
+    const threadRows = row.conversation_key
+      ? db.prepare(`
+          SELECT id, subject, from_email, from_name, to_emails, received_at, direction, processing_status,
+                 quote_detected, inquiry_detected, SUBSTR(COALESCE(cleaned_text, text_body, ''), 1, 240) AS preview
+          FROM email_messages
+          WHERE conversation_key = ?
+          ORDER BY COALESCE(received_at, created_at) ASC, id ASC
+          LIMIT 100
+        `).all(row.conversation_key)
+      : [];
     const suggestions = db.prepare(`
       SELECT *
       FROM crm_import_suggestions
       WHERE source_type = 'email' AND source_id = ?
       ORDER BY id DESC
     `).all(id);
-    res.json({ ok: true, message: row, suggestions });
+    res.json({ ok: true, message: row, suggestions, thread: threadRows });
   } catch (err) {
     handleError(res, err, '邮件详情读取失败');
+  }
+});
+
+router.get('/email/messages/:id/thread', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const message = db.prepare('SELECT id, conversation_key FROM email_messages WHERE id = ?').get(id);
+    if (!message) return res.status(404).json({ ok: false, error: '邮件不存在' });
+    if (!text(message.conversation_key)) return res.json({ ok: true, rows: [] });
+    const rows = db.prepare(`
+      SELECT id, subject, from_email, from_name, to_emails, cc_emails, received_at, direction, processing_status,
+             quote_detected, inquiry_detected, customer_detected, SUBSTR(COALESCE(cleaned_text, text_body, ''), 1, 240) AS preview
+      FROM email_messages
+      WHERE conversation_key = ?
+      ORDER BY COALESCE(received_at, created_at) ASC, id ASC
+    `).all(message.conversation_key);
+    res.json({ ok: true, conversation_key: message.conversation_key, rows });
+  } catch (err) {
+    handleError(res, err, '邮件线程读取失败');
   }
 });
 
@@ -1871,18 +1980,27 @@ router.post('/email/messages/:id/parse', (req, res) => {
     const id = idParam(req.params.id);
     const message = db.prepare('SELECT * FROM email_messages WHERE id = ?').get(id);
     if (!message) return res.status(404).json({ ok: false, error: '邮件不存在' });
-    const result = createSuggestionFromEmail(message, req.user.userName);
-    db.prepare("UPDATE email_messages SET processing_status = 'parsed', updated_at = ? WHERE id = ?").run(now(), id);
+    const result = createSuggestionsFromEmail(message);
+    db.prepare(`
+      UPDATE email_messages
+      SET processing_status = 'parsed', parsed_at = ?, quote_detected = ?, inquiry_detected = ?, customer_detected = ?,
+          matched_customer_id = COALESCE(?, matched_customer_id), matched_inquiry_id = COALESCE(?, matched_inquiry_id),
+          conversation_key = COALESCE(NULLIF(conversation_key, ''), ?), normalized_subject = COALESCE(NULLIF(normalized_subject, ''), ?),
+          updated_at = ?
+      WHERE id = ?
+    `).run(now(), result.parsed.quoteDetected, result.parsed.inquiryDetected, result.parsed.customerDetected, result.parsed.matchedCustomerId, result.parsed.matchedInquiryId, result.parsed.conversationKey, result.parsed.normalizedSubject, now(), id);
     crmAudit(req, 'email_message_parsed', 'crm_email_message', id, {
-      suggestion_id: result.id,
-      created: result.created
+      suggestion_ids: result.results.map((item) => item.id),
+      suggestion_types: result.results.map((item) => item.suggestion_type)
     });
-    crmAudit(req, 'crm_import_suggestion_created', 'crm_import_suggestion', result.id, {
-      source_type: 'email',
-      source_id: id,
-      suggestion_type: result.parsed.suggestionType
+    result.results.forEach((item) => {
+      crmAudit(req, 'crm_import_suggestion_created', 'crm_import_suggestion', item.id, {
+        source_type: 'email',
+        source_id: id,
+        suggestion_type: item.suggestion_type
+      });
     });
-    res.json({ ok: true, suggestion_id: result.id, created: result.created, parsed: result.parsed });
+    res.json({ ok: true, suggestion_ids: result.results.map((item) => item.id), created_count: result.results.filter((item) => item.created).length, parsed: result.parsed });
   } catch (err) {
     handleError(res, err, '邮件解析失败');
   }
@@ -1899,9 +2017,21 @@ router.post('/email/parse-unprocessed', (req, res) => {
       LIMIT ?
     `).all(limit);
     const results = rows.map((message) => {
-      const result = createSuggestionFromEmail(message, req.user.userName);
-      db.prepare("UPDATE email_messages SET processing_status = 'parsed', updated_at = ? WHERE id = ?").run(now(), message.id);
-      return { message_id: message.id, suggestion_id: result.id, created: result.created };
+      const result = createSuggestionsFromEmail(message);
+      db.prepare(`
+        UPDATE email_messages
+        SET processing_status = 'parsed', parsed_at = ?, quote_detected = ?, inquiry_detected = ?, customer_detected = ?,
+            matched_customer_id = COALESCE(?, matched_customer_id), matched_inquiry_id = COALESCE(?, matched_inquiry_id),
+            conversation_key = COALESCE(NULLIF(conversation_key, ''), ?), normalized_subject = COALESCE(NULLIF(normalized_subject, ''), ?),
+            updated_at = ?
+        WHERE id = ?
+      `).run(now(), result.parsed.quoteDetected, result.parsed.inquiryDetected, result.parsed.customerDetected, result.parsed.matchedCustomerId, result.parsed.matchedInquiryId, result.parsed.conversationKey, result.parsed.normalizedSubject, now(), message.id);
+      return {
+        message_id: message.id,
+        suggestion_ids: result.results.map((item) => item.id),
+        suggestion_types: result.results.map((item) => item.suggestion_type),
+        created_count: result.results.filter((item) => item.created).length
+      };
     });
     crmAudit(req, 'email_message_parsed', 'crm_email_batch', '', { count: results.length });
     res.json({ ok: true, rows: results });
@@ -1938,15 +2068,43 @@ router.get('/import-suggestions', (req, res) => {
   }
 });
 
+router.get('/email/quote-suggestions', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT
+        cis.*,
+        em.subject AS source_email_subject,
+        em.received_at AS source_email_received_at,
+        em.conversation_key AS source_email_conversation_key,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
+        i.inquiry_title AS matched_inquiry_title
+      FROM crm_import_suggestions cis
+      LEFT JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+      LEFT JOIN customers c ON c.id = cis.matched_customer_id
+      LEFT JOIN inquiries i ON i.id = cis.matched_inquiry_id
+      WHERE cis.source_type = 'email' AND cis.suggestion_type = 'quotation_draft'
+      ORDER BY cis.updated_at DESC, cis.id DESC
+      LIMIT 200
+    `).all();
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '报价建议读取失败');
+  }
+});
+
 router.get('/import-suggestions/:id', (req, res) => {
   try {
     const id = idParam(req.params.id);
     const row = db.prepare(`
       SELECT
         cis.*,
+        em.subject AS source_email_subject,
+        em.received_at AS source_email_received_at,
+        em.conversation_key AS source_email_conversation_key,
         COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
         i.inquiry_title AS matched_inquiry_title
       FROM crm_import_suggestions cis
+      LEFT JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
       LEFT JOIN customers c ON c.id = cis.matched_customer_id
       LEFT JOIN inquiries i ON i.id = cis.matched_inquiry_id
       WHERE cis.id = ?
