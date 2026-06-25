@@ -496,6 +496,10 @@ async function main() {
 
   const suggestionDetailBefore = await httpJson(`/api/crm/import-suggestions/${suggestionId}`, { token: crmAdminLogin.token });
   assert.strictEqual(Number(suggestionDetailBefore.suggestion.matched_customer_id), crmCustomerId, 'suggestion should match customer');
+  const suggestionPreview = await httpJson(`/api/crm/import-suggestions/${suggestionId}/preview`, { token: crmAdminLogin.token });
+  assert.strictEqual(suggestionPreview.ok, true, 'suggestion preview should succeed');
+  assert(Array.isArray(suggestionPreview.diff), 'suggestion preview should include diff');
+  await httpJson(`/api/crm/import-suggestions/${suggestionId}/preview`, { token: scopedSalesLogin.token, expectedStatus: 403 });
   const quoteSuggestions = await httpJson('/api/crm/email/quote-suggestions', { token: crmAdminLogin.token });
   assert(quoteSuggestions.rows.some(row => Number(row.source_id) === seededEmailId), 'quote suggestion list should include parsed quotation draft');
   const emailThread = await httpJson(`/api/crm/email/messages/${seededEmailId}/thread`, { token: crmAdminLogin.token });
@@ -512,6 +516,248 @@ async function main() {
   assert.strictEqual(customerAfterSuggestionStatus.customer.company_name, customerBeforeSuggestionStatus.customer.company_name, 'suggestion status update must not overwrite customer profile');
   assert(Array.isArray(customerAfterSuggestionStatus.relatedEmails), 'customer detail should include related emails');
   assert(Array.isArray(customerAfterSuggestionStatus.importSuggestions), 'customer detail should include related suggestions');
+
+  const db2 = new Database(dbPath);
+  const applyTs = '2026-06-24 13:00:00';
+  const customerProfileSuggestionId = Number(db2.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'manual_text',
+    0,
+    'customer_profile',
+    'high',
+    crmCustomerId,
+    null,
+    JSON.stringify({
+      company_name: 'CRM 守护客户升级版',
+      website: 'https://crm-guardian.example.com',
+      customer_summary: '客户通过邮件确认需要 stand up pouch 报价。',
+      priority: 'D'
+    }),
+    '{}',
+    '[]',
+    'customer profile apply test',
+    'manual',
+    applyTs,
+    applyTs
+  ).lastInsertRowid);
+  const commSuggestionId = Number(db2.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'email',
+    seededEmailId,
+    'communication_log',
+    'high',
+    crmCustomerId,
+    inquiryId,
+    JSON.stringify({
+      direction: 'inbound',
+      sender: 'alice@example.com',
+      recipient: 'sales@example.com',
+      subject: 'Follow up on pouch quotation',
+      raw_content: 'Customer asked to confirm zipper pouch details.',
+      ai_summary: '客户跟进拉链袋询价',
+      received_at: applyTs,
+      message_id: '<msg-1001@example.com>',
+      thread_id: 'thread:<msg-1001@example.com>'
+    }),
+    '{}',
+    '[]',
+    'communication log apply test',
+    'manual',
+    applyTs,
+    applyTs
+  ).lastInsertRowid);
+  const inquiryApplySuggestionId = Number(db2.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'manual_text',
+    0,
+    'inquiry',
+    'high',
+    crmCustomerId,
+    null,
+    JSON.stringify({
+      inquiry_title: 'Imported oatmeal pouch inquiry',
+      product_type: 'stand up pouch',
+      packaging_type: 'zipper pouch',
+      quantity: '30000 pcs',
+      destination_country: 'Bangladesh',
+      trade_term_requested: 'FOB',
+      next_action: 'Confirm artwork'
+    }),
+    '{}',
+    '[]',
+    'inquiry apply test',
+    'manual',
+    applyTs,
+    applyTs
+  ).lastInsertRowid);
+  const specificationSuggestionId = Number(db2.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'manual_text',
+    0,
+    'specification',
+    'high',
+    crmCustomerId,
+    inquiryId,
+    JSON.stringify({
+      product_type: 'stand up pouch',
+      bag_type: 'stand up zipper pouch',
+      size_width: '180',
+      size_height: '260',
+      thickness_total: '120',
+      thickness_unit: 'micron',
+      material_structure_text: 'PET12/PE108',
+      printing_colors: '8',
+      notes: 'Applied from import suggestion',
+      layers: [
+        { layer_order: 1, material_name: 'PET', thickness: '12', thickness_unit: 'micron', layer_role: 'print' },
+        { layer_order: 2, material_name: 'PE', thickness: '108', thickness_unit: 'micron', layer_role: 'seal' }
+      ]
+    }),
+    '{}',
+    '[]',
+    'specification apply test',
+    'manual',
+    applyTs,
+    applyTs
+  ).lastInsertRowid);
+  const quotationSuggestionId = Number(db2.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'email',
+    seededEmailId,
+    'quotation_draft',
+    'medium',
+    crmCustomerId,
+    inquiryId,
+    JSON.stringify({
+      trade_term: 'EXW',
+      quote_currency: 'USD',
+      unit_price: '0.12',
+      quantity: '30000 pcs',
+      payment_terms: '30% deposit',
+      lead_time: '15 days'
+    }),
+    '{}',
+    '[]',
+    'quotation draft apply test',
+    'manual',
+    applyTs,
+    applyTs
+  ).lastInsertRowid);
+  db2.close();
+
+  const customerApplyRet = await httpJson(`/api/crm/import-suggestions/${customerProfileSuggestionId}/apply`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      apply_fields: ['company_name', 'website', 'customer_summary', 'priority'],
+      allow_update_customer: true,
+      apply_priority: false,
+      review_note: 'apply customer profile'
+    }
+  });
+  assert.strictEqual(customerApplyRet.ok, true, 'customer profile apply should succeed');
+  await httpJson(`/api/crm/import-suggestions/${customerProfileSuggestionId}/apply`, {
+    method: 'POST',
+    token: scopedSalesLogin.token,
+    expectedStatus: 403,
+    body: {
+      apply_fields: ['company_name'],
+      allow_update_customer: true
+    }
+  });
+  const customerAfterApply = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(customerAfterApply.customer.company_name, 'CRM 守护客户升级版', 'customer apply should update company_name');
+  assert.strictEqual(customerAfterApply.customer.website, 'https://crm-guardian.example.com', 'customer apply should update website');
+  assert.strictEqual(customerAfterApply.customer.priority, 'B', 'priority should remain unchanged when apply_priority=false');
+  const customerAppliedSuggestion = await httpJson(`/api/crm/import-suggestions/${customerProfileSuggestionId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(customerAppliedSuggestion.suggestion.status, 'applied', 'customer profile suggestion should be applied');
+
+  const commApplyRet = await httpJson(`/api/crm/import-suggestions/${commSuggestionId}/apply`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      apply_fields: ['subject', 'raw_content'],
+      allow_create_communication_log: true,
+      review_note: 'apply communication log'
+    }
+  });
+  assert.strictEqual(commApplyRet.ok, true, 'communication log apply should succeed');
+
+  const inquiryApplyRet = await httpJson(`/api/crm/import-suggestions/${inquiryApplySuggestionId}/apply`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      apply_fields: ['inquiry_title', 'product_type', 'packaging_type', 'quantity', 'destination_country', 'trade_term_requested', 'next_action'],
+      allow_create_inquiry: true,
+      review_note: 'apply inquiry'
+    }
+  });
+  assert.strictEqual(inquiryApplyRet.ok, true, 'inquiry apply should succeed');
+  assert(Number(inquiryApplyRet.created?.inquiry_id) > 0, 'inquiry apply should create inquiry');
+  const importedInquiryId = Number(inquiryApplyRet.created.inquiry_id);
+  const customerAfterInquiryApply = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(Number(customerAfterInquiryApply.customer.latest_inquiry_id), importedInquiryId, 'apply inquiry should update customer latest_inquiry_id');
+
+  const specApplyRet = await httpJson(`/api/crm/import-suggestions/${specificationSuggestionId}/apply`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      apply_fields: ['product_type', 'bag_type', 'size_width', 'size_height', 'thickness_total', 'thickness_unit', 'material_structure_text', 'printing_colors', 'notes'],
+      allow_create_specification: true,
+      review_note: 'apply specification'
+    }
+  });
+  assert.strictEqual(specApplyRet.ok, true, 'specification apply should succeed');
+  const importedSpecId = Number(specApplyRet.created?.specification_id);
+  const inquiryAfterSpecApply = await httpJson(`/api/crm/inquiries/${inquiryId}`, { token: crmAdminLogin.token });
+  assert.strictEqual(Number(inquiryAfterSpecApply.inquiry.latest_specification_id), importedSpecId, 'specification apply should update inquiry latest spec');
+  const specHistoryAfterApply = await httpJson(`/api/crm/inquiries/${inquiryId}/specifications`, { token: crmAdminLogin.token });
+  const importedSpec = specHistoryAfterApply.rows.find(row => Number(row.id) === importedSpecId);
+  const previousCurrent = specHistoryAfterApply.rows.find(row => Number(row.id) === Number(specTwo.id));
+  assert.strictEqual(Number(importedSpec.is_current), 1, 'applied specification should be current');
+  assert.strictEqual(Number(previousCurrent.is_current), 0, 'previous current spec should be cleared');
+  const importedSpecDetail = await httpJson(`/api/crm/specifications/${importedSpecId}`, { token: crmAdminLogin.token });
+  assert(Array.isArray(importedSpecDetail.specification?.layers) && importedSpecDetail.specification.layers.length === 2, 'applied specification should create layers');
+
+  const quotationApplyRet = await httpJson(`/api/crm/import-suggestions/${quotationSuggestionId}/apply`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      apply_fields: ['trade_term', 'unit_price', 'quantity'],
+      allow_create_quotation: true,
+      review_note: 'attempt quotation apply'
+    }
+  });
+  assert.strictEqual(quotationApplyRet.ok, true, 'quotation suggestion apply should return structured response');
+  assert.strictEqual(quotationApplyRet.applied, false, 'quotation apply should not create quotation when table is unavailable');
+  assert(Array.isArray(quotationApplyRet.warnings) && quotationApplyRet.warnings.some(row => String(row).includes('Quotation table not available yet')), 'quotation apply should return table warning');
+
+  const db3 = new Database(dbPath);
+  const auditRow = db3.prepare(`SELECT action, detail FROM audit_logs WHERE action = 'apply_import_suggestion' ORDER BY id DESC LIMIT 1`).get();
+  const communicationRow = db3.prepare(`SELECT COUNT(*) AS total FROM communication_logs WHERE subject = 'Follow up on pouch quotation'`).get();
+  db3.close();
+  assert(auditRow, 'apply flow should write audit log');
+  assert(Number(communicationRow.total) > 0, 'communication log apply should create communication row');
 
   const inquiryWithoutSpec = await httpJson('/api/crm/inquiries', {
     method: 'POST',
@@ -552,7 +798,7 @@ async function main() {
   assert(Number(costingRequest.costing_request?.id) > 0, 'costing request id should be > 0');
   assert.strictEqual(Number(costingRequest.costing_request.customer_id), crmCustomerId);
   assert.strictEqual(Number(costingRequest.costing_request.inquiry_id), inquiryId);
-  assert.strictEqual(Number(costingRequest.costing_request.specification_id), Number(specTwo.id));
+  assert.strictEqual(Number(costingRequest.costing_request.specification_id), importedSpecId);
   assert(Array.isArray(costingRequest.layers) && costingRequest.layers.length > 0, 'costing request should include specification layers');
   const costingRequestId = Number(costingRequest.costing_request.id);
 
@@ -577,7 +823,7 @@ async function main() {
 
   const costingPrefill = await httpJson(`/api/crm/inquiries/${inquiryId}/costing-prefill`, { token: costingLogin.token });
   assert.strictEqual(costingPrefill.suggested_cost_input.quantity, '50000');
-  assert.strictEqual(costingPrefill.suggested_cost_input.material_structure_text, 'PET12/NY15/PE100');
+  assert.strictEqual(costingPrefill.suggested_cost_input.material_structure_text, 'PET12/PE108');
   assert(Array.isArray(costingPrefill.suggested_cost_input.layers), 'costing prefill should include layers');
 
   await httpJson(`/api/crm/costing-requests/${costingRequestId}`, {

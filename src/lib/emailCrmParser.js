@@ -293,6 +293,34 @@ function buildInquirySuggestion(message, extracted, matchedCustomerId, matchedIn
   };
 }
 
+function buildCommunicationSuggestion(message, matchedCustomerId, matchedInquiryId, confidence) {
+  const body = cleanBody(message);
+  return {
+    suggestionType: 'communication_log',
+    confidence,
+    matchedCustomerId,
+    matchedInquiryId,
+    extracted: {
+      channel: 'email',
+      direction: text(message.direction || 'unknown'),
+      sender: text(message.from_name || message.from_email),
+      recipient: text(message.to_emails),
+      subject: text(message.subject),
+      raw_content: body.slice(0, 4000),
+      ai_summary: body.slice(0, 600),
+      message_id: text(message.message_id),
+      thread_id: text(message.conversation_key || message.thread_id),
+      received_at: text(message.received_at || message.sent_at),
+      source_type: 'email',
+      source_id: message.id
+    },
+    suggestedUpdates: {},
+    summary: `邮件沟通记录：${text(message.subject || '(无主题)')}`,
+    rawInput: body.slice(0, 3000),
+    riskFlags: matchedCustomerId ? '' : 'customer_not_confirmed'
+  };
+}
+
 function buildSpecificationSuggestion(message, extracted, matchedCustomerId, matchedInquiryId, confidence) {
   return {
     suggestionType: 'specification',
@@ -437,6 +465,7 @@ function buildSuggestions(message) {
   if (contactEmail || CUSTOMER_HINTS.test(source)) {
     suggestions.push(buildCustomerSuggestion(message, customerExtracted, matchedCustomerId, confidence));
   }
+  suggestions.push(buildCommunicationSuggestion(message, matchedCustomerId, matchedInquiryId, matchedCustomerId ? 'high' : 'medium'));
   if (products.length || quantity || destinationCountry || tradeTerm) {
     suggestions.push(buildInquirySuggestion(message, inquiryExtracted, matchedCustomerId, matchedInquiryId, matchedInquiryId ? 'medium' : confidence));
   }

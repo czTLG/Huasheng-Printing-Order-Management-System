@@ -54,6 +54,20 @@ function handleError(res, err, fallback = 'CRM 操作失败') {
   return res.status(400).json({ ok: false, error: fallback });
 }
 
+function parseJsonObject(value, fallback = {}) {
+  if (!text(value)) return fallback;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function tableExists(name) {
+  return !!db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+}
+
 function crmAudit(req, action, resourceType, resourceId, detail = {}) {
   audit({
     role: req.user.role,
@@ -1058,6 +1072,101 @@ function safeEmailConfigStatus() {
     missing: validation.missing,
     suggestedHosts: ['imap.qiye.aliyun.com', 'imap.mxhichina.com'],
     note: 'Run real IMAP connectivity verification on the deployment server.'
+  };
+}
+
+const CUSTOMER_APPLY_FIELDS = [
+  'company_name', 'contact_person', 'email', 'whatsapp', 'phone', 'country', 'city', 'website',
+  'customer_type', 'industry', 'main_product', 'source_channel', 'customer_summary', 'risk_notes',
+  'next_action', 'priority'
+];
+
+const INQUIRY_APPLY_FIELDS = [
+  'inquiry_title', 'product_type', 'application', 'packaging_type', 'quantity', 'destination_country',
+  'destination_port', 'destination_address', 'trade_term_requested', 'customer_target_price',
+  'missing_info', 'customer_questions', 'technical_risks', 'commercial_risks', 'next_action'
+];
+
+const SPEC_APPLY_FIELDS = [
+  'product_type', 'bag_type', 'film_type', 'size_width', 'size_height', 'gusset_size', 'roll_width',
+  'repeat_length', 'thickness_total', 'thickness_unit', 'material_structure_text', 'printing_colors',
+  'surface_finish', 'zipper_required', 'valve_required', 'spout_required', 'tear_notch_required',
+  'window_required', 'filling_weight', 'packing_machine_type', 'artwork_status', 'notes'
+];
+
+function loadSuggestion(id) {
+  return db.prepare(`
+    SELECT cis.*, em.subject AS source_email_subject, em.received_at AS source_email_received_at, em.message_id AS source_message_id
+    FROM crm_import_suggestions cis
+    LEFT JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+    WHERE cis.id = ?
+  `).get(id);
+}
+
+function buildDiff(current, suggested, fields) {
+  return fields
+    .filter((field) => Object.prototype.hasOwnProperty.call(suggested, field))
+    .map((field) => {
+      const currentValue = current?.[field] ?? '';
+      const suggestedValue = suggested?.[field] ?? '';
+      if (String(currentValue ?? '') === String(suggestedValue ?? '')) return null;
+      return {
+        field,
+        current_value: currentValue,
+        suggested_value: suggestedValue,
+        action: currentValue === undefined || currentValue === null || currentValue === '' ? 'create' : 'update'
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildSuggestionPreview(row) {
+  const extracted = parseJsonObject(row.extracted_json, {});
+  const applyPlan = {
+    will_create_customer: false,
+    will_update_customer: false,
+    will_create_communication_log: false,
+    will_create_inquiry: false,
+    will_create_specification: false,
+    will_create_quotation: false
+  };
+  const warnings = [];
+  let target = {};
+  let diff = [];
+
+  if (row.suggestion_type === 'customer_profile') {
+    target = row.matched_customer_id ? getCustomer(Number(row.matched_customer_id)) || {} : {};
+    applyPlan.will_create_customer = !row.matched_customer_id;
+    applyPlan.will_update_customer = !!row.matched_customer_id;
+    diff = buildDiff(target, extracted, CUSTOMER_APPLY_FIELDS);
+    if (!row.matched_customer_id) warnings.push('No matched customer. Creating a new customer requires allow_create_customer=true.');
+  } else if (row.suggestion_type === 'communication_log') {
+    target = {};
+    applyPlan.will_create_communication_log = true;
+    diff = buildDiff({}, extracted, ['channel', 'direction', 'sender', 'recipient', 'subject', 'raw_content', 'received_at']);
+    if (!row.matched_customer_id) warnings.push('Communication log should be linked after customer confirmation.');
+  } else if (row.suggestion_type === 'inquiry') {
+    target = row.matched_inquiry_id ? getInquiry(Number(row.matched_inquiry_id)) || {} : {};
+    applyPlan.will_create_inquiry = !row.matched_inquiry_id;
+    diff = buildDiff(target, extracted, INQUIRY_APPLY_FIELDS);
+    if (!row.matched_customer_id) warnings.push('Inquiry creation requires a confirmed customer.');
+  } else if (row.suggestion_type === 'specification') {
+    target = row.matched_inquiry_id ? getInquiry(Number(row.matched_inquiry_id)) || {} : {};
+    applyPlan.will_create_specification = true;
+    diff = buildDiff({}, extracted, SPEC_APPLY_FIELDS);
+    if (!row.matched_inquiry_id) warnings.push('Specification creation requires a confirmed inquiry.');
+  } else if (row.suggestion_type === 'quotation_draft') {
+    applyPlan.will_create_quotation = tableExists('quotations');
+    diff = buildDiff({}, extracted, ['trade_term', 'unit_price', 'total_amount', 'quantity', 'payment_terms', 'lead_time', 'validity_date']);
+    if (!tableExists('quotations')) warnings.push('Quotation table not available yet.');
+  }
+
+  return {
+    suggestion: row,
+    target,
+    diff,
+    apply_plan: applyPlan,
+    warnings
   };
 }
 
@@ -2116,6 +2225,280 @@ router.get('/import-suggestions/:id', (req, res) => {
   }
 });
 
+router.get('/import-suggestions/:id/preview', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const row = loadSuggestion(id);
+    if (!row) return res.status(404).json({ ok: false, error: '导入建议不存在' });
+    const preview = buildSuggestionPreview(row);
+    crmAudit(req, 'preview_import_suggestion', 'crm_import_suggestion', id, {
+      suggestion_type: row.suggestion_type,
+      matched_customer_id: row.matched_customer_id,
+      matched_inquiry_id: row.matched_inquiry_id
+    });
+    res.json({ ok: true, ...preview });
+  } catch (err) {
+    handleError(res, err, '导入建议预览失败');
+  }
+});
+
+router.post('/import-suggestions/:id/apply', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const row = loadSuggestion(id);
+    if (!row) return res.status(404).json({ ok: false, error: '导入建议不存在' });
+    const body = req.body || {};
+    const applyFields = Array.isArray(body.apply_fields) ? body.apply_fields.map((item) => text(item)).filter(Boolean) : [];
+    const extracted = parseJsonObject(row.extracted_json, {});
+    const warnings = [];
+    const created = {};
+    const reviewNote = text(body.review_note);
+    let matchedCustomerId = Number(row.matched_customer_id || 0) || null;
+    let matchedInquiryId = Number(row.matched_inquiry_id || 0) || null;
+
+    const tx = db.transaction(() => {
+      if (row.suggestion_type === 'customer_profile') {
+        const allowedFields = applyFields.filter((field) => CUSTOMER_APPLY_FIELDS.includes(field) && (field !== 'priority' || body.apply_priority === true));
+        if (matchedCustomerId) {
+          if (allowedFields.length && body.allow_update_customer !== false) {
+            const oldRow = getCustomer(matchedCustomerId) || {};
+            const payload = {};
+            allowedFields.forEach((field) => { if (Object.prototype.hasOwnProperty.call(extracted, field)) payload[field] = extracted[field]; });
+            if (payload.company_name) payload.name = payload.company_name;
+            updateByFields('customers', matchedCustomerId, payload, [...CUSTOMER_FIELDS, 'name']);
+            crmAudit(req, 'update_customer_from_import_suggestion', 'crm_customer', matchedCustomerId, {
+              suggestion_id: id,
+              apply_fields: allowedFields,
+              changes: changesFrom(oldRow, payload, [...CUSTOMER_FIELDS, 'name']),
+              review_note: reviewNote
+            });
+          }
+        } else if (body.allow_create_customer === true) {
+          const ts = now();
+          const companyName = text(extracted.company_name || extracted.contact_person || extracted.email || `邮件客户 ${ts}`);
+          const result = db.prepare(`
+            INSERT INTO customers (
+              salesperson_id, name, company_name, contact_person, email, whatsapp, country, city, website,
+              customer_type, industry, main_product, source_channel, customer_summary, risk_notes, next_action,
+              active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          `).run(
+            null, companyName, companyName, text(extracted.contact_person), text(extracted.email), text(extracted.whatsapp),
+            text(extracted.country), text(extracted.city), text(extracted.website), text(extracted.customer_type),
+            text(extracted.industry), text(extracted.main_product), 'email', text(extracted.customer_summary),
+            text(extracted.risk_notes), text(extracted.next_action), ts, ts
+          );
+          matchedCustomerId = Number(result.lastInsertRowid);
+          created.customer_id = matchedCustomerId;
+          db.prepare('UPDATE crm_import_suggestions SET matched_customer_id = ?, updated_at = ? WHERE id = ?').run(matchedCustomerId, ts, id);
+          crmAudit(req, 'create_customer_from_import_suggestion', 'crm_customer', matchedCustomerId, {
+            suggestion_id: id,
+            apply_fields: allowedFields,
+            review_note: reviewNote
+          });
+        } else {
+          warnings.push('Customer not matched. Set allow_create_customer=true to create a new customer.');
+        }
+      } else if (row.suggestion_type === 'communication_log') {
+        if (body.allow_create_communication_log === true) {
+          const customerId = matchedCustomerId || null;
+          const result = db.prepare(`
+            INSERT INTO communication_logs (
+              customer_id, inquiry_id, channel, direction, sender, recipient, subject, raw_content,
+              ai_summary, attachments_json, message_id, thread_id, received_at, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            customerId,
+            matchedInquiryId,
+            'email',
+            text(extracted.direction || 'unknown'),
+            text(extracted.sender),
+            text(extracted.recipient),
+            text(extracted.subject),
+            text(extracted.raw_content || '').slice(0, 4000),
+            text(extracted.ai_summary || '').slice(0, 1200),
+            '[]',
+            text(extracted.message_id || row.source_message_id),
+            text(extracted.thread_id),
+            text(extracted.received_at || now()),
+            req.user.userName,
+            now(),
+            now()
+          );
+          created.communication_log_id = Number(result.lastInsertRowid);
+          crmAudit(req, 'create_communication_from_import_suggestion', 'crm_communication_log', result.lastInsertRowid, {
+            suggestion_id: id,
+            matched_customer_id: customerId,
+            matched_inquiry_id: matchedInquiryId,
+            review_note: reviewNote
+          });
+        } else {
+          warnings.push('allow_create_communication_log=false. Communication log was not created.');
+        }
+      } else if (row.suggestion_type === 'inquiry') {
+        const payload = {};
+        applyFields.filter((field) => INQUIRY_APPLY_FIELDS.includes(field)).forEach((field) => {
+          if (Object.prototype.hasOwnProperty.call(extracted, field)) payload[field] = extracted[field];
+        });
+        if (matchedInquiryId) {
+          updateByFields('inquiries', matchedInquiryId, payload, INQUIRY_APPLY_FIELDS);
+          crmAudit(req, 'update_inquiry_from_import_suggestion', 'crm_inquiry', matchedInquiryId, {
+            suggestion_id: id,
+            apply_fields: Object.keys(payload),
+            review_note: reviewNote
+          });
+        } else if (body.allow_create_inquiry === true) {
+          if (!matchedCustomerId) {
+            warnings.push('Inquiry creation requires matched_customer_id.');
+          } else {
+            const ts = now();
+            const result = db.prepare(`
+              INSERT INTO inquiries (
+                inquiry_code, customer_id, inquiry_title, product_type, application, packaging_type, status, priority,
+                quantity, destination_country, destination_port, destination_address, trade_term_requested, customer_target_price,
+                missing_info, customer_questions, technical_risks, commercial_risks, costing_required, next_action, created_by, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, 'new', 'C', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+            `).run(
+              '',
+              matchedCustomerId,
+              text(extracted.inquiry_title || 'Email inquiry'),
+              text(extracted.product_type),
+              text(extracted.application),
+              text(extracted.packaging_type),
+              text(extracted.quantity),
+              text(extracted.destination_country),
+              text(extracted.destination_port),
+              text(extracted.destination_address),
+              text(extracted.trade_term_requested),
+              text(extracted.customer_target_price),
+              text(extracted.missing_info),
+              text(extracted.customer_questions),
+              text(extracted.technical_risks),
+              text(extracted.commercial_risks),
+              text(extracted.next_action),
+              req.user.userName,
+              ts,
+              ts
+            );
+            matchedInquiryId = Number(result.lastInsertRowid);
+            created.inquiry_id = matchedInquiryId;
+            db.prepare('UPDATE customers SET latest_inquiry_id = ?, updated_at = ? WHERE id = ?').run(matchedInquiryId, ts, matchedCustomerId);
+            db.prepare('UPDATE crm_import_suggestions SET matched_customer_id = ?, matched_inquiry_id = ?, updated_at = ? WHERE id = ?').run(matchedCustomerId, matchedInquiryId, ts, id);
+            crmAudit(req, 'create_inquiry_from_import_suggestion', 'crm_inquiry', matchedInquiryId, {
+              suggestion_id: id,
+              matched_customer_id: matchedCustomerId,
+              review_note: reviewNote
+            });
+          }
+        } else {
+          warnings.push('Inquiry not matched. Set allow_create_inquiry=true to create a new inquiry.');
+        }
+      } else if (row.suggestion_type === 'specification') {
+        if (!matchedInquiryId) {
+          warnings.push('Specification creation requires matched_inquiry_id.');
+        } else if (body.allow_create_specification === true) {
+          const ts = now();
+          const currentMax = db.prepare('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM inquiry_specifications WHERE inquiry_id = ?').get(matchedInquiryId);
+          const versionNo = Number(currentMax?.max_version || 0) + 1;
+          db.prepare('UPDATE inquiry_specifications SET is_current = 0, updated_at = ? WHERE inquiry_id = ?').run(ts, matchedInquiryId);
+          const result = db.prepare(`
+            INSERT INTO inquiry_specifications (
+              inquiry_id, version_no, is_current, product_type, bag_type, film_type, size_width, size_height,
+              gusset_size, roll_width, repeat_length, thickness_total, thickness_unit, material_structure_text,
+              printing_colors, surface_finish, zipper_required, valve_required, spout_required, tear_notch_required,
+              window_required, filling_weight, packing_machine_type, artwork_status, notes, created_by, created_at, updated_at
+            ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            matchedInquiryId, versionNo, text(extracted.product_type), text(extracted.bag_type), text(extracted.film_type),
+            text(extracted.size_width), text(extracted.size_height), text(extracted.gusset_size), text(extracted.roll_width),
+            text(extracted.repeat_length), text(extracted.thickness_total), text(extracted.thickness_unit),
+            text(extracted.material_structure_text), text(extracted.printing_colors), text(extracted.surface_finish),
+            intFlag(extracted.zipper_required), intFlag(extracted.valve_required), intFlag(extracted.spout_required),
+            intFlag(extracted.tear_notch_required), intFlag(extracted.window_required), text(extracted.filling_weight),
+            text(extracted.packing_machine_type), text(extracted.artwork_status), text(extracted.notes), req.user.userName, ts, ts
+          );
+          const specificationId = Number(result.lastInsertRowid);
+          created.specification_id = specificationId;
+          db.prepare('UPDATE inquiries SET latest_specification_id = ?, updated_at = ? WHERE id = ?').run(specificationId, ts, matchedInquiryId);
+          const layers = Array.isArray(extracted.layers) ? extracted.layers : [];
+          layers.forEach((layer, index) => {
+            db.prepare(`
+              INSERT INTO specification_layers (
+                specification_id, layer_order, material_name, material_code, thickness, thickness_unit, layer_role,
+                is_customer_required, is_system_suggested, is_confirmed_by_costing, notes, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, '', ?, ?)
+            `).run(
+              specificationId,
+              Number(layer.layer_order || index + 1),
+              text(layer.material_name),
+              text(layer.material_code),
+              text(layer.thickness),
+              text(layer.thickness_unit || 'micron'),
+              text(layer.layer_role),
+              ts,
+              ts
+            );
+          });
+          crmAudit(req, 'create_specification_from_import_suggestion', 'crm_specification', specificationId, {
+            suggestion_id: id,
+            matched_inquiry_id: matchedInquiryId,
+            review_note: reviewNote,
+            layer_count: layers.length
+          });
+        } else {
+          warnings.push('allow_create_specification=false. Specification was not created.');
+        }
+      } else if (row.suggestion_type === 'quotation_draft') {
+        if (!tableExists('quotations')) {
+          warnings.push('Quotation table not available yet.');
+        } else if (body.allow_create_quotation !== true) {
+          warnings.push('allow_create_quotation=false. Quotation was not created.');
+        } else {
+          warnings.push('Quotation apply is deferred in this phase.');
+        }
+      }
+
+      const nextStatus = warnings.length && !Object.keys(created).length && row.suggestion_type === 'quotation_draft' ? 'needs_review' : 'applied';
+      if (!(row.suggestion_type === 'quotation_draft' && !tableExists('quotations'))) {
+        db.prepare(`
+          UPDATE crm_import_suggestions
+          SET status = ?, matched_customer_id = COALESCE(?, matched_customer_id), matched_inquiry_id = COALESCE(?, matched_inquiry_id),
+              reviewed_by = ?, reviewed_at = ?, updated_at = ?
+          WHERE id = ?
+        `).run(nextStatus, matchedCustomerId, matchedInquiryId, req.user.userName, now(), now(), id);
+      }
+      crmAudit(req, 'apply_import_suggestion', 'crm_import_suggestion', id, {
+        suggestion_id: id,
+        suggestion_type: row.suggestion_type,
+        source_type: row.source_type,
+        source_id: row.source_id,
+        matched_customer_id: matchedCustomerId,
+        matched_inquiry_id: matchedInquiryId,
+        apply_fields: applyFields,
+        created_entity_type: Object.keys(created)[0] || '',
+        created_entity_id: Object.values(created)[0] || '',
+        warnings,
+        review_note: reviewNote
+      });
+      return { matchedCustomerId, matchedInquiryId, created, warnings };
+    });
+
+    const result = tx();
+    res.json({
+      ok: true,
+      applied: !(row.suggestion_type === 'quotation_draft' && !tableExists('quotations')),
+      suggestion_id: id,
+      suggestion_type: row.suggestion_type,
+      matched_customer_id: result.matchedCustomerId,
+      matched_inquiry_id: result.matchedInquiryId,
+      created: result.created,
+      warnings: result.warnings
+    });
+  } catch (err) {
+    handleError(res, err, '导入建议应用失败');
+  }
+});
+
 router.patch('/import-suggestions/:id', (req, res) => {
   try {
     const id = idParam(req.params.id);
@@ -2130,7 +2513,7 @@ router.patch('/import-suggestions/:id', (req, res) => {
       SET status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
       WHERE id = ?
     `).run(status, req.user.userName, now(), now(), id);
-    crmAudit(req, 'crm_import_suggestion_status_updated', 'crm_import_suggestion', id, {
+    crmAudit(req, status === 'rejected' ? 'reject_import_suggestion' : status === 'ignored' ? 'ignore_import_suggestion' : 'crm_import_suggestion_status_updated', 'crm_import_suggestion', id, {
       old_status: oldRow.status,
       new_status: status
     });

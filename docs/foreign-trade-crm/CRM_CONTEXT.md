@@ -744,3 +744,63 @@ Safety rules:
 
 * No automatic update of `customers`, `inquiries`, `specifications`, or future `quotations` from parsed email.
 * No SMTP, no outgoing send, no remote delete, no remote move, no mark-as-read.
+
+## 26. Deployment IMAP Verification and Controlled Apply Flow
+
+Implemented on 2026-06-25:
+
+Deployment IMAP verification:
+
+* Real mailbox connectivity must be verified on the deployment server, not in local smoke tests.
+* Use the following network checks before running email sync:
+  * `getent hosts imap.qiye.aliyun.com`
+  * `getent hosts imap.mxhichina.com`
+  * `nc -vz imap.qiye.aliyun.com 993`
+  * `nc -vz imap.mxhichina.com 993`
+  * if `nc` is unavailable: `openssl s_client -connect imap.qiye.aliyun.com:993 -servername imap.qiye.aliyun.com`
+* Use `node scripts/verify-imap-sync.js` on the deployment server for a safe manual verification run.
+* `verify-imap-sync.js`:
+  * reads env configuration only
+  * masks the mailbox user
+  * never prints the password
+  * tries `INBOX` first, then sent-folder aliases
+  * prints summary counts only, not full email bodies
+
+Controlled import-suggestion workflow:
+
+* Email parsing still writes only to `crm_import_suggestions`.
+* Formal writes happen only through manual preview and apply actions by:
+  * `super_admin`
+  * `foreign_trade_crm_admin`
+* New review flow:
+  1. `GET /api/crm/import-suggestions/:id/preview`
+  2. review `diff`, `apply_plan`, and `warnings`
+  3. `POST /api/crm/import-suggestions/:id/apply` with explicit `apply_fields`
+* There is no batch auto-apply path.
+* `priority` remains opt-in only:
+  * `apply_priority` defaults to `false`
+  * priority suggestions must not change customer priority unless the reviewer explicitly enables them
+
+Apply behavior by suggestion type:
+
+* `customer_profile`
+  * may update an existing customer only for the explicitly selected fields
+  * may create a new customer only when `allow_create_customer=true`
+* `communication_log`
+  * may create a CRM communication entry from email summary data only when `allow_create_communication_log=true`
+* `inquiry`
+  * may update a matched inquiry
+  * may create a new inquiry only when `allow_create_inquiry=true`
+* `specification`
+  * requires a confirmed inquiry
+  * creates a new specification version and optional layers
+* `quotation_draft`
+  * remains review-only unless a future `quotations` table exists and the reviewer explicitly allows creation
+  * if quotation tables are unavailable, return a warning and keep the suggestion unresolved instead of crashing
+
+Audit and safety rules:
+
+* All preview/apply/reject/ignore paths must write CRM audit logs.
+* Applying a suggestion must update suggestion status to `applied` only after a formal write succeeds.
+* Rejecting or ignoring a suggestion only changes suggestion status and must not modify formal CRM tables.
+* The system must never auto overwrite non-empty customer fields unless they are explicitly included in `apply_fields`.

@@ -629,6 +629,18 @@ export const mockService = {
     return api<any>(`/api/crm/import-suggestions/${id}`);
   },
 
+  async getCrmImportSuggestionPreview(id: number | string) {
+    return api<any>(`/api/crm/import-suggestions/${id}/preview`);
+  },
+
+  async applyCrmImportSuggestion(id: number | string, payload: any) {
+    return api<any>(`/api/crm/import-suggestions/${id}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   async listCrmQuoteSuggestions() {
     return api<any>('/api/crm/email/quote-suggestions');
   },

@@ -572,3 +572,55 @@
   * no automatic customer update and no automatic formal quotation creation
 * Next step:
   * On a deployment server with real IMAP connectivity, verify INBOX and Sent folder behavior against the actual Aliyun mailbox, then evaluate whether a controlled “apply suggestion” flow is needed
+
+---
+
+## 2026-06-25 - Controlled Import Suggestion Apply Flow
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 新增部署服务器 IMAP 真实验证脚本
+  * 新增 import suggestion preview/apply 受控入库流程
+  * 支持 customer_profile、communication_log、inquiry、specification 的人工确认入库
+  * quotation_draft 在 quotations 表不存在时保留为警告/待后续处理
+  * 增强邮件导入页与客户详情页的确认入库交互
+* Files changed:
+  * scripts/verify-imap-sync.js
+  * src/routes/crm.js
+  * src/lib/emailCrmParser.js
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmEmailImport.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * 无新增表
+  * 复用既有 crm_import_suggestions / customers / inquiries / inquiry_specifications / specification_layers / communication_logs
+* API changes:
+  * Added `GET /api/crm/import-suggestions/:id/preview`
+  * Added `POST /api/crm/import-suggestions/:id/apply`
+  * Enhanced email parse paths to support controlled apply workflow data
+* Frontend changes:
+  * 邮件导入页增加“预览应用 / 确认入库 / 拒绝 / 忽略”
+  * 客户详情页增加待确认建议的 diff 预览与确认入库交互
+* Safety rules:
+  * 不自动 apply
+  * 不自动覆盖 customers
+  * priority 默认不应用
+  * quotations 表不存在时不强行创建正式报价
+* Build result:
+  * frontend-next npm run build: PASS
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * 真实 IMAP 仍需部署服务器验证
+  * 规则解析出的 suggestion 仍需人工确认字段差异
+* Decisions:
+  * 先把 preview/apply 做成显式人工确认流，再考虑后续更强 AI 解析
+  * quotation_draft 继续保持 review-first，不提前进入正式 quotations phase
+* Next step:
+  * 在部署服务器跑 `node scripts/verify-imap-sync.js`
+  * 如真实邮箱表现稳定，再考虑补充更细的 suggestion apply 审批体验

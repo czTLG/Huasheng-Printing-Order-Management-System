@@ -18,6 +18,10 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [suggestionBusy, setSuggestionBusy] = useState(false);
+  const [selectedSuggestionId, setSelectedSuggestionId] = useState<number | null>(null);
+  const [selectedSuggestionPreview, setSelectedSuggestionPreview] = useState<any>(null);
+  const [suggestionApplyForm, setSuggestionApplyForm] = useState<any>({ apply_fields: [], allow_create_customer: false, allow_update_customer: true, allow_create_inquiry: false, allow_create_specification: false, allow_create_communication_log: false, apply_priority: false, review_note: '' });
   const [customerForm, setCustomerForm] = useState<any>({});
   const [commForm, setCommForm] = useState({ channel: 'whatsapp', direction: 'inbound', subject: '', raw_content: '' });
   const [inquiryForm, setInquiryForm] = useState({ inquiry_title: '', product_type: '', packaging_type: '', quantity: '', destination_country: '', priority: 'C', next_action: '' });
@@ -87,6 +91,68 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
       if (ret?.id && onOpenInquiry) onOpenInquiry(Number(ret.id));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const buildApplyForm = (preview: any) => {
+    const fields = Array.isArray(preview?.diff) ? preview.diff.map((item: any) => item.field).filter((field: string) => field !== 'priority') : [];
+    const type = preview?.suggestion?.suggestion_type || '';
+    return {
+      apply_fields: fields,
+      allow_create_customer: !!preview?.apply_plan?.will_create_customer,
+      allow_update_customer: !!preview?.apply_plan?.will_update_customer,
+      allow_create_inquiry: type === 'inquiry' && !!preview?.apply_plan?.will_create_inquiry,
+      allow_create_specification: type === 'specification',
+      allow_create_communication_log: type === 'communication_log',
+      apply_priority: false,
+      review_note: ''
+    };
+  };
+
+  const previewSuggestion = async (id: number) => {
+    setSuggestionBusy(true);
+    try {
+      const preview = await mockService.getCrmImportSuggestionPreview(id);
+      setSelectedSuggestionId(id);
+      setSelectedSuggestionPreview(preview);
+      setSuggestionApplyForm(buildApplyForm(preview));
+    } finally {
+      setSuggestionBusy(false);
+    }
+  };
+
+  const toggleSuggestionField = (field: string) => {
+    setSuggestionApplyForm((prev: any) => ({
+      ...prev,
+      apply_fields: prev.apply_fields.includes(field)
+        ? prev.apply_fields.filter((item: string) => item !== field)
+        : [...prev.apply_fields, field]
+    }));
+  };
+
+  const applySuggestion = async (id: number) => {
+    setSuggestionBusy(true);
+    try {
+      await mockService.applyCrmImportSuggestion(id, suggestionApplyForm);
+      setSelectedSuggestionId(null);
+      setSelectedSuggestionPreview(null);
+      await load();
+    } finally {
+      setSuggestionBusy(false);
+    }
+  };
+
+  const updateSuggestionStatus = async (id: number, status: string) => {
+    setSuggestionBusy(true);
+    try {
+      await mockService.updateCrmImportSuggestion(id, { status });
+      if (selectedSuggestionId === id) {
+        setSelectedSuggestionId(null);
+        setSelectedSuggestionPreview(null);
+      }
+      await load();
+    } finally {
+      setSuggestionBusy(false);
     }
   };
 
@@ -343,6 +409,40 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             </div>
             <div className="text-sm text-slate-700 mt-1">{item.summary || '未记录'}</div>
             <div className="text-xs text-slate-500 mt-1">来源邮件：{item.source_email_subject || '未记录'}</div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button disabled={suggestionBusy} onClick={() => previewSuggestion(Number(item.id))} className="h-8 px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold disabled:opacity-60">预览应用</button>
+              <button disabled={suggestionBusy} onClick={() => updateSuggestionStatus(Number(item.id), 'rejected')} className="h-8 px-3 rounded-lg border border-rose-200 bg-rose-50 text-xs font-bold text-rose-700 disabled:opacity-60">拒绝</button>
+              <button disabled={suggestionBusy} onClick={() => updateSuggestionStatus(Number(item.id), 'ignored')} className="h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-700 disabled:opacity-60">忽略</button>
+            </div>
+            {selectedSuggestionId === Number(item.id) && selectedSuggestionPreview ? (
+              <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-3">
+                {(selectedSuggestionPreview.warnings || []).length > 0 && (
+                  <div className="text-xs text-amber-800">{selectedSuggestionPreview.warnings.join(' | ')}</div>
+                )}
+                <div className="space-y-2">
+                  {(selectedSuggestionPreview.diff || []).map((diff: any) => (
+                    <label key={diff.field} className="flex items-start gap-2 rounded-lg border border-white/80 bg-white px-3 py-2 text-xs">
+                      <input type="checkbox" checked={suggestionApplyForm.apply_fields.includes(diff.field)} onChange={() => toggleSuggestionField(diff.field)} className="mt-0.5" />
+                      <div>
+                        <div className="font-bold text-slate-800">{diff.field} · {diff.action}</div>
+                        <div className="text-slate-500">当前：{String(diff.current_value || '未记录')}</div>
+                        <div className="text-indigo-700">建议：{String(diff.suggested_value || '未记录')}</div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!suggestionApplyForm.allow_create_customer} onChange={e => setSuggestionApplyForm((prev: any) => ({ ...prev, allow_create_customer: e.target.checked }))} />允许创建客户</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!suggestionApplyForm.allow_update_customer} onChange={e => setSuggestionApplyForm((prev: any) => ({ ...prev, allow_update_customer: e.target.checked }))} />允许更新客户</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!suggestionApplyForm.allow_create_inquiry} onChange={e => setSuggestionApplyForm((prev: any) => ({ ...prev, allow_create_inquiry: e.target.checked }))} />允许创建询盘</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!suggestionApplyForm.allow_create_specification} onChange={e => setSuggestionApplyForm((prev: any) => ({ ...prev, allow_create_specification: e.target.checked }))} />允许创建规格</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!suggestionApplyForm.allow_create_communication_log} onChange={e => setSuggestionApplyForm((prev: any) => ({ ...prev, allow_create_communication_log: e.target.checked }))} />允许创建沟通记录</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!suggestionApplyForm.apply_priority} onChange={e => setSuggestionApplyForm((prev: any) => ({ ...prev, apply_priority: e.target.checked, apply_fields: e.target.checked ? Array.from(new Set([...prev.apply_fields, 'priority'])) : prev.apply_fields.filter((field: string) => field !== 'priority') }))} />允许应用优先级</label>
+                </div>
+                <textarea className={`${areaClass} w-full`} value={suggestionApplyForm.review_note} onChange={e => setSuggestionApplyForm((prev: any) => ({ ...prev, review_note: e.target.value }))} placeholder="review note" />
+                <button disabled={suggestionBusy} onClick={() => applySuggestion(Number(item.id))} className="h-9 px-4 rounded-lg bg-slate-900 text-white text-sm font-black disabled:opacity-60">确认入库</button>
+              </div>
+            ) : null}
           </div>
         ))}
       </section>
