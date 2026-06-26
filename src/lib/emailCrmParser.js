@@ -27,6 +27,9 @@ const PORT_PATTERNS = ['bangkok', 'chittagong', 'ho chi minh', 'jakarta', 'manil
 const TRADE_TERMS = ['EXW', 'FOB', 'CIF', 'CFR', 'DDP', 'DAP', 'FCA'];
 const QUOTE_KEYWORDS = /\b(quote|quotation|quoted|报价|单价|总价|unit price|total amount|per piece|\/pc|\/pcs|each|usd|rmb|cny|eur|gbp|freight|shipping cost|ocean freight|clearance|duty|tax|thc|tooling fee|cylinder fee|sample fee)\b/i;
 const CUSTOMER_HINTS = /\b(company|website|whatsapp|phone|address|buyer|contact|联系人|公司|网站)\b/i;
+const BUSINESS_KEYWORDS = /\b(rfq|quote|quotation|inquiry|spec|specification|packaging|pouch|bag|film|lamination|material|freight|shipment|oats|biscuit|coffee|spout|zipper|roll film|ddp|cif|exw|fob)\b/i;
+const NOISE_KEYWORDS = /\b(instagram|meta|facebook|google ranking|seo|web traffic|password reset|verification code|login code|weekly website report|conversations 深圳高峰会|newsletter|unsubscribe)\b/i;
+const COMPANY_EVIDENCE_REGEX = /\b([A-Z][A-Za-z&(),.\- ]{2,}(?:Ltd|Limited|LLC|Inc|Corporation|Corp|Co\.|Company|Manufacturers|Enterprise|Pvt|PVT|Private|Industries|Industry))\b/;
 
 function text(value) {
   if (value === undefined || value === null) return '';
@@ -165,6 +168,70 @@ function detectPrintingColors(source) {
 function extractWebsite(source) {
   const match = text(source).match(/https?:\/\/[^\s]+|www\.[^\s]+/i);
   return match ? text(match[0]) : '';
+}
+
+function inferCompanyName(message = {}, body = '') {
+  const matchedCompany = text(message.matched_customer_company_name || '');
+  if (matchedCompany) return matchedCompany;
+  const source = `${text(message.subject)}\n${body}`;
+  const lineMatch = source.match(COMPANY_EVIDENCE_REGEX);
+  if (lineMatch) return text(lineMatch[1]).replace(/\s+/g, ' ');
+  const signatureMatch = source.match(/\b(we,\s+the\s+)([A-Za-z0-9&(),.\- ]{3,80})(?:\s+in\s+[A-Z][a-z]+)/i);
+  if (signatureMatch) return text(signatureMatch[2]).replace(/\s+/g, ' ');
+  return '';
+}
+
+function buildParserHints(message = {}, body = '') {
+  const source = `${text(message.subject)}\n${body}`;
+  const tradeTerms = TRADE_TERMS.filter((term) => new RegExp(`\\b${term}\\b`, 'i').test(source));
+  const priceHints = [...new Set((source.match(/\b(?:USD|RMB|CNY|EUR|GBP)\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?\s*(?:USD|RMB|CNY|EUR|GBP)|\d+(?:\.\d+)?\s*(?:\/pc|\/pcs|per piece|per kg|per ton)\b/ig) || []).map((item) => text(item)))];
+  const materialHints = [...new Set((source.match(/\b(?:PET|BOPP|CPP|PE|VMPET|AL|RCPP|PA|NY|MET\s*BOPP)(?:\s*\d+(?:\.\d+)?)?\b/ig) || []).map((item) => text(item).toUpperCase()))];
+  return {
+    emails: [...new Set([pickContactEmail(message), ...parseEmails(message.to_emails), ...parseEmails(message.cc_emails)].filter(Boolean))],
+    possible_products: detectKeywords(source, PRODUCT_PATTERNS),
+    possible_trade_terms: tradeTerms,
+    possible_prices: priceHints,
+    possible_materials: materialHints
+  };
+}
+
+function analyzeEmailScreening(message = {}) {
+  const body = cleanBody(message);
+  const source = `${text(message.subject)}\n${body}`;
+  const fromEmail = text(message.from_email).toLowerCase();
+  const domain = extractDomain(fromEmail);
+  const hasQuote = QUOTE_KEYWORDS.test(source);
+  const hasInquiry = /\b(inquiry|rfq|quantity|moq|destination|port|customer target price|询盘)\b/i.test(source);
+  const hasSpecification = /\b(spec|specification|size|thickness|material|zipper|spout|valve|window|roll film|gravure|lamination)\b/i.test(source);
+  const hasLogistics = /\b(freight|shipment|shipping|clearance|customs|duty|tax|delivery|thc|ddp|cif|fob)\b/i.test(source);
+
+  let noiseLevel = 'low';
+  let businessRelevance = 'medium';
+  if (NOISE_KEYWORDS.test(source) || /mail\.instagram\.com|metamail\.com/.test(domain)) {
+    noiseLevel = 'high';
+    businessRelevance = 'irrelevant';
+  } else if (hasQuote || hasInquiry || hasSpecification || hasLogistics) {
+    noiseLevel = 'none';
+    businessRelevance = hasQuote || hasInquiry ? 'high' : 'medium';
+  } else if (BUSINESS_KEYWORDS.test(source)) {
+    noiseLevel = 'low';
+    businessRelevance = 'medium';
+  } else {
+    noiseLevel = 'medium';
+    businessRelevance = 'low';
+  }
+
+  return {
+    noise_level: noiseLevel,
+    business_relevance: businessRelevance,
+    detected_signals: {
+      has_quote: hasQuote,
+      has_inquiry: hasInquiry,
+      has_specification: hasSpecification,
+      has_logistics: hasLogistics
+    },
+    hints: buildParserHints(message, body)
+  };
 }
 
 function extractPriceFields(source) {
@@ -371,12 +438,12 @@ function buildSuggestions(message) {
   const thickness = detectThickness(source);
   const printingColors = detectPrintingColors(source);
   const quoteFields = extractPriceFields(source);
-  const companyName = text(matchedCustomer?.company_name || matchedCustomer?.name || contactName || domain.split('.')[0]);
+  const companyName = text(matchedCustomer?.company_name || matchedCustomer?.name || inferCompanyName(message, body));
   const website = extractWebsite(source) || text(matchedCustomer?.website);
   const phone = extractPhoneLike(source);
   const whatsapp = extractWhatsapp(source);
   const customerExtracted = {
-    company_name: companyName,
+    company_name: companyName || null,
     contact_person: contactName,
     email: contactEmail,
     whatsapp,
@@ -476,6 +543,7 @@ function buildSuggestions(message) {
     suggestions.push(buildQuotationSuggestion(message, quotationExtracted, matchedCustomerId, matchedInquiryId, 'medium'));
   }
   return {
+    screening: analyzeEmailScreening(message),
     matchedCustomerId,
     matchedInquiryId,
     conversationKey: computeConversationKey(message),
@@ -549,6 +617,8 @@ function createSuggestionsFromEmail(message) {
 }
 
 module.exports = {
+  analyzeEmailScreening,
+  buildParserHints,
   cleanBody,
   buildSuggestions,
   createSuggestionsFromEmail

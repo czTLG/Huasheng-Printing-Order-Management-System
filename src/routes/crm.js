@@ -2093,11 +2093,27 @@ router.post('/email/messages/:id/parse', (req, res) => {
     db.prepare(`
       UPDATE email_messages
       SET processing_status = 'parsed', parsed_at = ?, quote_detected = ?, inquiry_detected = ?, customer_detected = ?,
+          noise_level = ?, business_relevance = ?, detected_signals_json = ?, parser_hints_json = ?,
           matched_customer_id = COALESCE(?, matched_customer_id), matched_inquiry_id = COALESCE(?, matched_inquiry_id),
           conversation_key = COALESCE(NULLIF(conversation_key, ''), ?), normalized_subject = COALESCE(NULLIF(normalized_subject, ''), ?),
           updated_at = ?
       WHERE id = ?
-    `).run(now(), result.parsed.quoteDetected, result.parsed.inquiryDetected, result.parsed.customerDetected, result.parsed.matchedCustomerId, result.parsed.matchedInquiryId, result.parsed.conversationKey, result.parsed.normalizedSubject, now(), id);
+    `).run(
+      now(),
+      result.parsed.quoteDetected,
+      result.parsed.inquiryDetected,
+      result.parsed.customerDetected,
+      text(result.parsed.screening?.noise_level || 'low'),
+      text(result.parsed.screening?.business_relevance || 'low'),
+      JSON.stringify(result.parsed.screening?.detected_signals || {}),
+      JSON.stringify(result.parsed.screening?.hints || {}),
+      result.parsed.matchedCustomerId,
+      result.parsed.matchedInquiryId,
+      result.parsed.conversationKey,
+      result.parsed.normalizedSubject,
+      now(),
+      id
+    );
     crmAudit(req, 'email_message_parsed', 'crm_email_message', id, {
       suggestion_ids: result.results.map((item) => item.id),
       suggestion_types: result.results.map((item) => item.suggestion_type)
@@ -2130,11 +2146,27 @@ router.post('/email/parse-unprocessed', (req, res) => {
       db.prepare(`
         UPDATE email_messages
         SET processing_status = 'parsed', parsed_at = ?, quote_detected = ?, inquiry_detected = ?, customer_detected = ?,
+            noise_level = ?, business_relevance = ?, detected_signals_json = ?, parser_hints_json = ?,
             matched_customer_id = COALESCE(?, matched_customer_id), matched_inquiry_id = COALESCE(?, matched_inquiry_id),
             conversation_key = COALESCE(NULLIF(conversation_key, ''), ?), normalized_subject = COALESCE(NULLIF(normalized_subject, ''), ?),
             updated_at = ?
         WHERE id = ?
-      `).run(now(), result.parsed.quoteDetected, result.parsed.inquiryDetected, result.parsed.customerDetected, result.parsed.matchedCustomerId, result.parsed.matchedInquiryId, result.parsed.conversationKey, result.parsed.normalizedSubject, now(), message.id);
+      `).run(
+        now(),
+        result.parsed.quoteDetected,
+        result.parsed.inquiryDetected,
+        result.parsed.customerDetected,
+        text(result.parsed.screening?.noise_level || 'low'),
+        text(result.parsed.screening?.business_relevance || 'low'),
+        JSON.stringify(result.parsed.screening?.detected_signals || {}),
+        JSON.stringify(result.parsed.screening?.hints || {}),
+        result.parsed.matchedCustomerId,
+        result.parsed.matchedInquiryId,
+        result.parsed.conversationKey,
+        result.parsed.normalizedSubject,
+        now(),
+        message.id
+      );
       return {
         message_id: message.id,
         suggestion_ids: result.results.map((item) => item.id),

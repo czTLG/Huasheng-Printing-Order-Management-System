@@ -624,3 +624,57 @@
 * Next step:
   * 在部署服务器跑 `node scripts/verify-imap-sync.js`
   * 如真实邮箱表现稳定，再考虑补充更细的 suggestion apply 审批体验
+
+---
+
+## 2026-06-24 - Codex CLI Email Thread Analysis Pipeline
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 将规则 parser 降级为邮件初筛与 hints 提供层
+  * 新增 `email_ai_analysis_runs`
+  * 新增 prepare / run / import 三段式 AI 邮件线程解读流程
+  * 用 Codex CLI 实际解读两个重点联系人线程
+  * 将 AI 结果导入为 pending `crm_import_suggestions`
+* Files changed:
+  * src/db.js
+  * src/lib/emailCrmParser.js
+  * src/routes/crm.js
+  * scripts/prepare-email-ai-batches.js
+  * scripts/run-email-ai-analysis.js
+  * scripts/import-email-ai-results.js
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * Added `email_ai_analysis_runs`
+  * Added `noise_level`, `business_relevance`, `detected_signals_json`, `parser_hints_json` to `email_messages`
+* Script changes:
+  * Added `prepare-email-ai-batches.js`
+  * Added `run-email-ai-analysis.js`
+  * Added `import-email-ai-results.js`
+* API changes if any:
+  * No new AI run API in this batch; script workflow was prioritized
+* Frontend changes if any:
+  * No mandatory frontend change in this batch
+* Prompt schema:
+  * Customer profile, communications, inquiries, specifications, quotation_drafts, risk_flags, recommended_apply_order
+  * AI instructed to avoid using contact name as company name without evidence
+* Tested contacts:
+  * `shawkat3056@yahoo.com`
+  * `safeer.siddiqui@ebm.com.pk`
+* Build result:
+  * frontend-next npm run build: PASS
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * AI output still requires human preview/apply before formal import
+  * Noise filtering remains heuristic and should keep improving
+* Decisions:
+  * Rule parser is now a screening tool, not the final extractor
+  * AI-imported quotation clues remain `quotation_draft` only
+* Next step:
+  * Review AI-imported pending suggestions for the two tested contacts
+  * Only after preview should selected customer/inquiry/specification fields be applied

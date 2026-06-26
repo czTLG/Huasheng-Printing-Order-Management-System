@@ -34,3 +34,5 @@ backup/
 data/*.db.xz
 .playwright-mcp/
 page-screenshot.png
+data/email-ai-prompts/
+data/email-ai-outputs/

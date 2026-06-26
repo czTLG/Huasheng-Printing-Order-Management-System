@@ -416,6 +416,10 @@ function initDb() {
       email_domain TEXT,
       contact_email TEXT,
       contact_name TEXT,
+      noise_level TEXT DEFAULT 'low',
+      business_relevance TEXT DEFAULT 'low',
+      detected_signals_json TEXT,
+      parser_hints_json TEXT,
       quote_detected INTEGER DEFAULT 0,
       inquiry_detected INTEGER DEFAULT 0,
       customer_detected INTEGER DEFAULT 0,
@@ -443,6 +447,26 @@ function initDb() {
       raw_input TEXT,
       reviewed_by TEXT,
       reviewed_at TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS email_ai_analysis_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_code TEXT UNIQUE,
+      scope_type TEXT,
+      scope_key TEXT,
+      status TEXT DEFAULT 'pending',
+      model_provider TEXT DEFAULT 'codex_cli',
+      prompt_path TEXT,
+      output_path TEXT,
+      input_email_ids_json TEXT,
+      input_summary TEXT,
+      result_json TEXT,
+      error_message TEXT,
+      created_by TEXT,
+      started_at TEXT,
+      finished_at TEXT,
       created_at TEXT,
       updated_at TEXT
     );
@@ -672,6 +696,10 @@ function initDb() {
   if (!emcols.includes('email_domain')) db.exec("ALTER TABLE email_messages ADD COLUMN email_domain TEXT");
   if (!emcols.includes('contact_email')) db.exec("ALTER TABLE email_messages ADD COLUMN contact_email TEXT");
   if (!emcols.includes('contact_name')) db.exec("ALTER TABLE email_messages ADD COLUMN contact_name TEXT");
+  if (!emcols.includes('noise_level')) db.exec("ALTER TABLE email_messages ADD COLUMN noise_level TEXT DEFAULT 'low'");
+  if (!emcols.includes('business_relevance')) db.exec("ALTER TABLE email_messages ADD COLUMN business_relevance TEXT DEFAULT 'low'");
+  if (!emcols.includes('detected_signals_json')) db.exec("ALTER TABLE email_messages ADD COLUMN detected_signals_json TEXT");
+  if (!emcols.includes('parser_hints_json')) db.exec("ALTER TABLE email_messages ADD COLUMN parser_hints_json TEXT");
   if (!emcols.includes('quote_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN quote_detected INTEGER DEFAULT 0");
   if (!emcols.includes('inquiry_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN inquiry_detected INTEGER DEFAULT 0");
   if (!emcols.includes('customer_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN customer_detected INTEGER DEFAULT 0");
@@ -713,6 +741,9 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_inquiry ON email_messages(matched_inquiry_id, received_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_conversation ON email_messages(conversation_key, received_at DESC, id DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_quote ON email_messages(quote_detected, inquiry_detected, processing_status, received_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_messages_relevance ON email_messages(business_relevance, noise_level, received_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_ai_runs_status ON email_ai_analysis_runs(status, created_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_email_ai_runs_scope ON email_ai_analysis_runs(scope_type, scope_key, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_crm_import_suggestions_source ON crm_import_suggestions(source_type, source_id, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_crm_import_suggestions_match ON crm_import_suggestions(matched_customer_id, matched_inquiry_id, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_work_orders_salesperson ON work_orders(salesperson_id, created_at)");

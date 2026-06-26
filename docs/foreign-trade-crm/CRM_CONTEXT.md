@@ -804,3 +804,99 @@ Audit and safety rules:
 * Applying a suggestion must update suggestion status to `applied` only after a formal write succeeds.
 * Rejecting or ignoring a suggestion only changes suggestion status and must not modify formal CRM tables.
 * The system must never auto overwrite non-empty customer fields unless they are explicitly included in `apply_fields`.
+
+## 27. Codex CLI Email Thread Analysis Pipeline
+
+Implemented on 2026-06-26:
+
+Parsing strategy adjustment:
+
+* The rule-based parser is no longer treated as the final extraction authority for customer profile, inquiry, specification, or quotation interpretation.
+* The rule-based parser remains useful for:
+  * noise filtering
+  * business relevance scoring
+  * quote / inquiry / specification / logistics signal detection
+  * lightweight hints for downstream AI prompts
+* Final CRM import suggestions for valuable threads should come from Codex CLI / AI thread analysis, not from regex alone.
+
+Email screening layer:
+
+* `email_messages` now carries screening-oriented parser metadata:
+  * `noise_level`
+  * `business_relevance`
+  * `detected_signals_json`
+  * `parser_hints_json`
+* High-noise or irrelevant mail should not be prioritized into AI analysis batches.
+* The parser must not use a contact person name as `company_name` unless there is direct evidence.
+
+AI analysis task tracking:
+
+* Added `email_ai_analysis_runs` for thread-level AI analysis jobs.
+* Important fields:
+  * `run_code`
+  * `scope_type`
+  * `scope_key`
+  * `status`
+  * `prompt_path`
+  * `output_path`
+  * `input_email_ids_json`
+  * `input_summary`
+  * `result_json`
+  * `error_message`
+* Supported `scope_type` values:
+  * `conversation`
+  * `contact_email`
+  * `customer_candidate`
+  * `manual_batch`
+
+Three-stage AI workflow:
+
+1. `scripts/prepare-email-ai-batches.js`
+   * reads `email_messages`
+   * filters noisy / low-value messages
+   * groups by `conversation_key`, `contact_email`, or requested scope
+   * creates prompt files under `data/email-ai-prompts/`
+   * creates `email_ai_analysis_runs` with `status='prompt_ready'`
+2. `scripts/run-email-ai-analysis.js`
+   * reads `prompt_ready` runs
+   * calls Codex CLI when available
+   * writes JSON outputs under `data/email-ai-outputs/`
+   * updates run status to `completed` or `failed`
+3. `scripts/import-email-ai-results.js`
+   * validates completed run JSON
+   * imports AI results into `crm_import_suggestions`
+   * marks runs as `imported`
+   * writes audit logs
+
+Prompt and output locations:
+
+* Prompt files: `data/email-ai-prompts/`
+* Output files: `data/email-ai-outputs/`
+
+AI output contract:
+
+* Codex CLI / AI must output strict JSON only.
+* JSON should include:
+  * `customer_profile`
+  * `communications`
+  * `inquiries`
+  * `specifications`
+  * `quotation_drafts`
+  * `risk_flags`
+  * `recommended_apply_order`
+* `company_name` must come from evidence such as:
+  * signature block
+  * company legal suffix
+  * repeated context
+  * website/domain evidence
+* Personal email alone must not imply a company.
+* Uncertain fields should remain `null`.
+* Evidence arrays must reference email ids from the thread.
+
+Safety rules:
+
+* AI analysis results are imported only as `pending` suggestions.
+* The system must not auto apply AI-imported suggestions.
+* The system must not auto overwrite `customers`.
+* The system must not auto create formal `quotations`.
+* `quotation_draft` remains suggestion-only until a later explicit quotation phase.

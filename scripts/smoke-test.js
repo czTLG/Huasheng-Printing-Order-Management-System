@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
 
 const root = path.resolve(__dirname, '..');
@@ -505,6 +505,124 @@ async function main() {
   const emailThread = await httpJson(`/api/crm/email/messages/${seededEmailId}/thread`, { token: crmAdminLogin.token });
   assert(Array.isArray(emailThread.rows), 'email thread should return rows');
   await httpJson('/api/crm/import-suggestions', { token: scopedSalesLogin.token, expectedStatus: 403 });
+
+  const dbAi = new Database(dbPath);
+  const tableExists = dbAi.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='email_ai_analysis_runs'`).get();
+  assert(tableExists, 'email_ai_analysis_runs table should exist');
+  const aiEmailInsert = dbAi.prepare(`
+    INSERT INTO email_messages (
+      mailbox, folder, message_uid, message_id, thread_id, in_reply_to, references_header,
+      from_email, from_name, to_emails, cc_emails, bcc_emails, subject, text_body, html_body,
+      cleaned_text, attachments_json, sent_at, received_at, direction, processing_status,
+      normalized_subject, conversation_key, email_domain, contact_email, contact_name,
+      noise_level, business_relevance, detected_signals_json, parser_hints_json,
+      quote_detected, inquiry_detected, customer_detected, parsed_at,
+      matched_customer_id, matched_inquiry_id, raw_headers_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'sales@gdhspack.com',
+    'INBOX',
+    '2001',
+    '<msg-2001@example.com>',
+    '<msg-2001@example.com>',
+    '',
+    '',
+    'testbuyer@acmefoods.com',
+    'Test Buyer',
+    'sales@gdhspack.com',
+    '',
+    '',
+    'RFQ for 1kg zipper pouch to Dubai',
+    'We are ACME Foods LLC in UAE. Need 1kg zipper pouch, 50000 pcs, CIF Dubai. Please quote.',
+    '',
+    'We are ACME Foods LLC in UAE. Need 1kg zipper pouch, 50000 pcs, CIF Dubai. Please quote.',
+    '[]',
+    seedTs,
+    seedTs,
+    'inbound',
+    'new',
+    '',
+    'thread:<msg-2001@example.com>',
+    'acmefoods.com',
+    'testbuyer@acmefoods.com',
+    'Test Buyer',
+    'low',
+    'high',
+    '{}',
+    '{}',
+    1,
+    1,
+    1,
+    '',
+    null,
+    null,
+    '{}',
+    seedTs,
+    seedTs
+  );
+  const aiEmailId = Number(aiEmailInsert.lastInsertRowid);
+  dbAi.close();
+
+  const prepareScript = spawnSync(process.execPath, ['scripts/prepare-email-ai-batches.js', '--contact', 'testbuyer@acmefoods.com', '--limit', '5'], {
+    cwd: root,
+    env: { ...process.env, DB_PATH: dbPath },
+    encoding: 'utf8'
+  });
+  assert.strictEqual(prepareScript.status, 0, `prepare-email-ai-batches.js should succeed: ${prepareScript.stderr}`);
+  const prepareJson = JSON.parse(prepareScript.stdout);
+  assert(prepareJson.prepared_runs >= 1, 'prepare script should create at least one AI batch');
+  const preparedRun = prepareJson.runs[0];
+  assert(fs.existsSync(preparedRun.prompt_path), 'prepare script should write prompt file');
+
+  const dbAiImport = new Database(dbPath);
+  dbAiImport.prepare(`
+    UPDATE email_ai_analysis_runs
+    SET status = 'completed', result_json = ?, output_path = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    JSON.stringify({
+      customer_profile: {
+        company_name: 'ACME Foods LLC',
+        contact_person: 'Test Buyer',
+        email: 'testbuyer@acmefoods.com',
+        whatsapp: null,
+        phone: null,
+        country: 'UAE',
+        city: null,
+        website: 'https://acmefoods.com',
+        customer_summary: 'Potential UAE pouch buyer.',
+        next_action: 'Confirm exact material structure.',
+        confidence: 'high',
+        evidence: [aiEmailId]
+      },
+      communications: [{ summary: 'RFQ for zipper pouch', direction: 'inbound', email_id: aiEmailId, date: seedTs, key_points: ['50000 pcs', 'CIF Dubai'] }],
+      inquiries: [{ inquiry_title: 'RFQ for 1kg zipper pouch to Dubai', product_type: 'zipper pouch', packaging_type: 'stand up pouch', quantity: '50000 pcs', destination_country: 'UAE', destination_port: 'Dubai', trade_term_requested: 'CIF', customer_questions: [], missing_info: [], next_action: 'Confirm artwork', confidence: 'high', evidence: [aiEmailId] }],
+      specifications: [{ bag_type: 'stand up zipper pouch', film_type: '', size: '', material_structure_text: 'PET/PE', layers: [], thickness_total: '', printing_colors: '', surface_finish: '', special_features: ['zipper'], notes: '', confidence: 'medium', evidence: [aiEmailId] }],
+      quotation_drafts: [{ quoted_by_us: null, quote_currency: 'USD', quote_unit: 'pcs', trade_term: 'CIF', unit_price: '', total_amount: '', quantity: '50000 pcs', tooling_fee: '', freight_cost: '', clearance_cost: '', payment_terms: '', lead_time: '', validity_date: '', remarks: '', confidence: 'low', evidence: [aiEmailId] }],
+      risk_flags: [],
+      recommended_apply_order: ['customer_profile', 'communication_log', 'inquiry', 'specification', 'quotation_draft']
+    }),
+    path.join(root, 'data', 'email-ai-outputs', `${preparedRun.run_code}.json`),
+    seedTs,
+    preparedRun.id
+  );
+  dbAiImport.close();
+
+  const importScript = spawnSync(process.execPath, ['scripts/import-email-ai-results.js', '--id', String(preparedRun.id)], {
+    cwd: root,
+    env: { ...process.env, DB_PATH: dbPath },
+    encoding: 'utf8'
+  });
+  assert.strictEqual(importScript.status, 0, `import-email-ai-results.js should succeed: ${importScript.stderr}`);
+  const importJson = JSON.parse(importScript.stdout);
+  assert(importJson.imported_runs[0].created_suggestion_ids.length >= 4, 'import script should create pending suggestions from AI result');
+  const dbAiVerify = new Database(dbPath);
+  const importedRun = dbAiVerify.prepare(`SELECT status FROM email_ai_analysis_runs WHERE id = ?`).get(preparedRun.id);
+  const aiSuggestions = dbAiVerify.prepare(`SELECT suggestion_type, status FROM crm_import_suggestions WHERE source_type = 'email_ai_analysis' AND source_id = ? ORDER BY id ASC`).all(preparedRun.id);
+  dbAiVerify.close();
+  assert.strictEqual(importedRun.status, 'imported', 'AI analysis run should move to imported');
+  assert(aiSuggestions.some(row => row.suggestion_type === 'quotation_draft'), 'AI import should create quotation_draft suggestion');
+  assert(aiSuggestions.every(row => row.status === 'pending'), 'AI-imported suggestions should remain pending');
 
   const customerBeforeSuggestionStatus = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
   await httpJson(`/api/crm/import-suggestions/${suggestionId}`, {
