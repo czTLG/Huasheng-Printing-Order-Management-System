@@ -115,7 +115,10 @@ function updateByFields(table, id, body, fields) {
 const CUSTOMER_FIELDS = [
   'customer_code', 'company_name', 'country', 'city', 'contact_person', 'email', 'whatsapp',
   'source_channel', 'priority', 'stage', 'owner_id', 'ai_summary', 'risk_notes', 'next_action',
-  'next_followup_at', 'last_contact_at', 'contact', 'phone', 'default_bag_type', 'default_spec',
+  'next_followup_at', 'next_followup_purpose', 'next_followup_channel', 'followup_priority',
+  'last_contact_at', 'last_reply_at', 'last_outbound_email_at', 'unreplied_since_at',
+  'is_waiting_reply', 'is_invalid', 'invalid_reason',
+  'contact', 'phone', 'default_bag_type', 'default_spec',
   'default_use_case', 'default_roller', 'notes', 'website', 'customer_type', 'industry',
   'main_product', 'business_background', 'company_size_note', 'buyer_authenticity_note',
   'source_notes', 'customer_summary', 'priority_reason'
@@ -215,6 +218,339 @@ function getCustomerEmailConversations(customerId) {
     LIMIT 50
   `).all(customerId);
 }
+
+function priorityRank(priority) {
+  return { A: 1, B: 2, C: 3, D: 4 }[text(priority || 'D').toUpperCase()] || 4;
+}
+
+function compactCustomerName(row) {
+  return text(row.customer_display_name || row.display_name || row.company_name || row.name || row.contact_person) || '未命名客户';
+}
+
+function safeParsedJson(value) {
+  const parsed = parseJsonObject(value, {});
+  return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+router.get('/dashboard', (req, res) => {
+  try {
+    const today = now().slice(0, 10);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    const countOne = (sql, params = []) => {
+      const row = db.prepare(sql).get(...params) || {};
+      return Number(row.total || 0);
+    };
+
+    const suggestionCounts = db.prepare(`
+      SELECT suggestion_type, COUNT(*) AS total
+      FROM crm_import_suggestions
+      WHERE status IN ('pending', 'needs_review')
+      GROUP BY suggestion_type
+    `).all().reduce((acc, row) => {
+      acc[row.suggestion_type || 'unknown'] = Number(row.total || 0);
+      return acc;
+    }, {});
+
+    const summary = {
+      total_customers: countOne(`SELECT COUNT(*) AS total FROM customers WHERE COALESCE(active, 1) = 1`),
+      new_customers_7d: countOne(`SELECT COUNT(*) AS total FROM customers WHERE COALESCE(active, 1) = 1 AND COALESCE(created_at, '') >= ?`, [sevenDaysAgo]),
+      priority_a_customers: countOne(`SELECT COUNT(*) AS total FROM customers WHERE COALESCE(active, 1) = 1 AND priority = 'A'`),
+      pending_import_suggestions: countOne(`SELECT COUNT(*) AS total FROM crm_import_suggestions WHERE status IN ('pending', 'needs_review')`),
+      pending_customer_profile_suggestions: suggestionCounts.customer_profile || 0,
+      pending_inquiry_suggestions: suggestionCounts.inquiry || 0,
+      pending_specification_suggestions: suggestionCounts.specification || 0,
+      pending_quotation_drafts: suggestionCounts.quotation_draft || 0,
+      pending_costing_requests: countOne(`SELECT COUNT(*) AS total FROM costing_requests WHERE status IN ('pending', 'in_progress', 'revision_needed')`),
+      pending_freight_quotes: countOne(`SELECT COUNT(*) AS total FROM freight_quotes WHERE status IN ('draft', 'requested', 'received')`),
+      overdue_followups: countOne(`
+        SELECT COUNT(*) AS total
+        FROM customers
+        WHERE COALESCE(active, 1) = 1
+          AND COALESCE(is_invalid, 0) = 0
+          AND COALESCE(next_followup_at, '') != ''
+          AND SUBSTR(next_followup_at, 1, 10) <= ?
+      `, [today]),
+      waiting_reply_customers: countOne(`
+        SELECT COUNT(DISTINCT c.id) AS total
+        FROM customers c
+        WHERE COALESCE(c.active, 1) = 1
+          AND COALESCE(c.is_invalid, 0) = 0
+          AND (
+            COALESCE(c.is_waiting_reply, 0) = 1
+            OR EXISTS (
+              SELECT 1
+              FROM email_messages outm
+              WHERE outm.matched_customer_id = c.id
+                AND outm.direction = 'outbound'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM email_messages inm
+                  WHERE inm.matched_customer_id = c.id
+                    AND inm.direction = 'inbound'
+                    AND COALESCE(inm.received_at, inm.created_at, '') > COALESCE(outm.received_at, outm.created_at, '')
+                )
+            )
+          )
+      `),
+      recent_email_count_7d: countOne(`SELECT COUNT(*) AS total FROM email_messages WHERE COALESCE(received_at, created_at, '') >= ?`, [sevenDaysAgo])
+    };
+
+    const pendingSuggestions = db.prepare(`
+      SELECT
+        cis.id, cis.suggestion_type, cis.status, cis.confidence, cis.summary, cis.risk_flags,
+        cis.matched_customer_id, cis.matched_inquiry_id, cis.created_at, cis.updated_at,
+        cis.extracted_json, cis.suggested_updates_json,
+        em.subject AS source_email_subject,
+        em.from_email AS source_email_from,
+        em.direction AS source_email_direction,
+        em.received_at AS source_email_received_at,
+        ${customerDisplaySelect('c').replace('c.*,\n', '')},
+        i.inquiry_title
+      FROM crm_import_suggestions cis
+      LEFT JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+      LEFT JOIN customers c ON c.id = COALESCE(cis.matched_customer_id, em.matched_customer_id)
+      LEFT JOIN inquiries i ON i.id = cis.matched_inquiry_id
+      WHERE cis.status IN ('pending', 'needs_review')
+      ORDER BY
+        CASE cis.suggestion_type
+          WHEN 'customer_profile' THEN 1
+          WHEN 'inquiry' THEN 2
+          WHEN 'specification' THEN 3
+          WHEN 'quotation_draft' THEN 4
+          ELSE 5
+        END,
+        COALESCE(cis.updated_at, cis.created_at) DESC,
+        cis.id DESC
+      LIMIT 30
+    `).all().map((row) => ({
+      id: row.id,
+      suggestion_type: row.suggestion_type,
+      status: row.status,
+      confidence: row.confidence,
+      summary: row.summary,
+      risk_flags: row.risk_flags,
+      matched_customer_id: row.matched_customer_id,
+      matched_inquiry_id: row.matched_inquiry_id,
+      customer_display_name: compactCustomerName(row),
+      inquiry_title: row.inquiry_title,
+      source_email_subject: row.source_email_subject,
+      source_email_from: row.source_email_from,
+      source_email_direction: row.source_email_direction,
+      source_email_received_at: row.source_email_received_at,
+      created_at: row.created_at,
+      updated_at: row.updated_at
+    }));
+
+    const quotationDrafts = db.prepare(`
+      SELECT
+        cis.id, cis.confidence, cis.summary, cis.risk_flags, cis.matched_customer_id,
+        cis.matched_inquiry_id, cis.extracted_json, cis.suggested_updates_json,
+        cis.created_at, cis.updated_at,
+        em.subject AS source_email_subject,
+        em.direction AS source_email_direction,
+        em.received_at AS source_email_received_at,
+        ${customerDisplaySelect('c').replace('c.*,\n', '')},
+        i.inquiry_title
+      FROM crm_import_suggestions cis
+      LEFT JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+      LEFT JOIN customers c ON c.id = COALESCE(cis.matched_customer_id, em.matched_customer_id)
+      LEFT JOIN inquiries i ON i.id = cis.matched_inquiry_id
+      WHERE cis.status IN ('pending', 'needs_review') AND cis.suggestion_type = 'quotation_draft'
+      ORDER BY COALESCE(cis.updated_at, cis.created_at) DESC, cis.id DESC
+      LIMIT 20
+    `).all().map((row) => {
+      const extracted = safeParsedJson(row.suggested_updates_json || row.extracted_json);
+      return {
+        id: row.id,
+        confidence: row.confidence || extracted.confidence || '',
+        summary: row.summary,
+        customer_id: row.matched_customer_id,
+        customer_display_name: compactCustomerName(row),
+        inquiry_id: row.matched_inquiry_id,
+        inquiry_title: row.inquiry_title,
+        trade_term: extracted.trade_term || '',
+        unit_price: extracted.unit_price || extracted.exw_price || extracted.fob_price || extracted.cif_price || extracted.ddp_price || '',
+        total_amount: extracted.total_amount || '',
+        quantity: extracted.quantity || '',
+        quote_currency: extracted.quote_currency || '',
+        quoted_by_us: extracted.quoted_by_us,
+        payment_terms: extracted.payment_terms || '',
+        lead_time: extracted.lead_time || '',
+        source_email_subject: row.source_email_subject,
+        source_email_direction: row.source_email_direction,
+        source_email_received_at: row.source_email_received_at,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      };
+    });
+
+    const priorityCustomers = db.prepare(`
+      SELECT
+        ${customerDisplaySelect('c')},
+        i.inquiry_title AS latest_inquiry_title,
+        i.status AS latest_inquiry_status,
+        i.product_type AS latest_product_type,
+        (
+          SELECT COUNT(*) FROM costing_requests cr
+          WHERE cr.customer_id = c.id AND cr.status IN ('pending', 'in_progress', 'revision_needed')
+        ) AS pending_costing_count,
+        (
+          SELECT COUNT(*) FROM freight_quotes fq
+          WHERE fq.customer_id = c.id AND fq.status IN ('draft', 'requested', 'received')
+        ) AS pending_freight_count,
+        (
+          SELECT COUNT(*) FROM crm_import_suggestions cis
+          WHERE cis.matched_customer_id = c.id AND cis.status IN ('pending', 'needs_review')
+        ) AS pending_import_suggestion_count
+      FROM customers c
+      LEFT JOIN inquiries i ON i.id = c.latest_inquiry_id
+      WHERE COALESCE(c.active, 1) = 1 AND COALESCE(c.is_invalid, 0) = 0 AND c.priority = 'A'
+      ORDER BY COALESCE(c.next_followup_at, '9999-12-31 23:59:59') ASC,
+               COALESCE(c.last_contact_at, c.updated_at, c.created_at) DESC,
+               c.id DESC
+      LIMIT 12
+    `).all();
+
+    const pendingCosting = db.prepare(`
+      SELECT
+        cr.id, cr.costing_request_code, cr.status, cr.urgency, cr.assigned_to, cr.due_at,
+        cr.created_at, cr.updated_at,
+        c.id AS customer_id,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), NULLIF(c.contact_person, ''), '未命名客户') AS customer_display_name,
+        c.priority AS customer_priority,
+        i.id AS inquiry_id, i.inquiry_title, i.product_type, i.quantity
+      FROM costing_requests cr
+      LEFT JOIN customers c ON c.id = cr.customer_id
+      LEFT JOIN inquiries i ON i.id = cr.inquiry_id
+      WHERE cr.status IN ('pending', 'in_progress', 'revision_needed')
+      ORDER BY CASE cr.urgency WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 ELSE 3 END,
+               COALESCE(cr.due_at, '9999-12-31 23:59:59') ASC,
+               cr.updated_at DESC,
+               cr.id DESC
+      LIMIT 15
+    `).all();
+
+    const pendingFreight = db.prepare(`
+      SELECT
+        fq.id, fq.freight_quote_code, fq.status, fq.shipping_mode, fq.forwarder_name,
+        fq.destination_country, fq.destination_port, fq.total_freight_cost, fq.currency,
+        fq.assigned_to, fq.valid_until, fq.created_at, fq.updated_at,
+        c.id AS customer_id,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), NULLIF(c.contact_person, ''), '未命名客户') AS customer_display_name,
+        c.priority AS customer_priority,
+        i.id AS inquiry_id, i.inquiry_title, i.product_type, i.quantity
+      FROM freight_quotes fq
+      LEFT JOIN customers c ON c.id = fq.customer_id
+      LEFT JOIN inquiries i ON i.id = fq.inquiry_id
+      WHERE fq.status IN ('draft', 'requested', 'received')
+      ORDER BY COALESCE(fq.valid_until, '9999-12-31') ASC,
+               fq.updated_at DESC,
+               fq.id DESC
+      LIMIT 15
+    `).all();
+
+    const recentActiveCustomers = db.prepare(`
+      SELECT
+        ${customerDisplaySelect('c')},
+        i.inquiry_title AS latest_inquiry_title,
+        i.status AS latest_inquiry_status,
+        (
+          SELECT MAX(COALESCE(em.received_at, em.created_at))
+          FROM email_messages em
+          WHERE em.matched_customer_id = c.id
+        ) AS latest_email_at,
+        (
+          SELECT subject
+          FROM email_messages em
+          WHERE em.matched_customer_id = c.id
+          ORDER BY COALESCE(em.received_at, em.created_at) DESC, em.id DESC
+          LIMIT 1
+        ) AS latest_email_subject
+      FROM customers c
+      LEFT JOIN inquiries i ON i.id = c.latest_inquiry_id
+      WHERE COALESCE(c.active, 1) = 1 AND COALESCE(c.is_invalid, 0) = 0
+      ORDER BY COALESCE(latest_email_at, c.last_contact_at, c.updated_at, c.created_at) DESC, c.id DESC
+      LIMIT 12
+    `).all();
+
+    const todayTasks = [];
+    pendingSuggestions.slice(0, 12).forEach((item) => {
+      const typeLabel = {
+        customer_profile: '客户资料建议',
+        inquiry: '询盘建议',
+        specification: '规格建议',
+        quotation_draft: '报价线索'
+      }[item.suggestion_type] || '邮件建议';
+      todayTasks.push({
+        task_type: `suggestion_${item.suggestion_type || 'unknown'}`,
+        title: `确认${typeLabel}`,
+        customer_id: item.matched_customer_id || null,
+        customer_name: item.customer_display_name,
+        related_id: item.id,
+        priority: item.suggestion_type === 'quotation_draft' ? 'A' : 'B',
+        due_at: item.updated_at || item.created_at || '',
+        reason: item.summary || item.source_email_subject || '有待确认的邮件导入建议',
+        action_label: '预览并确认'
+      });
+    });
+    priorityCustomers
+      .filter((row) => text(row.next_followup_at) && row.next_followup_at.slice(0, 10) <= today)
+      .slice(0, 8)
+      .forEach((row) => todayTasks.push({
+        task_type: 'followup_priority_customer',
+        title: '跟进 A 类客户',
+        customer_id: row.id,
+        customer_name: compactCustomerName(row),
+        related_id: row.latest_inquiry_id || null,
+        priority: 'A',
+        due_at: row.next_followup_at,
+        reason: row.next_action || 'A 类客户已到跟进时间',
+        action_label: '查看客户档案'
+      }));
+    pendingCosting.slice(0, 8).forEach((row) => todayTasks.push({
+      task_type: 'pending_costing',
+      title: '推进核价请求',
+      customer_id: row.customer_id,
+      customer_name: row.customer_display_name,
+      related_id: row.id,
+      priority: row.urgency === 'urgent' ? 'A' : 'B',
+      due_at: row.due_at || '',
+      reason: `${row.inquiry_title || '询盘'} 等待核价处理`,
+      action_label: '查看核价'
+    }));
+    pendingFreight.slice(0, 8).forEach((row) => todayTasks.push({
+      task_type: 'pending_freight',
+      title: '确认物流费用',
+      customer_id: row.customer_id,
+      customer_name: row.customer_display_name,
+      related_id: row.id,
+      priority: row.customer_priority === 'A' ? 'A' : 'B',
+      due_at: row.valid_until || '',
+      reason: `${row.destination_country || '目的地'} ${row.destination_port || ''} 物流费用待确认`,
+      action_label: '查看物流'
+    }));
+
+    todayTasks.sort((a, b) => {
+      const rank = priorityRank(a.priority) - priorityRank(b.priority);
+      if (rank) return rank;
+      return String(a.due_at || '9999-12-31').localeCompare(String(b.due_at || '9999-12-31'));
+    });
+
+    res.json({
+      ok: true,
+      summary,
+      today_tasks: todayTasks.slice(0, 40),
+      priority_customers: priorityCustomers,
+      pending_suggestions: pendingSuggestions,
+      quotation_drafts: quotationDrafts,
+      pending_costing: pendingCosting,
+      pending_freight: pendingFreight,
+      recent_active_customers: recentActiveCustomers
+    });
+  } catch (err) {
+    handleError(res, err, 'CRM 作战台读取失败');
+  }
+});
 
 router.get('/customers', (req, res) => {
   try {

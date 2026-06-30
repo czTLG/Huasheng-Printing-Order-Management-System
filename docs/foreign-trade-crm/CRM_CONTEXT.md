@@ -900,3 +900,107 @@ Safety rules:
 * The system must not auto overwrite `customers`.
 * The system must not auto create formal `quotations`.
 * `quotation_draft` remains suggestion-only until a later explicit quotation phase.
+
+## 28. CRM Dashboard Workbench
+
+Implemented on 2026-06-30:
+
+CRM workbench positioning:
+
+* The single top-level CRM entry remains `外贸 CRM`.
+* CRM internal tabs now start with `作战台`, followed by:
+  * 客户档案
+  * 客户优先级
+  * 询盘项目
+  * 核价请求
+  * 物流费用
+  * 邮件导入
+  * CRM 日志
+* The dashboard is the daily operating surface. It answers:
+  * which email suggestions need confirmation
+  * which A-priority customers need follow-up
+  * which inquiries are waiting for costing
+  * which inquiries are waiting for freight / clearance costs
+  * which quotation clues exist as pending `quotation_draft` suggestions
+
+Dashboard API:
+
+* Added `GET /api/crm/dashboard`.
+* Access is restricted to:
+  * `super_admin`
+  * `foreign_trade_crm_admin`
+* `ai_sales`, `costing_user`, `freight_user`, and worker roles must not access the full dashboard.
+* The endpoint is read-only:
+  * it does not apply import suggestions
+  * it does not update customers
+  * it does not create formal quotations
+
+Dashboard response sections:
+
+* `summary`
+  * total customers
+  * new customers in 7 days
+  * A-priority customers
+  * pending import suggestions
+  * pending customer profile suggestions
+  * pending inquiry suggestions
+  * pending specification suggestions
+  * pending quotation drafts
+  * pending costing requests
+  * pending freight quotes
+  * overdue follow-ups
+  * waiting-reply customers
+  * recent email count in 7 days
+* `today_tasks`
+  * pending customer profile suggestions
+  * pending inquiry suggestions
+  * pending specification suggestions
+  * pending quotation drafts
+  * A-priority customer follow-ups due today or overdue
+  * pending costing requests
+  * pending freight quotes
+* `priority_customers`
+* `pending_suggestions`
+* `quotation_drafts`
+* `pending_costing`
+* `pending_freight`
+* `recent_active_customers`
+
+Customer follow-up fields:
+
+The `customers` table is safely extended through `initDb()` with:
+
+* `next_followup_purpose`
+* `next_followup_channel`
+* `followup_priority`
+* `last_reply_at`
+* `last_outbound_email_at`
+* `unreplied_since_at`
+* `is_waiting_reply`
+* `is_invalid`
+* `invalid_reason`
+
+These fields support dashboard display and later follow-up workflows. They must not be auto-filled aggressively from email. Email-derived follow-up state may be calculated conservatively for dashboard display without overwriting formal customer profile data.
+
+Frontend workbench:
+
+* Added `CrmDashboard.tsx`.
+* `CrmModule.tsx` defaults to the `作战台` tab.
+* Dashboard sections:
+  * 今日重点提醒
+  * 数据卡片
+  * 今日任务列表
+  * A 类重点客户
+  * 待确认邮件建议
+  * 报价线索
+  * 待核价
+  * 待物流
+  * 最近活跃客户
+
+Safety rules:
+
+* `quotation_draft` remains a pending suggestion only.
+* Dashboard must not create `quotations` or `quotation_lines`.
+* Dashboard must not auto apply suggestions.
+* Dashboard must not automatically change customer priority.
+* Dashboard must not send email or mutate remote mailbox state.

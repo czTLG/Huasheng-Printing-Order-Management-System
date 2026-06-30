@@ -225,6 +225,9 @@ async function main() {
   assert.strictEqual(crmAdminMe.user.role, 'foreign_trade_crm_admin');
   assert.strictEqual(crmAdminMe.user.permissions.modules.crm, true, 'crm admin role should have crm module');
   assert.strictEqual(crmAdminMe.user.permissions.modules.orders, true, 'crm admin role should retain basic order visibility');
+  await httpJson('/api/crm/dashboard', { token: adminToken });
+  await httpJson('/api/crm/dashboard', { token: crmAdminLogin.token });
+  await httpJson('/api/crm/dashboard', { token: scopedSalesLogin.token, expectedStatus: 403 });
   const costingLogin = await login('father_costing_guard', 'guard123');
   assert(costingLogin?.token, 'costing user login should return token');
   const costingMe = await httpJson('/api/auth/me', { token: costingLogin.token });
@@ -502,6 +505,16 @@ async function main() {
   await httpJson(`/api/crm/import-suggestions/${suggestionId}/preview`, { token: scopedSalesLogin.token, expectedStatus: 403 });
   const quoteSuggestions = await httpJson('/api/crm/email/quote-suggestions', { token: crmAdminLogin.token });
   assert(quoteSuggestions.rows.some(row => Number(row.source_id) === seededEmailId), 'quote suggestion list should include parsed quotation draft');
+  const dashboardAfterEmailParse = await httpJson('/api/crm/dashboard', { token: crmAdminLogin.token });
+  assert.strictEqual(dashboardAfterEmailParse.ok, true, 'crm dashboard should return ok');
+  assert(Number(dashboardAfterEmailParse.summary?.pending_import_suggestions || 0) >= 1, 'dashboard should count pending import suggestions');
+  assert(Number(dashboardAfterEmailParse.summary?.pending_quotation_drafts || 0) >= 1, 'dashboard should count pending quotation drafts');
+  assert(Array.isArray(dashboardAfterEmailParse.today_tasks), 'dashboard should return today tasks');
+  assert(Array.isArray(dashboardAfterEmailParse.quotation_drafts), 'dashboard should return quotation draft rows');
+  const dbDashboard = new Database(dbPath);
+  const quotationTableAfterDashboard = dbDashboard.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='quotations'`).get();
+  dbDashboard.close();
+  assert(!quotationTableAfterDashboard, 'dashboard should not create formal quotations table');
   const emailThread = await httpJson(`/api/crm/email/messages/${seededEmailId}/thread`, { token: crmAdminLogin.token });
   assert(Array.isArray(emailThread.rows), 'email thread should return rows');
   await httpJson('/api/crm/import-suggestions', { token: scopedSalesLogin.token, expectedStatus: 403 });

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { ClipboardList, FileSearch, Mail, Package, ShieldAlert, Truck, Users } from 'lucide-react';
+import { ClipboardList, FileSearch, LayoutDashboard, Mail, Package, ShieldAlert, Truck, Users } from 'lucide-react';
+import CrmDashboard from './CrmDashboard';
 import CrmCustomers from './CrmCustomers';
 import CrmInquiries from './CrmInquiries';
 import CrmCostingRequests from './CrmCostingRequests';
@@ -8,9 +9,10 @@ import CrmAuditLogs from './CrmAuditLogs';
 import CrmCustomerPriority from './CrmCustomerPriority';
 import CrmEmailImport from './CrmEmailImport';
 
-type CrmTab = 'customers' | 'inquiries' | 'costing' | 'freight' | 'priority' | 'email' | 'audit';
+type CrmTab = 'dashboard' | 'customers' | 'inquiries' | 'costing' | 'freight' | 'priority' | 'email' | 'audit';
 
 const tabs: Array<{ id: CrmTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { id: 'dashboard', label: '作战台', icon: LayoutDashboard },
   { id: 'customers', label: '客户档案', icon: Users },
   { id: 'priority', label: '客户优先级', icon: Package },
   { id: 'inquiries', label: '询盘项目', icon: ClipboardList },
@@ -21,10 +23,11 @@ const tabs: Array<{ id: CrmTab; label: string; icon: React.ComponentType<{ class
 ];
 
 export default function CrmModule() {
-  const [tab, setTab] = useState<CrmTab>('customers');
+  const [tab, setTab] = useState<CrmTab>('dashboard');
 
   const content = useMemo(() => {
     switch (tab) {
+      case 'dashboard': return <CrmDashboard />;
       case 'customers': return <CrmCustomers />;
       case 'inquiries': return <CrmInquiries />;
       case 'costing': return <CrmCostingRequests />;
@@ -32,7 +35,7 @@ export default function CrmModule() {
       case 'priority': return <CrmCustomerPriority />;
       case 'email': return <CrmEmailImport />;
       case 'audit': return <CrmAuditLogs />;
-      default: return <CrmCustomers />;
+      default: return <CrmDashboard />;
     }
   }, [tab]);
 
@@ -44,7 +47,7 @@ export default function CrmModule() {
             <h1 className="text-xl font-black text-slate-900">外贸 CRM</h1>
             <p className="text-sm text-slate-500 mt-1">聚合客户档案、询盘、核价、物流和后续报价链路，重点是展示清楚、排序清楚、权限安全。</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 w-full md:w-auto">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 w-full md:w-auto">
             {tabs.map((item) => {
               const Icon = item.icon;
               const active = item.id === tab;

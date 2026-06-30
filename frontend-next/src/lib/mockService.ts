@@ -501,6 +501,10 @@ export const mockService = {
     return api<any>('/api/cost/email-logs');
   },
 
+  async getCrmDashboard() {
+    return api<any>('/api/crm/dashboard');
+  },
+
   async listCrmCustomers(params: { q?: string; sortBy?: string; sortDirection?: string } = {}) {
     const search = new URLSearchParams();
     if (params.q) search.set('q', params.q);

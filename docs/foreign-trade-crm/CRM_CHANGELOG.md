@@ -678,3 +678,71 @@
 * Next step:
   * Review AI-imported pending suggestions for the two tested contacts
   * Only after preview should selected customer/inquiry/specification fields be applied
+
+---
+
+## 2026-06-24 - CRM Dashboard Workbench
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 新增外贸 CRM 作战台
+  * 将 CRM 内部 tabs 调整为作战台优先
+  * 汇总待确认邮件建议、A 类客户、待核价、待物流、报价线索和最近活跃客户
+  * 保持报价线索为 pending `quotation_draft`，不创建正式报价
+* Files changed:
+  * src/db.js
+  * src/routes/crm.js
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmModule.tsx
+  * frontend-next/src/components/crm/CrmDashboard.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * customers safely extended with follow-up fields:
+    * next_followup_purpose
+    * next_followup_channel
+    * followup_priority
+    * last_reply_at
+    * last_outbound_email_at
+    * unreplied_since_at
+    * is_waiting_reply
+    * is_invalid
+    * invalid_reason
+  * Added index `idx_customers_crm_followup`
+* Permission changes:
+  * `/api/crm/dashboard` restricted to `super_admin` and `foreign_trade_crm_admin`
+  * `ai_sales` remains blocked from CRM dashboard/API access
+* API changes:
+  * Added `GET /api/crm/dashboard`
+* Frontend changes:
+  * Added `CrmDashboard`
+  * `CrmModule` now defaults to `作战台`
+  * CRM tabs are now: 作战台, 客户档案, 客户优先级, 询盘项目, 核价请求, 物流费用, 邮件导入, CRM 日志
+* Dashboard metrics:
+  * total customers
+  * new customers in 7 days
+  * A-priority customers
+  * pending import suggestions
+  * pending customer profile / inquiry / specification suggestions
+  * pending quotation drafts
+  * pending costing requests
+  * pending freight quotes
+  * overdue follow-ups
+  * waiting-reply customers
+  * recent email count in 7 days
+* Build result:
+  * cd frontend-next && npm run build: PASS
+* Smoke test result:
+  * node scripts/smoke-test.js: SMOKE PASS
+* Risks:
+  * Follow-up fields are currently display/enrichment fields; automatic follow-up status updates should remain conservative
+  * Dashboard task ranking is heuristic and should be tuned after real daily usage
+* Decisions:
+  * Dashboard is read-only and does not create formal `quotations`
+  * `quotation_draft` remains a pending suggestion until a later explicit quotation phase
+* Next step:
+  * Use the dashboard for daily review of pending suggestions and priority customers
+  * Only after that move into formal quotation version Phase 6

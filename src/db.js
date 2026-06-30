@@ -675,7 +675,16 @@ function initDb() {
   if (!ccols.includes('risk_notes')) db.exec("ALTER TABLE customers ADD COLUMN risk_notes TEXT");
   if (!ccols.includes('next_action')) db.exec("ALTER TABLE customers ADD COLUMN next_action TEXT");
   if (!ccols.includes('next_followup_at')) db.exec("ALTER TABLE customers ADD COLUMN next_followup_at TEXT");
+  if (!ccols.includes('next_followup_purpose')) db.exec("ALTER TABLE customers ADD COLUMN next_followup_purpose TEXT");
+  if (!ccols.includes('next_followup_channel')) db.exec("ALTER TABLE customers ADD COLUMN next_followup_channel TEXT");
+  if (!ccols.includes('followup_priority')) db.exec("ALTER TABLE customers ADD COLUMN followup_priority TEXT");
   if (!ccols.includes('last_contact_at')) db.exec("ALTER TABLE customers ADD COLUMN last_contact_at TEXT");
+  if (!ccols.includes('last_reply_at')) db.exec("ALTER TABLE customers ADD COLUMN last_reply_at TEXT");
+  if (!ccols.includes('last_outbound_email_at')) db.exec("ALTER TABLE customers ADD COLUMN last_outbound_email_at TEXT");
+  if (!ccols.includes('unreplied_since_at')) db.exec("ALTER TABLE customers ADD COLUMN unreplied_since_at TEXT");
+  if (!ccols.includes('is_waiting_reply')) db.exec("ALTER TABLE customers ADD COLUMN is_waiting_reply INTEGER DEFAULT 0");
+  if (!ccols.includes('is_invalid')) db.exec("ALTER TABLE customers ADD COLUMN is_invalid INTEGER DEFAULT 0");
+  if (!ccols.includes('invalid_reason')) db.exec("ALTER TABLE customers ADD COLUMN invalid_reason TEXT");
   if (!ccols.includes('website')) db.exec("ALTER TABLE customers ADD COLUMN website TEXT");
   if (!ccols.includes('customer_type')) db.exec("ALTER TABLE customers ADD COLUMN customer_type TEXT");
   if (!ccols.includes('industry')) db.exec("ALTER TABLE customers ADD COLUMN industry TEXT");
@@ -720,6 +729,7 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_salesperson ON customers(salesperson_id, active, name)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_stage ON customers(stage, priority, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_priority ON customers(priority, stage, next_followup_at, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_followup ON customers(next_followup_at, followup_priority, is_waiting_reply, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_customer ON communication_logs(customer_id, received_at DESC, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_inquiry ON communication_logs(inquiry_id, received_at DESC, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_customer ON inquiries(customer_id, updated_at DESC)");
