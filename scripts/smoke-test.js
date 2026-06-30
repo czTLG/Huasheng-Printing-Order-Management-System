@@ -820,6 +820,54 @@ async function main() {
   assert.strictEqual(customerAfterApply.customer.company_name, 'CRM 守护客户升级版', 'customer apply should update company_name');
   assert.strictEqual(customerAfterApply.customer.website, 'https://crm-guardian.example.com', 'customer apply should update website');
   assert.strictEqual(customerAfterApply.customer.priority, 'B', 'priority should remain unchanged when apply_priority=false');
+
+  const dbCreateProfile = new Database(dbPath);
+  const createProfileSuggestionId = Number(dbCreateProfile.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'manual_text',
+    0,
+    'customer_profile',
+    'high',
+    null,
+    null,
+    JSON.stringify({
+      company_name: 'Selective Apply Customer',
+      contact_person: 'Selective Contact',
+      email: 'selective@example.com',
+      country: 'Malaysia',
+      city: 'Kuala Lumpur',
+      source_channel: 'email',
+      customer_summary: 'Should only apply selected fields.'
+    }),
+    '{}',
+    '[]',
+    'customer profile create selective apply test',
+    'manual',
+    applyTs,
+    applyTs
+  ).lastInsertRowid);
+  dbCreateProfile.close();
+  const createProfileRet = await httpJson(`/api/crm/import-suggestions/${createProfileSuggestionId}/apply`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      apply_fields: ['company_name', 'contact_person', 'email', 'country', 'customer_summary'],
+      allow_create_customer: true,
+      allow_update_customer: true,
+      apply_priority: false,
+      review_note: 'selective create customer profile'
+    }
+  });
+  assert.strictEqual(createProfileRet.ok, true, 'customer profile create apply should succeed');
+  const selectiveCustomer = await httpJson(`/api/crm/customers/${createProfileRet.created.customer_id}`, { token: crmAdminLogin.token });
+  assert.strictEqual(selectiveCustomer.customer.company_name, 'Selective Apply Customer', 'created customer should include selected company_name');
+  assert.strictEqual(selectiveCustomer.customer.city || '', '', 'created customer should not apply unselected city');
+  assert.strictEqual(selectiveCustomer.customer.source_channel || '', '', 'created customer should not apply unselected source_channel');
+
   const customerAppliedSuggestion = await httpJson(`/api/crm/import-suggestions/${customerProfileSuggestionId}`, { token: crmAdminLogin.token });
   assert.strictEqual(customerAppliedSuggestion.suggestion.status, 'applied', 'customer profile suggestion should be applied');
 

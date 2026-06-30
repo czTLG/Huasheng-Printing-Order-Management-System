@@ -2627,23 +2627,25 @@ router.post('/import-suggestions/:id/apply', (req, res) => {
     const tx = db.transaction(() => {
       if (row.suggestion_type === 'customer_profile') {
         const allowedFields = applyFields.filter((field) => CUSTOMER_APPLY_FIELDS.includes(field) && (field !== 'priority' || body.apply_priority === true));
+        const customerPayload = {};
+        allowedFields.forEach((field) => {
+          if (Object.prototype.hasOwnProperty.call(extracted, field)) customerPayload[field] = extracted[field];
+        });
         if (matchedCustomerId) {
           if (allowedFields.length && body.allow_update_customer !== false) {
             const oldRow = getCustomer(matchedCustomerId) || {};
-            const payload = {};
-            allowedFields.forEach((field) => { if (Object.prototype.hasOwnProperty.call(extracted, field)) payload[field] = extracted[field]; });
-            if (payload.company_name) payload.name = payload.company_name;
-            updateByFields('customers', matchedCustomerId, payload, [...CUSTOMER_FIELDS, 'name']);
+            if (customerPayload.company_name) customerPayload.name = customerPayload.company_name;
+            updateByFields('customers', matchedCustomerId, customerPayload, [...CUSTOMER_FIELDS, 'name']);
             crmAudit(req, 'update_customer_from_import_suggestion', 'crm_customer', matchedCustomerId, {
               suggestion_id: id,
               apply_fields: allowedFields,
-              changes: changesFrom(oldRow, payload, [...CUSTOMER_FIELDS, 'name']),
+              changes: changesFrom(oldRow, customerPayload, [...CUSTOMER_FIELDS, 'name']),
               review_note: reviewNote
             });
           }
         } else if (body.allow_create_customer === true) {
           const ts = now();
-          const companyName = text(extracted.company_name || extracted.contact_person || extracted.email || `邮件客户 ${ts}`);
+          const companyName = text(customerPayload.company_name || customerPayload.contact_person || customerPayload.email || `邮件客户 ${ts}`);
           const result = db.prepare(`
             INSERT INTO customers (
               salesperson_id, name, company_name, contact_person, email, whatsapp, country, city, website,
@@ -2651,10 +2653,10 @@ router.post('/import-suggestions/:id/apply', (req, res) => {
               active, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           `).run(
-            null, companyName, companyName, text(extracted.contact_person), text(extracted.email), text(extracted.whatsapp),
-            text(extracted.country), text(extracted.city), text(extracted.website), text(extracted.customer_type),
-            text(extracted.industry), text(extracted.main_product), 'email', text(extracted.customer_summary),
-            text(extracted.risk_notes), text(extracted.next_action), ts, ts
+            null, companyName, text(customerPayload.company_name || companyName), text(customerPayload.contact_person), text(customerPayload.email), text(customerPayload.whatsapp),
+            text(customerPayload.country), text(customerPayload.city), text(customerPayload.website), text(customerPayload.customer_type),
+            text(customerPayload.industry), text(customerPayload.main_product), text(customerPayload.source_channel), text(customerPayload.customer_summary),
+            text(customerPayload.risk_notes), text(customerPayload.next_action), ts, ts
           );
           matchedCustomerId = Number(result.lastInsertRowid);
           created.customer_id = matchedCustomerId;
