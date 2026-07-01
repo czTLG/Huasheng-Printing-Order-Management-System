@@ -804,3 +804,42 @@
 * Next step:
   * Verify the quote readiness flows on the real two customer examples
   * Confirm the dashboard tasks stay conservative before moving into formal quotation Phase 6
+
+## 2026-07-01 - Quote Readiness AI Candidate Hints
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 在报价资料完整度结果中增加 AI 待审核候选提示
+  * 保持正式 readiness 状态不变
+  * 在作战台中新增 AI 候选型 quote readiness 任务
+  * 让客户详情 / 询盘详情展示 pending specification suggestion 的候选字段
+* Files changed:
+  * src/routes/crm.js
+  * frontend-next/src/components/crm/CrmQuoteReadinessCard.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * frontend-next/src/components/crm/CrmInquiryDetail.tsx
+  * frontend-next/src/components/crm/CrmDashboard.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* API changes:
+  * `GET /api/crm/inquiries/:id/quote-readiness` now returns `pending_ai_candidates`, `field_candidate_map`, `has_pending_specification_suggestion`, and `suggested_apply_actions`
+  * `POST /api/crm/inquiries/:id/recalculate-quote-readiness` now returns the same AI hint payload
+* Frontend changes:
+  * Quote readiness cards now show formal missing fields plus AI candidate values and suggestion buttons
+  * Inquiry detail now shows a compact AI candidate preview panel
+  * Dashboard can surface `quote_readiness_pending_ai_candidate` tasks
+* Dashboard changes:
+  * Blocked inquiries with AI candidates are promoted to a higher-priority review task
+* Real customer verification:
+  * Safeer / ENGLISH BISCUIT MANUFACTURERS (PVT) LTD has pending spec suggestions with roll film candidates
+  * Shawkat / BM Enterprise has pending spec suggestions with size candidates
+* Build result:
+  * pending
+* Smoke test result:
+  * pending
+* Next step:
+  * Use the AI candidate layer to guide manual review of pending specification suggestions
+  * Keep formal quote readiness strict until suggestions are explicitly applied

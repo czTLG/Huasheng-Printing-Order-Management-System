@@ -134,6 +134,13 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
     }
   };
 
+  const openQuoteReadinessSuggestion = async (id: number) => {
+    await previewSuggestion(id);
+    window.requestAnimationFrame(() => {
+      document.getElementById('crm-suggestions')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
   const toggleSuggestionField = (field: string) => {
     setSuggestionApplyForm((prev: any) => ({
       ...prev,
@@ -239,7 +246,14 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
               </div>
             </div>
             {latest?.quote_readiness ? (
-              <CrmQuoteReadinessCard readiness={latest.quote_readiness} onRecalculate={recalculateLatestReadiness} loading={readinessBusy} title="最新询盘报价资料完整度" />
+              <CrmQuoteReadinessCard
+                readiness={latest.quote_readiness}
+                onRecalculate={recalculateLatestReadiness}
+                onViewSuggestion={openQuoteReadinessSuggestion}
+                onReviewSuggestion={openQuoteReadinessSuggestion}
+                loading={readinessBusy}
+                title="最新询盘报价资料完整度"
+              />
             ) : null}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
@@ -386,7 +400,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
         </section>
       </div>
 
-      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+      <section id="crm-suggestions" className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
         <h3 className="text-sm font-black text-slate-800">邮件线程</h3>
         {emailConversations.length === 0 ? (
           <div className="text-sm text-slate-400">暂无邮件线程</div>

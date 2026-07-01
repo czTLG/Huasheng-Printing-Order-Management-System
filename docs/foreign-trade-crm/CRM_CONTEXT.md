@@ -1082,3 +1082,46 @@ Dashboard follow-up / quote-readiness tasks:
   * `ready` inquiries that still have no costing request / cost sheet / quote
 * These tasks are read-only and are only used to guide human action.
 * The dashboard must not auto-mutate stage, costing state, or quotation state.
+
+## 30. Quote Readiness AI Candidate Hints
+
+The quote readiness layer now shows a second, non-destructive hint channel.
+
+Purpose:
+
+* Keep the formal readiness result strict and unchanged.
+* Surface AI-pending specification suggestions that may already contain missing fields.
+* Help the user understand what the AI extracted, where it came from, and what should be reviewed next.
+
+Data model used for hints:
+
+* `pending_ai_candidates`
+* `field_candidate_map`
+* `has_pending_specification_suggestion`
+* `suggested_apply_actions`
+
+Candidate sourcing rules:
+
+* The system looks for pending `crm_import_suggestions` rows of type `specification`.
+* The strongest match is `matched_inquiry_id = inquiry.id`.
+* A weaker but still acceptable match is `matched_customer_id = inquiry.customer_id`.
+* For email-derived suggestions, the underlying email evidence is shown when available.
+* For AI-derived suggestions, the analysis run id is exposed when available.
+
+Candidate behavior:
+
+* Candidate hints do not change formal `quote_readiness_status`.
+* Candidate hints do not auto-apply.
+* Candidate hints do not create a formal quotation.
+* Candidate hints only tell the user that a missing field may already exist in a pending suggestion and should be reviewed.
+
+Frontend behavior:
+
+* Quote readiness cards show the formal missing fields and the AI candidates side by side.
+* Candidate cards include buttons to inspect the suggestion and go to the review flow.
+* Dashboard quote-readiness tasks gain a special `quote_readiness_pending_ai_candidate` task type when a blocked inquiry has AI fields that cover the missing formal fields.
+
+Operational rule:
+
+* The presence of an AI candidate does not mark the inquiry as ready.
+* Only a deliberate human review/apply step can move those fields into formal CRM data.

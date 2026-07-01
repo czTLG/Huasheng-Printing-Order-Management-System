@@ -154,6 +154,9 @@ export default function CrmDashboard() {
                       <tr key={`${row.task_type}-${row.related_id || index}`} className="border-b border-slate-50 last:border-b-0">
                         <td className="py-3 pr-3 font-bold text-slate-900">
                           <div>{text(row.title)}</div>
+                          {row.task_type === 'quote_readiness_pending_ai_candidate' ? (
+                            <div className="mt-1 text-[11px] font-black text-indigo-600">AI 候选 · 待审核入库</div>
+                          ) : null}
                           {row.quote_readiness ? (
                             <div className="mt-1 text-xs text-slate-500">资料：{text(row.quote_readiness.status, 'unknown')} · 分数 {Number(row.quote_readiness.score || 0)}</div>
                           ) : null}

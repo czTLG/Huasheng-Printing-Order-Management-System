@@ -233,6 +233,168 @@ function safeParsedJson(value) {
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
+const QUOTE_AI_SPEC_FIELDS = [
+  'size',
+  'size_width',
+  'size_height',
+  'gusset_size',
+  'material_structure_text',
+  'thickness_total',
+  'printing_colors',
+  'surface_finish',
+  'zipper_required',
+  'spout_required',
+  'valve_required',
+  'tear_notch_required',
+  'window_required',
+  'artwork_status',
+  'shelf_life_requirement',
+  'high_barrier_required',
+  'retort_required',
+  'frozen_required',
+  'filling_weight',
+  'roll_width',
+  'repeat_length',
+  'quantity',
+  'core_id',
+  'max_roll_diameter',
+  'max_roll_weight',
+  'packing_machine_type',
+  'machine_direction',
+  'eye_mark_required',
+  'heat_seal_requirement',
+  'barrier_requirement',
+  'cof_requirement',
+  'sample_image_status',
+  'WVTR',
+  'OTR',
+  'residual_solvent',
+  'grammage'
+];
+
+function candidateValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => candidateValue(item)).filter(Boolean).join(' · ');
+  }
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  const textValue = text(value);
+  return textValue || '';
+}
+
+function pickCandidateFields(source = {}) {
+  const picked = {};
+  QUOTE_AI_SPEC_FIELDS.forEach((field) => {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) return;
+    const value = source[field];
+    const normalized = candidateValue(value);
+    if (normalized) picked[field] = value;
+  });
+  return picked;
+}
+
+function formatEvidenceSummary(row) {
+  return text(
+    row.source_email_subject
+    || row.source_email_received_at
+    || row.source_ai_run_code
+    || row.summary
+    || row.source_type
+  );
+}
+
+function getPendingSpecificationSuggestionsForInquiry(inquiry) {
+  if (!inquiry) return [];
+  const customerId = Number(inquiry.customer_id || 0) || 0;
+  const inquiryId = Number(inquiry.id || 0) || 0;
+  if (!customerId && !inquiryId) return [];
+  return db.prepare(`
+    SELECT
+      cis.*,
+      em.subject AS source_email_subject,
+      em.received_at AS source_email_received_at,
+      ar.run_code AS source_ai_run_code
+    FROM crm_import_suggestions cis
+    LEFT JOIN email_messages em ON em.id = cis.source_id AND cis.source_type = 'email'
+    LEFT JOIN email_ai_analysis_runs ar ON ar.id = cis.source_id AND cis.source_type = 'email_ai_analysis'
+    WHERE cis.status = 'pending'
+      AND cis.suggestion_type = 'specification'
+      AND (
+        cis.matched_inquiry_id = ?
+        OR cis.matched_customer_id = ?
+        OR (cis.source_type = 'email' AND em.matched_customer_id = ?)
+      )
+    ORDER BY cis.updated_at DESC, cis.id DESC
+    LIMIT 40
+  `).all(inquiryId, customerId, customerId);
+}
+
+function buildQuoteReadinessHints(inquiry, readiness) {
+  const suggestions = getPendingSpecificationSuggestionsForInquiry(inquiry);
+  const fieldCandidateMap = {};
+  const pendingAiCandidates = suggestions.map((row) => {
+    const extracted = safeParsedJson(row.suggested_updates_json || row.extracted_json || '{}');
+    const candidateFields = pickCandidateFields(extracted);
+    const normalizedCandidateFields = {};
+    Object.entries(candidateFields).forEach(([field, value]) => {
+      const normalizedValue = candidateValue(value);
+      if (!normalizedValue) return;
+      normalizedCandidateFields[field] = value;
+      if (!fieldCandidateMap[field]) fieldCandidateMap[field] = [];
+      fieldCandidateMap[field].push({
+        suggestion_id: Number(row.id),
+        value,
+        confidence: text(row.confidence || extracted.confidence || 'low') || 'low',
+        source_type: row.source_type,
+        source_id: Number(row.source_id || 0) || null,
+        email_ai_analysis_run_id: row.source_type === 'email_ai_analysis' ? Number(row.source_id || 0) || null : null,
+        matched_customer_id: row.matched_customer_id ? Number(row.matched_customer_id) : null,
+        matched_inquiry_id: row.matched_inquiry_id ? Number(row.matched_inquiry_id) : null,
+        created_at: row.created_at || null,
+        evidence_summary: formatEvidenceSummary(row)
+      });
+    });
+    return {
+      suggestion_id: Number(row.id),
+      suggestion_type: row.suggestion_type,
+      confidence: text(row.confidence || extracted.confidence || 'low') || 'low',
+      summary: text(row.summary || extracted.summary || ''),
+      source_type: row.source_type,
+      source_id: Number(row.source_id || 0) || null,
+      email_ai_analysis_run_id: row.source_type === 'email_ai_analysis' ? Number(row.source_id || 0) || null : null,
+      matched_customer_id: row.matched_customer_id ? Number(row.matched_customer_id) : null,
+      matched_inquiry_id: row.matched_inquiry_id ? Number(row.matched_inquiry_id) : null,
+      candidate_fields: normalizedCandidateFields,
+      evidence_summary: formatEvidenceSummary(row),
+      created_at: row.created_at || null
+    };
+  });
+
+  const missingRequired = Array.isArray(readiness?.missing_required_fields) ? readiness.missing_required_fields : [];
+  const suggestedApplyActions = [];
+  const seen = new Set();
+  pendingAiCandidates.forEach((candidate) => {
+    const candidateFieldNames = Object.keys(candidate.candidate_fields || {});
+    const matchedMissingFields = missingRequired.filter((field) => candidateFieldNames.includes(field));
+    if (!matchedMissingFields.length) return;
+    if (seen.has(candidate.suggestion_id)) return;
+    seen.add(candidate.suggestion_id);
+    suggestedApplyActions.push({
+      action_type: 'review_specification_suggestion',
+      suggestion_id: candidate.suggestion_id,
+      label: `Review pending AI specification for ${matchedMissingFields.join(' / ')}`
+    });
+  });
+
+  return {
+    has_pending_specification_suggestion: pendingAiCandidates.length > 0,
+    pending_ai_candidates: pendingAiCandidates,
+    field_candidate_map: fieldCandidateMap,
+    suggested_apply_actions: suggestedApplyActions
+  };
+}
+
 function getCurrentSpecificationForInquiry(inquiry) {
   if (!inquiry) return null;
   const latestSpecId = Number(inquiry.latest_specification_id || 0);
@@ -277,13 +439,14 @@ function recalculateQuoteReadiness(inquiryOrId, specification = null) {
   const currentSpecification = specification || getCurrentSpecificationForInquiry(inquiry);
   const readiness = evaluateQuoteReadiness(inquiry, currentSpecification || {});
   persistQuoteReadiness(Number(inquiry.id || inquiryOrId), readiness);
-  return { inquiry, specification: currentSpecification, readiness };
+  return { inquiry, specification: currentSpecification, readiness, hints: buildQuoteReadinessHints(inquiry, readiness) };
 }
 
 function withQuoteReadiness(inquiry) {
   if (!inquiry) return inquiry;
   const currentSpecification = getCurrentSpecificationForInquiry(inquiry);
   const readiness = evaluateQuoteReadiness(inquiry, currentSpecification || {});
+  const hints = buildQuoteReadinessHints(inquiry, readiness);
   return {
     ...inquiry,
     quote_readiness: readiness,
@@ -293,6 +456,10 @@ function withQuoteReadiness(inquiry) {
     quote_missing_fields_json: JSON.stringify(readiness.missing_required_fields || []),
     quote_readiness_warnings_json: JSON.stringify(readiness.warnings || []),
     quote_next_action: readiness.next_action,
+    pending_ai_candidates: hints.pending_ai_candidates,
+    field_candidate_map: hints.field_candidate_map,
+    has_pending_specification_suggestion: hints.has_pending_specification_suggestion,
+    suggested_apply_actions: hints.suggested_apply_actions,
   };
 }
 
@@ -556,25 +723,29 @@ router.get('/dashboard', (req, res) => {
     readinessCandidates.forEach((row) => {
       const currentSpecification = getCurrentSpecificationForInquiry(row);
       const readiness = evaluateQuoteReadiness(row, currentSpecification || {});
+      const hints = buildQuoteReadinessHints(row, readiness);
       if (Object.prototype.hasOwnProperty.call(readinessStats, readiness.status)) {
         readinessStats[readiness.status] += 1;
       }
       const isTaskStatus = ['blocked', 'need_customer_info', 'technical_check'].includes(readiness.status);
       const isReadyWaitingCosting = readiness.status === 'ready' && Number(row.costing_required || 0) !== 1 && !Number(row.latest_cost_sheet_id || 0) && !Number(row.latest_quote_id || 0);
       if (!isTaskStatus && !isReadyWaitingCosting) return;
+      const hasAiCandidate = readiness.status === 'blocked' && hints.has_pending_specification_suggestion && Object.keys(hints.field_candidate_map || {}).some((field) => (readiness.missing_required_fields || []).includes(field));
       readinessTasks.push({
-        task_type: `quote_readiness_${readiness.status}`,
-        title: readiness.status === 'ready' ? '待推进核价' : '检查报价资料完整度',
+        task_type: hasAiCandidate ? 'quote_readiness_pending_ai_candidate' : `quote_readiness_${readiness.status}`,
+        title: hasAiCandidate ? '审核 AI 候选规格' : (readiness.status === 'ready' ? '待推进核价' : '检查报价资料完整度'),
         customer_id: row.customer_id || null,
         customer_name: row.customer_display_name,
         related_id: row.id,
-        priority: readiness.status === 'blocked' ? 'A' : row.customer_priority === 'A' ? 'A' : 'B',
+        priority: hasAiCandidate ? 'A' : readiness.status === 'blocked' ? 'A' : row.customer_priority === 'A' ? 'A' : 'B',
         due_at: row.customer_next_followup_at || row.customer_last_contact_at || row.updated_at || '',
-        reason: readiness.status === 'ready'
-          ? `${row.inquiry_title || '询盘'} 资料已完整，尚未发起核价`
-          : `${row.inquiry_title || '询盘'} · ${readiness.next_action || '请补齐报价资料'}`,
-        action_label: readiness.status === 'ready' ? '发起核价' : '查看资料完整度',
-        quote_readiness: readiness
+        reason: hasAiCandidate
+          ? `${row.inquiry_title || '询盘'} 缺少正式资料，但 AI 已提取候选字段，建议审核规格建议`
+          : readiness.status === 'ready'
+            ? `${row.inquiry_title || '询盘'} 资料已完整，尚未发起核价`
+            : `${row.inquiry_title || '询盘'} · ${readiness.next_action || '请补齐报价资料'}`,
+        action_label: hasAiCandidate ? '查看 AI 候选' : (readiness.status === 'ready' ? '发起核价' : '查看资料完整度'),
+        quote_readiness: { ...readiness, ...hints }
       });
     });
 
@@ -1343,11 +1514,12 @@ router.get('/inquiries/:id/quote-readiness', (req, res) => {
     if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
     const currentSpecification = getCurrentSpecificationForInquiry(inquiry);
     const quoteReadiness = evaluateQuoteReadiness(inquiry, currentSpecification || {});
+    const hints = buildQuoteReadinessHints(inquiry, quoteReadiness);
     res.json({
       ok: true,
-      inquiry: withQuoteReadiness(inquiry),
+      inquiry: { ...withQuoteReadiness(inquiry), ...hints },
       current_specification: currentSpecification,
-      quote_readiness: quoteReadiness
+      quote_readiness: { ...quoteReadiness, ...hints }
     });
   } catch (err) {
     handleError(res, err, '报价资料完整度读取失败');
@@ -1367,9 +1539,9 @@ router.post('/inquiries/:id/recalculate-quote-readiness', (req, res) => {
     });
     res.json({
       ok: true,
-      inquiry: withQuoteReadiness(result.inquiry),
+      inquiry: { ...withQuoteReadiness(result.inquiry), ...(result.hints || {}) },
       current_specification: result.specification,
-      quote_readiness: result.readiness
+      quote_readiness: { ...result.readiness, ...(result.hints || {}) }
     });
   } catch (err) {
     handleError(res, err, '报价资料完整度重算失败');

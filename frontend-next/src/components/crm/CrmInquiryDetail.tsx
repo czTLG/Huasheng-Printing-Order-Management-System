@@ -19,6 +19,8 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [readinessBusy, setReadinessBusy] = useState(false);
+  const [aiSuggestionBusy, setAiSuggestionBusy] = useState(false);
+  const [aiSuggestionPreview, setAiSuggestionPreview] = useState<any>(null);
   const [inquiryForm, setInquiryForm] = useState<any>({});
   const [specForm, setSpecForm] = useState({
     product_type: '', bag_type: '', film_type: '', size_width: '', size_height: '',
@@ -120,6 +122,19 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
       await load();
     } finally {
       setReadinessBusy(false);
+    }
+  };
+
+  const openQuoteReadinessSuggestion = async (id: number) => {
+    setAiSuggestionBusy(true);
+    try {
+      const preview = await mockService.getCrmImportSuggestionPreview(id);
+      setAiSuggestionPreview(preview);
+      window.requestAnimationFrame(() => {
+        document.getElementById('quote-readiness-ai-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    } finally {
+      setAiSuggestionBusy(false);
     }
   };
 
@@ -226,7 +241,33 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
             <Save className="w-4 h-4" /> 保存询盘
           </button>
         </div>
-        <CrmQuoteReadinessCard readiness={quoteReadiness} onRecalculate={recalculateReadiness} loading={readinessBusy} title="报价资料完整度" />
+        <CrmQuoteReadinessCard
+          readiness={quoteReadiness}
+          onRecalculate={recalculateReadiness}
+          onViewSuggestion={openQuoteReadinessSuggestion}
+          onReviewSuggestion={openQuoteReadinessSuggestion}
+          loading={readinessBusy || aiSuggestionBusy}
+          title="报价资料完整度"
+        />
+        {aiSuggestionPreview ? (
+          <div id="quote-readiness-ai-preview" className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-black text-indigo-900">AI 候选 suggestion #{aiSuggestionPreview.suggestion?.id || '-'}</div>
+              <div className="text-xs font-bold text-indigo-700">{aiSuggestionPreview.suggestion?.suggestion_type || 'specification'}</div>
+            </div>
+            <div className="text-sm text-slate-700 whitespace-pre-wrap">{aiSuggestionPreview.suggestion?.summary || '未记录'}</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+              {(aiSuggestionPreview.diff || []).map((diff: any) => (
+                <div key={diff.field} className="rounded-lg border border-indigo-100 bg-white px-3 py-2">
+                  <div className="font-black text-slate-900">{diff.field}</div>
+                  <div className="text-slate-500">当前：{String(diff.current_value || '未记录')}</div>
+                  <div className="text-indigo-700">建议：{String(diff.suggested_value || '未记录')}</div>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-amber-700">{(aiSuggestionPreview.warnings || []).join(' | ')}</div>
+          </div>
+        ) : null}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <input className={inputClass} value={inquiryForm.inquiry_title} onChange={e => setInquiryForm((f: any) => ({ ...f, inquiry_title: e.target.value }))} placeholder="询盘标题" />
           <select className={inputClass} value={inquiryForm.status} onChange={e => setInquiryForm((f: any) => ({ ...f, status: e.target.value }))}>

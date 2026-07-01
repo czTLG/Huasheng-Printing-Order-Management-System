@@ -528,11 +528,108 @@ async function main() {
   });
   assert.strictEqual(blockedDashboardInquiry.ok, true);
 
+  const dbQuoteHints = new Database(dbPath);
+  const tsHints = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  dbQuoteHints.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'email_ai_analysis',
+    701,
+    'specification',
+    'pending',
+    'high',
+    completeCustomerId,
+    Number(blockedDashboardInquiry.id),
+    JSON.stringify({
+      size: '500g: 15 x 25 x 8 cm; 1kg: 18 x 30 x 10 cm',
+      size_width: '18 cm',
+      size_height: '30 cm',
+      gusset_size: '10 cm',
+      material_structure_text: 'PET12/AL7/PE100',
+      thickness_total: '120 mic',
+      printing_colors: '4-5 colors',
+      surface_finish: 'matte',
+      zipper_required: 1,
+      artwork_status: 'ready',
+      evidence: ['email_ai_analysis#701']
+    }),
+    JSON.stringify({
+      size: '500g: 15 x 25 x 8 cm; 1kg: 18 x 30 x 10 cm',
+      size_width: '18 cm',
+      size_height: '30 cm',
+      gusset_size: '10 cm',
+      material_structure_text: 'PET12/AL7/PE100',
+      thickness_total: '120 mic',
+      printing_colors: '4-5 colors',
+      surface_finish: 'matte',
+      zipper_required: 1,
+      artwork_status: 'ready',
+      evidence: ['email_ai_analysis#701']
+    }),
+    '[]',
+    'AI spec candidate for stand-up pouch size',
+    'AI parsed thread',
+    tsHints,
+    tsHints
+  );
+  dbQuoteHints.prepare(`
+    INSERT INTO crm_import_suggestions (
+      source_type, source_id, suggestion_type, status, confidence, matched_customer_id, matched_inquiry_id,
+      extracted_json, suggested_updates_json, risk_flags, summary, raw_input, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'email_ai_analysis',
+    702,
+    'specification',
+    'pending',
+    'high',
+    rollCustomerId,
+    rollInquiryId,
+    JSON.stringify({
+      roll_width: '175 mm',
+      repeat_length: '185 mm',
+      material_structure_text: 'PET12/Met BOPP15',
+      thickness_total: '29 µm',
+      printing_colors: '4',
+      artwork_status: 'ready',
+      evidence: ['email_ai_analysis#702']
+    }),
+    JSON.stringify({
+      roll_width: '175 mm',
+      repeat_length: '185 mm',
+      material_structure_text: 'PET12/Met BOPP15',
+      thickness_total: '29 µm',
+      printing_colors: '4',
+      artwork_status: 'ready',
+      evidence: ['email_ai_analysis#702']
+    }),
+    '[]',
+    'AI spec candidate for roll film width and repeat length',
+    'AI parsed thread',
+    tsHints,
+    tsHints
+  );
+  dbQuoteHints.close();
+
+  const rollReadinessWithHints = await httpJson(`/api/crm/inquiries/${rollInquiryId}/quote-readiness`, { token: crmAdminLogin.token });
+  assert.strictEqual(rollReadinessWithHints.quote_readiness.status, 'need_customer_info', 'roll film without material/thickness should need customer info');
+  assert(Array.isArray(rollReadinessWithHints.quote_readiness.pending_ai_candidates) && rollReadinessWithHints.quote_readiness.pending_ai_candidates.length > 0, 'roll film readiness should expose AI candidates');
+  assert(Array.isArray(rollReadinessWithHints.quote_readiness.field_candidate_map?.roll_width), 'roll film readiness should map roll_width candidates');
+
+  const blockedWithHints = await httpJson(`/api/crm/inquiries/${Number(blockedDashboardInquiry.id)}/quote-readiness`, { token: crmAdminLogin.token });
+  assert.strictEqual(blockedWithHints.quote_readiness.status, 'blocked', 'blocked inquiry should remain blocked');
+  assert(Array.isArray(blockedWithHints.quote_readiness.pending_ai_candidates) && blockedWithHints.quote_readiness.pending_ai_candidates.length > 0, 'blocked inquiry should expose pending AI candidates');
+  assert(Array.isArray(blockedWithHints.quote_readiness.field_candidate_map?.size), 'blocked inquiry should map size candidates');
+
   const dashboardReadiness = await httpJson('/api/crm/dashboard', { token: crmAdminLogin.token });
   assert(Number(dashboardReadiness.quote_readiness_blocked || 0) >= 1, 'dashboard should count blocked readiness inquiries');
   assert(Number(dashboardReadiness.quote_readiness_need_customer_info || 0) >= 1, 'dashboard should count need_customer_info readiness inquiries');
   assert(Number(dashboardReadiness.quote_readiness_ready || 0) >= 1, 'dashboard should count ready inquiries');
   assert(Array.isArray(dashboardReadiness.today_tasks) && dashboardReadiness.today_tasks.some(row => String(row.task_type || '').includes('quote_readiness')), 'dashboard should include quote readiness tasks');
+  assert(Array.isArray(dashboardReadiness.today_tasks) && dashboardReadiness.today_tasks.some(row => String(row.task_type || '') === 'quote_readiness_pending_ai_candidate'), 'dashboard should include AI candidate quote readiness tasks');
 
   await httpJson('/api/crm/email/sync-runs', { token: adminToken });
   await httpJson('/api/crm/email/sync-runs', { token: crmAdminLogin.token });
