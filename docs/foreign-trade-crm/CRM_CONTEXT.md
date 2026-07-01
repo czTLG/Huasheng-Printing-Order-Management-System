@@ -197,6 +197,12 @@ AI candidate hints:
 * Candidate hints do not change formal readiness status.
 * Candidate hints only guide human review.
 
+High-barrier dry-food packaging rule:
+
+* ALOX / high-barrier / barrier-film language by itself should not be treated as sterilization / retort / frozen technical risk.
+* If the inquiry only suggests a high-barrier dry-food structure, the readiness result may stay yellow/partial with a next action to confirm final barrier structure, MOQ, and quotation scope.
+* Only explicit hard-process keywords such as retort, sterilization, 121°C, boiling, microwave, frozen, high temperature, or pressure cooking should force a technical-check style warning.
+
 ## 9. Costing / Freight Boundary
 
 Costing integration:

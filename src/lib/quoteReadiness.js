@@ -31,6 +31,8 @@ const CRM_STAGE_OPTIONS = Object.keys(CRM_STAGE_LABELS).map((value) => ({ value,
 const BAG_KEYWORDS = ['pouch', 'bag', 'sachet', 'stand up', 'stand-up', 'zipper', 'retort', 'spout', 'window', 'gusset', 'doypack', 'flat bottom', 'bottom gusset'];
 const ROLL_KEYWORDS = ['roll film', 'film roll', 'web', 'roll stock', 'lamination roll', 'reel'];
 const TECH_KEYWORDS = ['wvtr', 'otr', 'cof', 'barrier', 'retort', 'frozen', 'heat seal', 'machine direction', 'reverse gravure', 'core id', 'od max', 'web width', 'repeat length'];
+const HARD_TECH_KEYWORDS = ['sterilization', 'sterilisation', '121°c', '121 c', '121c', 'boiling', 'boil', 'microwave', 'high temperature', 'pressure cooking'];
+const HARD_TECH_STRUCTURE_KEYWORDS = ['retort', 'frozen', 'steril', '121', 'boil', 'microwave', 'pressure cooking', 'high temperature'];
 const SPECIAL_KEYS = {
   zipper_required: ['zipper'],
   spout_required: ['spout'],
@@ -103,10 +105,10 @@ function detectSpecialSignals(inquiryText, spec = {}) {
       signals.push(key);
     }
   });
-  if (hasText(spec.material_structure_text) && containsAny(spec.material_structure_text, ['alox', 'wvtr', 'otr', 'cof', 'barrier', 'retort', 'frozen'])) {
+  if (hasText(spec.material_structure_text) && containsAny(spec.material_structure_text, HARD_TECH_STRUCTURE_KEYWORDS)) {
     signals.push('technical_structure');
   }
-  if (hasText(spec.notes) && containsAny(spec.notes, ['wvtr', 'otr', 'cof', 'barrier', 'retort', 'frozen'])) {
+  if (hasText(spec.notes) && containsAny(spec.notes, HARD_TECH_STRUCTURE_KEYWORDS)) {
     signals.push('technical_notes');
   }
   return Array.from(new Set(signals));
@@ -139,6 +141,8 @@ function evaluateQuoteReadiness(inquiry = {}, specification = {}) {
   const bag = looksLikeBag(inquiryText, specification);
   const mode = rollFilm && !bag ? 'roll_film' : bag ? 'bag' : rollFilm ? 'roll_film' : 'unknown';
   const specialSignals = detectSpecialSignals(inquiryText, specification);
+  const hasHardTechnicalRequest = containsAny(inquiryText, HARD_TECH_KEYWORDS);
+  const hasHighBarrierRequest = specialSignals.includes('high_barrier_required');
 
   const missingRequiredFields = [];
   const missingOptionalFields = [];
@@ -233,9 +237,14 @@ function evaluateQuoteReadiness(inquiry = {}, specification = {}) {
   if (!hasText(printingColors) || !hasText(joinText(specification.artwork_status))) {
     warnings.push('印刷颜色或设计稿未完全确认。');
   }
-  const technicalSignals = specialSignals.some((item) => item.startsWith('technical') || ['high_barrier_required', 'retort_required', 'frozen_required'].includes(item));
+  const technicalSignals = hasHardTechnicalRequest
+    || specialSignals.some((item) => item.startsWith('technical') || ['retort_required', 'frozen_required'].includes(item));
+  const highBarrierOnly = hasHighBarrierRequest && !technicalSignals;
   if (technicalSignals) {
     warnings.push('检测到高阻隔/蒸煮/冷冻等技术要求，需要技术确认。');
+  }
+  if (highBarrierOnly) {
+    warnings.push('High barrier / ALOX structure should be confirmed before quotation.');
   }
   if (hasText(targetPrice)) {
     warnings.push('客户存在目标价，需要老板确认价格边界。');
@@ -255,6 +264,10 @@ function evaluateQuoteReadiness(inquiry = {}, specification = {}) {
     status = 'technical_check';
     color = 'yellow';
     nextAction = '请技术确认高阻隔/蒸煮/冷冻等要求';
+  } else if (highBarrierOnly) {
+    status = 'partial';
+    color = 'yellow';
+    nextAction = 'Confirm final barrier structure, MOQ, and quotation scope.';
   } else if (!hasText(material) || !hasText(thickness)) {
     status = 'need_customer_info';
     color = 'yellow';

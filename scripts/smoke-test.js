@@ -334,6 +334,53 @@ async function main() {
   assert(Array.isArray(quoteReadinessBeforeSpec.quote_readiness.missing_required_fields), 'quote readiness should expose missing required fields');
   await httpJson(`/api/crm/inquiries/${inquiryId}/quote-readiness`, { token: scopedSalesLogin.token, expectedStatus: 403 });
 
+  const barrierInquiry = await httpJson('/api/crm/inquiries', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      customer_id: crmCustomerId,
+      inquiry_title: 'High barrier dry-food pouch',
+      product_type: 'instant oats packaging pouch',
+      packaging_type: 'stand_up_zipper_bag',
+      quantity: '30000 pcs',
+      destination_country: 'Bangladesh',
+      trade_term_requested: 'EXW',
+      priority: 'B',
+      next_action: 'Confirm barrier structure'
+    }
+  });
+  assert.strictEqual(barrierInquiry.ok, true);
+  const barrierInquiryId = Number(barrierInquiry.id);
+  assert(barrierInquiryId > 0, 'barrier inquiry id should be > 0');
+
+  const barrierSpec = await httpJson(`/api/crm/inquiries/${barrierInquiryId}/specifications`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      product_type: 'instant oats packaging pouch',
+      bag_type: 'stand-up zipper pouch',
+      film_type: 'high barrier matte laminated pouch',
+      size_width: '15 cm / 18 cm',
+      size_height: '25 cm / 30 cm',
+      gusset_size: '8 cm / 10 cm',
+      thickness_total: '100-120 microns',
+      thickness_unit: 'micron',
+      material_structure_text: 'ALOX / matte high barrier',
+      printing_colors: 'CMYK 4-5 colors',
+      surface_finish: 'soft matte',
+      zipper_required: true,
+      window_required: true,
+      artwork_status: 'ready',
+      notes: '24 months shelf life'
+    }
+  });
+  assert.strictEqual(barrierSpec.ok, true);
+  const barrierReadiness = await httpJson(`/api/crm/inquiries/${barrierInquiryId}/quote-readiness`, { token: crmAdminLogin.token });
+  assert(['partial', 'technical_check'].includes(barrierReadiness.quote_readiness.status), 'high barrier dry-food inquiry should not be blocked');
+  assert(!String(barrierReadiness.quote_readiness.warnings || []).includes('蒸煮'), 'high barrier dry-food inquiry should not mention retort/boiling warnings');
+  assert(!String(barrierReadiness.quote_readiness.warnings || []).includes('冷冻'), 'high barrier dry-food inquiry should not mention frozen warnings');
+  assert.strictEqual(barrierReadiness.quote_readiness.next_action, 'Confirm final barrier structure, MOQ, and quotation scope.', 'high barrier dry-food inquiry should use a barrier review next action');
+
   const researchNote = await httpJson(`/api/crm/customers/${crmCustomerId}/research-notes`, {
     method: 'POST',
     token: crmAdminLogin.token,
