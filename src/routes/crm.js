@@ -3,6 +3,7 @@ const { db, now, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
 const { validateImapConfig, syncMailbox } = require('../lib/imapSync');
 const { createSuggestionsFromEmail } = require('../lib/emailCrmParser');
+const { evaluateQuoteReadiness, normalizeCrmStage } = require('../lib/quoteReadiness');
 
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
@@ -230,6 +231,69 @@ function compactCustomerName(row) {
 function safeParsedJson(value) {
   const parsed = parseJsonObject(value, {});
   return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+function getCurrentSpecificationForInquiry(inquiry) {
+  if (!inquiry) return null;
+  const latestSpecId = Number(inquiry.latest_specification_id || 0);
+  if (latestSpecId) {
+    const current = getSpecification(latestSpecId);
+    if (current) return current;
+  }
+  const row = db.prepare(`
+    SELECT id
+    FROM inquiry_specifications
+    WHERE inquiry_id = ?
+    ORDER BY is_current DESC, version_no DESC, id DESC
+    LIMIT 1
+  `).get(Number(inquiry.id || 0));
+  return row ? getSpecification(Number(row.id)) : null;
+}
+
+function persistQuoteReadiness(inquiryId, readiness) {
+  if (!inquiryId || !readiness) return;
+  db.prepare(`
+    UPDATE inquiries
+    SET quote_readiness_status = ?, quote_readiness_score = ?, quote_readiness_color = ?,
+        quote_missing_fields_json = ?, quote_readiness_warnings_json = ?, quote_next_action = ?,
+        quote_readiness_updated_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    readiness.status || 'blocked',
+    Number(readiness.score || 0),
+    readiness.color || 'red',
+    JSON.stringify(readiness.missing_required_fields || []),
+    JSON.stringify(readiness.warnings || []),
+    readiness.next_action || '',
+    now(),
+    now(),
+    inquiryId
+  );
+}
+
+function recalculateQuoteReadiness(inquiryOrId, specification = null) {
+  const inquiry = typeof inquiryOrId === 'object' ? inquiryOrId : getInquiry(Number(inquiryOrId || 0));
+  if (!inquiry) return null;
+  const currentSpecification = specification || getCurrentSpecificationForInquiry(inquiry);
+  const readiness = evaluateQuoteReadiness(inquiry, currentSpecification || {});
+  persistQuoteReadiness(Number(inquiry.id || inquiryOrId), readiness);
+  return { inquiry, specification: currentSpecification, readiness };
+}
+
+function withQuoteReadiness(inquiry) {
+  if (!inquiry) return inquiry;
+  const currentSpecification = getCurrentSpecificationForInquiry(inquiry);
+  const readiness = evaluateQuoteReadiness(inquiry, currentSpecification || {});
+  return {
+    ...inquiry,
+    quote_readiness: readiness,
+    quote_readiness_status: readiness.status,
+    quote_readiness_score: readiness.score,
+    quote_readiness_color: readiness.color,
+    quote_missing_fields_json: JSON.stringify(readiness.missing_required_fields || []),
+    quote_readiness_warnings_json: JSON.stringify(readiness.warnings || []),
+    quote_next_action: readiness.next_action,
+  };
 }
 
 router.get('/dashboard', (req, res) => {
@@ -473,6 +537,47 @@ router.get('/dashboard', (req, res) => {
       LIMIT 12
     `).all();
 
+    const readinessCandidates = db.prepare(`
+      SELECT
+        i.*,
+        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), NULLIF(c.contact_person, ''), '未命名客户') AS customer_display_name,
+        c.priority AS customer_priority,
+        c.next_followup_at AS customer_next_followup_at,
+        c.last_contact_at AS customer_last_contact_at
+      FROM inquiries i
+      LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE COALESCE(c.active, 1) = 1
+      ORDER BY i.updated_at DESC, i.id DESC
+      LIMIT 80
+    `).all();
+
+    const readinessStats = { blocked: 0, need_customer_info: 0, technical_check: 0, ready: 0, boss_check: 0, partial: 0 };
+    const readinessTasks = [];
+    readinessCandidates.forEach((row) => {
+      const currentSpecification = getCurrentSpecificationForInquiry(row);
+      const readiness = evaluateQuoteReadiness(row, currentSpecification || {});
+      if (Object.prototype.hasOwnProperty.call(readinessStats, readiness.status)) {
+        readinessStats[readiness.status] += 1;
+      }
+      const isTaskStatus = ['blocked', 'need_customer_info', 'technical_check'].includes(readiness.status);
+      const isReadyWaitingCosting = readiness.status === 'ready' && Number(row.costing_required || 0) !== 1 && !Number(row.latest_cost_sheet_id || 0) && !Number(row.latest_quote_id || 0);
+      if (!isTaskStatus && !isReadyWaitingCosting) return;
+      readinessTasks.push({
+        task_type: `quote_readiness_${readiness.status}`,
+        title: readiness.status === 'ready' ? '待推进核价' : '检查报价资料完整度',
+        customer_id: row.customer_id || null,
+        customer_name: row.customer_display_name,
+        related_id: row.id,
+        priority: readiness.status === 'blocked' ? 'A' : row.customer_priority === 'A' ? 'A' : 'B',
+        due_at: row.customer_next_followup_at || row.customer_last_contact_at || row.updated_at || '',
+        reason: readiness.status === 'ready'
+          ? `${row.inquiry_title || '询盘'} 资料已完整，尚未发起核价`
+          : `${row.inquiry_title || '询盘'} · ${readiness.next_action || '请补齐报价资料'}`,
+        action_label: readiness.status === 'ready' ? '发起核价' : '查看资料完整度',
+        quote_readiness: readiness
+      });
+    });
+
     const todayTasks = [];
     pendingSuggestions.slice(0, 12).forEach((item) => {
       const typeLabel = {
@@ -493,6 +598,7 @@ router.get('/dashboard', (req, res) => {
         action_label: '预览并确认'
       });
     });
+    readinessTasks.slice(0, 12).forEach((task) => todayTasks.push(task));
     priorityCustomers
       .filter((row) => text(row.next_followup_at) && row.next_followup_at.slice(0, 10) <= today)
       .slice(0, 8)
@@ -539,6 +645,10 @@ router.get('/dashboard', (req, res) => {
     res.json({
       ok: true,
       summary,
+      quote_readiness_blocked: readinessStats.blocked,
+      quote_readiness_need_customer_info: readinessStats.need_customer_info,
+      quote_readiness_technical_check: readinessStats.technical_check,
+      quote_readiness_ready: readinessStats.ready,
       today_tasks: todayTasks.slice(0, 40),
       priority_customers: priorityCustomers,
       pending_suggestions: pendingSuggestions,
@@ -640,6 +750,7 @@ router.post('/customers', (req, res) => {
     const companyName = text(body.company_name || body.name || body.customer_name);
     if (!companyName) return res.status(400).json({ ok: false, error: 'company_name 必填' });
     const ts = now();
+    const stage = normalizeCrmStage(body.stage || 'new_unprocessed');
     const name = companyName;
     const result = db.prepare(`
       INSERT INTO customers (
@@ -660,7 +771,7 @@ router.post('/customers', (req, res) => {
       text(body.whatsapp),
       text(body.source_channel),
       text(body.priority || 'C'),
-      text(body.stage || 'new'),
+      stage,
       body.owner_id || req.user.id || null,
       text(body.ai_summary),
       text(body.risk_notes),
@@ -689,10 +800,11 @@ router.get('/customers/:id', (req, res) => {
     const id = idParam(req.params.id);
     const customer = getCustomer(id);
     if (!customer) return res.status(404).json({ ok: false, error: '客户不存在' });
-    const latestInquiry = customer.latest_inquiry_id
+    const latestInquiryBase = customer.latest_inquiry_id
       ? db.prepare('SELECT * FROM inquiries WHERE id = ?').get(customer.latest_inquiry_id) || null
       : null;
-    const inquiries = db.prepare('SELECT * FROM inquiries WHERE customer_id = ? ORDER BY updated_at DESC, id DESC LIMIT 100').all(id);
+    const latestInquiry = latestInquiryBase ? withQuoteReadiness(latestInquiryBase) : null;
+    const inquiries = db.prepare('SELECT * FROM inquiries WHERE customer_id = ? ORDER BY updated_at DESC, id DESC LIMIT 100').all(id).map(withQuoteReadiness);
     const communications = db.prepare('SELECT * FROM communication_logs WHERE customer_id = ? ORDER BY COALESCE(received_at, created_at) DESC, id DESC LIMIT 100').all(id);
     const overview = getCustomerOverview(id);
     const latestResearchNote = getLatestResearchNote(id);
@@ -977,6 +1089,9 @@ router.patch('/customers/:id', (req, res) => {
     if (Object.prototype.hasOwnProperty.call(normalized, 'company_name') && text(normalized.company_name)) {
       normalized.name = text(normalized.company_name);
     }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'stage')) {
+      normalized.stage = normalizeCrmStage(normalized.stage);
+    }
     const fields = [...CUSTOMER_FIELDS, 'name'];
     const changes = changesFrom(oldRow, normalized, fields);
     updateByFields('customers', id, normalized, fields);
@@ -1146,6 +1261,7 @@ router.post('/inquiries', (req, res) => {
       return result.lastInsertRowid;
     });
     const id = tx();
+    recalculateQuoteReadiness(id);
     crmAudit(req, 'create_inquiry', 'crm_inquiry', id, {
       entity: 'inquiry',
       action: 'create',
@@ -1184,13 +1300,14 @@ function getSpecification(id) {
 router.get('/inquiries/:id', (req, res) => {
   try {
     const id = idParam(req.params.id);
-    const inquiry = getInquiry(id);
+    const inquiryBase = getInquiry(id);
+    const inquiry = inquiryBase ? withQuoteReadiness(inquiryBase) : null;
     if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
     const specifications = db.prepare('SELECT * FROM inquiry_specifications WHERE inquiry_id = ? ORDER BY version_no DESC, id DESC').all(id);
     const currentBase = specifications.find((row) => Number(row.is_current) === 1) || specifications[0] || null;
     const currentSpecification = currentBase ? getSpecification(currentBase.id) : null;
     const communications = db.prepare('SELECT * FROM communication_logs WHERE inquiry_id = ? ORDER BY COALESCE(received_at, created_at) DESC, id DESC LIMIT 100').all(id);
-    res.json({ ok: true, inquiry, currentSpecification, specifications, communications });
+    res.json({ ok: true, inquiry, currentSpecification, specifications, communications, quote_readiness: inquiry.quote_readiness });
   } catch (err) {
     handleError(res, err, '询盘详情读取失败');
   }
@@ -1207,6 +1324,7 @@ router.patch('/inquiries/:id', (req, res) => {
     }
     const changes = changesFrom(oldRow, body, INQUIRY_FIELDS);
     updateByFields('inquiries', id, body, INQUIRY_FIELDS);
+    recalculateQuoteReadiness(id);
     crmAudit(req, 'update_inquiry', 'crm_inquiry', id, {
       entity: 'inquiry',
       action: 'update',
@@ -1215,6 +1333,46 @@ router.patch('/inquiries/:id', (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     handleError(res, err, '询盘更新失败');
+  }
+});
+
+router.get('/inquiries/:id/quote-readiness', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const inquiry = getInquiry(id);
+    if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const currentSpecification = getCurrentSpecificationForInquiry(inquiry);
+    const quoteReadiness = evaluateQuoteReadiness(inquiry, currentSpecification || {});
+    res.json({
+      ok: true,
+      inquiry: withQuoteReadiness(inquiry),
+      current_specification: currentSpecification,
+      quote_readiness: quoteReadiness
+    });
+  } catch (err) {
+    handleError(res, err, '报价资料完整度读取失败');
+  }
+});
+
+router.post('/inquiries/:id/recalculate-quote-readiness', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const result = recalculateQuoteReadiness(id);
+    if (!result) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    crmAudit(req, 'recalculate_quote_readiness', 'crm_inquiry', id, {
+      inquiry_id: id,
+      quote_readiness_status: result.readiness.status,
+      quote_readiness_score: result.readiness.score,
+      quote_readiness_color: result.readiness.color
+    });
+    res.json({
+      ok: true,
+      inquiry: withQuoteReadiness(result.inquiry),
+      current_specification: result.specification,
+      quote_readiness: result.readiness
+    });
+  } catch (err) {
+    handleError(res, err, '报价资料完整度重算失败');
   }
 });
 
@@ -1302,6 +1460,7 @@ router.post('/inquiries/:id/specifications', (req, res) => {
       return { id: result.lastInsertRowid, versionNo };
     });
     const result = tx();
+    recalculateQuoteReadiness(inquiryId);
     crmAudit(req, 'create_specification_version', 'crm_specification', result.id, {
       entity: 'specification',
       action: 'create_version',
@@ -1363,6 +1522,8 @@ router.post('/specifications/:id/layers', (req, res) => {
       layer_order: layerOrder,
       material_name: materialName
     });
+    const specRow = db.prepare('SELECT inquiry_id FROM inquiry_specifications WHERE id = ?').get(specificationId);
+    if (specRow?.inquiry_id) recalculateQuoteReadiness(Number(specRow.inquiry_id));
     res.json({ ok: true, id: result.lastInsertRowid });
   } catch (err) {
     handleError(res, err, '材料层创建失败');

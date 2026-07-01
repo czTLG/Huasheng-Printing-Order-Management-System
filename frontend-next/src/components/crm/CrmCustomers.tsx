@@ -3,6 +3,7 @@ import { Plus, RefreshCcw, Search, Users } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
 import CrmCustomerDetail from './CrmCustomerDetail';
 import CrmInquiryDetail from './CrmInquiryDetail';
+import { CRM_STAGE_OPTIONS, getCrmStageLabel, normalizeCrmStage } from '../../lib/crmStage';
 
 const inputClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 
@@ -15,7 +16,7 @@ export default function CrmCustomers() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [selectedInquiryId, setSelectedInquiryId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ company_name: '', contact_person: '', email: '', whatsapp: '', country: '', priority: 'C', stage: 'new', next_action: '' });
+  const [form, setForm] = useState({ company_name: '', contact_person: '', email: '', whatsapp: '', country: '', priority: 'C', stage: 'new_unprocessed', next_action: '' });
 
   const load = async () => {
     setLoading(true);
@@ -41,7 +42,7 @@ export default function CrmCustomers() {
     setCreating(true);
     try {
       const ret = await mockService.createCrmCustomer(form);
-      setForm({ company_name: '', contact_person: '', email: '', whatsapp: '', country: '', priority: 'C', stage: 'new', next_action: '' });
+      setForm({ company_name: '', contact_person: '', email: '', whatsapp: '', country: '', priority: 'C', stage: 'new_unprocessed', next_action: '' });
       await load();
       if (ret?.id) setSelectedCustomerId(Number(ret.id));
     } finally {
@@ -79,6 +80,9 @@ export default function CrmCustomers() {
           <input className={inputClass} value={form.country} onChange={e => setForm(f => ({ ...f, country: e.target.value }))} placeholder="国家" />
           <select className={inputClass} value={form.priority} onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}>
             <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+          </select>
+          <select className={inputClass} value={form.stage} onChange={e => setForm(f => ({ ...f, stage: normalizeCrmStage(e.target.value) }))}>
+            {CRM_STAGE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
           <input className={inputClass} value={form.next_action} onChange={e => setForm(f => ({ ...f, next_action: e.target.value }))} placeholder="下一步" />
           <button disabled={creating} onClick={createCustomer} className="h-9 px-3 rounded-lg bg-indigo-600 text-white text-sm font-black flex items-center justify-center gap-2 disabled:opacity-60">
@@ -128,7 +132,7 @@ export default function CrmCustomers() {
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-600">{[row.customer_type, row.country].filter(Boolean).join(' / ') || row.country || '-'}</td>
                   <td className="px-4 py-3"><span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-xs font-black">{row.priority || 'C'}</span></td>
-                  <td className="px-4 py-3 text-sm text-slate-600">{row.stage || 'new'}</td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{getCrmStageLabel(row.stage || 'new_unprocessed')}</td>
                   <td className="px-4 py-3 text-sm text-slate-600">{row.latest_inquiry_title || '-'}</td>
                   <td className="px-4 py-3 text-xs text-slate-500">{`核价 ${row.latest_costing_status || '-'} / 物流 ${row.latest_freight_status || '-'}`}</td>
                   <td className="px-4 py-3 text-sm text-slate-600 max-w-[220px] truncate">{row.next_action || '-'}</td>

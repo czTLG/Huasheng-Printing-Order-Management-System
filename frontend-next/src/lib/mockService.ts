@@ -677,6 +677,18 @@ export const mockService = {
     return api<any>(`/api/crm/inquiries/${id}`);
   },
 
+  async getCrmInquiryQuoteReadiness(id: number | string) {
+    return api<any>(`/api/crm/inquiries/${id}/quote-readiness`);
+  },
+
+  async recalculateCrmInquiryQuoteReadiness(id: number | string) {
+    return api<any>(`/api/crm/inquiries/${id}/recalculate-quote-readiness`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  },
+
   async listCustomerImportSuggestions(customerId: number | string) {
     return api<any>(`/api/crm/customers/${customerId}/import-suggestions`);
   },

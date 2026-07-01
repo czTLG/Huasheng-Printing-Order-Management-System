@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Globe, MessageSquarePlus, Plus, RefreshCcw, Save } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
 import CrmCustomerResearchNotes from './CrmCustomerResearchNotes';
+import CrmQuoteReadinessCard from './CrmQuoteReadinessCard';
+import { CRM_STAGE_OPTIONS, getCrmStageLabel, normalizeCrmStage } from '../../lib/crmStage';
 
 type Props = {
   customerId: number;
@@ -11,8 +13,6 @@ type Props = {
 
 const fieldClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 const areaClass = 'min-h-[80px] px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
-
-const stageOptions = ['new', 'researching', 'spec_checking', 'costing', 'freight_checking', 'quoted', 'sample', 'order', 'paused', 'lost'];
 
 export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }: Props) {
   const [data, setData] = useState<any>(null);
@@ -25,6 +25,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
   const [customerForm, setCustomerForm] = useState<any>({});
   const [commForm, setCommForm] = useState({ channel: 'whatsapp', direction: 'inbound', subject: '', raw_content: '' });
   const [inquiryForm, setInquiryForm] = useState({ inquiry_title: '', product_type: '', packaging_type: '', quantity: '', destination_country: '', priority: 'C', next_action: '' });
+  const [readinessBusy, setReadinessBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -43,7 +44,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
         industry: detail.customer?.industry || '',
         main_product: detail.customer?.main_product || '',
         priority: detail.customer?.priority || 'C',
-        stage: detail.customer?.stage || 'new',
+        stage: normalizeCrmStage(detail.customer?.stage || 'new_unprocessed'),
         customer_summary: detail.customer?.customer_summary || detail.customer?.ai_summary || '',
         business_background: detail.customer?.business_background || '',
         priority_reason: detail.customer?.priority_reason || '',
@@ -58,6 +59,18 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
   useEffect(() => { load().catch(() => setLoading(false)); }, [customerId]);
 
   const updateField = (key: string, value: string) => setCustomerForm((prev: any) => ({ ...prev, [key]: value }));
+
+  const recalculateLatestReadiness = async () => {
+    const latestInquiryId = Number(data?.latestInquiry?.id || 0);
+    if (!latestInquiryId) return;
+    setReadinessBusy(true);
+    try {
+      await mockService.recalculateCrmInquiryQuoteReadiness(latestInquiryId);
+      await load();
+    } finally {
+      setReadinessBusy(false);
+    }
+  };
 
   const saveCustomer = async () => {
     setSaving(true);
@@ -189,18 +202,19 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-lg font-black text-slate-900">{data.customer.display_name}</h2>
-                <div className="text-xs text-slate-500 mt-1">{[data.customer.country, data.customer.city, data.customer.customer_type, data.customer.industry].filter(Boolean).join(' · ') || '客户基础标签待补充'}</div>
+        <div className="text-xs text-slate-500 mt-1">{[data.customer.country, data.customer.city, data.customer.customer_type, data.customer.industry].filter(Boolean).join(' · ') || '客户基础标签待补充'}</div>
               </div>
               <div className="flex gap-2">
                 <span className="px-2.5 py-1 rounded bg-indigo-50 text-indigo-700 text-xs font-black">{data.customer.priority || 'C'}</span>
-                <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 text-xs font-black">{data.customer.stage || 'new'}</span>
+                <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 text-xs font-black">{getCrmStageLabel(data.customer.stage || 'new_unprocessed')}</span>
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 text-sm">
               <div className="rounded-lg border border-slate-100 p-3">
                 <div className="text-xs font-bold text-slate-400">最近询盘</div>
                 <div className="text-sm font-black text-slate-900 mt-1">{latest?.inquiry_title || '-'}</div>
                 <div className="text-xs text-slate-500 mt-1">{latest?.status || '-'} · {latest?.quantity || '-'}</div>
+                <div className="text-xs text-slate-500 mt-1">完整度：{latest?.quote_readiness?.status || '未评估'} / 分数 {latest?.quote_readiness?.score ?? 0}</div>
               </div>
               <div className="rounded-lg border border-slate-100 p-3">
                 <div className="text-xs font-bold text-slate-400">最近核价</div>
@@ -217,7 +231,16 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
                 <div className="text-sm font-black text-slate-900 mt-1">{data.pendingImportSuggestionCount || 0}</div>
                 <div className="text-xs text-slate-500 mt-1">最新调研 {latestResearchNote?.title || '未记录'}</div>
               </div>
+              <div className="rounded-lg border border-slate-100 p-3">
+                <div className="text-xs font-bold text-slate-400">报价资料完整度</div>
+                <div className="text-sm font-black text-slate-900 mt-1">{latest?.quote_readiness?.status || '未评估'}</div>
+                <div className="text-xs text-slate-500 mt-1">{latest?.quote_readiness?.next_action || '点击下方卡片重新计算'}</div>
+                <button disabled={readinessBusy || !latest?.id} onClick={recalculateLatestReadiness} className="mt-2 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-black text-slate-700 disabled:opacity-60">重新计算</button>
+              </div>
             </div>
+            {latest?.quote_readiness ? (
+              <CrmQuoteReadinessCard readiness={latest.quote_readiness} onRecalculate={recalculateLatestReadiness} loading={readinessBusy} title="最新询盘报价资料完整度" />
+            ) : null}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
                 <div className="text-xs font-bold text-slate-400">客户总览</div>
@@ -287,8 +310,8 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             <option value="C">C 普通</option>
             <option value="D">D 暂缓</option>
           </select>
-          <select className={fieldClass} value={customerForm.stage} onChange={e => updateField('stage', e.target.value)}>
-            {stageOptions.map(item => <option key={item} value={item}>{item}</option>)}
+          <select className={fieldClass} value={customerForm.stage} onChange={e => updateField('stage', normalizeCrmStage(e.target.value))}>
+            {CRM_STAGE_OPTIONS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -356,6 +379,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
               <button key={item.id} onClick={() => onOpenInquiry?.(Number(item.id))} className="block w-full text-left border border-slate-100 rounded-lg p-3 hover:border-indigo-200">
                 <div className="text-sm font-black text-slate-800">{item.inquiry_title}</div>
                 <div className="text-xs text-slate-500 mt-1">{item.status} · {item.priority} · {item.destination_country || '-'} · {item.trade_term_requested || '-'}</div>
+                <div className="text-xs text-slate-500 mt-1">报价资料：{item.quote_readiness?.status || '未评估'} · 分数 {item.quote_readiness?.score ?? 0} · {item.quote_readiness?.next_action || '-'}</div>
               </button>
             ))}
           </div>

@@ -714,6 +714,15 @@ function initDb() {
   if (!emcols.includes('customer_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN customer_detected INTEGER DEFAULT 0");
   if (!emcols.includes('parsed_at')) db.exec("ALTER TABLE email_messages ADD COLUMN parsed_at TEXT");
 
+  const icols = db.prepare("PRAGMA table_info(inquiries)").all().map(c => c.name);
+  if (!icols.includes('quote_readiness_status')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_status TEXT");
+  if (!icols.includes('quote_readiness_score')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_score INTEGER DEFAULT 0");
+  if (!icols.includes('quote_readiness_color')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_color TEXT");
+  if (!icols.includes('quote_missing_fields_json')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_missing_fields_json TEXT");
+  if (!icols.includes('quote_readiness_warnings_json')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_warnings_json TEXT");
+  if (!icols.includes('quote_next_action')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_next_action TEXT");
+  if (!icols.includes('quote_readiness_updated_at')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_updated_at TEXT");
+
   const cscols = db.prepare("PRAGMA table_info(cost_snapshots)").all().map(c => c.name);
   if (!cscols.includes('customer_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN customer_id INTEGER");
   if (!cscols.includes('inquiry_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN inquiry_id INTEGER");

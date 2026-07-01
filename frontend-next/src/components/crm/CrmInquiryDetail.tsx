@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Calculator, Copy, Layers, Plus, RefreshCcw, Save, Ship } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
 import CrmTermTooltip from './CrmTermTooltip';
+import CrmQuoteReadinessCard from './CrmQuoteReadinessCard';
 
 type Props = {
   inquiryId: number;
@@ -17,6 +18,7 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const [freightQuotes, setFreightQuotes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [readinessBusy, setReadinessBusy] = useState(false);
   const [inquiryForm, setInquiryForm] = useState<any>({});
   const [specForm, setSpecForm] = useState({
     product_type: '', bag_type: '', film_type: '', size_width: '', size_height: '',
@@ -111,6 +113,16 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
     }
   };
 
+  const recalculateReadiness = async () => {
+    setReadinessBusy(true);
+    try {
+      await mockService.recalculateCrmInquiryQuoteReadiness(inquiryId);
+      await load();
+    } finally {
+      setReadinessBusy(false);
+    }
+  };
+
   const createSpecification = async () => {
     setSaving(true);
     try {
@@ -175,6 +187,7 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const layers = Array.isArray(current?.layers) ? current.layers : [];
   const latestCosting = costingRequests[0] || null;
   const currentFreight = freightQuotes.find((row: any) => Number(row.is_current) === 1) || freightQuotes[0] || null;
+  const quoteReadiness = data.quote_readiness || data.inquiry?.quote_readiness || null;
   const costingSummary = [
     `客户简称：${data.inquiry.customer_display_name || '-'}`,
     `询盘编号：${data.inquiry.inquiry_code || data.inquiry.id || '-'}`,
@@ -213,6 +226,7 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
             <Save className="w-4 h-4" /> 保存询盘
           </button>
         </div>
+        <CrmQuoteReadinessCard readiness={quoteReadiness} onRecalculate={recalculateReadiness} loading={readinessBusy} title="报价资料完整度" />
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <input className={inputClass} value={inquiryForm.inquiry_title} onChange={e => setInquiryForm((f: any) => ({ ...f, inquiry_title: e.target.value }))} placeholder="询盘标题" />
           <select className={inputClass} value={inquiryForm.status} onChange={e => setInquiryForm((f: any) => ({ ...f, status: e.target.value }))}>

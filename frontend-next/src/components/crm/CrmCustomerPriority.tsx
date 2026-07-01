@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, RefreshCcw, Search, Star } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
+import { getCrmStageLabel } from '../../lib/crmStage';
 
 const inputClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 const priorityOrder = ['A', 'B', 'C', 'D'];
@@ -111,7 +112,7 @@ export default function CrmCustomerPriority() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-black text-slate-900">{row.display_name}</div>
-                      <div className="text-xs text-slate-500 mt-1">{[row.country, row.customer_type, row.stage].filter(Boolean).join(' · ') || '未补充客户标签'}</div>
+                      <div className="text-xs text-slate-500 mt-1">{[row.country, row.customer_type, getCrmStageLabel(row.stage || 'new_unprocessed')].filter(Boolean).join(' · ') || '未补充客户标签'}</div>
                     </div>
                     <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-black">{row.priority || 'D'}</span>
                   </div>

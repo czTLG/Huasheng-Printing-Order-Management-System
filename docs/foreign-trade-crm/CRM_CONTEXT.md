@@ -1004,3 +1004,81 @@ Safety rules:
 * Dashboard must not auto apply suggestions.
 * Dashboard must not automatically change customer priority.
 * Dashboard must not send email or mutate remote mailbox state.
+
+## 29. Quote Readiness and CRM Stage Standardization
+
+Implemented as a lightweight planning layer rather than a formal quotation system.
+
+Quote readiness evaluator:
+
+* Added `src/lib/quoteReadiness.js`.
+* The evaluator reads `inquiry + latest specification` and classifies the quote input as:
+  * `ready`
+  * `partial`
+  * `blocked`
+  * `technical_check`
+  * `boss_check`
+  * `need_customer_info`
+* The evaluator returns:
+  * `status`
+  * `color`
+  * `score`
+  * `missing_required_fields`
+  * `missing_optional_fields`
+  * `warnings`
+  * `next_action`
+* The evaluator is intentionally conservative:
+  * bag size, quantity, destination country, and trade term are required for bag work
+  * roll width, repeat length, quantity, destination country, and trade term are required for roll film work
+  * missing material or thickness pushes the record toward yellow / information-needed states
+  * high-barrier, retort, and frozen requirements trigger technical review handling
+  * target price can trigger a boss check state
+
+Persisted inquiry fields:
+
+* `quote_readiness_status`
+* `quote_readiness_score`
+* `quote_readiness_color`
+* `quote_missing_fields_json`
+* `quote_readiness_warnings_json`
+* `quote_next_action`
+* `quote_readiness_updated_at`
+
+CRM stage standardization:
+
+* Added a shared stage map in both backend and frontend helpers.
+* Normalized stage values:
+  * `new_unprocessed`
+  * `organized`
+  * `missing_info`
+  * `technical_check`
+  * `costing`
+  * `freight_checking`
+  * `ready_to_quote`
+  * `quoted`
+  * `quoted_no_reply`
+  * `sample_discussion`
+  * `sample_sent`
+  * `negotiation`
+  * `ordered`
+  * `paused`
+  * `invalid`
+  * `lost`
+* Legacy aliases are normalized, including:
+  * `new -> new_unprocessed`
+  * `researching -> organized`
+  * `spec_checking -> technical_check`
+  * `qualified -> ready_to_quote`
+  * `sample -> sample_discussion`
+  * `order -> ordered`
+* CRM customers and customer lists should display the normalized Chinese label, not raw legacy stage strings.
+
+Dashboard follow-up / quote-readiness tasks:
+
+* The dashboard now surfaces quote-readiness tasks for:
+  * `blocked`
+  * `need_customer_info`
+  * `technical_check`
+  * `ready` inquiries that still have no costing request / cost sheet / quote
+* These tasks are read-only and are only used to guide human action.
+* The dashboard must not auto-mutate stage, costing state, or quotation state.

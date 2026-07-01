@@ -11,6 +11,7 @@ import {
   Users,
 } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
+import { getCrmStageLabel } from '../../lib/crmStage';
 
 const emptyText = '未记录';
 
@@ -151,7 +152,12 @@ export default function CrmDashboard() {
                   <tbody>
                     {data.today_tasks.map((row: any, index: number) => (
                       <tr key={`${row.task_type}-${row.related_id || index}`} className="border-b border-slate-50 last:border-b-0">
-                        <td className="py-3 pr-3 font-bold text-slate-900">{text(row.title)}</td>
+                        <td className="py-3 pr-3 font-bold text-slate-900">
+                          <div>{text(row.title)}</div>
+                          {row.quote_readiness ? (
+                            <div className="mt-1 text-xs text-slate-500">资料：{text(row.quote_readiness.status, 'unknown')} · 分数 {Number(row.quote_readiness.score || 0)}</div>
+                          ) : null}
+                        </td>
                         <td className="py-3 pr-3 text-slate-600">{text(row.customer_name)}</td>
                         <td className="py-3 pr-3 text-slate-500 max-w-md truncate">{text(row.reason)}</td>
                         <td className="py-3 pr-3"><Pill value={row.priority}>{text(row.priority)}</Pill></td>
@@ -199,9 +205,9 @@ export default function CrmDashboard() {
                   <div key={row.id} className="border border-slate-100 rounded-lg p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="font-black text-slate-900 truncate">{text(row.display_name)}</div>
-                      <Pill value={row.stage}>{text(row.stage)}</Pill>
+                      <Pill value={row.stage}>{getCrmStageLabel(row.stage || 'new_unprocessed')}</Pill>
                     </div>
-                    <div className="text-xs text-slate-500 mt-2">{text(row.country)} · {text(row.customer_type)} · {text(row.latest_inquiry_title, '暂无最新询盘')}</div>
+                    <div className="text-xs text-slate-500 mt-2">{text(row.country)} · {text(row.customer_type)} · {getCrmStageLabel(row.stage || 'new_unprocessed')} · {text(row.latest_inquiry_title, '暂无最新询盘')}</div>
                     <div className="text-xs text-slate-600 mt-2">下一步：{text(row.next_action)}</div>
                     <div className="text-xs text-slate-400 mt-1">跟进时间：{text(row.next_followup_at)}</div>
                   </div>
@@ -274,7 +280,7 @@ export default function CrmDashboard() {
                   <div className="font-black text-slate-900 truncate">{text(row.display_name)}</div>
                   <Pill value={row.priority}>{text(row.priority)}</Pill>
                 </div>
-                <div className="text-xs text-slate-500 mt-2">{text(row.country)} · {text(row.stage)}</div>
+                <div className="text-xs text-slate-500 mt-2">{text(row.country)} · {getCrmStageLabel(row.stage || 'new_unprocessed')}</div>
                 <div className="text-xs text-slate-600 mt-2 truncate">邮件：{text(row.latest_email_subject)}</div>
               </div>
             ))}

@@ -305,6 +305,11 @@ async function main() {
   const customerDetail = await httpJson(`/api/crm/customers/${crmCustomerId}`, { token: crmAdminLogin.token });
   assert.strictEqual(Number(customerDetail.customer.latest_inquiry_id), inquiryId, 'customer should reference latest inquiry');
   assert.strictEqual(Number(customerDetail.latestInquiry.id), inquiryId, 'customer detail should include latest inquiry');
+  assert.strictEqual(customerDetail.customer.stage, 'ready_to_quote', 'legacy qualified stage should normalize to ready_to_quote');
+  const quoteReadinessBeforeSpec = await httpJson(`/api/crm/inquiries/${inquiryId}/quote-readiness`, { token: crmAdminLogin.token });
+  assert.strictEqual(quoteReadinessBeforeSpec.quote_readiness.status, 'blocked', 'inquiry without complete specification should be blocked');
+  assert(Array.isArray(quoteReadinessBeforeSpec.quote_readiness.missing_required_fields), 'quote readiness should expose missing required fields');
+  await httpJson(`/api/crm/inquiries/${inquiryId}/quote-readiness`, { token: scopedSalesLogin.token, expectedStatus: 403 });
 
   const researchNote = await httpJson(`/api/crm/customers/${crmCustomerId}/research-notes`, {
     method: 'POST',
@@ -402,6 +407,132 @@ async function main() {
   assert(customerPriority.rows.some(row => Number(row.id) === crmCustomerId), 'customer priority should include crm customer');
   const customerPriorityFiltered = await httpJson('/api/crm/customer-priority?pending_suggestions=1&customer_type=brand_owner', { token: crmAdminLogin.token });
   assert(Array.isArray(customerPriorityFiltered.rows), 'filtered customer priority should return rows');
+
+  const rollCustomer = await httpJson('/api/crm/customers', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      company_name: 'Roll Film Guard',
+      contact_person: 'Bob',
+      email: 'bob@rollguard.com',
+      country: 'Pakistan',
+      priority: 'B',
+      stage: 'organized',
+      next_action: '确认卷膜参数'
+    }
+  });
+  assert.strictEqual(rollCustomer.ok, true);
+  const rollCustomerId = Number(rollCustomer.id);
+  const rollInquiry = await httpJson('/api/crm/inquiries', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      customer_id: rollCustomerId,
+      inquiry_title: 'Roll film for biscuits',
+      product_type: 'roll film',
+      packaging_type: 'roll film',
+      quantity: '5000 kg',
+      destination_country: 'Pakistan',
+      trade_term_requested: 'EXW',
+      next_action: '确认卷膜规格'
+    }
+  });
+  assert.strictEqual(rollInquiry.ok, true);
+  const rollInquiryId = Number(rollInquiry.id);
+  const rollSpec = await httpJson(`/api/crm/inquiries/${rollInquiryId}/specifications`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      product_type: 'roll film',
+      film_type: 'roll film',
+      roll_width: '1200',
+      repeat_length: '400',
+      printing_colors: '4'
+    }
+  });
+  assert.strictEqual(rollSpec.ok, true);
+  const rollReadiness = await httpJson(`/api/crm/inquiries/${rollInquiryId}/quote-readiness`, { token: crmAdminLogin.token });
+  assert.strictEqual(rollReadiness.quote_readiness.status, 'need_customer_info', 'roll film without material/thickness should need customer info');
+  assert.strictEqual(rollReadiness.quote_readiness.color, 'yellow', 'roll film readiness should be yellow');
+
+  const completeCustomer = await httpJson('/api/crm/customers', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      company_name: 'Complete Guard Buyer',
+      contact_person: 'Carol',
+      email: 'carol@completeguard.com',
+      country: 'Malaysia',
+      priority: 'B',
+      stage: 'organized',
+      next_action: '核价'
+    }
+  });
+  assert.strictEqual(completeCustomer.ok, true);
+  const completeCustomerId = Number(completeCustomer.id);
+  const completeInquiry = await httpJson('/api/crm/inquiries', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      customer_id: completeCustomerId,
+      inquiry_title: 'Stand up pouch complete quote readiness',
+      product_type: 'pouch',
+      packaging_type: 'stand-up pouch',
+      quantity: '20000',
+      destination_country: 'Malaysia',
+      trade_term_requested: 'FOB',
+      next_action: '进入核价'
+    }
+  });
+  assert.strictEqual(completeInquiry.ok, true);
+  const completeInquiryId = Number(completeInquiry.id);
+  const completeSpec = await httpJson(`/api/crm/inquiries/${completeInquiryId}/specifications`, {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      product_type: 'pouch',
+      bag_type: 'stand_up_pouch',
+      size_width: '150',
+      size_height: '220',
+      gusset_size: '80',
+      thickness_total: '120',
+      thickness_unit: 'mic',
+      material_structure_text: 'PET12/AL7/PE100',
+      printing_colors: '6',
+      surface_finish: 'matte',
+      artwork_status: 'ready',
+      filling_weight: '500g'
+    }
+  });
+  assert.strictEqual(completeSpec.ok, true);
+  const completeReadiness = await httpJson(`/api/crm/inquiries/${completeInquiryId}/quote-readiness`, { token: crmAdminLogin.token });
+  assert.strictEqual(completeReadiness.quote_readiness.status, 'ready', 'complete inquiry should be ready');
+  assert.strictEqual(completeReadiness.quote_readiness.color, 'green', 'complete inquiry should be green');
+  const recalcComplete = await httpJson(`/api/crm/inquiries/${completeInquiryId}/recalculate-quote-readiness`, { method: 'POST', token: crmAdminLogin.token, body: {} });
+  assert.strictEqual(recalcComplete.inquiry.quote_readiness_status, 'ready', 'recalculate should persist quote readiness');
+  assert.strictEqual(recalcComplete.inquiry.quote_readiness_color, 'green', 'persisted readiness color should be green');
+
+  const blockedDashboardInquiry = await httpJson('/api/crm/inquiries', {
+    method: 'POST',
+    token: crmAdminLogin.token,
+    body: {
+      customer_id: completeCustomerId,
+      inquiry_title: 'Blocked dashboard quote readiness sample',
+      product_type: 'pouch',
+      packaging_type: 'stand-up pouch',
+      quantity: '12000',
+      destination_country: 'Malaysia',
+      trade_term_requested: 'FOB',
+      next_action: '等待规格补充'
+    }
+  });
+  assert.strictEqual(blockedDashboardInquiry.ok, true);
+
+  const dashboardReadiness = await httpJson('/api/crm/dashboard', { token: crmAdminLogin.token });
+  assert(Number(dashboardReadiness.quote_readiness_blocked || 0) >= 1, 'dashboard should count blocked readiness inquiries');
+  assert(Number(dashboardReadiness.quote_readiness_need_customer_info || 0) >= 1, 'dashboard should count need_customer_info readiness inquiries');
+  assert(Number(dashboardReadiness.quote_readiness_ready || 0) >= 1, 'dashboard should count ready inquiries');
+  assert(Array.isArray(dashboardReadiness.today_tasks) && dashboardReadiness.today_tasks.some(row => String(row.task_type || '').includes('quote_readiness')), 'dashboard should include quote readiness tasks');
 
   await httpJson('/api/crm/email/sync-runs', { token: adminToken });
   await httpJson('/api/crm/email/sync-runs', { token: crmAdminLogin.token });

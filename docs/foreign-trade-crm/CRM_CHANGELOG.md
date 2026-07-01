@@ -746,3 +746,61 @@
 * Next step:
   * Use the dashboard for daily review of pending suggestions and priority customers
   * Only after that move into formal quotation version Phase 6
+
+## 2026-07-01 - Quote Readiness and CRM Stage Standardization
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: see current HEAD after commit
+* Scope:
+  * 新增报价资料完整度检查
+  * 统一 CRM 客户阶段枚举与显示标签
+  * 增强作战台跟进提醒，加入 quote readiness 任务
+  * 为 inquiry 持久化报价完整度结果
+* Files changed:
+  * src/lib/quoteReadiness.js
+  * src/routes/crm.js
+  * src/db.js
+  * frontend-next/src/lib/crmStage.ts
+  * frontend-next/src/lib/mockService.ts
+  * frontend-next/src/components/crm/CrmQuoteReadinessCard.tsx
+  * frontend-next/src/components/crm/CrmCustomers.tsx
+  * frontend-next/src/components/crm/CrmCustomerDetail.tsx
+  * frontend-next/src/components/crm/CrmInquiryDetail.tsx
+  * frontend-next/src/components/crm/CrmDashboard.tsx
+  * frontend-next/src/components/crm/CrmCustomerPriority.tsx
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+* Database changes:
+  * Added quote readiness columns to `inquiries`
+* API changes:
+  * Added `GET /api/crm/inquiries/:id/quote-readiness`
+  * Added `POST /api/crm/inquiries/:id/recalculate-quote-readiness`
+* Frontend changes:
+  * Added `CrmQuoteReadinessCard`
+  * Customer detail and inquiry detail now surface quote readiness
+  * Dashboard now surfaces quote-readiness follow-up tasks
+  * CRM stage display uses normalized labels
+* Quote readiness logic:
+  * Bag and roll-film records are classified conservatively with red/yellow/green states
+  * Missing key bag or roll-film fields return blocked or information-needed states
+  * Technical keywords push records into technical review
+  * Target price can trigger a boss check state
+* Stage map:
+  * Legacy CRM stages are normalized to the new stage vocabulary
+* Dashboard task changes:
+  * Quote-readiness tasks are added for blocked, need_customer_info, technical_check, and ready-but-not-yet-costed inquiries
+* Build result:
+  * pending
+* Smoke test result:
+  * pending
+* Risks:
+  * The evaluator is intentionally conservative and should be tuned from real usage
+  * Existing CRM data may still contain older stage values until records are touched
+* Decisions:
+  * Quote readiness is a planning aid, not a formal quotation phase
+  * The dashboard remains read-only and does not create quotations
+* Next step:
+  * Verify the quote readiness flows on the real two customer examples
+  * Confirm the dashboard tasks stay conservative before moving into formal quotation Phase 6
