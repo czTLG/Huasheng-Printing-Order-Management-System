@@ -225,6 +225,29 @@ async function main() {
   assert.strictEqual(crmAdminMe.user.role, 'foreign_trade_crm_admin');
   assert.strictEqual(crmAdminMe.user.permissions.modules.crm, true, 'crm admin role should have crm module');
   assert.strictEqual(crmAdminMe.user.permissions.modules.orders, true, 'crm admin role should retain basic order visibility');
+  const boundaryOrder = await httpJson('/api/orders', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      customerName: 'CRM 边界守护客户',
+      bagType: '三边封袋',
+      useCase: 'CRM 边界删除校验',
+      size: { length: 10, width: 12 },
+      orderQty: '1000',
+      orderSpec: '10*12'
+    }
+  });
+  assert.strictEqual(boundaryOrder.ok, true);
+  assert(Number(boundaryOrder.id) > 0, 'boundary order id should be > 0');
+  await httpJson(`/api/orders/${boundaryOrder.id}`, {
+    method: 'DELETE',
+    token: crmAdminLogin.token,
+    expectedStatus: 403
+  });
+  await httpJson(`/api/orders/${boundaryOrder.id}`, {
+    method: 'DELETE',
+    token: adminToken
+  });
   await httpJson('/api/crm/dashboard', { token: adminToken });
   await httpJson('/api/crm/dashboard', { token: crmAdminLogin.token });
   await httpJson('/api/crm/dashboard', { token: scopedSalesLogin.token, expectedStatus: 403 });

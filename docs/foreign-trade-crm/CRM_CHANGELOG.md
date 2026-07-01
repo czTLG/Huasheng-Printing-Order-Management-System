@@ -843,3 +843,45 @@
 * Next step:
   * Use the AI candidate layer to guide manual review of pending specification suggestions
   * Keep formal quote readiness strict until suggestions are explicitly applied
+
+## 2026-07-01 - CRM / Order Boundary Review
+
+* Operator: Codex
+* Branch: feature/foreign-trade-crm
+* Commit: 5e62253 (review baseline)
+* Scope:
+  * 审查 CRM 与订单管理系统的数据隔离边界
+  * 确认 CRM 未直接写入订单核心表
+  * 强化 smoke test 的订单权限回归
+  * 固化 CRM / 订单边界文档
+* Files changed:
+  * scripts/smoke-test.js
+  * docs/foreign-trade-crm/CRM_CONTEXT.md
+  * docs/foreign-trade-crm/CRM_CHANGELOG.md
+  * docs/foreign-trade-crm/CRM_ORDER_SYSTEM_BOUNDARY.md
+* Database changes:
+  * None
+* Permission changes:
+  * None
+* API changes:
+  * None
+* Frontend changes:
+  * None
+* Safety findings:
+  * CRM 路由未发现直接写入 `orders` / `work_orders` / `order_stage_logs` / `material_prices`
+  * 订单删除权限仍然由订单路由控制，CRM 管理角色不会因此获得删除权
+  * CRM initDb 变更保持 append-only，没有 destructive migration
+* Smoke test result:
+  * Added explicit CRM-admin order-delete 403 regression plus cleanup delete by admin
+  * Existing order and work-order regression coverage remains intact
+* Build result:
+  * pending
+* Risks:
+  * `foreign_trade_crm_admin` retains order module visibility for frontend browsing, so UI boundary must remain clear
+  * Any future CRM-to-order bridge must stay read-only unless separately reviewed
+* Decisions:
+  * Record the boundary as a separate document for future audits
+  * Keep CRM work isolated from order mutations
+* Next step:
+  * Run build and smoke verification after the smoke-test addition
+  * Commit the boundary audit if verification stays green

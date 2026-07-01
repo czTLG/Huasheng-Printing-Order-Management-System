@@ -1125,3 +1125,34 @@ Operational rule:
 
 * The presence of an AI candidate does not mark the inquiry as ready.
 * Only a deliberate human review/apply step can move those fields into formal CRM data.
+
+## 31. CRM / Order System Boundary
+
+The CRM module is allowed to read order-related summaries only when needed for display or guidance, but it must not become a write path into the order management system.
+
+Core order tables that must remain isolated:
+
+* `orders`
+* `work_orders`
+* `order_stage_logs`
+* `quote_sheets`
+* `material_prices`
+* `users`
+* `audit_logs`
+
+Boundary rules:
+
+* CRM migrations are append-only and use `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE ADD COLUMN` only.
+* CRM must not rename or drop order tables or order columns.
+* CRM must not add mandatory fields to `orders` or `work_orders`.
+* CRM must not change order status flow, production flow, or cost formulas.
+* CRM API should write only CRM-owned tables unless a specific read-only bridge is explicitly documented.
+* Any bridge into order/cost data must remain nullable and backward compatible.
+* `foreign_trade_crm_admin` is a CRM manager, not an order super-admin.
+* CRM admin may view order summaries only where the existing frontend/back-end permissions already allow it, but it must not gain delete or destructive order mutation powers through CRM code.
+
+Smoke-test expectation:
+
+* Order list, order detail, order stage transitions, work-order flows, and cost calculations remain functional after CRM initialization.
+* CRM-only roles must not gain new order-delete or order-mutation permissions.
+* CRM dashboard/API failures must not prevent order APIs from serving.
