@@ -248,8 +248,21 @@ async function main() {
     method: 'DELETE',
     token: adminToken
   });
-  await httpJson('/api/crm/dashboard', { token: adminToken });
-  await httpJson('/api/crm/dashboard', { token: crmAdminLogin.token });
+  const adminDashboardRes = await httpResponse('/api/crm/dashboard', { token: adminToken });
+  const adminDashboardText = adminDashboardRes.buffer.toString('utf8');
+  assert(!adminDashboardText.includes('<!DOCTYPE html>'), 'crm dashboard should not return html');
+  assert(
+    String(adminDashboardRes.headers.get('content-type') || '').includes('application/json'),
+    'crm dashboard should return json content type'
+  );
+  const adminDashboard = JSON.parse(adminDashboardText);
+  assert(adminDashboard.summary && typeof adminDashboard.summary === 'object', 'crm dashboard should include summary');
+  assert(Array.isArray(adminDashboard.today_tasks), 'crm dashboard should include today_tasks array');
+  assert.strictEqual(typeof adminDashboard.summary.total_customers, 'number', 'crm dashboard total_customers should be a number');
+  assert.strictEqual(typeof adminDashboard.summary.pending_quotation_drafts, 'number', 'crm dashboard pending_quotation_drafts should be a number');
+  assert.strictEqual(typeof adminDashboard.summary.quote_readiness_ready, 'number', 'crm dashboard quote_readiness_ready should be in summary');
+  const crmAdminDashboard = await httpJson('/api/crm/dashboard', { token: crmAdminLogin.token });
+  assert(crmAdminDashboard.summary && typeof crmAdminDashboard.summary === 'object', 'crm admin dashboard should include summary');
   await httpJson('/api/crm/dashboard', { token: scopedSalesLogin.token, expectedStatus: 403 });
   const costingLogin = await login('father_costing_guard', 'guard123');
   assert(costingLogin?.token, 'costing user login should return token');

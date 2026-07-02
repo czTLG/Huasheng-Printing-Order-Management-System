@@ -22,6 +22,10 @@ async function api<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const contentType = res.headers.get('content-type') || '';
   const isJson = contentType.includes('application/json');
   const data = isJson ? await res.json().catch(() => ({})) : await res.text();
+  if (url.startsWith('/api/') && !isJson) {
+    const preview = String(data || '').replace(/\s+/g, ' ').slice(0, 180);
+    throw new Error(`API ${url} returned non-JSON response (${res.status} ${contentType || 'unknown content-type'}): ${preview}`);
+  }
   if (!res.ok) {
     const message = typeof data === 'object' && data ? (data.error || data.message) : String(data || `HTTP ${res.status}`);
     if (res.status === 401) {
@@ -502,7 +506,11 @@ export const mockService = {
   },
 
   async getCrmDashboard() {
-    return api<any>('/api/crm/dashboard');
+    const ret = await api<any>('/api/crm/dashboard');
+    if (!ret || typeof ret !== 'object' || !ret.summary || !Array.isArray(ret.today_tasks)) {
+      throw new Error('CRM dashboard API returned an invalid response shape.');
+    }
+    return ret;
   },
 
   async listCrmCustomers(params: { q?: string; sortBy?: string; sortDirection?: string } = {}) {

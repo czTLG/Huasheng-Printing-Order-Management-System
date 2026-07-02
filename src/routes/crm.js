@@ -813,6 +813,12 @@ router.get('/dashboard', (req, res) => {
       return String(a.due_at || '9999-12-31').localeCompare(String(b.due_at || '9999-12-31'));
     });
 
+    summary.quote_readiness_blocked = readinessStats.blocked;
+    summary.quote_readiness_need_customer_info = readinessStats.need_customer_info;
+    summary.quote_readiness_ready = readinessStats.ready;
+    summary.quote_readiness_technical_check = readinessStats.technical_check;
+    summary.quote_readiness_partial = readinessStats.partial;
+
     res.json({
       ok: true,
       summary,
