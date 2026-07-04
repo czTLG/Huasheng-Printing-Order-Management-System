@@ -79,6 +79,30 @@ async function login(username, password, expectedStatus = 200) {
   });
 }
 
+function assertForeignTradeAssistantTables() {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const requiredTables = [
+      'material_aliases',
+      'foreign_costing_drafts',
+      'foreign_costing_reviews'
+    ];
+    const missing = requiredTables.filter(name => {
+      const row = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name = ?`
+      ).get(name);
+      return !row;
+    });
+    assert.strictEqual(
+      missing.length,
+      0,
+      `missing assistant tables: ${missing.join(', ')}`
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function main() {
   const datedProductName = `柠檬凤爪 ${todayMd()}`;
   const todayStart = new Date();
@@ -117,6 +141,7 @@ async function main() {
   });
 
   await waitForHealth();
+  assertForeignTradeAssistantTables();
 
   // Extract randomly generated admin password from server stdout
   const pwMatch = stdout.match(/\[db\] Created default admin account\. username=admin password=(\S+)/);

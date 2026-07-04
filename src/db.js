@@ -108,6 +108,56 @@ function initDb() {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS material_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      raw_name TEXT NOT NULL,
+      normalized_material TEXT NOT NULL,
+      display_name_cn TEXT,
+      density REAL,
+      price REAL,
+      price_unit TEXT,
+      confidence TEXT NOT NULL DEFAULT 'medium',
+      needs_confirm INTEGER NOT NULL DEFAULT 1,
+      note TEXT,
+      updated_by TEXT,
+      updated_at TEXT NOT NULL,
+      UNIQUE(raw_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS foreign_costing_drafts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      crm_inquiry_id INTEGER,
+      customer_id INTEGER,
+      customer_name TEXT,
+      source_text TEXT,
+      parsed_spec_json TEXT,
+      material_mapping_json TEXT,
+      quote_input_json TEXT,
+      quote_result_json TEXT,
+      calculation_table_json TEXT,
+      ai_provider TEXT,
+      ai_model TEXT,
+      status TEXT NOT NULL DEFAULT 'internal_pre_quote',
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS foreign_costing_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      draft_id INTEGER NOT NULL,
+      reviewer TEXT,
+      reviewed_input_json TEXT,
+      reviewed_result_json TEXT,
+      approved_unit_price REAL,
+      approved_total_price REAL,
+      father_note TEXT,
+      father_correction_note TEXT,
+      changed_fields_json TEXT,
+      status TEXT NOT NULL DEFAULT 'reviewed',
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS cost_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_name TEXT NOT NULL,
@@ -739,6 +789,9 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_stage ON customers(stage, priority, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_priority ON customers(priority, stage, next_followup_at, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_followup ON customers(next_followup_at, followup_priority, is_waiting_reply, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_customers_whatsapp ON customers(whatsapp)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_customers_name_lookup ON customers(company_name, name, contact_person)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_customer ON communication_logs(customer_id, received_at DESC, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_communication_logs_inquiry ON communication_logs(inquiry_id, received_at DESC, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_customer ON inquiries(customer_id, updated_at DESC)");
@@ -849,6 +902,44 @@ function initDb() {
   `);
   const ts = now();
   Object.entries(defaults).forEach(([code, cfg]) => upsert.run(code, cfg.prop, cfg.price, ts));
+
+  const aliasTs = now();
+  const materialAliasSeed = db.prepare(`
+    INSERT OR IGNORE INTO material_aliases (
+      raw_name,
+      normalized_material,
+      display_name_cn,
+      density,
+      price,
+      price_unit,
+      confidence,
+      needs_confirm,
+      note,
+      updated_by,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  [
+    ['LDPE', 'PE', '低密度聚乙烯', null, null, null, 'medium', 1, null, 'system', aliasTs],
+    ['LDPE Tr.', 'PE/透明PE', '透明低密度聚乙烯', null, null, null, 'medium', 1, null, 'system', aliasTs],
+    ['LLDPE', 'PE/LLDPE', '线性低密度聚乙烯', null, null, null, 'medium', 1, null, 'system', aliasTs],
+    ['PE', 'PE', '聚乙烯', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['CPE', 'CPE', '流延聚乙烯', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['CPP', 'CPP', '流延聚丙烯', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['RCPP', 'CPP/RCPP', '镀铝蒸煮CPP', null, null, null, 'medium', 1, null, 'system', aliasTs],
+    ['PET', 'PET', '聚对苯二甲酸乙二醇酯', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['BOPP', 'BOPP', '双向拉伸聚丙烯', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['MOPP', 'MOPP', '单向拉伸聚丙烯', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['MBOPP', 'MBOPP', '镀铝双向拉伸聚丙烯', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['VMPET', 'VMPET', '镀铝PET', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['MET PET', 'VMPET', '镀铝PET', null, null, null, 'medium', 1, null, 'system', aliasTs],
+    ['VMCPP', 'VMCPP', '镀铝CPP', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['AL', 'AL', '铝箔', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['Aluminum foil', 'AL', '铝箔', null, null, null, 'medium', 0, null, 'system', aliasTs],
+    ['ALOX', '氧化铝/ALOX', '氧化铝涂层', null, null, null, 'medium', 1, null, 'system', aliasTs],
+    ['Kraft', '白牛皮纸/牛皮纸', '牛皮纸', null, null, null, 'medium', 1, null, 'system', aliasTs],
+    ['Matt varnish', 'surface_finish', '哑光光油', null, null, null, 'medium', 1, null, 'system', aliasTs]
+  ].forEach(row => materialAliasSeed.run(...row));
 
   const menuCount = db.prepare('SELECT count(*) AS c FROM menu_items').get().c;
   if (!menuCount) {
