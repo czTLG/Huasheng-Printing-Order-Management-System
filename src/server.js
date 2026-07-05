@@ -23,6 +23,7 @@ const stocksRouter = require('./routes/stocks');
 const futuresRouter = require('./routes/futures');
 const statsRouter = require('./routes/stats');
 const crmRouter = require('./routes/crm');
+const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant');
 
 initDb();
 
@@ -97,6 +98,7 @@ app.use('/api/menu', menuRouter);
 app.use('/api/stocks', stocksRouter);
 app.use('/api/futures', futuresRouter);
 app.use('/api/stats', statsRouter);
+app.use('/api/foreign-costing-assistant', foreignCostingAssistantRouter);
 app.use('/api/crm', crmRouter);
 
 if (process.env.DISABLE_CRON !== '1') {
