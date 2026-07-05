@@ -505,6 +505,30 @@ export const mockService = {
     return api<any>('/api/cost/email-logs');
   },
 
+  async parseForeignCosting(text: string) {
+    return api<any>('/api/foreign-costing-assistant/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+  },
+
+  async createForeignCostingDraft(payload: any) {
+    return api<any>('/api/foreign-costing-assistant/draft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async saveForeignCostingReview(payload: any) {
+    return api<any>('/api/foreign-costing-assistant/review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
   async getCrmDashboard() {
     const ret = await api<any>('/api/crm/dashboard');
     if (!ret || typeof ret !== 'object' || !ret.summary || !Array.isArray(ret.today_tasks)) {

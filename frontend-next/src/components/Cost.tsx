@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { mockService } from '../lib/mockService';
+import ForeignCostingAssistant from './ForeignCostingAssistant';
 
 const TEMPLATES = [
   { id: 'stand_zipper_bag', name: '自立拉链袋' },
@@ -95,6 +96,7 @@ export default function Cost() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [panelMode, setPanelMode] = useState<string>('legacy');
 
   // Case & history management
   const [caseItems, setCaseItems] = useState<any[]>([]);
@@ -431,6 +433,35 @@ export default function Cost() {
   const priceSummary = [0, 1, 2, 3].map(i => form.price[i]).filter(Boolean).join(', ') || '—';
 
   // === Render ===
+  if (panelMode === 'assistant') {
+    return (
+      <div className="max-w-[1400px] mx-auto p-1 sm:p-3 md:p-6 space-y-1.5 md:space-y-2.5 bg-slate-50 min-h-screen">
+        {successMsg && (
+          <div className="fixed top-4 right-4 z-50 bg-emerald-600 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-bold">{successMsg}</div>
+        )}
+        {error && (
+          <div className="fixed top-4 right-4 z-50 bg-rose-600 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-bold flex items-center gap-2">
+            <span>{error}</span>
+            <button onClick={() => setError('')} className="text-white/80 hover:text-white"><X className="w-3.5 h-3.5" /></button>
+          </div>
+        )}
+        <div className="bg-white p-1.5 sm:p-3 md:p-4 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between gap-2">
+          <div>
+            <div className="text-[10px] font-black text-slate-500 tracking-wider">成本核算模块 / 助手入口</div>
+            <div className="text-sm font-black text-slate-900">外贸成本复核智能核价助手</div>
+          </div>
+          <button
+            onClick={() => setPanelMode('legacy')}
+            className="px-3 py-1.5 text-[11px] font-bold rounded-md bg-slate-900 text-white"
+          >
+            返回传统成本核算
+          </button>
+        </div>
+        <ForeignCostingAssistant onBack={() => setPanelMode('legacy')} />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-[1400px] mx-auto p-1 sm:p-3 md:p-6 space-y-1.5 md:space-y-2.5 bg-slate-50 min-h-screen">
 
@@ -447,6 +478,26 @@ export default function Cost() {
 
       {/* === Top bar: Template selector === */}
       <div className="bg-white p-1.5 sm:p-3 md:p-4 rounded-xl shadow-sm border border-slate-200">
+        <div className="flex flex-wrap gap-2 mb-2">
+          <button
+            onClick={() => setPanelMode('legacy')}
+            className={cn(
+              'px-3 py-1.5 text-[11px] font-bold rounded-md border',
+              panelMode === 'legacy' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'
+            )}
+          >
+            传统成本核算
+          </button>
+          <button
+            onClick={() => setPanelMode('assistant')}
+            className={cn(
+              'px-3 py-1.5 text-[11px] font-bold rounded-md border',
+              panelMode === 'assistant' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'
+            )}
+          >
+            外贸成本复核智能核价助手
+          </button>
+        </div>
         <label className="text-[10px] font-black text-slate-500 tracking-wider block mb-1.5">核算模板</label>
         <select
           value={costType}
