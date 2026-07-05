@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
+const { createDraftFromText } = require('../src/services/foreignCostingAssistant');
 
 const root = path.resolve(__dirname, '..');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'packaging-smoke-'));
@@ -103,6 +104,143 @@ function assertForeignTradeAssistantTables() {
   }
 }
 
+async function assertForeignCostingAssistantFlow(token) {
+  const ferrenoText = `Ferreno Chocolate Industry L.L.C, UAE.
+Item No.1 flat bottom pouch / 3D pouch for chocolate hazelnut product.
+Filling weight 500g.
+Size 165mm W × 245mm H × 40+40mm gusset.
+Material 12mic PET + 100mic transparent LDPE + matt varnish.
+Zipper shown in artwork.
+Artwork will be provided.
+Quantity 25,000 pcs × 4 variants, total 100,000 pcs.
+Incoterms EXW.
+Destination UAE.`;
+
+  const parseRet = await httpJson('/api/foreign-costing-assistant/parse', {
+    method: 'POST',
+    token,
+    body: { text: ferrenoText }
+  });
+  assert.strictEqual(parseRet.status, 'internal_pre_quote', 'foreign costing parse should stay internal');
+  assert.strictEqual(parseRet.suggested_cost_type || '', 'eight_side_seal', 'Ferreno sample should map to eight_side_seal');
+  assert(Array.isArray(parseRet.material_mapping_warnings) && parseRet.material_mapping_warnings.length > 0, 'parse should include material mapping warnings');
+
+  const draftRet = await createDraftFromText(ferrenoText, { provider: 'mock' });
+  assert.strictEqual(draftRet.status, 'internal_pre_quote', 'foreign costing draft should stay internal');
+  assert.strictEqual(draftRet.suggested_cost_type || draftRet.quote_input?.cost_type || draftRet.quote_input?.quoteType || '', 'eight_side_seal', 'draft should map to eight_side_seal');
+  assert.strictEqual(Number(draftRet.quote_input?.ba_kuang), 16.5, 'Ferreno width should normalize to 16.5 cm');
+  assert.strictEqual(Number(draftRet.quote_input?.ba_chang), 24.5, 'Ferreno height should normalize to 24.5 cm');
+  assert.strictEqual(Number(draftRet.quote_input?.ba_di), 4, 'Ferreno gusset should normalize to 4 cm');
+  const draftLayers = Array.isArray(draftRet.quote_input?.material_layers) ? draftRet.quote_input.material_layers : [];
+  assert(draftLayers.some(layer => approxEqual(layer?.thickness, 1.2)), 'draft should include PET 1.2 thickness value');
+  assert(draftLayers.some(layer => approxEqual(layer?.thickness, 10)), 'draft should include LDPE 10 thickness value');
+  assert(Array.isArray(draftRet.quote_input?.surface_finish) && draftRet.quote_input.surface_finish.some(v => String(v).toLowerCase().includes('matt varnish')), 'matt varnish should remain a surface finish');
+  assert.strictEqual(Number(draftRet.quote_input?.quantity_total), 100000, 'Ferreno total quantity should be 100000');
+  assert.strictEqual(Number(draftRet.quote_input?.quantity_per_variant), 25000, 'Ferreno per-variant quantity should be 25000');
+  assert.strictEqual(Number(draftRet.quote_input?.variants), 4, 'Ferreno variants should be 4');
+  assert.strictEqual(String(draftRet.quote_input?.trade_term_requested || '').toUpperCase(), 'EXW', 'Ferreno trade term should be EXW');
+  assert(Array.isArray(draftRet.quote_input?.material_mapping_warnings) && draftRet.quote_input.material_mapping_warnings.length > 0, 'draft should include material mapping warnings');
+  assert(Array.isArray(draftRet.calculation_table) && draftRet.calculation_table.length > 0, 'draft should include calculation table');
+  assert(draftRet.father_review_panel && typeof draftRet.father_review_panel === 'object', 'draft should include father review panel');
+  assert(
+    Object.prototype.hasOwnProperty.call(draftRet.father_review_panel, 'father_note') ||
+    Object.prototype.hasOwnProperty.call(draftRet.father_review_panel, 'fatherNote'),
+    'draft should expose father_note field'
+  );
+  assert(
+    Object.prototype.hasOwnProperty.call(draftRet.father_review_panel, 'father_correction_note') ||
+    Object.prototype.hasOwnProperty.call(draftRet.father_review_panel, 'fatherCorrectionNote'),
+    'draft should expose father_correction_note field'
+  );
+
+  const joinedWarnings = JSON.stringify(draftRet);
+  [
+    'final artwork not provided',
+    'printing colors not confirmed',
+    'gold effect not confirmed',
+    '4 variants may require 4 sets of cylinders',
+    'zipper cost needs father confirmation',
+    'jgf need father confirmation'
+  ].forEach(msg => {
+    assert(joinedWarnings.toLowerCase().includes(msg.toLowerCase().replace(/\s+/g, ' ')), `draft should include warning: ${msg}`);
+  });
+  assert(/transparent ldpe|ldpe tr/i.test(joinedWarnings) && /确认|confirm/i.test(joinedWarnings), 'draft should include transparent LDPE / LDPE Tr. mapping warning');
+  assert((draftRet.quote_input?.default_notes || []).includes('jgf 使用系统默认值，需复核'), 'draft should include jgf default note');
+  assert((draftRet.quote_input?.default_notes || []).includes('sh 使用系统默认值，需复核'), 'draft should include sh default note');
+  assert((draftRet.quote_input?.default_notes || []).includes('lr 使用系统默认值，需复核'), 'draft should include lr default note');
+  assert(!joinedWarnings.includes('undefined'), 'draft should not include undefined');
+  assert(!joinedWarnings.includes('NaN'), 'draft should not include NaN');
+  assert(!joinedWarnings.includes('[object Object]'), 'draft should not include [object Object]');
+  assert(!joinedWarnings.includes('正式报价已确认'), 'draft should not include formal quote confirmation wording');
+  assert(!joinedWarnings.includes('已发送客户'), 'draft should not include sent customer wording');
+  assert(!joinedWarnings.includes('自动报价成功'), 'draft should not include automatic quote wording');
+
+  const dbInsert = new Database(dbPath);
+  let insertedDraftId = null;
+  try {
+    const result = dbInsert.prepare(`
+      INSERT INTO foreign_costing_drafts (
+        crm_inquiry_id, customer_id, customer_name, source_text, parsed_spec_json,
+        material_mapping_json, quote_input_json, quote_result_json, calculation_table_json,
+        ai_provider, ai_model, status, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      null,
+      null,
+      String(draftRet.quote_input?.customer_name || ''),
+      ferrenoText,
+      JSON.stringify(draftRet.parsed_spec || {}),
+      JSON.stringify(draftRet.material_mapping_json || draftRet.material_mapping || []),
+      JSON.stringify(draftRet.quote_input || {}),
+      JSON.stringify(draftRet.quote_result || {}),
+      JSON.stringify(draftRet.calculation_table || []),
+      'mock',
+      'mock',
+      'internal_pre_quote',
+      'admin',
+      new Date().toISOString().slice(0, 19).replace('T', ' '),
+      new Date().toISOString().slice(0, 19).replace('T', ' ')
+    );
+    insertedDraftId = result.lastInsertRowid;
+  } finally {
+    dbInsert.close();
+  }
+
+  const reviewRet = await httpJson('/api/foreign-costing-assistant/review', {
+    method: 'POST',
+    token,
+    body: {
+      draft_id: insertedDraftId,
+      father_note: '金色先按普通印刷，4款版费分开算。',
+      father_correction_note: 'LDPE Tr. 后续默认映射 PE/透明PE，但必须提示确认单价。',
+      approved_unit_price: '0.12',
+      approved_total_price: '12.00',
+      changed_fields: { jgf: 'system default', material_mapping: 'LDPE Tr. -> PE' }
+    }
+  });
+  assert.strictEqual(reviewRet.status, 'reviewed', 'review endpoint should return reviewed');
+  assert(reviewRet.review_id || reviewRet.id, 'review endpoint should return review id');
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db.prepare(`
+      SELECT father_note, father_correction_note, approved_unit_price, approved_total_price, changed_fields_json, status
+      FROM foreign_costing_reviews
+      ORDER BY id DESC
+      LIMIT 1
+    `).get();
+    assert(row, 'review row should be saved');
+    assert.strictEqual(row.father_note, '金色先按普通印刷，4款版费分开算。', 'saved review should persist father_note');
+    assert.strictEqual(row.father_correction_note, 'LDPE Tr. 后续默认映射 PE/透明PE，但必须提示确认单价。', 'saved review should persist father_correction_note');
+    assert.strictEqual(Number(row.approved_unit_price), 0.12, 'saved review should persist approved_unit_price');
+    assert.strictEqual(Number(row.approved_total_price), 12, 'saved review should persist approved_total_price');
+    assert.strictEqual(row.status, 'reviewed', 'saved review should persist reviewed status');
+    assert(String(row.changed_fields_json || '').includes('jgf'), 'saved review should persist changed_fields');
+  } finally {
+    db.close();
+  }
+}
+
 async function main() {
   const datedProductName = `柠檬凤爪 ${todayMd()}`;
   const todayStart = new Date();
@@ -151,6 +289,8 @@ async function main() {
   const adminLogin = await login('admin', adminPwd);
   assert(adminLogin?.token, 'admin login should return token');
   const adminToken = adminLogin.token;
+
+  await assertForeignCostingAssistantFlow(adminToken);
 
   const me = await httpJson('/api/auth/me', { token: adminToken });
   assert.strictEqual(me.user.username, 'admin');
