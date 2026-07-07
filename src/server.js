@@ -7,6 +7,7 @@ for (const [key, value] of Object.entries(bootEnv)) {
 const express = require('express');
 const compression = require('compression');
 const cron = require('node-cron');
+const path = require('path');
 const { initDb, db, audit } = require('./db');
 const { fakeAuth } = require('./middleware/auth');
 
@@ -83,6 +84,9 @@ app.use(express.static(require('path').join(__dirname, '..', 'public'), {
     res.setHeader('Cache-Control', 'public, max-age=600');
   }
 }));
+app.get(['/crm', '/crm/*'], (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'new', 'index.html'));
+});
 app.use(fakeAuth);
 app.use('/api/auth', authRouter);
 

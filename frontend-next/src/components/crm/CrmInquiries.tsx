@@ -5,7 +5,11 @@ import CrmInquiryDetail from './CrmInquiryDetail';
 
 const inputClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 
-export default function CrmInquiries() {
+type Props = {
+  onOpenInquiry?: (id: number) => void;
+};
+
+export default function CrmInquiries({ onOpenInquiry }: Props) {
   const [rows, setRows] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [q, setQ] = useState('');
@@ -109,7 +113,10 @@ export default function CrmInquiries() {
               ) : filteredRows.length === 0 ? (
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-sm font-bold text-slate-400">暂无询盘</td></tr>
               ) : filteredRows.map(row => (
-                <tr key={row.id} onClick={() => setSelectedInquiryId(Number(row.id))} className="hover:bg-slate-50 cursor-pointer">
+                <tr key={row.id} onClick={() => {
+                  if (onOpenInquiry) onOpenInquiry(Number(row.id));
+                  else setSelectedInquiryId(Number(row.id));
+                }} className="hover:bg-slate-50 cursor-pointer">
                   <td className="px-4 py-3 text-sm font-black text-slate-900">{row.inquiry_title}</td>
                   <td className="px-4 py-3 text-sm text-slate-600">{row.customer_display_name || '-'}</td>
                   <td className="px-4 py-3 text-sm text-slate-600">{row.status || 'new'}</td>
@@ -127,4 +134,3 @@ export default function CrmInquiries() {
     </div>
   );
 }
-

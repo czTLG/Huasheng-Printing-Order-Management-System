@@ -45,7 +45,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('orders');
+  const [activeTab, setActiveTab] = useState<Tab>(() => (window.location.pathname.startsWith('/crm') ? 'crm' : 'orders'));
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -58,14 +58,18 @@ const App: React.FC = () => {
     const cached = mockService.getUser();
     if (cached?.username && getVisibleModules(cached).length > 0) {
       setUser(cached);
-      if (cached.role.startsWith('worker')) setActiveTab('board');
+      if (window.location.pathname.startsWith('/crm')) {
+        setActiveTab('crm');
+      } else if (cached.role.startsWith('worker')) setActiveTab('board');
       else if (cached.role === 'ai_sales') setActiveTab('workorders');
     }
     mockService.loadCurrentUser()
       .then(fresh => {
         if (!fresh?.username) return;
         setUser(fresh);
-        if (fresh.role.startsWith('worker')) setActiveTab('board');
+        if (window.location.pathname.startsWith('/crm')) {
+          setActiveTab('crm');
+        } else if (fresh.role.startsWith('worker')) setActiveTab('board');
         else if (fresh.role === 'ai_sales') setActiveTab('workorders');
       })
       .catch(() => {});
@@ -112,6 +116,18 @@ const App: React.FC = () => {
     return () => window.removeEventListener('app-impersonate', handleImpersonate);
   }, [user]);
 
+  useEffect(() => {
+    if (activeTab === 'crm') {
+      if (!window.location.pathname.startsWith('/crm')) {
+        window.history.replaceState({}, '', '/crm');
+      }
+      return;
+    }
+    if (window.location.pathname.startsWith('/crm')) {
+      window.history.replaceState({}, '', '/');
+    }
+  }, [activeTab]);
+
   // ⌘+K / Ctrl+K shortcut to focus global search; ESC to close help
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -136,7 +152,9 @@ const App: React.FC = () => {
     setUser(loggedInUser);
     
     // Redirect based on role if needed
-    if (loggedInUser.role.startsWith('worker')) {
+    if (window.location.pathname.startsWith('/crm')) {
+      setActiveTab('crm');
+    } else if (loggedInUser.role.startsWith('worker')) {
        setActiveTab('board');
     } else if (loggedInUser.role === 'ai_sales') {
        setActiveTab('workorders');
@@ -194,7 +212,7 @@ const App: React.FC = () => {
       case 'workorders': return <WorkOrders />;
       case 'board': return <Board />;
       case 'cost': return <Cost />;
-      case 'crm': return visibleModules.includes('crm') ? <CrmModule /> : forbidden;
+      case 'crm': return visibleModules.includes('crm') ? <CrmModule initialTab={window.location.pathname.startsWith('/crm/messages') ? 'messages' : 'dashboard'} /> : forbidden;
       case 'stats': return <Stats />;
       case 'admin': return <Admin />;
       default: return <Orders />;

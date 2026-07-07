@@ -7,7 +7,12 @@ import { CRM_STAGE_OPTIONS, getCrmStageLabel, normalizeCrmStage } from '../../li
 
 const inputClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 
-export default function CrmCustomers() {
+type Props = {
+  onOpenCustomer?: (id: number) => void;
+  onOpenInquiry?: (id: number) => void;
+};
+
+export default function CrmCustomers({ onOpenCustomer, onOpenInquiry }: Props) {
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState('');
   const [sortBy, setSortBy] = useState('priority');
@@ -54,7 +59,7 @@ export default function CrmCustomers() {
     return <CrmInquiryDetail inquiryId={selectedInquiryId} onBack={() => setSelectedInquiryId(null)} />;
   }
   if (selectedCustomerId) {
-    return <CrmCustomerDetail customerId={selectedCustomerId} onBack={() => { setSelectedCustomerId(null); load().catch(() => {}); }} onOpenInquiry={setSelectedInquiryId} />;
+    return <CrmCustomerDetail customerId={selectedCustomerId} onBack={() => { setSelectedCustomerId(null); load().catch(() => {}); }} onOpenInquiry={onOpenInquiry || setSelectedInquiryId} />;
   }
 
   return (
@@ -125,7 +130,10 @@ export default function CrmCustomers() {
               ) : filteredRows.length === 0 ? (
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-sm font-bold text-slate-400">暂无客户</td></tr>
               ) : filteredRows.map(row => (
-                <tr key={row.id} onClick={() => setSelectedCustomerId(Number(row.id))} className="hover:bg-slate-50 cursor-pointer">
+                <tr key={row.id} onClick={() => {
+                  if (onOpenCustomer) onOpenCustomer(Number(row.id));
+                  else setSelectedCustomerId(Number(row.id));
+                }} className="hover:bg-slate-50 cursor-pointer">
                   <td className="px-4 py-3">
                     <div className="text-sm font-black text-slate-900">{row.display_name}</div>
                     <div className="text-xs text-slate-400">{row.contact_person || row.contact || '-'}</div>
