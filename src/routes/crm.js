@@ -1826,6 +1826,294 @@ router.post('/customers/:id/communications', (req, res) => {
   }
 });
 
+router.get('/messages', (req, res) => {
+  try {
+    const params = [];
+    let where = 'WHERE 1 = 1';
+    const hasSourceType = Object.prototype.hasOwnProperty.call(req.query, 'source_type') || Object.prototype.hasOwnProperty.call(req.query, 'source');
+    const sourceType = hasSourceType ? text(req.query.source_type ?? req.query.source) : 'whatsapp';
+    if (sourceType && sourceType !== 'all') {
+      where += ' AND m.source_type = ?';
+      params.push(sourceType);
+    }
+    const customerKeyword = text(req.query.customer);
+    if (customerKeyword) {
+      const like = `%${customerKeyword}%`;
+      where += ' AND (COALESCE(c.company_name, "") LIKE ? OR COALESCE(c.name, "") LIKE ? OR COALESCE(c.contact_person, "") LIKE ? OR COALESCE(m.sender_name, "") LIKE ? OR COALESCE(m.sender_contact, "") LIKE ?)';
+      params.push(like, like, like, like, like);
+    }
+    const q = text(req.query.q);
+    if (q) {
+      const like = `%${q}%`;
+      where += ' AND (COALESCE(m.message_text, "") LIKE ? OR COALESCE(m.sender_name, "") LIKE ? OR COALESCE(m.sender_contact, "") LIKE ? OR COALESCE(c.company_name, "") LIKE ? OR COALESCE(c.name, "") LIKE ?)';
+      params.push(like, like, like, like, like);
+    }
+    const direction = normalizeWhatsappDirection(req.query.direction);
+    if (direction) {
+      where += ' AND m.direction = ?';
+      params.push(direction);
+    }
+    const aiStatus = text(req.query.ai_status);
+    if (aiStatus) {
+      where += ' AND m.ai_status = ?';
+      params.push(aiStatus);
+    }
+    const dateFrom = text(req.query.date_from);
+    if (dateFrom) {
+      where += ' AND m.received_at >= ?';
+      params.push(dateFrom);
+    }
+    const dateTo = text(req.query.date_to);
+    if (dateTo) {
+      where += ' AND m.received_at <= ?';
+      params.push(dateTo);
+    }
+    const rows = db.prepare(`
+      SELECT
+        m.*,
+        ${customerDisplaySelect('c').replace('c.*,\n', '')},
+        c.whatsapp AS customer_whatsapp,
+        c.phone AS customer_phone,
+        c.country AS customer_country,
+        c.stage AS customer_stage,
+        c.priority AS customer_priority,
+        i.inquiry_title
+      FROM crm_messages m
+      LEFT JOIN customers c ON c.id = m.customer_id
+      LEFT JOIN inquiries i ON i.id = m.inquiry_id
+      ${where}
+      ORDER BY m.received_at DESC, m.id DESC
+      LIMIT 300
+    `).all(...params).map((row) => {
+      const normalized = normalizeCrmAttachments(db, row);
+      const attachmentSummary = summarizeAttachments(normalized.attachments);
+      const rawPayload = parseJsonObject(row.raw_payload_json, {});
+      return {
+        ...row,
+        id: Number(row.id),
+        customer_id: row.customer_id ? Number(row.customer_id) : null,
+        inquiry_id: row.inquiry_id ? Number(row.inquiry_id) : null,
+        message_subject: rawPayload.subject || '',
+        is_new: row.ai_status === 'pending' && String(row.received_at || '').slice(0, 10) >= now().slice(0, 10),
+        ...attachmentSummary,
+        attachments_format_error: normalized.format_error ? 1 : 0
+      };
+    });
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, 'CRM 消息读取失败');
+  }
+});
+
+router.get('/messages/:id', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const row = db.prepare(`
+      SELECT
+        m.*,
+        ${customerDisplaySelect('c').replace('c.*,\n', '')},
+        c.whatsapp AS customer_whatsapp,
+        c.phone AS customer_phone,
+        c.country AS customer_country,
+        c.stage AS customer_stage,
+        c.priority AS customer_priority,
+        i.inquiry_title
+      FROM crm_messages m
+      LEFT JOIN customers c ON c.id = m.customer_id
+      LEFT JOIN inquiries i ON i.id = m.inquiry_id
+      WHERE m.id = ?
+    `).get(id);
+    if (!row) return res.status(404).json({ ok: false, error: '消息不存在' });
+    const normalized = normalizeCrmAttachments(db, row);
+    const attachmentSummary = summarizeAttachments(normalized.attachments);
+    const rawPayload = parseJsonObject(row.raw_payload_json, {});
+    res.json({
+      ok: true,
+      message: {
+        ...row,
+        message_subject: rawPayload.subject || '',
+        ...attachmentSummary,
+        attachments_format_error: normalized.format_error ? 1 : 0,
+        attachments_source: normalized.source
+      },
+      attachments: normalized.attachments,
+      latest_interpretation: latestMessageInterpretation(id),
+      attachments_format_error: normalized.format_error ? 1 : 0
+    });
+  } catch (err) {
+    handleError(res, err, 'CRM 消息读取失败');
+  }
+});
+
+router.get('/workbench', (req, res) => {
+  try {
+    res.json({ ok: true, ...buildCrmWorkbench(db) });
+  } catch (err) {
+    handleError(res, err, '外贸作战台读取失败');
+  }
+});
+
+router.get('/father-review-tasks', (req, res) => {
+  try {
+    res.json({ ok: true, ...listFatherReviewTasks(db, req.query || {}) });
+  } catch (err) {
+    handleError(res, err, '父亲确认任务读取失败');
+  }
+});
+
+router.get('/father-review-tasks/:id', (req, res) => {
+  try {
+    const detail = getFatherReviewTaskDetail(db, idParam(req.params.id));
+    if (!detail) return res.status(404).json({ ok: false, error: '父亲确认任务不存在' });
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    handleError(res, err, '父亲确认任务详情读取失败');
+  }
+});
+
+router.patch('/father-review-tasks/:id/sales-handled', (req, res) => {
+  try {
+    const result = markFatherTaskSalesHandled(db, idParam(req.params.id), {
+      sales_handled_by: req.user?.userName || 'sales',
+      sales_note: text(req.body?.sales_note)
+    });
+    crmAudit(req, 'crm_father_review_sales_handled', 'crm_father_review_task', idParam(req.params.id), { sales_note: text(req.body?.sales_note) });
+    res.json(result);
+  } catch (err) {
+    handleError(res, err, '父亲确认任务业务处理失败');
+  }
+});
+
+router.post('/messages/:id/ai-parse', (req, res) => {
+  try {
+    const messageId = idParam(req.params.id);
+    const message = db.prepare('SELECT * FROM crm_messages WHERE id = ?').get(messageId);
+    if (!message) return res.status(404).json({ ok: false, error: '消息不存在' });
+    const normalized = normalizeCrmAttachments(db, message);
+    const ts = now();
+    let result;
+    try {
+      const parsed = interpretCrmMessage(message, normalized.attachments);
+      const inserted = db.prepare(`
+        INSERT INTO crm_ai_interpretations (
+          message_id, customer_id, inquiry_id, provider, model, parsed_json,
+          changed_fields_json, status, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, 'rule_based', 'crm_message_interpreter_v1', ?, '[]', 'parsed', ?, ?, ?)
+      `).run(messageId, message.customer_id || null, message.inquiry_id || null, JSON.stringify(parsed), req.user.userName, ts, ts);
+      db.prepare("UPDATE crm_messages SET ai_status = 'parsed', updated_at = ? WHERE id = ?").run(ts, messageId);
+      result = latestMessageInterpretation(messageId);
+      crmAudit(req, 'crm_message_ai_parsed', 'crm_message', messageId, { interpretation_id: inserted.lastInsertRowid, provider: 'rule_based' });
+    } catch (parseError) {
+      db.prepare("UPDATE crm_messages SET ai_status = 'failed', updated_at = ? WHERE id = ?").run(ts, messageId);
+      throw parseError;
+    }
+    res.json({ ok: true, interpretation: result, status: 'parsed' });
+  } catch (err) {
+    handleError(res, err, '消息 AI 解读失败');
+  }
+});
+
+router.post('/messages/:id/update-inquiry', (req, res) => {
+  try {
+    const messageId = idParam(req.params.id);
+    const message = db.prepare('SELECT * FROM crm_messages WHERE id = ?').get(messageId);
+    if (!message) return res.status(404).json({ ok: false, error: '消息不存在' });
+    const requestedInterpretationId = idParam(req.body?.interpretation_id);
+    const interpretation = requestedInterpretationId
+      ? hydrateInterpretation(db.prepare('SELECT * FROM crm_ai_interpretations WHERE id = ? AND message_id = ?').get(requestedInterpretationId, messageId))
+      : latestMessageInterpretation(messageId);
+    if (!interpretation) return res.status(400).json({ ok: false, error: '请先 AI 解读该消息' });
+    const parsed = interpretation.parsed;
+    const ts = now();
+    const tx = db.transaction(() => {
+      let inquiryId = idParam(message.inquiry_id || req.body?.inquiry_id);
+      let inquiry = inquiryId ? getInquiry(inquiryId) : null;
+      let created = false;
+      if (!inquiry) {
+        const customerId = idParam(message.customer_id);
+        if (!customerId || !getCustomer(customerId)) throw new Error('消息未关联有效客户，不能创建询盘');
+        const inserted = db.prepare(`
+          INSERT INTO inquiries (
+            inquiry_code, customer_id, inquiry_title, status, priority, created_by, created_at, updated_at
+          ) VALUES (?, ?, ?, 'new', 'C', ?, ?, ?)
+        `).run(`AI-PENDING-${messageId}`, customerId, `待确认询盘 - 消息 #${messageId}`, req.user.userName, ts, ts);
+        inquiryId = Number(inserted.lastInsertRowid);
+        inquiry = getInquiry(inquiryId);
+        created = true;
+      }
+      const plan = buildInquiryFillPlan(inquiry, parsed);
+      const entries = Object.entries(plan.updates);
+      if (entries.length) {
+        const setSql = entries.map(([field]) => `${field} = ?`).join(', ');
+        db.prepare(`UPDATE inquiries SET ${setSql}, updated_at = ? WHERE id = ?`).run(...entries.map(([, value]) => value), ts, inquiryId);
+      }
+      const changedFields = entries.map(([field, newValue]) => ({
+        field,
+        old_value: inquiry[field] ?? null,
+        new_value: newValue,
+        source_message_id: messageId,
+        interpretation_id: interpretation.id,
+        changed_at: ts
+      }));
+      const history = [...(interpretation.changed_fields || []), ...changedFields];
+      db.prepare(`UPDATE crm_ai_interpretations SET inquiry_id = ?, changed_fields_json = ?, updated_at = ? WHERE id = ?`)
+        .run(inquiryId, JSON.stringify(history), ts, interpretation.id);
+      db.prepare(`UPDATE crm_messages SET inquiry_id = ?, workflow_status = 'created_inquiry', updated_at = ? WHERE id = ?`)
+        .run(inquiryId, ts, messageId);
+      db.prepare('UPDATE crm_message_attachments SET inquiry_id = ?, updated_at = ? WHERE message_id = ?').run(inquiryId, ts, messageId);
+      db.prepare('UPDATE customers SET latest_inquiry_id = ?, updated_at = ? WHERE id = ?').run(inquiryId, ts, message.customer_id);
+      return { inquiry_id: inquiryId, created, changed_fields: changedFields, skipped_fields: plan.skipped_fields };
+    });
+    const result = tx();
+    crmAudit(req, 'crm_message_update_inquiry', 'crm_inquiry', result.inquiry_id, { message_id: messageId, interpretation_id: interpretation.id, ...result });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    handleError(res, err, '消息更新询盘失败');
+  }
+});
+
+router.post('/messages/:id/father-task', (req, res) => {
+  try {
+    const messageId = idParam(req.params.id);
+    const message = db.prepare('SELECT * FROM crm_messages WHERE id = ?').get(messageId);
+    if (!message) return res.status(404).json({ ok: false, error: '消息不存在' });
+    const interpretation = idParam(req.body?.interpretation_id)
+      ? hydrateInterpretation(db.prepare('SELECT * FROM crm_ai_interpretations WHERE id = ? AND message_id = ?').get(idParam(req.body.interpretation_id), messageId))
+      : latestMessageInterpretation(messageId);
+    if (!interpretation) return res.status(400).json({ ok: false, error: '请先 AI 解读该消息' });
+    const parsed = interpretation.parsed;
+    const normalized = normalizeCrmAttachments(db, message);
+    const attachmentIds = normalized.attachments.map((row) => Number(row.id)).filter(Boolean);
+    const inquiryId = idParam(req.body?.inquiry_id || message.inquiry_id) || null;
+    const ts = now();
+    const inserted = db.prepare(`
+      INSERT INTO crm_father_review_tasks (
+        customer_id, inquiry_id, source_message_id, interpretation_id, task_type, question_cn,
+        ai_context_cn, customer_original_text, attachment_ids_json, required_fields_json,
+        status, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+    `).run(
+      message.customer_id || null,
+      inquiryId,
+      messageId,
+      interpretation.id,
+      text(req.body?.task_type || parsed.father_task_type || 'general'),
+      text(req.body?.question_cn || parsed.question_for_father_cn || '请确认客户需求和下一步处理。'),
+      text(req.body?.ai_context_cn || parsed.summary_cn),
+      text(message.message_text),
+      JSON.stringify(attachmentIds),
+      JSON.stringify(parsed.missing_information || []),
+      req.user.userName,
+      ts,
+      ts
+    );
+    crmAudit(req, 'create_crm_father_review_task', 'crm_father_review_task', inserted.lastInsertRowid, { message_id: messageId, inquiry_id: inquiryId, attachment_ids: attachmentIds });
+    res.json({ ok: true, task: fatherTaskWithAttachments(db.prepare('SELECT * FROM crm_father_review_tasks WHERE id = ?').get(inserted.lastInsertRowid)) });
+  } catch (err) {
+    handleError(res, err, '父亲确认任务创建失败');
+  }
+});
+
 const INQUIRY_FIELDS = [
   'inquiry_code', 'customer_id', 'inquiry_title', 'product_type', 'application', 'packaging_type',
   'status', 'priority', 'quantity', 'destination_country', 'destination_port', 'destination_address',
