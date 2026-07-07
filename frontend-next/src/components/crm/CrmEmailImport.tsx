@@ -18,6 +18,8 @@ export default function CrmEmailImport() {
   const [syncing, setSyncing] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [selectedEmailIds, setSelectedEmailIds] = useState<number[]>([]);
   const [filters, setFilters] = useState({ keyword: '', direction: '', processing_status: '' });
   const [syncForm, setSyncForm] = useState({ folder: 'INBOX', days: 90, limit: 200 });
 
@@ -34,6 +36,7 @@ export default function CrmEmailImport() {
       setSyncRuns(Array.isArray(runs?.rows) ? runs.rows : []);
       setMessages(Array.isArray(emailRows?.rows) ? emailRows.rows : []);
       setSuggestions(Array.isArray(suggestionRows?.rows) ? suggestionRows.rows : []);
+      setSelectedEmailIds((prev) => prev.filter((id) => (Array.isArray(emailRows?.rows) ? emailRows.rows : []).some((row: any) => Number(row.id) === id)));
     } finally {
       setLoading(false);
     }
@@ -99,6 +102,37 @@ export default function CrmEmailImport() {
   const openMessage = async (id: number) => {
     const detail = await mockService.getCrmEmailMessage(id);
     setSelectedMessage(detail);
+  };
+
+  const toggleEmailSelection = (id: number) => {
+    setSelectedEmailIds((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]);
+  };
+
+  const importOneEmail = async (id: number) => {
+    setImporting(true);
+    try {
+      const result = await mockService.importCrmEmailMessageToCrm(id);
+      await load();
+      const detail = await mockService.getCrmEmailMessage(id);
+      setSelectedMessage({ ...detail, crm_import_result: result });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const importSelectedEmails = async () => {
+    if (!selectedEmailIds.length) return;
+    setImporting(true);
+    try {
+      await mockService.batchImportCrmEmailMessagesToCrm({
+        email_message_ids: selectedEmailIds,
+        only_unimported: true
+      });
+      setSelectedEmailIds([]);
+      await load();
+    } finally {
+      setImporting(false);
+    }
   };
 
   const openSuggestion = async (id: number) => {
@@ -251,22 +285,64 @@ export default function CrmEmailImport() {
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-100 text-sm font-black text-slate-900">邮件列表</div>
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
+            <div className="text-sm font-black text-slate-900">邮件列表</div>
+            <button
+              disabled={importing || selectedEmailIds.length === 0}
+              onClick={importSelectedEmails}
+              className="h-8 px-3 rounded-lg bg-slate-900 text-white text-xs font-black disabled:opacity-50"
+            >
+              批量导入选中邮件 ({selectedEmailIds.length})
+            </button>
+          </div>
           <div className="max-h-[520px] overflow-auto divide-y divide-slate-100">
             {loading ? (
               <div className="p-6 text-sm text-slate-400">加载中...</div>
             ) : messages.length === 0 ? (
               <div className="p-6 text-sm text-slate-400">暂无邮件</div>
             ) : messages.map((row) => (
-              <button key={row.id} onClick={() => openMessage(Number(row.id))} className="w-full text-left px-4 py-3 hover:bg-slate-50">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-black text-slate-900 truncate">{row.subject || '(无主题)'}</div>
-                  <div className="text-xs text-slate-400">{row.received_at || '-'}</div>
+              <div key={row.id} onClick={() => openMessage(Number(row.id))} className="w-full text-left px-4 py-3 hover:bg-slate-50 cursor-pointer">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedEmailIds.includes(Number(row.id))}
+                        onChange={(event) => { event.stopPropagation(); toggleEmailSelection(Number(row.id)); }}
+                        onClick={(event) => event.stopPropagation()}
+                        className="h-4 w-4"
+                      />
+                      <div className="text-sm font-black text-slate-900 truncate">{row.subject || '(无主题)'}</div>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">{row.from_name || row.from_email || '-'} · {row.direction} · {row.processing_status}</div>
+                    <div className="text-xs text-slate-500 mt-1">客户 {row.matched_customer_name || '-'} · 询盘 {row.matched_inquiry_title || '-'} · 报价 {Number(row.quote_detected || 0) ? '是' : '否'} · 询盘 {Number(row.inquiry_detected || 0) ? '是' : '否'}</div>
+                    <div className="text-xs text-slate-400 mt-1 truncate">{row.cleaned_text || '-'}</div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2 shrink-0">
+                    <div className="text-xs text-slate-400">{row.received_at || '-'}</div>
+                    {row.imported_to_crm ? (
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          window.history.pushState({}, '', `/crm/messages/${row.crm_message_id}`);
+                          window.dispatchEvent(new PopStateEvent('popstate'));
+                        }}
+                        className="h-7 px-2 rounded bg-emerald-100 text-xs font-black text-emerald-800"
+                      >
+                        已入 CRM #{row.crm_message_id}
+                      </button>
+                    ) : (
+                      <button
+                        disabled={importing}
+                        onClick={(event) => { event.stopPropagation(); importOneEmail(Number(row.id)); }}
+                        className="h-7 px-2 rounded bg-indigo-600 text-xs font-black text-white disabled:opacity-50"
+                      >
+                        导入到 CRM
+                      </button>
+                    )}
+                  </div>
                 </div>
-                  <div className="text-xs text-slate-500 mt-1">{row.from_name || row.from_email || '-'} · {row.direction} · {row.processing_status}</div>
-                  <div className="text-xs text-slate-500 mt-1">客户 {row.matched_customer_name || '-'} · 询盘 {row.matched_inquiry_title || '-'} · 报价 {Number(row.quote_detected || 0) ? '是' : '否'} · 询盘 {Number(row.inquiry_detected || 0) ? '是' : '否'}</div>
-                  <div className="text-xs text-slate-400 mt-1 truncate">{row.cleaned_text || '-'}</div>
-                </button>
+              </div>
               ))}
           </div>
         </section>
@@ -275,7 +351,22 @@ export default function CrmEmailImport() {
           <div className="flex items-center justify-between">
             <div className="text-sm font-black text-slate-900">邮件详情</div>
             {selectedMessage?.message?.id ? (
-              <button disabled={parsing} onClick={() => parseMessage(Number(selectedMessage.message.id))} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">生成解析建议</button>
+              <div className="flex items-center gap-2">
+                {selectedMessage.message.imported_to_crm ? (
+                  <button
+                    onClick={() => {
+                      window.history.pushState({}, '', `/crm/messages/${selectedMessage.message.crm_message_id}`);
+                      window.dispatchEvent(new PopStateEvent('popstate'));
+                    }}
+                    className="h-9 px-4 rounded-lg bg-emerald-100 text-emerald-800 text-sm font-black"
+                  >
+                    已入 CRM #{selectedMessage.message.crm_message_id}
+                  </button>
+                ) : (
+                  <button disabled={importing} onClick={() => importOneEmail(Number(selectedMessage.message.id))} className="h-9 px-4 rounded-lg bg-slate-900 text-white text-sm font-black disabled:opacity-60">导入到 CRM</button>
+                )}
+                <button disabled={parsing} onClick={() => parseMessage(Number(selectedMessage.message.id))} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-60">生成解析建议</button>
+              </div>
             ) : null}
           </div>
           {!selectedMessage?.message ? (

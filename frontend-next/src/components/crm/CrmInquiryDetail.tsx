@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Calculator, Copy, Layers, Plus, RefreshCcw, Save, Ship } from 'lucide-react';
+import { ArrowLeft, BrainCircuit, Calculator, Copy, Layers, MailCheck, Plus, RefreshCcw, Save, Ship, UserRoundCheck } from 'lucide-react';
 import { mockService } from '../../lib/mockService';
 import CrmTermTooltip from './CrmTermTooltip';
 import CrmQuoteReadinessCard from './CrmQuoteReadinessCard';
+import CrmAttachmentGallery from './attachments/CrmAttachmentGallery';
 
 type Props = {
   inquiryId: number;
@@ -21,6 +22,10 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const [readinessBusy, setReadinessBusy] = useState(false);
   const [aiSuggestionBusy, setAiSuggestionBusy] = useState(false);
   const [aiSuggestionPreview, setAiSuggestionPreview] = useState<any>(null);
+  const [fatherReplies, setFatherReplies] = useState<Record<number, string>>({});
+  const [replyDrafts, setReplyDrafts] = useState<any[]>([]);
+  const [workflowBusy, setWorkflowBusy] = useState('');
+  const [workflowMessage, setWorkflowMessage] = useState('');
   const [inquiryForm, setInquiryForm] = useState<any>({});
   const [specForm, setSpecForm] = useState({
     product_type: '', bag_type: '', film_type: '', size_width: '', size_height: '',
@@ -203,6 +208,12 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
   const latestCosting = costingRequests[0] || null;
   const currentFreight = freightQuotes.find((row: any) => Number(row.is_current) === 1) || freightQuotes[0] || null;
   const quoteReadiness = data.quote_readiness || data.inquiry?.quote_readiness || null;
+  const inquiryAttachments = Array.isArray(data.inquiry_attachments) ? data.inquiry_attachments : [];
+  const attachmentGroups = data.inquiry_attachments_grouped || {};
+  const aiInterpretation = data.latest_ai_interpretation || null;
+  const aiSpec = aiInterpretation?.parsed || {};
+  const fatherTasks = Array.isArray(data.father_review_tasks) ? data.father_review_tasks : [];
+  const foreignCostingDrafts = Array.isArray(data.foreign_costing_drafts) ? data.foreign_costing_drafts : [];
   const costingSummary = [
     `客户简称：${data.inquiry.customer_display_name || '-'}`,
     `询盘编号：${data.inquiry.inquiry_code || data.inquiry.id || '-'}`,
@@ -287,6 +298,127 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
           <textarea className={areaClass} value={inquiryForm.technical_risks} onChange={e => setInquiryForm((f: any) => ({ ...f, technical_risks: e.target.value }))} placeholder="技术风险" />
           <textarea className={areaClass} value={inquiryForm.commercial_risks} onChange={e => setInquiryForm((f: any) => ({ ...f, commercial_risks: e.target.value }))} placeholder="商务风险" />
         </div>
+      </section>
+
+      <section className="bg-white border border-indigo-100 rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-900 flex items-center gap-2"><BrainCircuit className="w-4 h-4 text-indigo-600" /> AI 规格总览</h3>
+            <p className="text-xs text-slate-500 mt-1">来自最近一次消息解读；缺失和风险必须人工确认。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={sendToCostingAssistant} disabled={!!workflowBusy} className="h-9 px-4 rounded-lg bg-slate-900 text-white text-sm font-black flex items-center gap-2 disabled:opacity-50"><Calculator className="w-4 h-4" />发送到报价助手</button>
+            <button onClick={generateReplyDraft} disabled={!!workflowBusy} className="h-9 px-4 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-black flex items-center gap-2 disabled:opacity-50"><MailCheck className="w-4 h-4" />生成客户回复草稿</button>
+          </div>
+        </div>
+        {workflowMessage ? <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm font-bold text-indigo-800">{workflowMessage}</div> : null}
+        {!aiInterpretation ? (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-400">暂无关联消息 AI 解读</div>
+        ) : (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm text-indigo-950">{aiSpec.summary_cn || data.inquiry.ai_summary_cn || '-'}</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+              {[
+                ['产品类型', aiSpec.product_type], ['袋型/卷膜', aiSpec.bag_type || aiSpec.roll_or_bag], ['尺寸/装量', aiSpec.size_text],
+                ['装量', aiSpec.capacity_text], ['配件', (aiSpec.accessories || []).join('、')],
+                ['材料', aiSpec.material_structure], ['厚度', aiSpec.thickness_text], ['数量', aiSpec.quantity_text],
+                ['印刷颜色', aiSpec.printing_colors], ['目的地', aiSpec.destination_text || [aiSpec.destination_country, aiSpec.destination_port].filter(Boolean).join(' / ')], ['贸易条款', aiSpec.trade_term]
+              ].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-200 px-3 py-2"><div className="text-xs font-bold text-slate-500">{label}</div><div className="mt-1 font-bold text-slate-800">{String(value || '-')}</div></div>)}
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="text-xs font-black text-amber-700">缺失信息</div><div className="mt-1">{(aiSpec.missing_information || []).join('、') || '-'}</div></div>
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3"><div className="text-xs font-black text-red-700">风险提示</div><div className="mt-1">{(aiSpec.risk_flags || []).join('、') || '-'}</div></div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><div className="text-xs font-black text-emerald-700">下一步动作</div><div className="mt-1">{aiSpec.suggested_next_action_cn || data.inquiry.next_action || '-'}</div></div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between"><div><h3 className="text-sm font-black text-slate-900 flex items-center gap-2"><MailCheck className="w-4 h-4 text-indigo-600" />关联回复草稿</h3><p className="text-xs text-slate-500 mt-1">仅供内部确认，系统不会自动发送客户。</p></div><span className="text-xs font-bold text-slate-500">{replyDrafts.length} 条</span></div>
+        {replyDrafts.length === 0 ? <div className="text-sm font-bold text-slate-400">暂无关联回复草稿</div> : (
+          <div className="space-y-3">{replyDrafts.map((draft: any) => (
+            <div key={draft.id} className="rounded-lg border border-slate-200 p-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-black text-slate-900">Draft #{draft.id}</div>
+                <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-black text-slate-700">{draft.status}</span>
+              </div>
+              <div className="mt-1 text-xs text-slate-500">{draft.reply_channel} · {draft.created_at}</div>
+              <div className="mt-2 line-clamp-2 text-slate-700">{draft.draft_summary_cn || draft.draft_text_cn || draft.draft_text_en}</div>
+            </div>
+          ))}</div>
+        )}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-black text-slate-900 flex items-center gap-2"><UserRoundCheck className="w-4 h-4 text-indigo-600" />待老板/父亲确认</h3><div className="flex items-center gap-2"><span className="text-xs font-bold text-slate-500">{fatherTasks.filter((task: any) => task.status === 'pending').length} 条待处理</span><button onClick={createInquiryFatherTask} disabled={!!workflowBusy} className="h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-black text-slate-700 disabled:opacity-50">创建确认任务</button></div></div>
+        {fatherTasks.length === 0 ? <div className="text-sm font-bold text-slate-400">暂无父亲确认任务</div> : fatherTasks.map((task: any) => (
+          <div key={task.id} className="rounded-lg border border-slate-200 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm font-black text-slate-900">#{task.id} · {task.task_type}</div><span className={`px-2 py-0.5 rounded text-xs font-black ${task.status === 'done' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{task.status}</span></div>
+            <div className="text-sm font-bold text-slate-800">{task.question_cn}</div>
+            <div className="text-sm text-slate-600">{task.ai_context_cn || '-'}</div>
+            {Array.isArray(task.attachments) && task.attachments.length ? <CrmAttachmentGallery attachments={task.attachments} compact maxVisible={4} showSource /> : <div className="text-xs text-slate-400">无关联附件</div>}
+            {task.status === 'done' ? <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">父亲意见：{task.father_reply_cn}</div> : (
+              <div className="flex flex-col md:flex-row gap-2"><textarea className={`${areaClass} flex-1`} value={fatherReplies[task.id] || ''} onChange={(event) => setFatherReplies((current) => ({ ...current, [task.id]: event.target.value }))} placeholder="输入中文确认意见，不会自动发给客户" /><button onClick={() => saveFatherReply(task.id)} disabled={workflowBusy === `father-${task.id}` || !String(fatherReplies[task.id] || '').trim()} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black disabled:opacity-50">保存意见</button></div>
+            )}
+          </div>
+        ))}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between"><div><h3 className="text-sm font-black text-slate-900">关联报价助手草稿</h3><p className="text-xs text-slate-500 mt-1">仅内部预核价，必须陈湧杰复核，不可直接对客户报价。</p></div><span className="text-xs font-bold text-slate-500">{foreignCostingDrafts.length} 条</span></div>
+        {foreignCostingDrafts.length === 0 ? <div className="text-sm font-bold text-slate-400">暂无关联草稿</div> : (
+          <div className="space-y-3">{foreignCostingDrafts.map((draft: any) => (
+            <div key={draft.id} className="rounded-lg border border-slate-200 p-4 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+              <div><div className="text-xs font-bold text-slate-500">Draft</div><div className="font-black">#{draft.id}</div></div>
+              <div><div className="text-xs font-bold text-slate-500">状态</div><div className="font-black text-amber-700">{draft.status}</div></div>
+              <div><div className="text-xs font-bold text-slate-500">创建时间</div><div>{draft.created_at || '-'}</div></div>
+              <div><div className="text-xs font-bold text-slate-500">计算表</div><div>{Array.isArray(draft.calculation_table) ? draft.calculation_table.length : 0} 行</div></div>
+              <div className="md:col-span-4 text-xs text-slate-600">袋型：{draft.parsed_spec?.suggested_cost_type || draft.quote_input?.cost_type || '-'} · 来源消息：{(draft.source_message_ids || []).join(', ') || '-'}</div>
+            </div>
+          ))}</div>
+        )}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-900">客户提供资料</h3>
+            <p className="text-xs text-slate-500 mt-1">按来源消息归档客户发来的图片、PDF 和文件。</p>
+          </div>
+          <div className="text-xs font-bold text-slate-500">{inquiryAttachments.length} 个附件</div>
+        </div>
+        {inquiryAttachments.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-400">暂无客户附件资料</div>
+        ) : (
+          <div className="space-y-4">
+            {[
+              ['image', '图片'],
+              ['pdf', 'PDF'],
+              ['document', '设计稿/文件'],
+              ['spreadsheet', '表格'],
+              ['archive', '压缩包'],
+              ['other', '其他'],
+            ].map(([key, label]) => {
+              const rows = Array.isArray(attachmentGroups[key]) ? attachmentGroups[key] : [];
+              if (!rows.length) return null;
+              return (
+                <div key={key} className="space-y-2">
+                  <div className="text-xs font-black text-slate-600">{label} · {rows.length}</div>
+                  <CrmAttachmentGallery
+                    attachments={rows}
+                    showSource
+                    showAiSummary
+                    onJumpToMessage={(id) => {
+                      window.history.pushState({}, '', `/crm/messages/${id}`);
+                      window.dispatchEvent(new PopStateEvent('popstate'));
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">

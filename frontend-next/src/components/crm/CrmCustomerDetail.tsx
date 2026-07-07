@@ -3,18 +3,20 @@ import { AlertTriangle, ArrowLeft, Globe, MessageSquarePlus, Plus, RefreshCcw, S
 import { mockService } from '../../lib/mockService';
 import CrmCustomerResearchNotes from './CrmCustomerResearchNotes';
 import CrmQuoteReadinessCard from './CrmQuoteReadinessCard';
+import CrmAttachmentGallery from './attachments/CrmAttachmentGallery';
 import { CRM_STAGE_OPTIONS, getCrmStageLabel, normalizeCrmStage } from '../../lib/crmStage';
 
 type Props = {
   customerId: number;
   onBack: () => void;
   onOpenInquiry?: (id: number) => void;
+  backLabel?: string;
 };
 
 const fieldClass = 'h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 const areaClass = 'min-h-[80px] px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-500';
 
-export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }: Props) {
+export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry, backLabel = '返回客户列表' }: Props) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -186,6 +188,10 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
   const overview = data.overview || {};
   const inquiries = Array.isArray(data.inquiries) ? data.inquiries : [];
   const communications = Array.isArray(data.communications) ? data.communications : [];
+  const whatsappMessages = Array.isArray(data.whatsappMessages) ? data.whatsappMessages : [];
+  const costingRequests = Array.isArray(data.costingRequests) ? data.costingRequests : [];
+  const freightQuotes = Array.isArray(data.freightQuotes) ? data.freightQuotes : [];
+  const timelineItems = Array.isArray(data.timelineItems) ? data.timelineItems : [];
   const relatedEmails = Array.isArray(data.relatedEmails) ? data.relatedEmails : [];
   const emailConversations = Array.isArray(data.emailConversations) ? data.emailConversations : [];
   const importSuggestions = Array.isArray(data.importSuggestions) ? data.importSuggestions : [];
@@ -196,7 +202,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-600 flex items-center gap-2">
-          <ArrowLeft className="w-4 h-4" /> 返回客户列表
+          <ArrowLeft className="w-4 h-4" /> {backLabel}
         </button>
         <button onClick={load} className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm font-bold text-slate-600 flex items-center gap-2">
           <RefreshCcw className="w-4 h-4" /> 刷新
@@ -298,6 +304,46 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry }:
             ) : null}
           </div>
         </div>
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-black text-slate-900">客户时间线</h2>
+          <div className="text-xs text-slate-500">WhatsApp / Gmail / 报价 / 跟进 / 物流</div>
+        </div>
+        {timelineItems.length === 0 ? (
+          <div className="text-sm text-slate-400">暂无时间线记录</div>
+        ) : (
+          <div className="space-y-3">
+            {timelineItems.slice(0, 40).map((item: any, index: number) => (
+              <div key={`${item.source_type || item.kind || 'item'}-${item.source_id || index}-${item.at || index}`} className={`rounded-lg border px-4 py-3 ${item.kind === 'whatsapp' ? 'border-emerald-100 bg-emerald-50/50' : item.kind === 'email' ? 'border-indigo-100 bg-indigo-50/50' : item.kind === 'quotation' ? 'border-amber-100 bg-amber-50/50' : item.kind === 'freight' ? 'border-sky-100 bg-sky-50/50' : 'border-slate-100 bg-slate-50'}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-black text-slate-900">{item.title || '记录'}</div>
+                  <div className="text-xs font-bold text-slate-500">{item.at || '-'}</div>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px] font-black">
+                  <span className="px-2 py-0.5 rounded bg-white text-slate-600 border border-slate-200">{item.kind || 'event'}</span>
+                  {item.note ? <span className="px-2 py-0.5 rounded bg-white text-slate-600 border border-slate-200">{item.note}</span> : null}
+                  {item.highlight ? <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800">待分析</span> : null}
+                </div>
+                <div className="text-sm text-slate-700 whitespace-pre-wrap mt-2">{item.summary || '-'}</div>
+                {Array.isArray(item.attachments) && item.attachments.length > 0 ? (
+                  <div className="mt-3">
+                    <CrmAttachmentGallery
+                      attachments={item.attachments}
+                      compact
+                      maxVisible={4}
+                      onJumpToMessage={(id) => {
+                        window.history.pushState({}, '', `/crm/messages/${id}`);
+                        window.dispatchEvent(new PopStateEvent('popstate'));
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">

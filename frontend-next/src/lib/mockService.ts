@@ -557,6 +557,126 @@ export const mockService = {
     return api<any>(`/api/crm/customers/${id}`);
   },
 
+  async getCrmWorkbench() {
+    return api<any>('/api/crm/workbench');
+  },
+
+  async getFatherReviewTasks(params: Record<string, any> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) search.set(key, String(value));
+    });
+    return api<any>(`/api/crm/father-review-tasks?${search.toString()}`);
+  },
+
+  async getFatherReviewTask(id: number | string) {
+    return api<any>(`/api/crm/father-review-tasks/${id}`);
+  },
+
+  async replyFatherReviewTask(id: number | string, payload: any) {
+    return api<any>(`/api/crm/father-review-tasks/${id}/reply`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async markFatherTaskSalesHandled(id: number | string, payload: any = {}) {
+    return api<any>(`/api/crm/father-review-tasks/${id}/sales-handled`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async generateReplyDraftFromFatherTask(id: number | string, payload: any = {}) {
+    return api<any>(`/api/crm/father-review-tasks/${id}/generate-reply-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async generateReplyDraftFromMessage(id: number | string, payload: any = {}) {
+    return api<any>(`/api/crm/messages/${id}/generate-reply-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async generateReplyDraftFromInquiry(id: number | string, payload: any = {}) {
+    return api<any>(`/api/crm/inquiries/${id}/generate-reply-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async listCrmReplyDrafts(params: Record<string, any> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) search.set(key, String(value));
+    });
+    return api<any>(`/api/crm/reply-drafts?${search.toString()}`);
+  },
+
+  async getCrmReplyDraft(id: number | string) {
+    return api<any>(`/api/crm/reply-drafts/${id}`);
+  },
+
+  async updateCrmReplyDraft(id: number | string, payload: any) {
+    return api<any>(`/api/crm/reply-drafts/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async approveCrmReplyDraft(id: number | string) {
+    return api<any>(`/api/crm/reply-drafts/${id}/approve`, { method: 'PATCH' });
+  },
+
+  async markCrmReplyDraftSentManually(id: number | string) {
+    return api<any>(`/api/crm/reply-drafts/${id}/mark-sent-manually`, { method: 'PATCH' });
+  },
+
+  async listCrmWhatsappMessages(params: Record<string, any> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) search.set(key, String(value));
+    });
+    return api<any>(`/api/crm/messages?${search.toString()}`);
+  },
+
+  async getCrmWhatsappMessage(id: number | string) {
+    return api<any>(`/api/crm/messages/${id}`);
+  },
+
+  async parseCrmMessage(id: number | string) {
+    return api<any>(`/api/crm/messages/${id}/ai-parse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  },
+
+  async updateInquiryFromCrmMessage(id: number | string, interpretationId: number | string) {
+    return api<any>(`/api/crm/messages/${id}/update-inquiry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interpretation_id: interpretationId }),
+    });
+  },
+
+  async createFatherTaskFromCrmMessage(id: number | string, payload: any = {}) {
+    return api<any>(`/api/crm/messages/${id}/father-task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   async updateCrmCustomer(id: number | string, payload: any) {
     return api<any>(`/api/crm/customers/${id}`, {
       method: 'PATCH',
@@ -645,6 +765,22 @@ export const mockService = {
     });
   },
 
+  async importCrmEmailMessageToCrm(id: number | string) {
+    return api<any>(`/api/crm/email/messages/${id}/import-to-crm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  },
+
+  async batchImportCrmEmailMessagesToCrm(payload: any) {
+    return api<any>('/api/crm/email/import-to-crm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
   async parseUnprocessedCrmEmails(limit = 50) {
     return api<any>('/api/crm/email/parse-unprocessed', {
       method: 'POST',
@@ -707,6 +843,30 @@ export const mockService = {
 
   async getCrmInquiry(id: number | string) {
     return api<any>(`/api/crm/inquiries/${id}`);
+  },
+
+  async listCrmInquiryFatherTasks(id: number | string) {
+    return api<any>(`/api/crm/inquiries/${id}/father-tasks`);
+  },
+
+  async createCrmInquiryFatherTask(id: number | string, payload: any = {}) {
+    return api<any>(`/api/crm/inquiries/${id}/father-tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async saveCrmFatherTaskReply(id: number | string, fatherReplyCn: string) {
+    return api<any>(`/api/crm/father-review-tasks/${id}/reply`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ father_reply_cn: fatherReplyCn }),
+    });
+  },
+
+  async listCrmInquiryCostingDrafts(id: number | string) {
+    return api<any>(`/api/crm/inquiries/${id}/costing-drafts`);
   },
 
   async getCrmInquiryQuoteReadiness(id: number | string) {
