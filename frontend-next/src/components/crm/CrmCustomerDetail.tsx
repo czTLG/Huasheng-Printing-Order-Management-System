@@ -267,9 +267,25 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry, b
                 <div className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{data.customer.customer_summary || data.customer.ai_summary || data.customer.business_background || '暂无客户概览摘要'}</div>
               </div>
               <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
-                <div className="text-xs font-bold text-slate-400">待处理事项</div>
+                <div className="text-xs font-bold text-slate-400">当前待处理事项</div>
                 <div className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{data.customer.next_action || latest?.next_action || '暂无下一步动作'}</div>
                 <div className="text-xs text-slate-500 mt-2">下次跟进：{data.customer.next_followup_at || '-'} / 最近联系：{data.customer.last_contact_at || '-'}</div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded bg-white border border-slate-100 px-2 py-1">待 AI 解读：{data.currentTasks?.messages_pending_ai || 0}</div>
+                  <div className="rounded bg-white border border-slate-100 px-2 py-1">待父亲确认：{data.currentTasks?.father_tasks_pending || 0}</div>
+                  <div className="rounded bg-white border border-slate-100 px-2 py-1">父亲已回复：{data.currentTasks?.father_tasks_done_pending_sales || 0}</div>
+                  <div className="rounded bg-white border border-slate-100 px-2 py-1">报价草稿：{data.currentTasks?.costing_drafts_pending_review || 0}</div>
+                </div>
+                {data.currentTasks?.latest_father_task ? (
+                  <div className="mt-2 rounded bg-indigo-50 border border-indigo-100 px-2 py-1 text-xs text-indigo-800">
+                    父亲任务：{data.currentTasks.latest_father_task.question_cn || data.currentTasks.latest_father_task.father_reply_cn || '-'}
+                  </div>
+                ) : null}
+                {data.currentTasks?.latest_costing_draft ? (
+                  <div className="mt-2 rounded bg-purple-50 border border-purple-100 px-2 py-1 text-xs text-purple-800">
+                    报价助手 draft #{data.currentTasks.latest_costing_draft.id}：{data.currentTasks.latest_costing_draft.status || '-'}
+                  </div>
+                ) : null}
               </div>
               <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
                 <div className="text-xs font-bold text-slate-400">核价与物流状态</div>
@@ -295,6 +311,7 @@ export default function CrmCustomerDetail({ customerId, onBack, onOpenInquiry, b
               <div>来源：{data.customer.source_channel || '-'}</div>
               <div>负责人：{data.customer.owner_id || '-'}</div>
               <div>最后更新：{data.customer.updated_at || '-'}</div>
+              <div>WhatsApp：{whatsappMessages.length} / 核价：{costingRequests.length} / 物流：{freightQuotes.length}</div>
             </div>
             {latestCommunication ? (
               <div className="pt-2 border-t border-slate-100">

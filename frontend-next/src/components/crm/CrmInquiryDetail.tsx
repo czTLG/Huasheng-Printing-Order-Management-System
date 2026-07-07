@@ -82,13 +82,15 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
     setLoading(true);
     try {
       const detail = await mockService.getCrmInquiry(inquiryId);
-      const [costing, freight] = await Promise.all([
+      const [costing, freight, replies] = await Promise.all([
         mockService.listCostingRequests({ inquiry_id: inquiryId }),
         mockService.listInquiryFreightQuotes(inquiryId),
+        mockService.listCrmReplyDrafts({ inquiry_id: inquiryId }).catch(() => ({ rows: [] })),
       ]);
       setData(detail);
       setCostingRequests(Array.isArray(costing?.rows) ? costing.rows : []);
       setFreightQuotes(Array.isArray(freight?.rows) ? freight.rows : []);
+      setReplyDrafts(Array.isArray(replies?.rows) ? replies.rows : []);
       setInquiryForm({
         inquiry_title: detail.inquiry?.inquiry_title || '',
         status: detail.inquiry?.status || 'new',
@@ -199,6 +201,102 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
     }
   };
 
+  const sendToCostingAssistant = async () => {
+    const inquiry = data?.inquiry || {};
+    const specification = data?.currentSpecification || {};
+    const interpretation = data?.latest_ai_interpretation?.parsed || {};
+    const sourceMessageIds = data?.latest_ai_interpretation?.message_id ? [Number(data.latest_ai_interpretation.message_id)] : [];
+    const attachmentIds = (data?.inquiry_attachments || []).map((item: any) => Number(item.id)).filter(Boolean);
+    const crmSpec = {
+      product_type: inquiry.product_type || specification.product_type || interpretation.product_type || '',
+      bag_type: specification.bag_type || inquiry.packaging_type || interpretation.bag_type || '',
+      roll_or_bag: specification.film_type ? 'roll' : (interpretation.roll_or_bag || 'bag'),
+      size_text: interpretation.size_text || [specification.size_width, specification.size_height, specification.gusset_size].filter(Boolean).join(' x '),
+      material_structure: specification.material_structure_text || interpretation.material_structure || '',
+      thickness_text: specification.thickness_total || interpretation.thickness_text || '',
+      quantity_text: inquiry.quantity || interpretation.quantity_text || '',
+      printing_colors: specification.printing_colors || interpretation.printing_colors || '',
+      artwork_status: specification.artwork_status || interpretation.artwork_status || '',
+      destination_country: inquiry.destination_country || interpretation.destination_country || '',
+      destination_port: inquiry.destination_port || interpretation.destination_port || '',
+      trade_term: inquiry.trade_term_requested || interpretation.trade_term || '',
+      ai_summary_cn: interpretation.summary_cn || '',
+      missing_information: interpretation.missing_information || [],
+      risk_flags: interpretation.risk_flags || []
+    };
+    const sourceText = [
+      `Product: ${crmSpec.product_type}`,
+      `Bag type: ${crmSpec.bag_type}`,
+      `Size: ${crmSpec.size_text}`,
+      `Material: ${crmSpec.material_structure}`,
+      `Thickness: ${crmSpec.thickness_text}`,
+      `Quantity: ${crmSpec.quantity_text}`,
+      `Destination: ${crmSpec.destination_country} ${crmSpec.destination_port}`,
+      `Incoterms: ${crmSpec.trade_term}`
+    ].filter((line) => !line.endsWith(': ')).join('. ');
+    setWorkflowBusy('costing');
+    setWorkflowMessage('');
+    try {
+      const result = await mockService.createForeignCostingDraft({
+        text: sourceText,
+        customer_id: inquiry.customer_id,
+        inquiry_id: inquiry.id,
+        customer_name: inquiry.customer_display_name || '',
+        source_message_ids: sourceMessageIds,
+        attachment_ids: attachmentIds,
+        crm_spec: crmSpec
+      });
+      setWorkflowMessage(`已创建内部预核价草稿 #${result.draft_id}，待陈湧杰复核。`);
+      await load();
+    } catch (error: any) {
+      setWorkflowMessage(error?.message || '创建内部预核价草稿失败');
+    } finally {
+      setWorkflowBusy('');
+    }
+  };
+
+  const saveFatherReply = async (taskId: number) => {
+    const reply = String(fatherReplies[taskId] || '').trim();
+    if (!reply) return;
+    setWorkflowBusy(`father-${taskId}`);
+    try {
+      await mockService.saveCrmFatherTaskReply(taskId, reply);
+      setFatherReplies((current) => ({ ...current, [taskId]: '' }));
+      await load();
+    } finally {
+      setWorkflowBusy('');
+    }
+  };
+
+  const createInquiryFatherTask = async () => {
+    setWorkflowBusy('new-father');
+    try {
+      await mockService.createCrmInquiryFatherTask(inquiryId, {
+        interpretation_id: data?.latest_ai_interpretation?.id || undefined
+      });
+      await load();
+    } finally {
+      setWorkflowBusy('');
+    }
+  };
+
+  const generateReplyDraft = async () => {
+    setWorkflowBusy('reply-draft');
+    setWorkflowMessage('');
+    try {
+      const result = await mockService.generateReplyDraftFromInquiry(inquiryId, {
+        tone: 'professional',
+        reply_channel: 'email'
+      });
+      setWorkflowMessage(`已生成客户回复草稿 #${result.reply_draft_id}，不会自动发送。`);
+      await load();
+    } catch (error: any) {
+      setWorkflowMessage(error?.message || '生成客户回复草稿失败');
+    } finally {
+      setWorkflowBusy('');
+    }
+  };
+
   if (loading) return <div className="p-8 text-sm font-bold text-slate-400">加载询盘详情...</div>;
   if (!data?.inquiry) return <div className="p-8 text-sm font-bold text-slate-400">询盘不存在</div>;
 
@@ -251,6 +349,32 @@ export default function CrmInquiryDetail({ inquiryId, onBack }: Props) {
           <button disabled={saving} onClick={saveInquiry} className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-black flex items-center gap-2 disabled:opacity-60">
             <Save className="w-4 h-4" /> 保存询盘
           </button>
+        </div>
+        <div className="rounded-lg border border-emerald-100 bg-emerald-50/40 p-4">
+          <div className="text-sm font-black text-slate-900">下一步动作</div>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className="rounded-lg bg-white border border-emerald-100 p-3">
+              <div className="text-xs font-bold text-slate-500">当前阶段</div>
+              <div className="mt-1 font-black text-slate-900">{data.inquiry.status || data.inquiry.stage || '-'}</div>
+              <div className="mt-1 text-xs text-slate-500">{data.inquiry.next_action || aiSpec.suggested_next_action_cn || '暂无下一步动作'}</div>
+            </div>
+            <div className="rounded-lg bg-white border border-amber-100 p-3">
+              <div className="text-xs font-bold text-amber-700">缺失 / 风险</div>
+              <div className="mt-1 text-xs text-slate-700">缺失：{Array.isArray(aiSpec.missing_information) && aiSpec.missing_information.length ? aiSpec.missing_information.join('、') : data.inquiry.missing_info || '-'}</div>
+              <div className="mt-1 text-xs text-slate-700">风险：{Array.isArray(aiSpec.risk_flags) && aiSpec.risk_flags.length ? aiSpec.risk_flags.join('、') : data.inquiry.technical_risks || '-'}</div>
+            </div>
+            <div className="rounded-lg bg-white border border-indigo-100 p-3">
+              <div className="text-xs font-bold text-indigo-700">父亲确认 / 报价助手</div>
+              <div className="mt-1 text-xs text-slate-700">待父亲确认：{fatherTasks.filter((task: any) => task.status === 'pending').length}</div>
+              <div className="mt-1 text-xs text-slate-700">父亲已回复：{fatherTasks.filter((task: any) => task.status === 'done').length}</div>
+              <div className="mt-1 text-xs text-slate-700">关联 draft：{foreignCostingDrafts.length}</div>
+            </div>
+          </div>
+          {fatherTasks.find((task: any) => task.status === 'done')?.father_reply_cn ? (
+            <div className="mt-3 rounded-lg border border-emerald-100 bg-white p-3 text-sm text-slate-700">
+              父亲最新回复：{fatherTasks.find((task: any) => task.status === 'done')?.father_reply_cn}
+            </div>
+          ) : null}
         </div>
         <CrmQuoteReadinessCard
           readiness={quoteReadiness}
