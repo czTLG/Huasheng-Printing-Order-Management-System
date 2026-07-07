@@ -127,8 +127,43 @@ router.post('/parse', async (req, res) => {
 
 router.post('/draft', async (req, res) => {
   try {
-    const text = String(req.body?.text ?? req.body?.source_text ?? req.body?.message ?? '').trim();
+    const crmSpec = req.body?.crm_spec && typeof req.body.crm_spec === 'object'
+      ? req.body.crm_spec
+      : {
+          product_type: req.body?.product_type || '',
+          bag_type: req.body?.bag_type || '',
+          roll_or_bag: req.body?.roll_or_bag || '',
+          size_text: req.body?.size_text || '',
+          material_structure: req.body?.material_structure || '',
+          thickness_text: req.body?.thickness_text || '',
+          quantity_text: req.body?.quantity_text || '',
+          printing_colors: req.body?.printing_colors || '',
+          artwork_status: req.body?.artwork_status || '',
+          destination_country: req.body?.destination_country || '',
+          destination_port: req.body?.destination_port || '',
+          trade_term: req.body?.trade_term || '',
+          ai_summary_cn: req.body?.ai_summary_cn || '',
+          missing_information: req.body?.missing_information || [],
+          risk_flags: req.body?.risk_flags || []
+        };
+    const contextText = [
+      crmSpec.product_type && `Product: ${crmSpec.product_type}`,
+      crmSpec.bag_type && `Bag type: ${crmSpec.bag_type}`,
+      crmSpec.size_text && `Size: ${crmSpec.size_text}`,
+      crmSpec.material_structure && `Material: ${crmSpec.material_structure}`,
+      crmSpec.thickness_text && `Thickness: ${crmSpec.thickness_text}`,
+      crmSpec.quantity_text && `Quantity: ${crmSpec.quantity_text}`,
+      crmSpec.printing_colors && `Printing: ${crmSpec.printing_colors}`,
+      crmSpec.destination_country && `Destination: ${crmSpec.destination_country}${crmSpec.destination_port ? ` / ${crmSpec.destination_port}` : ''}`,
+      crmSpec.trade_term && `Incoterms: ${crmSpec.trade_term}`
+    ].filter(Boolean).join('. ');
+    const text = String(req.body?.text ?? req.body?.source_text ?? req.body?.message ?? contextText).trim();
     if (!text) return res.status(400).json({ error: 'text 必填' });
+
+    const customerId = nOrNull(req.body?.customer_id);
+    const crmInquiryId = nOrNull(req.body?.inquiry_id ?? req.body?.crm_inquiry_id);
+    const sourceMessageIds = Array.isArray(req.body?.source_message_ids) ? req.body.source_message_ids.map(Number).filter(Boolean) : [];
+    const attachmentIds = Array.isArray(req.body?.attachment_ids) ? req.body.attachment_ids.map(Number).filter(Boolean) : [];
 
     const parsed = await parseInquiryText(text, {
       provider: req.body?.provider,
@@ -154,6 +189,20 @@ router.post('/draft', async (req, res) => {
         }))
       };
     }
+    parsed.crm_context = {
+      customer_id: customerId,
+      inquiry_id: crmInquiryId,
+      source_message_ids: sourceMessageIds,
+      attachment_ids: attachmentIds,
+      ...crmSpec
+    };
+    parsed.customer_order_info = {
+      ...parsed.customer_order_info,
+      customer_name: req.body?.customer_name || parsed.customer_order_info?.customer_name || '',
+      product_name: crmSpec.product_type || parsed.customer_order_info?.product_name || '',
+      destination_country: crmSpec.destination_country || parsed.customer_order_info?.destination_country || '',
+      trade_term: crmSpec.trade_term || parsed.customer_order_info?.trade_term || ''
+    };
 
     const materialMapping = await normalizeMaterialLayers(parsed.customer_order_info || {});
     const parsedForQuote = {
@@ -181,12 +230,13 @@ router.post('/draft', async (req, res) => {
       INSERT INTO foreign_costing_drafts (
         crm_inquiry_id, customer_id, customer_name, source_text, parsed_spec_json,
         material_mapping_json, quote_input_json, quote_result_json, calculation_table_json,
-        ai_provider, ai_model, status, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ai_provider, ai_model, status, created_by, created_at, updated_at,
+        source_message_ids_json, attachment_ids_json, crm_spec_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      null,
-      null,
-      String(parsed.customer_order_info?.customer_name || ''),
+      crmInquiryId,
+      customerId,
+      String(req.body?.customer_name || parsed.customer_order_info?.customer_name || ''),
       parsed.source_text || text,
       JSON.stringify(parsed),
       JSON.stringify(materialMapping),
@@ -198,7 +248,10 @@ router.post('/draft', async (req, res) => {
       'internal_pre_quote',
       String(req.user?.userName || ''),
       now(),
-      now()
+      now(),
+      JSON.stringify(sourceMessageIds),
+      JSON.stringify(attachmentIds),
+      JSON.stringify(crmSpec)
     );
 
     audit({
@@ -220,6 +273,7 @@ router.post('/draft', async (req, res) => {
       calculation_table: calculationTable,
       father_review_panel: fatherReviewPanel,
       warnings,
+      crm_context: parsed.crm_context,
       status: 'internal_pre_quote'
     });
   } catch (err) {

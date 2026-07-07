@@ -1,9 +1,22 @@
 const express = require('express');
+const crypto = require('crypto');
 const { db, now, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
 const { validateImapConfig, syncMailbox } = require('../lib/imapSync');
 const { createSuggestionsFromEmail } = require('../lib/emailCrmParser');
 const { evaluateQuoteReadiness, normalizeCrmStage } = require('../lib/quoteReadiness');
+const { attachmentsFromJson, normalizeCrmAttachments, summarizeAttachments } = require('../lib/crmAttachments');
+const { importEmailToCrmMessage, batchImportEmailsToCrmMessages } = require('../lib/emailToCrmMessage');
+const { buildCrmWorkbench, getFatherReviewTaskDetail, listFatherReviewTasks, markFatherTaskSalesHandled } = require('../lib/crmWorkbench');
+const { interpretCrmMessage, buildInquiryFillPlan, deriveInquiryAiSummary } = require('../services/crmMessageInterpreter');
+const {
+  approveReplyDraft,
+  generateReplyDraft,
+  getReplyDraft,
+  listReplyDrafts,
+  markReplyDraftSentManually,
+  updateReplyDraft
+} = require('../services/crmReplyDraftService');
 
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
@@ -65,14 +78,72 @@ function parseJsonObject(value, fallback = {}) {
   }
 }
 
+function parseJsonArray(value, fallback = []) {
+  const parsed = parseJsonObject(value, fallback);
+  return Array.isArray(parsed) ? parsed : fallback;
+}
+
+function hydrateInterpretation(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    parsed: parseJsonObject(row.parsed_json, {}),
+    changed_fields: parseJsonArray(row.changed_fields_json, [])
+  };
+}
+
+function latestMessageInterpretation(messageId) {
+  return hydrateInterpretation(db.prepare(`
+    SELECT * FROM crm_ai_interpretations
+    WHERE message_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(messageId));
+}
+
+function fatherTaskWithAttachments(row) {
+  if (!row) return null;
+  const attachmentIds = parseJsonArray(row.attachment_ids_json, []).map(Number).filter(Boolean);
+  const sourceMessage = row.source_message_id ? db.prepare('SELECT * FROM crm_messages WHERE id = ?').get(row.source_message_id) : null;
+  const normalized = sourceMessage ? normalizeCrmAttachments(db, sourceMessage).attachments : [];
+  const attachments = normalized.filter((item) => attachmentIds.includes(Number(item.id)));
+  return { ...row, attachment_ids: attachmentIds, attachments };
+}
+
+function hydrateCostingDraft(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    parsed_spec: parseJsonObject(row.parsed_spec_json, {}),
+    material_mapping: parseJsonObject(row.material_mapping_json, {}),
+    quote_input: parseJsonObject(row.quote_input_json, {}),
+    quote_result: parseJsonObject(row.quote_result_json, {}),
+    calculation_table: parseJsonArray(row.calculation_table_json, []),
+    source_message_ids: parseJsonArray(row.source_message_ids_json, []),
+    attachment_ids: parseJsonArray(row.attachment_ids_json, []),
+    crm_spec: parseJsonObject(row.crm_spec_json, {})
+  };
+}
+
+function hydrateReplyDraft(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    risk_flags: parseJsonArray(row.risk_flags_json, []),
+    missing_info: parseJsonArray(row.missing_info_json, []),
+    referenced_attachment_ids: parseJsonArray(row.referenced_attachment_ids_json, []),
+    crm_context: parseJsonObject(row.crm_context_json, {})
+  };
+}
+
 function tableExists(name) {
   return !!db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
 }
 
 function crmAudit(req, action, resourceType, resourceId, detail = {}) {
   audit({
-    role: req.user.role,
-    userName: req.user.userName,
+    role: req.user?.role || 'system',
+    userName: req.user?.userName || 'system',
     action,
     resourceType,
     resourceId,
@@ -220,6 +291,349 @@ function getCustomerEmailConversations(customerId) {
   `).all(customerId);
 }
 
+function getCustomerWhatsappMessages(customerId, limit = 100) {
+  return db.prepare(`
+    SELECT *
+    FROM crm_messages
+    WHERE customer_id = ? AND source_type = 'whatsapp'
+    ORDER BY received_at DESC, id DESC
+    LIMIT ?
+  `).all(customerId, limit).map((row) => {
+    const normalized = normalizeCrmAttachments(db, row);
+    const summary = summarizeAttachments(normalized.attachments);
+    return {
+      ...row,
+      attachments: normalized.attachments,
+      attachments_source: normalized.source,
+      attachments_format_error: normalized.format_error ? 1 : 0,
+      ...summary
+    };
+  });
+}
+
+function getInquiryMessageAttachments(inquiryId, limit = 200) {
+  const rows = db.prepare(`
+    SELECT
+      m.*,
+      COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), NULLIF(c.contact_person, ''), '未匹配客户') AS customer_display_name
+    FROM crm_messages m
+    LEFT JOIN customers c ON c.id = m.customer_id
+    WHERE m.inquiry_id = ?
+    ORDER BY m.received_at DESC, m.id DESC
+    LIMIT ?
+  `).all(inquiryId, limit);
+  const attachments = [];
+  rows.forEach((row) => {
+    const normalized = normalizeCrmAttachments(db, row);
+    normalized.attachments.forEach((attachment) => {
+      attachments.push({
+        ...attachment,
+        source_message: {
+          id: row.id,
+          source_type: row.source_type,
+          direction: row.direction,
+          sender_name: row.sender_name,
+          sender_contact: row.sender_contact,
+          received_at: row.received_at,
+          summary: text(row.message_text).slice(0, 180),
+          customer_display_name: row.customer_display_name
+        }
+      });
+    });
+  });
+  const groups = attachments.reduce((acc, item) => {
+    const key = item.attachment_type || 'other';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+  return { rows: attachments, grouped: groups };
+}
+
+function insertCrmMessageAttachmentsFromJson(messageId, message, attachmentsJson) {
+  const normalized = attachmentsFromJson(attachmentsJson, {
+    message_id: messageId,
+    customer_id: message.customer_id || null,
+    inquiry_id: message.inquiry_id || null,
+    source_type: message.source_type || '',
+    source_message_id: message.source_message_id || ''
+  });
+  if (!normalized.attachments.length) return 0;
+  const stmt = db.prepare(`
+    INSERT INTO crm_message_attachments (
+      message_id, conversation_id, customer_id, inquiry_id, source_type, source_message_id,
+      whatsapp_message_id, email_message_id, original_file_name, stored_file_name, mime_type,
+      file_ext, file_size, storage_path, public_url, preview_url, thumbnail_url, attachment_type,
+      media_order, caption_text, ai_status, ai_summary_cn, ai_summary_en, extracted_specs_json,
+      risk_flags_json, raw_metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  normalized.attachments.forEach((attachment, index) => {
+    stmt.run(
+      messageId,
+      text(message.thread_id),
+      attachment.customer_id || null,
+      attachment.inquiry_id || null,
+      attachment.source_type || '',
+      attachment.source_message_id || '',
+      message.source_type === 'whatsapp' ? text(message.source_message_id || messageId) : '',
+      message.source_type === 'email' ? text(message.source_message_id || messageId) : '',
+      attachment.original_file_name || '',
+      '',
+      attachment.mime_type || '',
+      attachment.file_ext || '',
+      Number(attachment.file_size || 0) || 0,
+      attachment.storage_path || '',
+      attachment.public_url || '',
+      attachment.preview_url || '',
+      attachment.thumbnail_url || '',
+      attachment.attachment_type || 'other',
+      Number(attachment.media_order || index + 1) || index + 1,
+      attachment.caption_text || '',
+      attachment.ai_status || 'skipped',
+      attachment.ai_summary_cn || '',
+      attachment.ai_summary_en || '',
+      attachment.extracted_specs_json || '',
+      attachment.risk_flags_json || '',
+      attachment.raw_metadata_json || '{}',
+      now(),
+      now()
+    );
+  });
+  return normalized.attachments.length;
+}
+
+function getCustomerCostingRequests(customerId, limit = 50) {
+  return db.prepare(`
+    SELECT *
+    FROM costing_requests
+    WHERE customer_id = ?
+    ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+    LIMIT ?
+  `).all(customerId, limit);
+}
+
+function getCustomerFreightQuotes(customerId, limit = 50) {
+  return db.prepare(`
+    SELECT *
+    FROM freight_quotes
+    WHERE customer_id = ?
+    ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+    LIMIT ?
+  `).all(customerId, limit);
+}
+
+function getCustomerFollowupTimeline(customer, inquiries = []) {
+  const items = [];
+  if (text(customer?.next_followup_at)) {
+    items.push({
+      kind: 'followup',
+      source_type: 'customer_followup',
+      title: '客户待跟进',
+      summary: customer.next_action || customer.next_followup_purpose || '客户资料设置了下次跟进时间',
+      note: customer.followup_priority || customer.stage || 'customer',
+      at: customer.next_followup_at,
+      customer_id: customer.id || null,
+      inquiry_id: null
+    });
+  }
+  inquiries.forEach((inquiry) => {
+    if (!text(inquiry?.next_followup_at)) return;
+    items.push({
+      kind: 'followup',
+      source_type: 'inquiry_followup',
+      title: inquiry.inquiry_title || '询盘待跟进',
+      summary: inquiry.next_action || '询盘记录设置了下次跟进时间',
+      note: inquiry.priority || inquiry.status || 'inquiry',
+      at: inquiry.next_followup_at,
+      customer_id: customer.id || null,
+      inquiry_id: inquiry.id || null
+    });
+  });
+  return items;
+}
+
+function buildCustomerTimeline(customer, payload = {}) {
+  const timeline = [];
+  const customerId = Number(customer?.id || 0) || 0;
+  const pushItem = (item) => {
+    const at = text(item.at || item.received_at || item.created_at || item.updated_at);
+    if (!at) return;
+    timeline.push({
+      ...item,
+      at,
+      sort_key: at,
+      customer_id: item.customer_id || customerId || null
+    });
+  };
+
+  (payload.whatsappMessages || []).forEach((row) => pushItem({
+    kind: 'whatsapp',
+    source_type: 'whatsapp',
+    title: row.sender_name || row.sender_contact || 'WhatsApp',
+    summary: row.message_text || '',
+    note: `${text(row.direction || 'unknown')} · ${text(row.ai_status || 'pending')}`,
+    at: row.received_at || row.created_at,
+    customer_id: row.customer_id || customerId || null,
+    inquiry_id: row.inquiry_id || null,
+    source_id: row.id,
+    attachments: Array.isArray(row.attachments) ? row.attachments.slice(0, 4) : [],
+    attachments_count: Number(row.attachments_count || 0) || 0,
+    highlight: row.ai_status === 'pending'
+  }));
+
+  (payload.relatedEmails || []).forEach((row) => pushItem({
+    kind: 'email',
+    source_type: 'email',
+    title: row.subject || '(无主题)',
+    summary: row.preview || '',
+    note: `${text(row.direction || '-')}`,
+    at: row.received_at || row.created_at,
+    customer_id: customerId,
+    inquiry_id: row.matched_inquiry_id || null,
+    source_id: row.id
+  }));
+
+  (payload.communications || []).forEach((row) => pushItem({
+    kind: 'communication',
+    source_type: row.channel || 'manual',
+    title: row.subject || row.channel || '沟通记录',
+    summary: row.ai_summary || row.raw_content || '',
+    note: `${text(row.channel || 'manual')} · ${text(row.direction || '-')}`,
+    at: row.received_at || row.created_at,
+    customer_id: row.customer_id || customerId,
+    inquiry_id: row.inquiry_id || null,
+    source_id: row.id
+  }));
+
+  (payload.costingRequests || []).forEach((row) => pushItem({
+    kind: 'quotation',
+    source_type: 'costing_request',
+    title: row.costing_request_code || '核价记录',
+    summary: row.request_note || row.status || '',
+    note: `${text(row.status || 'pending')} · ${text(row.urgency || 'normal')}`,
+    at: row.updated_at || row.created_at,
+    customer_id: row.customer_id || customerId,
+    inquiry_id: row.inquiry_id || null,
+    source_id: row.id
+  }));
+
+  (payload.freightQuotes || []).forEach((row) => pushItem({
+    kind: 'freight',
+    source_type: 'freight_quote',
+    title: row.freight_quote_code || '物流询价记录',
+    summary: row.forwarder_name || row.notes || row.total_freight_cost || '',
+    note: `${text(row.status || 'draft')} · ${text(row.shipping_mode || '-')}`,
+    at: row.updated_at || row.created_at,
+    customer_id: row.customer_id || customerId,
+    inquiry_id: row.inquiry_id || null,
+    source_id: row.id
+  }));
+
+  getCustomerFollowupTimeline(customer, payload.inquiries || []).forEach(pushItem);
+
+  return timeline.sort((a, b) => {
+    const left = text(b.sort_key || '');
+    const right = text(a.sort_key || '');
+    return left.localeCompare(right);
+  }).slice(0, 200).map((item) => {
+    const { sort_key, ...rest } = item;
+    return rest;
+  });
+}
+
+function findCustomerByPhone(phone) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return null;
+  const rows = db.prepare(`
+    SELECT id, company_name, name, contact_person, whatsapp, phone, source_channel, stage, priority
+    FROM customers
+    WHERE COALESCE(phone, '') != '' OR COALESCE(whatsapp, '') != ''
+    ORDER BY updated_at DESC, id DESC
+  `).all();
+  return rows.find((row) => {
+    const candidates = [row.phone, row.whatsapp]
+      .map(normalizePhone)
+      .filter(Boolean);
+    return candidates.includes(normalizedPhone);
+  }) || null;
+}
+
+function findCustomerByName(name) {
+  const normalized = normalizeCustomerLookupName(name);
+  if (!normalized) return null;
+  const like = `%${normalized}%`;
+  return db.prepare(`
+    SELECT id, company_name, name, contact_person, whatsapp, phone, source_channel, stage, priority
+    FROM customers
+    WHERE LOWER(COALESCE(company_name, '')) LIKE ?
+       OR LOWER(COALESCE(name, '')) LIKE ?
+       OR LOWER(COALESCE(contact_person, '')) LIKE ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `).get(like, like, like) || null;
+}
+
+function createWhatsappCustomer(body, ts) {
+  const companyName = text(body.customer) || text(body.phone) || `WhatsApp ${ts}`;
+  const phone = text(body.phone);
+  const result = db.prepare(`
+    INSERT INTO customers (
+      salesperson_id, name, customer_code, company_name, country, city, contact_person, email,
+      whatsapp, phone, source_channel, priority, stage, owner_id, ai_summary, risk_notes, next_action,
+      next_followup_at, last_contact_at, contact, notes, active, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `).run(
+    null,
+    companyName,
+    '',
+    companyName,
+    '',
+    '',
+    text(body.customer),
+    '',
+    phone,
+    phone,
+    'whatsapp',
+    'C',
+    'new',
+    null,
+    '',
+    '',
+    text(body.next_action || 'Follow up WhatsApp lead'),
+    '',
+    text(body.time || ts),
+    text(body.customer),
+    text(body.notes || body.source || 'whatsapp_web'),
+    ts,
+    ts
+  );
+  return result.lastInsertRowid;
+}
+
+function matchOrCreateWhatsappCustomer(body, ts) {
+  const phone = text(body.phone);
+  const customerName = text(body.customer);
+  const byPhone = phone ? findCustomerByPhone(phone) : null;
+  if (byPhone) {
+    if (phone && (!text(byPhone.phone) || !text(byPhone.whatsapp))) {
+      db.prepare(`UPDATE customers SET phone = COALESCE(NULLIF(phone, ''), ?), whatsapp = COALESCE(NULLIF(whatsapp, ''), ?), updated_at = ? WHERE id = ?`)
+        .run(phone, phone, ts, Number(byPhone.id));
+    }
+    return { customerId: Number(byPhone.id), matchedBy: 'phone', created: false };
+  }
+  const byName = customerName ? findCustomerByName(customerName) : null;
+  if (byName) {
+    if (phone && (!text(byName.phone) || !text(byName.whatsapp))) {
+      db.prepare(`UPDATE customers SET phone = COALESCE(NULLIF(phone, ''), ?), whatsapp = COALESCE(NULLIF(whatsapp, ''), ?), updated_at = ? WHERE id = ?`)
+        .run(phone, phone, ts, Number(byName.id));
+    }
+    return { customerId: Number(byName.id), matchedBy: 'name', created: false };
+  }
+  return { customerId: Number(createWhatsappCustomer(body, ts)), matchedBy: 'created', created: true };
+}
+
 function priorityRank(priority) {
   return { A: 1, B: 2, C: 3, D: 4 }[text(priority || 'D').toUpperCase()] || 4;
 }
@@ -231,6 +645,37 @@ function compactCustomerName(row) {
 function safeParsedJson(value) {
   const parsed = parseJsonObject(value, {});
   return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+function normalizePhone(value) {
+  const raw = text(value);
+  if (!raw) return '';
+  const hasPlus = raw.startsWith('+');
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+  return hasPlus ? `+${digits}` : digits;
+}
+
+function normalizeCustomerLookupName(value) {
+  return text(value).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function normalizeWhatsappDirection(value) {
+  const direction = text(value).toLowerCase();
+  return ['inbound', 'outbound', 'unknown'].includes(direction) ? direction : '';
+}
+
+function normalizeDateTimeText(value, fallback = now()) {
+  const raw = text(value);
+  if (!raw) return fallback;
+  const normalized = raw.replace('T', ' ').trim();
+  return normalized.length >= 19 ? normalized.slice(0, 19) : normalized;
+}
+
+function whatsappDedupeHash(sourceType, customer, direction, message, receivedAt) {
+  return crypto.createHash('sha256').update(
+    [text(sourceType), text(customer), text(direction), text(message), text(receivedAt)].join('|')
+  ).digest('hex');
 }
 
 const QUOTE_AI_SPEC_FIELDS = [
@@ -983,6 +1428,9 @@ router.get('/customers/:id', (req, res) => {
     const latestInquiry = latestInquiryBase ? withQuoteReadiness(latestInquiryBase) : null;
     const inquiries = db.prepare('SELECT * FROM inquiries WHERE customer_id = ? ORDER BY updated_at DESC, id DESC LIMIT 100').all(id).map(withQuoteReadiness);
     const communications = db.prepare('SELECT * FROM communication_logs WHERE customer_id = ? ORDER BY COALESCE(received_at, created_at) DESC, id DESC LIMIT 100').all(id);
+    const whatsappMessages = getCustomerWhatsappMessages(id, 100);
+    const costingRequests = getCustomerCostingRequests(id, 50);
+    const freightQuotes = getCustomerFreightQuotes(id, 50);
     const overview = getCustomerOverview(id);
     const latestResearchNote = getLatestResearchNote(id);
     const latestSpecification = latestInquiry?.latest_specification_id ? getSpecification(Number(latestInquiry.latest_specification_id)) : null;
@@ -998,6 +1446,36 @@ router.get('/customers/:id', (req, res) => {
     `).all(id);
     const importSuggestions = getCustomerImportSuggestions(id);
     const emailConversations = getCustomerEmailConversations(id);
+    const fatherTasks = db.prepare(`
+      SELECT *
+      FROM crm_father_review_tasks
+      WHERE customer_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 50
+    `).all(id).map(fatherTaskWithAttachments);
+    const foreignCostingDrafts = db.prepare(`
+      SELECT *
+      FROM foreign_costing_drafts
+      WHERE customer_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 50
+    `).all(id).map(hydrateCostingDraft);
+    const currentTasks = {
+      messages_pending_ai: whatsappMessages.filter((row) => row.ai_status === 'pending').length,
+      father_tasks_pending: fatherTasks.filter((row) => row.status === 'pending').length,
+      father_tasks_done_pending_sales: fatherTasks.filter((row) => row.status === 'done' && !row.sales_handled_at).length,
+      costing_drafts_pending_review: foreignCostingDrafts.filter((row) => ['internal_pre_quote', 'draft', 'pending_review'].includes(String(row.status || ''))).length,
+      latest_father_task: fatherTasks[0] || null,
+      latest_costing_draft: foreignCostingDrafts[0] || null
+    };
+    const timelineItems = buildCustomerTimeline(customer, {
+      communications,
+      relatedEmails,
+      whatsappMessages,
+      costingRequests,
+      freightQuotes,
+      inquiries
+    });
     const auditLogs = db.prepare(`
       SELECT *
       FROM audit_logs
@@ -1021,6 +1499,13 @@ router.get('/customers/:id', (req, res) => {
       communications,
       relatedEmails,
       emailConversations,
+      whatsappMessages,
+      costingRequests,
+      freightQuotes,
+      fatherTasks,
+      foreignCostingDrafts,
+      currentTasks,
+      timelineItems,
       importSuggestions,
       latestResearchNote,
       overview,
@@ -1484,9 +1969,227 @@ router.get('/inquiries/:id', (req, res) => {
     const currentBase = specifications.find((row) => Number(row.is_current) === 1) || specifications[0] || null;
     const currentSpecification = currentBase ? getSpecification(currentBase.id) : null;
     const communications = db.prepare('SELECT * FROM communication_logs WHERE inquiry_id = ? ORDER BY COALESCE(received_at, created_at) DESC, id DESC LIMIT 100').all(id);
-    res.json({ ok: true, inquiry, currentSpecification, specifications, communications, quote_readiness: inquiry.quote_readiness });
+    const inquiryAttachments = getInquiryMessageAttachments(id);
+    const latestInterpretation = hydrateInterpretation(db.prepare(`
+      SELECT * FROM crm_ai_interpretations
+      WHERE inquiry_id = ?
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `).get(id));
+    inquiry.ai_summary_cn = deriveInquiryAiSummary(inquiry, latestInterpretation?.parsed);
+    const fatherTasks = db.prepare(`SELECT * FROM crm_father_review_tasks WHERE inquiry_id = ? ORDER BY created_at DESC, id DESC`).all(id).map(fatherTaskWithAttachments);
+    const costingDrafts = db.prepare(`SELECT * FROM foreign_costing_drafts WHERE crm_inquiry_id = ? ORDER BY created_at DESC, id DESC`).all(id).map(hydrateCostingDraft);
+    res.json({
+      ok: true,
+      inquiry,
+      currentSpecification,
+      specifications,
+      communications,
+      inquiry_attachments: inquiryAttachments.rows,
+      inquiry_attachments_grouped: inquiryAttachments.grouped,
+      latest_ai_interpretation: latestInterpretation,
+      father_review_tasks: fatherTasks,
+      foreign_costing_drafts: costingDrafts,
+      quote_readiness: inquiry.quote_readiness
+    });
   } catch (err) {
     handleError(res, err, '询盘详情读取失败');
+  }
+});
+
+router.get('/inquiries/:id/father-tasks', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    if (!getInquiry(inquiryId)) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const rows = db.prepare('SELECT * FROM crm_father_review_tasks WHERE inquiry_id = ? ORDER BY created_at DESC, id DESC').all(inquiryId).map(fatherTaskWithAttachments);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '父亲确认任务读取失败');
+  }
+});
+
+router.post('/inquiries/:id/father-tasks', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    const inquiry = getInquiry(inquiryId);
+    if (!inquiry) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const interpretation = idParam(req.body?.interpretation_id)
+      ? hydrateInterpretation(db.prepare('SELECT * FROM crm_ai_interpretations WHERE id = ? AND inquiry_id = ?').get(idParam(req.body.interpretation_id), inquiryId))
+      : hydrateInterpretation(db.prepare('SELECT * FROM crm_ai_interpretations WHERE inquiry_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1').get(inquiryId));
+    const parsed = interpretation?.parsed || {};
+    const sourceMessageId = idParam(req.body?.source_message_id || interpretation?.message_id) || null;
+    const sourceMessage = sourceMessageId ? db.prepare('SELECT * FROM crm_messages WHERE id = ?').get(sourceMessageId) : null;
+    const attachmentIds = sourceMessage ? normalizeCrmAttachments(db, sourceMessage).attachments.map((item) => Number(item.id)).filter(Boolean) : [];
+    const ts = now();
+    const inserted = db.prepare(`
+      INSERT INTO crm_father_review_tasks (
+        customer_id, inquiry_id, source_message_id, interpretation_id, task_type, question_cn,
+        ai_context_cn, customer_original_text, attachment_ids_json, required_fields_json,
+        status, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+    `).run(
+      inquiry.customer_id || null,
+      inquiryId,
+      sourceMessageId,
+      interpretation?.id || null,
+      text(req.body?.task_type || parsed.father_task_type || 'general'),
+      text(req.body?.question_cn || parsed.question_for_father_cn || '请确认该询盘的技术、材料或核价边界。'),
+      text(req.body?.ai_context_cn || parsed.summary_cn || inquiry.inquiry_title),
+      text(sourceMessage?.message_text),
+      JSON.stringify(attachmentIds),
+      JSON.stringify(parsed.missing_information || []),
+      req.user.userName,
+      ts,
+      ts
+    );
+    crmAudit(req, 'create_crm_father_review_task', 'crm_father_review_task', inserted.lastInsertRowid, { inquiry_id: inquiryId, source_message_id: sourceMessageId, attachment_ids: attachmentIds });
+    res.json({ ok: true, task: fatherTaskWithAttachments(db.prepare('SELECT * FROM crm_father_review_tasks WHERE id = ?').get(inserted.lastInsertRowid)) });
+  } catch (err) {
+    handleError(res, err, '父亲确认任务创建失败');
+  }
+});
+
+router.patch('/father-review-tasks/:id/reply', (req, res) => {
+  try {
+    const taskId = idParam(req.params.id);
+    const task = db.prepare('SELECT * FROM crm_father_review_tasks WHERE id = ?').get(taskId);
+    if (!task) return res.status(404).json({ ok: false, error: '父亲确认任务不存在' });
+    const fatherReply = text(req.body?.father_reply_cn);
+    if (!fatherReply) return res.status(400).json({ ok: false, error: 'father_reply_cn 必填' });
+    const ts = now();
+    db.transaction(() => {
+      db.prepare(`UPDATE crm_father_review_tasks SET father_reply_cn = ?, status = 'done', completed_at = ?, updated_at = ? WHERE id = ?`)
+        .run(fatherReply, ts, ts, taskId);
+      if (task.inquiry_id) {
+        db.prepare('UPDATE inquiries SET next_action = ?, updated_at = ? WHERE id = ?').run(`根据老板意见处理：${fatherReply}`, ts, task.inquiry_id);
+      }
+    })();
+    crmAudit(req, 'reply_crm_father_review_task', 'crm_father_review_task', taskId, { inquiry_id: task.inquiry_id, status: 'done' });
+    res.json({ ok: true, task: fatherTaskWithAttachments(db.prepare('SELECT * FROM crm_father_review_tasks WHERE id = ?').get(taskId)) });
+  } catch (err) {
+    handleError(res, err, '父亲确认意见保存失败');
+  }
+});
+
+router.post('/father-review-tasks/:id/generate-reply-draft', (req, res) => {
+  try {
+    const taskId = idParam(req.params.id);
+    const draft = generateReplyDraft(db, {
+      source: 'father_task',
+      father_task_id: taskId,
+      tone: text(req.body?.tone || 'professional'),
+      reply_channel: text(req.body?.reply_channel || ''),
+      created_by: req.user?.userName || 'system'
+    });
+    crmAudit(req, 'generate_crm_reply_draft_from_father_task', 'crm_reply_draft', draft.id, { father_task_id: taskId });
+    res.json({ ok: true, reply_draft_id: draft.id, draft_text_en: draft.draft_text_en, status: draft.status, row: hydrateReplyDraft(draft) });
+  } catch (err) {
+    handleError(res, err, '生成客户回复草稿失败');
+  }
+});
+
+router.get('/inquiries/:id/costing-drafts', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    if (!getInquiry(inquiryId)) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const rows = db.prepare('SELECT * FROM foreign_costing_drafts WHERE crm_inquiry_id = ? ORDER BY created_at DESC, id DESC').all(inquiryId).map(hydrateCostingDraft);
+    res.json({ ok: true, rows });
+  } catch (err) {
+    handleError(res, err, '关联核价草稿读取失败');
+  }
+});
+
+router.post('/messages/:id/generate-reply-draft', (req, res) => {
+  try {
+    const messageId = idParam(req.params.id);
+    const draft = generateReplyDraft(db, {
+      source: 'message',
+      message_id: messageId,
+      tone: text(req.body?.tone || 'professional'),
+      reply_channel: text(req.body?.reply_channel || ''),
+      created_by: req.user?.userName || 'system'
+    });
+    crmAudit(req, 'generate_crm_reply_draft_from_message', 'crm_reply_draft', draft.id, { message_id: messageId });
+    res.json({ ok: true, reply_draft_id: draft.id, draft_text_en: draft.draft_text_en, status: draft.status, row: hydrateReplyDraft(draft) });
+  } catch (err) {
+    handleError(res, err, '生成客户回复草稿失败');
+  }
+});
+
+router.post('/inquiries/:id/generate-reply-draft', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    const draft = generateReplyDraft(db, {
+      source: 'inquiry',
+      inquiry_id: inquiryId,
+      tone: text(req.body?.tone || 'professional'),
+      reply_channel: text(req.body?.reply_channel || ''),
+      created_by: req.user?.userName || 'system'
+    });
+    crmAudit(req, 'generate_crm_reply_draft_from_inquiry', 'crm_reply_draft', draft.id, { inquiry_id: inquiryId });
+    res.json({ ok: true, reply_draft_id: draft.id, draft_text_en: draft.draft_text_en, status: draft.status, row: hydrateReplyDraft(draft) });
+  } catch (err) {
+    handleError(res, err, '生成客户回复草稿失败');
+  }
+});
+
+router.get('/reply-drafts', (req, res) => {
+  try {
+    const result = listReplyDrafts(db, req.query || {});
+    res.json({ ok: true, rows: result.rows.map(hydrateReplyDraft) });
+  } catch (err) {
+    handleError(res, err, '读取客户回复草稿失败');
+  }
+});
+
+router.get('/reply-drafts/:id', (req, res) => {
+  try {
+    const draft = getReplyDraft(db, idParam(req.params.id));
+    if (!draft) return res.status(404).json({ ok: false, error: '回复草稿不存在' });
+    res.json({ ok: true, row: hydrateReplyDraft(draft) });
+  } catch (err) {
+    handleError(res, err, '读取客户回复草稿失败');
+  }
+});
+
+router.patch('/reply-drafts/:id', (req, res) => {
+  try {
+    const draft = updateReplyDraft(db, idParam(req.params.id), {
+      draft_text_en: req.body?.draft_text_en,
+      draft_text_cn: req.body?.draft_text_cn,
+      tone: req.body?.tone,
+      status: req.body?.status,
+      updated_by: req.user?.userName || 'system'
+    });
+    crmAudit(req, 'update_crm_reply_draft', 'crm_reply_draft', draft.id, { status: draft.status });
+    res.json({ ok: true, row: hydrateReplyDraft(draft) });
+  } catch (err) {
+    handleError(res, err, '更新客户回复草稿失败');
+  }
+});
+
+router.patch('/reply-drafts/:id/approve', (req, res) => {
+  try {
+    const draft = approveReplyDraft(db, idParam(req.params.id), {
+      approved_by: req.user?.userName || 'system',
+      updated_by: req.user?.userName || 'system'
+    });
+    crmAudit(req, 'approve_crm_reply_draft', 'crm_reply_draft', draft.id, { status: draft.status });
+    res.json({ ok: true, row: hydrateReplyDraft(draft) });
+  } catch (err) {
+    handleError(res, err, '批准客户回复草稿失败');
+  }
+});
+
+router.patch('/reply-drafts/:id/mark-sent-manually', (req, res) => {
+  try {
+    const draft = markReplyDraftSentManually(db, idParam(req.params.id), {
+      updated_by: req.user?.userName || 'system'
+    });
+    crmAudit(req, 'mark_crm_reply_draft_sent_manually', 'crm_reply_draft', draft.id, { status: draft.status });
+    res.json({ ok: true, row: hydrateReplyDraft(draft) });
+  } catch (err) {
+    handleError(res, err, '标记手动发送失败');
   }
 });
 
@@ -2690,17 +3393,48 @@ router.get('/email/messages', (req, res) => {
         em.cleaned_text, em.sent_at, em.received_at, em.direction, em.processing_status, em.quote_detected,
         em.inquiry_detected, em.customer_detected, em.matched_customer_id, em.matched_inquiry_id, em.created_at, em.updated_at,
         COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
-        i.inquiry_title AS matched_inquiry_title
+        i.inquiry_title AS matched_inquiry_title,
+        cm.id AS crm_message_id
       FROM email_messages em
       LEFT JOIN customers c ON c.id = em.matched_customer_id
       LEFT JOIN inquiries i ON i.id = em.matched_inquiry_id
+      LEFT JOIN crm_messages cm ON cm.source_type = 'email' AND cm.source_message_id = CAST(em.id AS TEXT)
       ${where}
       ORDER BY COALESCE(em.received_at, em.created_at) DESC, em.id DESC
       LIMIT 300
-    `).all(...params);
+    `).all(...params).map((row) => ({
+      ...row,
+      imported_to_crm: row.crm_message_id ? true : false,
+      import_status: row.crm_message_id ? 'imported' : 'not_imported'
+    }));
     res.json({ ok: true, rows, config_status: safeEmailConfigStatus() });
   } catch (err) {
     handleError(res, err, '邮件列表读取失败');
+  }
+});
+
+router.post('/email/messages/:id/import-to-crm', (req, res) => {
+  try {
+    const id = idParam(req.params.id);
+    const result = importEmailToCrmMessage(db, id);
+    crmAudit(req, 'crm_email_import_to_message', 'email_message', id, result);
+    res.json(result);
+  } catch (err) {
+    handleError(res, err, '邮件导入 CRM 消息失败');
+  }
+});
+
+router.post('/email/import-to-crm', (req, res) => {
+  try {
+    const result = batchImportEmailsToCrmMessages(db, {
+      email_message_ids: Array.isArray(req.body?.email_message_ids) ? req.body.email_message_ids : [],
+      limit: Number(req.body?.limit || 50) || 50,
+      only_unimported: req.body?.only_unimported !== false
+    });
+    crmAudit(req, 'crm_email_batch_import_to_message', 'email_message', 0, result);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    handleError(res, err, '批量导入 CRM 消息失败');
   }
 });
 
@@ -2711,10 +3445,12 @@ router.get('/email/messages/:id', (req, res) => {
       SELECT
         em.*,
         COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '未匹配客户') AS matched_customer_name,
-        i.inquiry_title AS matched_inquiry_title
+        i.inquiry_title AS matched_inquiry_title,
+        cm.id AS crm_message_id
       FROM email_messages em
       LEFT JOIN customers c ON c.id = em.matched_customer_id
       LEFT JOIN inquiries i ON i.id = em.matched_inquiry_id
+      LEFT JOIN crm_messages cm ON cm.source_type = 'email' AND cm.source_message_id = CAST(em.id AS TEXT)
       WHERE em.id = ?
     `).get(id);
     if (!row) return res.status(404).json({ ok: false, error: '邮件不存在' });
@@ -2734,7 +3470,16 @@ router.get('/email/messages/:id', (req, res) => {
       WHERE source_type = 'email' AND source_id = ?
       ORDER BY id DESC
     `).all(id);
-    res.json({ ok: true, message: row, suggestions, thread: threadRows });
+    res.json({
+      ok: true,
+      message: {
+        ...row,
+        imported_to_crm: row.crm_message_id ? true : false,
+        import_status: row.crm_message_id ? 'imported' : 'not_imported'
+      },
+      suggestions,
+      thread: threadRows
+    });
   } catch (err) {
     handleError(res, err, '邮件详情读取失败');
   }

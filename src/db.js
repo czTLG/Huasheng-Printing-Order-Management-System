@@ -216,6 +216,129 @@ function initDb() {
       updated_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS crm_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT NOT NULL,
+      source_message_id TEXT,
+      thread_id TEXT,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      direction TEXT NOT NULL,
+      sender_name TEXT,
+      sender_contact TEXT,
+      receiver_contact TEXT,
+      message_text TEXT NOT NULL,
+      attachments_json TEXT,
+      raw_payload_json TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      ai_status TEXT NOT NULL DEFAULT 'pending',
+      workflow_status TEXT NOT NULL DEFAULT 'pending',
+      dedupe_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS crm_message_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL,
+      conversation_id TEXT,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      source_type TEXT,
+      source_message_id TEXT,
+      whatsapp_message_id TEXT,
+      email_message_id TEXT,
+      original_file_name TEXT,
+      stored_file_name TEXT,
+      mime_type TEXT,
+      file_ext TEXT,
+      file_size INTEGER DEFAULT 0,
+      storage_path TEXT,
+      public_url TEXT,
+      preview_url TEXT,
+      thumbnail_url TEXT,
+      attachment_type TEXT DEFAULT 'other',
+      media_order INTEGER DEFAULT 1,
+      caption_text TEXT,
+      ai_status TEXT DEFAULT 'skipped',
+      ai_summary_cn TEXT,
+      ai_summary_en TEXT,
+      extracted_specs_json TEXT,
+      risk_flags_json TEXT,
+      raw_metadata_json TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS crm_ai_interpretations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      provider TEXT NOT NULL DEFAULT 'rule_based',
+      model TEXT,
+      parsed_json TEXT NOT NULL,
+      changed_fields_json TEXT,
+      status TEXT NOT NULL DEFAULT 'parsed',
+      error_message TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS crm_father_review_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      source_message_id INTEGER,
+      interpretation_id INTEGER,
+      task_type TEXT NOT NULL DEFAULT 'general',
+      question_cn TEXT NOT NULL,
+      ai_context_cn TEXT,
+      customer_original_text TEXT,
+      attachment_ids_json TEXT,
+      required_fields_json TEXT,
+      father_reply_cn TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      sales_handled_at TEXT,
+      sales_handled_by TEXT,
+      sales_note TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS crm_reply_drafts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER,
+      inquiry_id INTEGER,
+      source_message_id INTEGER,
+      source_interpretation_id INTEGER,
+      father_task_id INTEGER,
+      costing_draft_id INTEGER,
+      source_type TEXT,
+      reply_channel TEXT,
+      recipient_contact TEXT,
+      email_subject TEXT,
+      draft_text_en TEXT NOT NULL,
+      draft_text_cn TEXT,
+      draft_summary_cn TEXT,
+      generation_method TEXT NOT NULL DEFAULT 'rule_based',
+      tone TEXT NOT NULL DEFAULT 'professional',
+      status TEXT NOT NULL DEFAULT 'draft',
+      risk_flags_json TEXT,
+      missing_info_json TEXT,
+      referenced_attachment_ids_json TEXT,
+      crm_context_json TEXT,
+      created_by TEXT,
+      updated_by TEXT,
+      approved_by TEXT,
+      approved_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS inquiries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       inquiry_code TEXT,
@@ -745,6 +868,96 @@ function initDb() {
   if (!ccols.includes('source_notes')) db.exec("ALTER TABLE customers ADD COLUMN source_notes TEXT");
   if (!ccols.includes('customer_summary')) db.exec("ALTER TABLE customers ADD COLUMN customer_summary TEXT");
   if (!ccols.includes('priority_reason')) db.exec("ALTER TABLE customers ADD COLUMN priority_reason TEXT");
+
+  const crmMsgCols = db.prepare("PRAGMA table_info(crm_messages)").all().map(c => c.name);
+  if (!crmMsgCols.includes('workflow_status')) db.exec("ALTER TABLE crm_messages ADD COLUMN workflow_status TEXT NOT NULL DEFAULT 'pending'");
+
+  const fatherTaskCols = db.prepare("PRAGMA table_info(crm_father_review_tasks)").all().map(c => c.name);
+  if (!fatherTaskCols.includes('sales_handled_at')) db.exec("ALTER TABLE crm_father_review_tasks ADD COLUMN sales_handled_at TEXT");
+  if (!fatherTaskCols.includes('sales_handled_by')) db.exec("ALTER TABLE crm_father_review_tasks ADD COLUMN sales_handled_by TEXT");
+  if (!fatherTaskCols.includes('sales_note')) db.exec("ALTER TABLE crm_father_review_tasks ADD COLUMN sales_note TEXT");
+
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'crm_reply_drafts'").get()) {
+    const replyDraftCols = db.prepare("PRAGMA table_info(crm_reply_drafts)").all().map(c => c.name);
+    [
+      ['customer_id', 'INTEGER'],
+      ['inquiry_id', 'INTEGER'],
+      ['source_message_id', 'INTEGER'],
+      ['source_interpretation_id', 'INTEGER'],
+      ['father_task_id', 'INTEGER'],
+      ['costing_draft_id', 'INTEGER'],
+      ['source_type', 'TEXT'],
+      ['reply_channel', 'TEXT'],
+      ['recipient_contact', 'TEXT'],
+      ['email_subject', 'TEXT'],
+      ['draft_text_en', 'TEXT'],
+      ['draft_text_cn', 'TEXT'],
+      ['draft_summary_cn', 'TEXT'],
+      ['generation_method', "TEXT NOT NULL DEFAULT 'rule_based'"],
+      ['tone', "TEXT NOT NULL DEFAULT 'professional'"],
+      ['status', "TEXT NOT NULL DEFAULT 'draft'"],
+      ['risk_flags_json', 'TEXT'],
+      ['missing_info_json', 'TEXT'],
+      ['referenced_attachment_ids_json', 'TEXT'],
+      ['crm_context_json', 'TEXT'],
+      ['created_by', 'TEXT'],
+      ['updated_by', 'TEXT'],
+      ['approved_by', 'TEXT'],
+      ['approved_at', 'TEXT'],
+      ['created_at', 'TEXT'],
+      ['updated_at', 'TEXT']
+    ].forEach(([name, ddl]) => {
+      if (!replyDraftCols.includes(name)) db.exec(`ALTER TABLE crm_reply_drafts ADD COLUMN ${name} ${ddl}`);
+    });
+  }
+
+  const crmAttachmentCols = db.prepare("PRAGMA table_info(crm_message_attachments)").all().map(c => c.name);
+  [
+    ['message_id', 'INTEGER'],
+    ['conversation_id', 'TEXT'],
+    ['customer_id', 'INTEGER'],
+    ['inquiry_id', 'INTEGER'],
+    ['source_type', 'TEXT'],
+    ['source_message_id', 'TEXT'],
+    ['whatsapp_message_id', 'TEXT'],
+    ['email_message_id', 'TEXT'],
+    ['original_file_name', 'TEXT'],
+    ['stored_file_name', 'TEXT'],
+    ['mime_type', 'TEXT'],
+    ['file_ext', 'TEXT'],
+    ['file_size', 'INTEGER DEFAULT 0'],
+    ['storage_path', 'TEXT'],
+    ['public_url', 'TEXT'],
+    ['preview_url', 'TEXT'],
+    ['thumbnail_url', 'TEXT'],
+    ['attachment_type', "TEXT DEFAULT 'other'"],
+    ['media_order', 'INTEGER DEFAULT 1'],
+    ['caption_text', 'TEXT'],
+    ['ai_status', "TEXT DEFAULT 'skipped'"],
+    ['ai_summary_cn', 'TEXT'],
+    ['ai_summary_en', 'TEXT'],
+    ['extracted_specs_json', 'TEXT'],
+    ['risk_flags_json', 'TEXT'],
+    ['raw_metadata_json', 'TEXT'],
+    ['created_at', 'TEXT'],
+    ['updated_at', 'TEXT']
+  ].forEach(([name, ddl]) => {
+    if (!crmAttachmentCols.includes(name)) db.exec(`ALTER TABLE crm_message_attachments ADD COLUMN ${name} ${ddl}`);
+  });
+
+  const foreignCostingDraftCols = db.prepare("PRAGMA table_info(foreign_costing_drafts)").all().map(c => c.name);
+  [
+    ['source_message_ids_json', 'TEXT'],
+    ['attachment_ids_json', 'TEXT'],
+    ['crm_spec_json', 'TEXT']
+  ].forEach(([name, ddl]) => {
+    if (!foreignCostingDraftCols.includes(name)) db.exec(`ALTER TABLE foreign_costing_drafts ADD COLUMN ${name} ${ddl}`);
+  });
+
+  db.exec("CREATE INDEX IF NOT EXISTS idx_crm_message_attachments_message ON crm_message_attachments(message_id, media_order, id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_crm_message_attachments_customer ON crm_message_attachments(customer_id, created_at DESC, id DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_crm_message_attachments_inquiry ON crm_message_attachments(inquiry_id, created_at DESC, id DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_crm_message_attachments_type ON crm_message_attachments(attachment_type, ai_status, created_at DESC)");
 
   const mpcols = db.prepare("PRAGMA table_info(material_prices)").all().map(c => c.name);
   if (!mpcols.includes('prop')) db.exec("ALTER TABLE material_prices ADD COLUMN prop REAL");
