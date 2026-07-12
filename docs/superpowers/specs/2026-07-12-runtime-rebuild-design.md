@@ -1,109 +1,109 @@
-# Runtime Rebuild and Data Hygiene Design
+# 运行环境重建与数据清理设计
 
-## 1. Objective
+## 1. 目标
 
-Build a reproducible migration path so that possession of the private Git repository and a separately stored private data bundle is sufficient to rebuild the system on a new Ubuntu server.
+建立一套可复现的服务器迁移方案：只要拥有私有 Git 仓库和单独保存的私密数据包，就能在新的 Ubuntu 服务器上重建完整系统。
 
-The migration must preserve orders, order-stage history, work orders, calculation snapshots, quotations, users, permissions, audit records, customer records, messages, uploaded images, attachments, and required business configuration. Cleanup and deduplication must never be allowed to destroy the only recoverable copy.
+迁移必须保留订单、订单工序历史、开单、成本核算快照、报价、用户、权限、审计记录、客户资料、消息、订单图片、附件及必要业务配置。任何清理和去重操作都不能破坏唯一可恢复副本。
 
-## 2. Scope and constraints
+## 2. 范围与约束
 
-The target platform is Ubuntu 22.04 or 24.04 with Node.js 22, Nginx, systemd, SQLite, DNS, and HTTPS.
+目标环境统一按 Ubuntu 22.04 或 24.04、Node.js 22、Nginx、systemd、SQLite、DNS 和 HTTPS 设计。
 
-The design follows the existing native deployment architecture. It does not introduce Docker, change legacy API contracts, migrate the database engine, alter calculation formulas, or modify production data directly during the audit phase.
+本方案沿用当前原生部署架构，不引入 Docker，不改变旧接口，不迁移数据库引擎，不修改成本公式，也不在审计阶段直接修改生产数据。
 
-Sensitive business data must not enter Git. This includes:
+以下敏感内容禁止进入 Git：
 
-- `data/app.db` and derived database snapshots;
-- customer and user records;
-- internal calculation results and material prices;
-- uploaded order images and CRM attachments;
-- mailbox credentials, synchronization tokens, application secrets, and TLS private keys.
+- `data/app.db` 及其数据库快照；
+- 客户、用户和联系方式；
+- 内部成本结果、材料价格和利润数据；
+- 订单图片、CRM 附件及邮件内容；
+- 邮箱密码、同步令牌、应用密钥和 TLS 私钥。
 
-## 3. Selected approach
+## 3. 总体方案
 
-Use two independently managed artifacts:
+迁移使用两套相互独立的交付物：
 
-1. **Repository artifact**: application source, lock files, deployment templates, backup and verification tooling, environment-variable template, and reconstruction documentation.
-2. **Private data artifact**: a verified SQLite snapshot, referenced business files, required data-side JSON configuration, a manifest, checksums, and encrypted secret material or instructions for recreating secrets.
+1. **代码仓库**：应用源码、依赖锁文件、部署模板、备份及验证工具、环境变量示例和重建手册。
+2. **私密数据包**：通过一致性校验的 SQLite 快照、业务附件、数据侧配置、清单、校验和，以及加密后的密钥文件或密钥重建说明。
 
-This is preferred over a machine image because it is portable across hosting providers, and over containerization because it preserves the current production architecture and minimizes migration risk.
+相较于整机镜像，这种方式不绑定云厂商；相较于容器化，它不改变当前生产架构，迁移风险更低。
 
-## 4. Safety model
+## 4. 安全顺序
 
-Migration and cleanup use four immutable stages:
+迁移和清理必须遵循四个阶段：
 
-1. Capture an original recovery snapshot before analysis.
-2. Audit production data and files read-only.
-3. Rehearse proposed cleanup against a disposable copy.
-4. Produce the final migration snapshot only after verification.
+1. 在分析之前生成不可变的原始恢复快照。
+2. 只读审计生产数据和文件。
+3. 在一次性副本中演练拟议清理规则。
+4. 验证通过后生成最终迁移快照。
 
-No cleanup command may run automatically as part of backup or migration. Audit output must classify candidates without deleting them. Any later cleanup implementation must require an explicit allowlist and produce a before/after report.
+备份或迁移命令不得自动执行清理。审计只输出候选项，不能删除数据。后续如实现清理工具，必须使用明确白名单，并生成清理前后报告。
 
-Core business tables are never automatically deduplicated. Similar orders, work orders, calculation snapshots, quotations, customers, users, or audit records may represent legitimate versions or workflow events.
+订单、开单、成本快照、报价、客户、用户和审计记录不得自动去重。内容相似可能代表合法版本、重开记录或业务流程事件。
 
-## 5. Data inventory
+## 5. 数据范围
 
-### 5.1 Database
+### 5.1 数据库
 
-The default source is `data/app.db`, unless `DB_PATH` explicitly selects another database. The snapshot contains all SQLite tables, including the following critical groups:
+默认数据库为 `data/app.db`；若设置了 `DB_PATH`，必须以实际路径为准。快照应覆盖全部 SQLite 表，重点包括：
 
-- order records and stage history;
-- work orders, templates, and preview drafts;
-- calculation snapshots, material prices, aliases, requests, and review records;
-- quotations and quotation sheets;
-- users, permissions, subscriptions, and audit logs;
-- customers, inquiries, specifications, communications, messages, and attachments metadata;
-- email synchronization and analysis history.
+- 订单及工序流转记录；
+- 开单、模板和预览草稿；
+- 成本快照、材料价格、材料别名、核算请求和复核记录；
+- 报价及报价单；
+- 用户、权限、订阅和审计日志；
+- 客户、询盘、规格、沟通记录、消息和附件元数据；
+- 邮箱同步及分析历史。
 
-The database snapshot must be created through SQLite's online backup mechanism exposed by `better-sqlite3`. Copying a live database file with `cp` is not an accepted backup method.
+运行中的数据库必须通过 `better-sqlite3` 提供的 SQLite 在线备份机制生成一致性快照，禁止把普通 `cp` 作为热备方式。
 
-### 5.2 Business files
+### 5.2 业务文件
 
-The data bundle must include files referenced by database paths or URLs and required runtime configuration, including:
+私密数据包必须包含数据库引用的文件和运行所需的数据侧配置，至少包括：
 
-- `public/uploads/orders/`;
-- attachment files referenced by `crm_message_attachments.storage_path`;
-- existing `data/uploads/`, if present;
-- `data/product_prefill_map.json`;
-- `data/customer_bag_map.json`;
-- `data/material_options.json`;
-- `data/system_package_config.json`;
-- other data-side files explicitly discovered by the inventory command.
+- `public/uploads/orders/`；
+- `crm_message_attachments.storage_path` 引用的附件；
+- 存在时的 `data/uploads/`；
+- `data/product_prefill_map.json`；
+- `data/customer_bag_map.json`；
+- `data/material_options.json`；
+- `data/system_package_config.json`；
+- 盘点程序发现并经确认的其他数据文件。
 
-Email-analysis prompt/output files are inventoried separately. They are included or excluded according to an explicit retention decision and must not silently disappear.
+邮件分析输入和输出文件单独盘点。是否纳入迁移包必须由保留策略明确决定，不能静默遗漏。
 
-### 5.3 Secrets
+### 5.3 密钥
 
-Secrets are recreated from a private secret store or transferred as a separately encrypted file. `.env.example` documents names and safe placeholders only. The reconstruction guide must fail closed when required variables are missing.
+密钥通过私有密码管理器重建，或作为单独加密文件传输。`.env.example` 只能记录变量名和安全占位值。缺少必需变量时，重建流程必须明确失败，不能使用不安全默认值继续启动。
 
-## 6. Audit and deduplication
+## 6. 清理与去重审计
 
-The audit produces machine-readable JSON and a human-readable Markdown summary. It must not reveal passwords, tokens, message bodies, internal prices, or customer contact details in console output.
+审计同时生成机器可读 JSON 和中文 Markdown 报告。控制台及报告不得输出密码、令牌、消息正文、内部价格或客户联系方式。
 
-### 6.1 File classifications
+### 6.1 文件分类
 
-- exact duplicate: identical SHA-256 and size;
-- orphan candidate: business file not referenced by the current database or an approved static manifest;
-- missing reference: database points to a file that does not exist;
-- expired intermediate artifact: generated prompt, output, export, archive, or build artifact older than its configured retention period;
-- protected file: current database, required configuration, active upload, or latest verified recovery artifact.
+- **完全重复**：文件大小和 SHA-256 均一致；
+- **孤立候选**：当前数据库和静态文件清单都未引用；
+- **引用缺失**：数据库存在路径记录，但对应文件不存在；
+- **过期中间产物**：超过保留期限的提示词、分析输出、导出文件、旧压缩包或构建产物；
+- **保护文件**：当前数据库、必要配置、有效上传文件或最新健康恢复包。
 
-Duplicate files are reported as groups. The report recommends a canonical copy but does not replace files with links and does not delete duplicates.
+重复文件按组报告，并建议保留副本，但第一阶段不删除、不替换为软链接。
 
-### 6.2 Database classifications
+### 6.2 数据库分类
 
-- structural health: `PRAGMA integrity_check`, foreign-key inspection, schema inventory, page count, and database size;
-- critical counts: record counts and maximum update timestamps for critical tables;
-- exact-row candidates: rows identical across explicitly selected non-key fields;
-- possible business duplicates: similar identifying fields within a defined time window;
-- relationship anomalies: orphan foreign-key-like references, missing attachment files, or records referring to absent parents.
+- 结构健康：`PRAGMA integrity_check`、外键检查、表结构清单、页数和数据库大小；
+- 核心统计：关键表记录数和最大更新时间；
+- 完全重复候选：排除主键后，明确选择的业务字段全部一致；
+- 疑似业务重复：关键识别字段相近且发生时间接近；
+- 关系异常：父记录缺失、引用不存在或附件路径失效。
 
-Possible duplicates remain unresolved until a human reviews business provenance and relationships. Audit and workflow histories are append-only evidence and are excluded from automatic deletion.
+疑似重复必须人工核对来源和关联关系。审计日志、订单工序历史等证据型数据属于追加记录，禁止自动删除。
 
-## 7. Backup artifact format
+## 7. 私密数据包格式
 
-Each successful data artifact contains:
+每个成功的数据包采用以下结构：
 
 ```text
 runtime-data-YYYYMMDD_HHMMSS/
@@ -116,110 +116,109 @@ runtime-data-YYYYMMDD_HHMMSS/
 └── verification.json
 ```
 
-`manifest.json` records the creation time, source host identifier, Git commit, Node version, database path, included roots, excluded roots, file counts, sizes, critical table counts, and migration format version. It contains no secret values.
+`manifest.json` 记录生成时间、源主机标识、Git 提交号、Node 版本、数据库路径、纳入和排除目录、文件数量、容量、核心表记录数及迁移格式版本，但不记录密钥值。
 
-The artifact is first built in a temporary directory, verified, archived, optionally encrypted, and atomically renamed into its final location. A failed build must leave the prior healthy artifacts unchanged.
+数据包先在临时目录中生成，完成校验、压缩及可选加密后，再原子移动到最终路径。构建失败不得影响已有健康备份。
 
-Local recovery copies use directory mode `0700` and file mode `0600`. Off-host copies must be encrypted in transit and at rest.
+本机备份目录权限设为 `0700`，文件权限设为 `0600`。异地副本必须在传输和存储阶段加密。
 
-## 8. Verification requirements
+## 8. 备份验证标准
 
-A backup is healthy only when all checks pass:
+只有同时满足以下条件，备份才标记为健康：
 
-- archive extraction succeeds in a temporary directory;
-- SHA-256 verification succeeds;
-- SQLite `integrity_check` returns `ok`;
-- required tables exist;
-- critical table counts match the manifest;
-- required configuration files exist and parse successfully;
-- referenced attachments are either present or explicitly listed as pre-existing missing references;
-- a disposable application instance can open the restored database without modifying production data;
-- application health and smoke verification succeed where the environment permits.
+- 能在临时目录完整解压；
+- SHA-256 校验全部通过；
+- SQLite `integrity_check` 返回 `ok`；
+- 必要数据表全部存在；
+- 核心表记录数与清单一致；
+- 必要 JSON 配置存在且能正常解析；
+- 数据库引用的附件存在，或已在迁移前缺失清单中明确登记；
+- 一次性应用实例能够打开恢复数据库，且不接触生产数据；
+- 环境允许时，健康检查和烟雾测试通过。
 
-Verification status is stored as data, not inferred from the existence of an archive.
+不能根据“压缩包存在”推断备份有效，验证结果必须写入 `verification.json`。
 
-## 9. Reconstruction flow
+## 9. 新服务器重建流程
 
-The reconstruction guide will implement this sequence:
+最终中文操作手册采用以下顺序：
 
-1. Provision Ubuntu and create a non-root application account.
-2. Configure SSH access, time zone, hostname, firewall, and security updates.
-3. Clone the private Git repository at a named commit or release tag.
-4. Install Node.js 22, Nginx, and required native build packages.
-5. Install locked backend and frontend dependencies with `npm ci`.
-6. Build the current React frontend into its expected output directory.
-7. Transfer, decrypt, and verify the private data artifact.
-8. Restore the database, files, and data configuration with restrictive ownership and permissions.
-9. Recreate environment variables from the private secret source.
-10. Install and start the templated systemd service.
-11. Install Nginx configuration and initially expose only a local or temporary hostname.
-12. Run database verification, health checks, smoke tests, and a read-only business checklist.
-13. Configure DNS and obtain a Let's Encrypt certificate.
-14. Freeze writes on the old server for the final short cutover window, create a final delta snapshot, restore it on the new host, and repeat verification.
-15. Switch DNS, monitor the new service, and retain the old server in read-only rollback readiness for the agreed observation period.
+1. 初始化 Ubuntu，创建非 root 应用用户。
+2. 设置 SSH、时区、主机名、防火墙和安全更新。
+3. 按指定提交或发布标签克隆私有 Git 仓库。
+4. 安装 Node.js 22、Nginx 和原生构建依赖。
+5. 使用 `npm ci` 安装锁定的前后端依赖。
+6. 构建 React 前端到项目约定目录。
+7. 传输、解密并校验私密数据包。
+8. 以严格权限恢复数据库、附件和数据配置。
+9. 从私有密钥来源重建环境变量。
+10. 安装并启动 systemd 服务。
+11. 安装 Nginx 配置，先使用本地地址或临时域名验收。
+12. 执行数据库、健康、烟雾和只读业务检查。
+13. 配置 DNS 并申请 Let's Encrypt 证书。
+14. 在最终切换窗口暂停旧服务器写入，生成最终快照，在新服务器恢复并重新验收。
+15. 切换 DNS，监控新服务，并在观察期内保留旧服务器的只读回滚能力。
 
-## 10. Restore and rollback
+## 10. 恢复与回滚
 
-Restore never overwrites a database used by a running process. The required order is:
+恢复操作禁止覆盖运行中进程正在使用的数据库，固定顺序为：
 
-1. verify the selected artifact before touching the service;
-2. stop the application service;
-3. capture a pre-restore rollback snapshot;
-4. restore into a sibling staging path;
-5. verify the staged database and files;
-6. atomically switch the active data path;
-7. start the service;
-8. run health, database, and business checks;
-9. atomically switch back and restart if any required check fails.
+1. 在停止服务前验证目标数据包；
+2. 停止应用服务；
+3. 生成恢复前回滚快照；
+4. 恢复到同级临时路径；
+5. 验证临时数据库和文件；
+6. 原子切换活动数据路径；
+7. 启动服务；
+8. 执行健康、数据库和业务验收；
+9. 任一必要检查失败时原子切回并重启。
 
-Code rollback uses a named Git commit or release tag. Data rollback uses the pre-restore snapshot. These are separate operations and the guide must state which one is being performed.
+代码回滚使用指定 Git 提交或发布标签；数据回滚使用恢复前快照。两者是独立操作，手册必须明确当前执行哪一种。
 
-## 11. Network and cutover
+## 11. 网络切换
 
-Nginx terminates HTTP/HTTPS and proxies only to `127.0.0.1:8080`. The firewall exposes SSH, port 80, and port 443; the Node port is not publicly exposed.
+Nginx 负责 HTTP/HTTPS，并只反向代理到 `127.0.0.1:8080`。防火墙仅开放 SSH、80 和 443，Node 端口不得直接暴露到公网。
 
-Before migration, reduce DNS TTL to 300 seconds. Obtain and test TLS on the new host before final cutover when DNS validation permits. Preserve the old server for rollback until logs, login, order lookup, work-order lookup, calculation snapshot lookup, user permissions, exports, images, and attachments have been confirmed.
+迁移前将 DNS TTL 调低到 300 秒。条件允许时，在正式切换前完成新服务器 TLS 验证。登录、订单查询、开单查询、成本快照查询、用户权限、导出、订单图片及附件全部确认后，旧服务器才能退出回滚观察期。
 
-## 12. Operational backup policy
+## 12. 长期备份策略
 
-The rebuilt server should support:
+新服务器应支持：
 
-- hourly snapshots retained for 48 hours;
-- daily snapshots retained for 30 days;
-- weekly snapshots retained for 12 weeks;
-- monthly snapshots retained for 12 months;
-- at least one encrypted off-host copy;
-- daily automated integrity verification;
-- a documented restore rehearsal at least monthly.
+- 每小时备份保留 48 小时；
+- 每日备份保留 30 天；
+- 每周备份保留 12 周；
+- 每月备份保留 12 个月；
+- 至少一份加密异地副本；
+- 每日自动执行完整性验证；
+- 至少每月完成一次恢复演练并留存结果。
 
-Retention cleanup runs only after a new artifact has passed verification and must never remove the last known healthy artifact in any required tier.
+只有新备份验证成功后才允许执行过期清理，并且不能删除任何保留层级中最后一份已知健康备份。
 
-## 13. Documentation deliverables
+## 13. 文档交付物
 
-Implementation will update `docs/DEPLOYMENT_FULL_REPRO.md` into the canonical Chinese operator guide. It will contain:
+实施阶段把 `docs/DEPLOYMENT_FULL_REPRO.md` 更新为唯一标准的中文运维手册，内容包括：
 
-- prerequisites and variable conventions;
-- old-server audit, backup, and export commands;
-- private artifact transfer and verification;
-- new-server bootstrap and frontend build;
-- database, attachment, configuration, and secret restoration;
-- systemd, Nginx, firewall, DNS, and HTTPS setup;
-- final cutover, acceptance, rollback, and troubleshooting;
-- recurring backup and restore-rehearsal instructions;
-- a one-page fast-rebuild checklist.
+- 前置条件和变量约定；
+- 旧服务器审计、备份和导出命令；
+- 私密数据包传输及验证；
+- 新服务器初始化和前端构建；
+- 数据库、附件、配置和密钥恢复；
+- systemd、Nginx、防火墙、DNS 和 HTTPS；
+- 最终切换、验收、回滚及故障排查；
+- 周期备份和恢复演练；
+- 单页快速重建清单。
 
-The existing README statement that a live SQLite database can be backed up by merely copying the file will be corrected to distinguish an offline copy from an online consistent backup.
+同时修正 README 中“运行中 SQLite 直接复制即可备份”的不严谨说明，明确区分停机复制和在线一致性备份。
 
-## 14. Acceptance criteria
+## 14. 验收标准
 
-The work is accepted when:
+满足以下条件才视为完成：
 
-- audit commands run read-only and produce both JSON and Markdown reports;
-- no audit or backup output discloses sensitive record contents;
-- a verified private artifact contains all required database and file categories;
-- corrupt or incomplete artifacts are rejected;
-- reconstruction instructions work from a clean supported Ubuntu host using the repository and private artifact;
-- the restored system passes integrity, health, smoke, permission, and critical business checks;
-- rollback steps are explicit and independently testable;
-- no production record or business file is deleted by the migration tooling.
-
+- 审计工具以只读方式运行，并生成 JSON 和中文 Markdown 报告；
+- 报告及日志不泄露敏感业务内容；
+- 私密数据包完整包含数据库及必要业务文件；
+- 损坏或不完整的数据包会被拒绝；
+- 仅凭仓库和私密数据包，可在干净的受支持 Ubuntu 主机上完成重建；
+- 恢复后的系统通过完整性、健康、烟雾、权限和关键业务检查；
+- 回滚步骤明确且可以独立验证；
+- 迁移工具不删除任何生产记录或业务文件。
