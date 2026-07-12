@@ -25,6 +25,10 @@ function todayMd() {
   return `${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')}`;
 }
 
+function approxEqual(actual, expected, delta = 1e-6) {
+  return Math.abs(Number(actual) - expected) <= delta;
+}
+
 async function waitForHealth(timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
