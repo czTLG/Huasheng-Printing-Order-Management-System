@@ -1,144 +1,64 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const {
-  calcAutoBag,
-  calcEightSideSeal,
-  calcStandZipperBag,
-  calcIrregularZipperBag,
-  calcMaterialWeight
-} = require('../src/services/quoteEngine');
+const engine = require('../src/services/quoteEngine');
 
-function n(v) { const x = Number(v); return Number.isFinite(x) ? x : 0; }
-function r(v, d = 6) { const p = 10 ** d; return Math.round((v + Number.EPSILON) * p) / p; }
-function p4(arr) { const a = (arr || []).map(n); while (a.length < 4) a.push(0); return a; }
-
-function expectedSeal(input, { multiArea = false, freightFactor = 1 } = {}) {
-  const ba_chang = n(input.ba_chang), ba_kuang = n(input.ba_kuang), ba_di = n(input.ba_di);
-  const thick = p4(input.thick), price = p4(input.price), prop = p4(input.proportion);
-
-  const z_chang = ba_chang * 2 + 3.5 + ba_di;
-  const z_kuang = ba_kuang + 0.5;
-  const z_mian = z_chang * z_kuang;
-  const z2 = n(input.z_mian_2) || z_mian;
-  const z3 = n(input.z_mian_3) || z_mian;
-  const z4 = n(input.z_mian_4) || z_mian;
-  const areas = multiArea ? [z_mian, z2, z3, z4] : [z_mian, z_mian, z_mian, z_mian];
-
-  const proth = thick.map((t, i) => t * prop[i]);
-  const dun = proth.map((x, i) => (x * areas[i]) / 1000000);
-  const layerCost = dun.map((d, i) => d * price[i]);
-  const all_dun = dun.reduce((a, b) => a + b, 0);
-  const matCost = layerCost.reduce((a, b) => a + b, 0);
-
-  const jgf = n(input.jgf), zxyf = n(input.zxyf), sh = n(input.sh), lr = n(input.lr), lldj = n(input.lldj);
-  const zipperCost = n(input.ba_zdf) || ((z_kuang * lldj) / 100);
-  const processCost = (jgf * z_mian) / 10000;
-  const totalCost = (matCost + processCost) * (1 + sh) + zipperCost;
-  const freight = ((zxyf * all_dun) / 1000) * freightFactor;
-  const finalQuote = freight + totalCost * (1 + lr);
-
-  return {
-    z_chang: r(z_chang, 4),
-    z_kuang: r(z_kuang, 4),
-    z_mian: r(z_mian, 4),
-    all_dun: r(all_dun, 6),
-    totalCost: r(totalCost, 2),
-    finalQuote: r(finalQuote, 2)
-  };
+function sha256(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-function expectedAuto(input) {
-  const thick = p4(input.thick), price = p4(input.price), proportion = p4(input.proportion);
-  const proth = thick.map((t, i) => t * proportion[i]);
-  const allpro = proth.reduce((a, b) => a + b, 0);
-  const ratio = proth.map(x => allpro ? x / allpro : 0);
-  const dun = ratio.map(x => x * 1000);
-  const clcb = dun.map((d, i) => d * price[i]);
-  const mdpb1 = proth[0] ? (dun[0] / proth[0]) * 100 : 0;
-
-  const jgf = n(input.jgf), fqfy = n(input.fqfy), yf = n(input.yf), zt = n(input.zt), btzt = n(input.btzt), sh = n(input.sh), lr = n(input.lr);
-  const alljgf = jgf * mdpb1;
-  const base = alljgf + fqfy + yf + zt + btzt + clcb.reduce((a, b) => a + b, 0);
-  const costBeforeProfit = base * (1 + sh);
-  const finalQuote = costBeforeProfit * (1 + lr);
-
-  return {
-    allpro: r(allpro, 4),
-    costBeforeProfit: r(costBeforeProfit, 2),
-    finalQuote: r(finalQuote, 2)
-  };
-}
-
-function expectedWeight(input) {
-  const chang = n(input.chang), kuang = n(input.kuang);
-  const thick = p4(input.thick), prop = p4(input.proportion);
-  const layerWeightKg = thick.map((t, i) => chang * kuang * t * prop[i] * 0.01);
-  const totalWeightKg = layerWeightKg.reduce((a, b) => a + b, 0);
-  const totalWeightG = totalWeightKg * 1000;
-  return {
-    totalWeightKg: r(totalWeightKg, 6),
-    totalWeightG: r(totalWeightG, 3)
-  };
-}
-
-function systemCalc(costType, input) {
-  if (costType === 'eight_side_seal') return calcEightSideSeal(input);
-  if (costType === 'stand_zipper_bag') return calcStandZipperBag(input);
-  if (costType === 'irregular_zipper_bag') return calcIrregularZipperBag(input);
-  if (costType === 'auto_bag') return calcAutoBag(input);
-  if (costType === 'material_weight') return calcMaterialWeight(input);
-  throw new Error('unknown costType: ' + costType);
-}
-
-function expectedCalc(costType, input) {
-  if (costType === 'eight_side_seal') return expectedSeal(input, { multiArea: false, freightFactor: 1 });
-  if (costType === 'stand_zipper_bag') return expectedSeal(input, { multiArea: true, freightFactor: 1.1 });
-  if (costType === 'irregular_zipper_bag') return expectedSeal(input, { multiArea: false, freightFactor: 1 });
-  if (costType === 'auto_bag') return expectedAuto(input);
-  if (costType === 'material_weight') return expectedWeight(input);
-  throw new Error('unknown costType: ' + costType);
-}
-
-function compare(costType, got, exp) {
-  const fields = {
-    eight_side_seal: ['z_chang', 'z_kuang', 'z_mian', 'all_dun', 'totalCost', 'finalQuote'],
-    stand_zipper_bag: ['z_chang', 'z_kuang', 'z_mian', 'all_dun', 'totalCost', 'finalQuote'],
-    irregular_zipper_bag: ['z_chang', 'z_kuang', 'z_mian', 'all_dun', 'totalCost', 'finalQuote'],
-    auto_bag: ['allpro', 'costBeforeProfit', 'finalQuote'],
-    material_weight: ['totalWeightKg', 'totalWeightG']
-  }[costType];
-
-  const diffs = [];
-  for (const k of fields) {
-    const gv = Number(got[k]);
-    const ev = Number(exp[k]);
-    const delta = Math.abs(gv - ev);
-    const ok = delta <= 1e-6;
-    if (!ok) diffs.push({ key: k, got: gv, expected: ev, delta });
-  }
-  return diffs;
-}
-
-const casesPath = path.join(__dirname, '..', 'baseline', 'cases.json');
-const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
-
-let failed = 0;
-console.log(`Baseline cases: ${cases.length}`);
-for (const c of cases) {
-  const got = systemCalc(c.costType, c.input);
-  const exp = expectedCalc(c.costType, c.input);
-  const diffs = compare(c.costType, got, exp);
-  if (diffs.length) {
-    failed += 1;
-    console.log(`❌ ${c.id} (${c.costType})`);
-    diffs.forEach(d => console.log(`   - ${d.key}: got=${d.got}, expected=${d.expected}, delta=${d.delta}`));
-  } else {
-    console.log(`✅ ${c.id} (${c.costType})`);
+function calculate(costType, input) {
+  switch (costType) {
+    case 'auto_bag': return engine.calcAutoBag(input);
+    case 'eight_side_seal': return engine.calcEightSideSeal(input);
+    case 'stand_zipper_bag': return engine.calcStandZipperBag(input);
+    case 'three_side_seal': return engine.calcStandZipperBag({ ...input, ba_di: 0 });
+    case 'irregular_zipper_bag': return engine.calcIrregularZipperBag(input);
+    case 'back_seal': return engine.calcBackSealBag({ ...input, bag_mode: 'back_seal' });
+    case 'side_seal': return engine.calcBackSealBag({ ...input, bag_mode: 'side_seal' });
+    case 'four_side_seal': return engine.calcBackSealBag({ ...input, bag_mode: 'four_side_seal' });
+    case 'material_weight': return engine.calcMaterialWeight(input);
+    default: throw new Error(`不支持的成本类型：${costType}`);
   }
 }
 
-if (failed > 0) {
-  console.log(`\nFAILED: ${failed}/${cases.length}`);
-  process.exit(1);
+function numericFields(value, prefix = '', result = {}) {
+  if (Array.isArray(value)) value.forEach((item, index) => numericFields(item, `${prefix}[${index}]`, result));
+  else if (value && typeof value === 'object') Object.entries(value).forEach(([key, item]) => numericFields(item, prefix ? `${prefix}.${key}` : key, result));
+  else if (typeof value === 'number' && Number.isFinite(value)) result[prefix] = value;
+  return result;
 }
-console.log(`\nPASS: ${cases.length}/${cases.length}`);
+
+function main() {
+  const baselinePath = process.env.GOLDEN_BASELINE_PATH;
+  if (!baselinePath) {
+    console.error('缺少 GOLDEN_BASELINE_PATH；私密黄金基线必须位于项目目录之外。');
+    process.exit(2);
+  }
+  const resolved = path.resolve(baselinePath);
+  if (!fs.existsSync(resolved)) throw new Error(`私密黄金基线不存在：${resolved}`);
+  const baseline = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+  if (baseline.format_version !== 1 || baseline.status !== 'technical_baseline_confirmed' || !Array.isArray(baseline.cases)) throw new Error('私密黄金基线格式或状态不合法');
+
+  const enginePath = path.join(__dirname, '..', 'src', 'services', 'quoteEngine.js');
+  const engineHash = sha256(enginePath);
+  if (baseline.engine_sha256 && baseline.engine_sha256 !== engineHash) throw new Error(`成本引擎哈希变化：当前=${engineHash}，基线=${baseline.engine_sha256}`);
+  if (!baseline.engine_sha256 && process.env.GOLDEN_BASELINE_ALLOW_ENGINE_HASH_INIT !== '1') throw new Error('私密黄金基线缺少成本引擎哈希');
+
+  let failed = 0;
+  console.log(`Golden baseline cases: ${baseline.cases.length}`);
+  for (const item of baseline.cases) {
+    const current = numericFields(calculate(item.cost_type, item.input));
+    const expected = numericFields(item.expected);
+    const common = Object.keys(expected).filter(key => Object.hasOwn(current, key));
+    const diffs = common.filter(key => Math.abs(current[key] - expected[key]) > 1e-6);
+    if (!common.length || diffs.length) {
+      failed += 1;
+      console.log(`❌ ${item.case_id} (${item.cost_type}) 差异字段=${diffs.length || '无共同数值字段'}`);
+    } else console.log(`✅ ${item.case_id} (${item.cost_type})`);
+  }
+  if (failed) { console.log(`\nFAILED: ${failed}/${baseline.cases.length}`); process.exit(1); }
+  console.log(`\nPASS: ${baseline.cases.length}/${baseline.cases.length}`);
+}
+
+try { main(); } catch (error) { console.error(`黄金基线验证失败：${error.message}`); process.exit(1); }

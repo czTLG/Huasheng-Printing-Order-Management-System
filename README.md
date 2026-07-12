@@ -76,6 +76,14 @@ npm run runtime:verify -- --bundle /私密数据包目录
 
 完整的服务器迁移、数据恢复、Nginx、systemd、DNS、HTTPS、验收和回滚流程见 [`docs/DEPLOYMENT_FULL_REPRO.md`](docs/DEPLOYMENT_FULL_REPRO.md)。
 
+成本回归基线使用项目外的私密黄金文件，避免把材料价格和利润数据提交到 Git：
+
+```bash
+GOLDEN_BASELINE_PATH=/私密目录/private-golden-baseline.json npm run baseline:verify
+```
+
+验证器只复放静态黄金结果，不再维护第二套期望公式。缺少私密文件、成本引擎哈希变化或结果被篡改时，验证会明确失败。
+
 ## 本地开发
 
 ```bash
