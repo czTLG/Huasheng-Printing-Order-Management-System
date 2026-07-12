@@ -1,0 +1,14 @@
+[Unit]
+Description=Runtime Recovery Snapshot
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__
+UMask=0077
+ExecStart=__NODE_BIN__ __APP_DIR__/scripts/runtime-backup.js --db __APP_DIR__/data/app.db --root __APP_DIR__ --out __BACKUP_DIR__ --baseline __GOLDEN_BASELINE_PATH__
+
+[Install]
+WantedBy=multi-user.target

@@ -9,6 +9,14 @@ pnpm-debug.log*
 !.env.example
 
 archives/
+runtime-data-*/
+runtime-audit.json
+runtime-audit.md
+.runtime-stage-*/
+*.private.env
+*.secrets.env
+private-golden-baseline-*.json
+golden-baseline-index-*.json
 *.tar.gz
 *.zip
 

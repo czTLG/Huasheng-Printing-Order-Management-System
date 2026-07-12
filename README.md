@@ -64,18 +64,31 @@ PORT=8080 node src/server.js
 
 ## 数据备份与恢复
 
-### 备份
+运行中的 SQLite 数据库必须使用 SQLite 在线备份机制生成一致性快照；只有应用完全停止后，才可以把数据库文件作为离线副本复制。不要直接复制正在使用的 `data/app.db`。
+
+项目提供只读审计、在线备份和独立验证命令：
+
 ```bash
-tar czf backup-$(date +%Y%m%d).tar.gz data/
+npm run runtime:audit -- --db /绝对路径/app.db --root /项目路径 --out /项目外审计目录
+npm run runtime:backup -- --db /绝对路径/app.db --root /项目路径 --out /项目外备份目录
+npm run runtime:verify -- --bundle /私密数据包目录
 ```
 
-### 恢复
+完整的服务器迁移、数据恢复、Nginx、systemd、DNS、HTTPS、验收和回滚流程见 [`docs/DEPLOYMENT_FULL_REPRO.md`](docs/DEPLOYMENT_FULL_REPRO.md)。
+
+成本回归基线使用项目外的私密黄金文件，避免把材料价格和利润数据提交到 Git：
+
 ```bash
-tar xzf backup-YYYYMMDD.tar.gz
-PORT=8080 DB_PATH=./data/app.db node src/server.js
+GOLDEN_BASELINE_PATH=/私密目录/private-golden-baseline.json npm run baseline:verify
 ```
 
-数据库为单文件 SQLite，备份即复制文件，无需 `pg_dump` 或 `mysqldump`。
+从历史复算一致记录生成项目外私密基线：
+
+```bash
+npm run baseline:generate-private -- --db /绝对路径/app.db --out /项目外私密目录
+```
+
+验证器只复放静态黄金结果，不再维护第二套期望公式。缺少私密文件、成本引擎哈希变化或结果被篡改时，验证会明确失败。
 
 ## 本地开发
 
