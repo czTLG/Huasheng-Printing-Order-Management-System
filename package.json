@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "baseline:verify": "node scripts/verify-baseline.js",
-    "verify:smoke": "node scripts/smoke-test.js"
+    "verify:smoke": "node scripts/smoke-test.js",
+    "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
