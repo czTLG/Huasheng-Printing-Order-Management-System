@@ -1,327 +1,294 @@
-# 包装袋印刷厂管理系统（packaging-system）完整部署与可复现手册
+# 服务器迁移与完整重建手册
 
-> 目标：把当前线上可运行版本完整沉淀成可迁移文档，方便你推到私人仓库后，在任意新机器一键复现（应用 + 数据库 + Nginx + systemd + 回归验证）。
+> 目标：仅凭私有 Git 仓库和经过验证的私密数据包，在 Ubuntu 22.04/24.04 新服务器上恢复订单、开单、成本快照、用户权限、客户资料、附件及网络服务。
 
----
+## 1. 安全原则
 
-## 1. 项目地址（当前环境）
+1. Git 只保存代码、模板和文档；数据库、附件、真实 `.env` 和私密数据包禁止进入 Git。
+2. 运行中的 SQLite 只能通过在线 Backup API 生成一致性快照，不能直接复制主库文件。
+3. 清理之前先备份；第一阶段只审计，不删除任何数据。
+4. 恢复之前先校验；不能覆盖正在被 Node 进程使用的数据库。
+5. 旧服务器保留到新服务器完成业务验收和回滚观察期。
 
-- **服务器公网地址**：`http://198.11.183.14/`
-- **绑定域名**：`http://cahs.top/`
-- **项目代码目录（服务器本地）**：`/home/admin/work/packaging-system`
-- **服务监听端口（Node）**：`127.0.0.1:8080`
-- **反向代理（Nginx）**：`80 -> 8080`
-- **systemd 服务名**：`packaging-system.service`
+## 2. 变量约定
 
----
-
-## 2. 技术栈与运行结构
-
-- Node.js + Express
-- SQLite（better-sqlite3）
-- 前端：`public/index.html` 单页应用
-- 导出：CSV / XLS / DOC / PDF（pdfkit）
-- 进程管理：systemd
-- 网关：Nginx
-
-关键目录：
+旧服务器和新服务器分别设置适合自己的值：
 
 ```bash
-/home/admin/work/packaging-system
-├── src/                 # 后端
-├── public/              # 前端静态资源
-├── data/                # SQLite 数据文件目录（重点备份）
-├── baseline/            # 核算基准样例
-├── scripts/             # 回归脚本 verify-baseline.js
-├── deploy/              # 部署相关文件（可补充）
-└── docs/                # 文档（本文件）
+export APP_USER=admin
+export APP_DIR=/home/admin/work/packaging-system
+export REPO_URL=git@github.com:czTLG/Huasheng-Printing-Order-Management-System.git
+export RELEASE_REF=feature/runtime-rebuild
+export BACKUP_DIR=/var/lib/packaging-system-backups
+export DOMAIN=example.com
 ```
 
----
+`RELEASE_REF` 正式迁移时应改为经过验收的提交号或发布标签。域名未知时先用服务器 IP 做本地验收。
 
-## 3. 新机器部署前提
+## 3. 两类迁移资产
 
-## 系统要求
+### 3.1 私有 Git 仓库
 
-- Ubuntu 22.04 LTS（建议）
-- 2C2G 起步
-- 开放 80 端口（如需 HTTPS 还要 443）
+仓库必须包含 `src/`、`frontend-next/`、`public/` 中的代码资源、`deploy/`、`scripts/`、依赖锁文件和本文档。
 
-## 安装运行环境
+提交前检查不能包含私密数据：
 
 ```bash
-sudo apt-get update -y
-sudo apt-get install -y curl git nginx
+cd "$APP_DIR"
+git status --short
+git ls-files | rg '(^|/)(app\.db|\.env)$|runtime-data-|private|secret'
+```
 
-# 安装 nvm（若未安装）
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-source ~/.bashrc
+### 3.2 私密数据包
 
-# 安装 Node（建议与线上一致）
-nvm install 22
-nvm use 22
+数据包包含：
+
+- SQLite 一致性快照；
+- 订单图片和业务附件；
+- `product_prefill_map.json`、`customer_bag_map.json`、`material_options.json`、`system_package_config.json`；
+- `manifest.json`、`checksums.sha256` 和 `verification.json`。
+
+私密数据包必须通过 SSH/SFTP、加密对象存储或离线加密介质传输，不能通过公开链接或 Git 提交传输。
+
+## 4. 旧服务器迁移前审计
+
+### 4.1 记录当前版本和数据库状态
+
+```bash
+cd "$APP_DIR"
+git rev-parse HEAD
 node -v
-npm -v
+stat -c '%s %y %n' data/app.db
+sha256sum data/app.db
+systemctl is-active packaging-system.service
 ```
 
----
+### 4.2 执行只读审计
 
-## 4. 项目初始化（从你的私人仓库拉取）
+审计目录必须放在项目目录之外：
 
 ```bash
-# 示例：替换成你的仓库地址
-git clone <YOUR_PRIVATE_REPO_URL> /home/admin/work/packaging-system
-cd /home/admin/work/packaging-system
-bash deploy/scripts/bootstrap.sh
+AUDIT_DIR="$BACKUP_DIR/audit-$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$AUDIT_DIR"
+chmod 700 "$BACKUP_DIR" "$AUDIT_DIR"
+cd "$APP_DIR"
+npm run runtime:audit -- --db "$APP_DIR/data/app.db" --root "$APP_DIR" --out "$AUDIT_DIR"
 ```
 
-> `bootstrap.sh` 会自动安装依赖、创建 `data/` 目录、渲染 systemd 服务文件并启用 Nginx 反向代理。
+检查 `runtime-audit.md` 和 `runtime-audit.json`。重复文件、孤立候选和疑似重复记录只进入人工评审清单，本流程不执行删除。
 
----
+再次执行 `stat` 和 `sha256sum`，数据库大小、修改时间和哈希应与审计前一致。
 
-## 5. 数据库（SQLite）迁移与恢复
-
-## 数据目录建议
-
-- 统一放在：`/home/admin/work/packaging-system/data/`
-- 至少备份：`data/*.db`（或你实际库名）
-
-## 旧机器导出（在线热备份推荐）
+## 5. 旧服务器生成原始恢复包
 
 ```bash
-# 示例：假设主库为 data/app.db
-cd /home/admin/work/packaging-system
-sqlite3 data/app.db ".backup '/home/admin/work/packaging-system/data/app.backup-$(date +%F-%H%M%S).db'"
+sudo install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$BACKUP_DIR"
+cd "$APP_DIR"
+npm run runtime:backup -- --db "$APP_DIR/data/app.db" --root "$APP_DIR" --out "$BACKUP_DIR"
+LATEST_BUNDLE="$(find "$BACKUP_DIR" -maxdepth 1 -type d -name 'runtime-data-*' | sort | tail -1)"
+npm run runtime:verify -- --bundle "$LATEST_BUNDLE"
 ```
 
-## 新机器恢复
+确认 `verification.json` 的状态为 `healthy` 后才允许传输。建议在传输前用组织批准的加密工具加密；密码或私钥必须通过另一条通道保存。
+
+## 6. 新服务器基础准备
+
+推荐配置为 2 核、4 GB 内存、充足独立磁盘。安全组和防火墙仅开放 SSH、80、443，禁止公开 8080。
 
 ```bash
-mkdir -p /home/admin/work/packaging-system/data
-# 将备份文件上传到 data/ 后：
-cp app.backup-YYYY-MM-DD-HHMMSS.db /home/admin/work/packaging-system/data/app.db
+sudo timedatectl set-timezone Asia/Shanghai
+sudo apt-get update
+sudo apt-get install -y git curl nginx ufw build-essential
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
 ```
 
-## 权限
+创建普通应用用户并配置只允许密钥登录。不要使用 root 直接运行应用。
+
+## 7. 克隆仓库和安装依赖
 
 ```bash
-sudo chown -R admin:admin /home/admin/work/packaging-system
-chmod -R u+rwX /home/admin/work/packaging-system/data
+sudo install -d -m 0755 -o "$APP_USER" -g "$APP_USER" "$(dirname "$APP_DIR")"
+git clone "$REPO_URL" "$APP_DIR"
+cd "$APP_DIR"
+git checkout "$RELEASE_REF"
+git status --short
 ```
 
----
+先不要运行 `bootstrap.sh`。它检测不到 `data/app.db` 时会以状态码 2 停止，避免误启动空生产库。
 
-## 6. systemd 部署（后台常驻 + 开机自启）
+## 8. 传输和校验私密数据包
 
-创建服务文件：`/etc/systemd/system/packaging-system.service`
-
-```ini
-[Unit]
-Description=Packaging System Node Service
-After=network.target
-
-[Service]
-Type=simple
-User=admin
-WorkingDirectory=/home/admin/work/packaging-system
-Environment=PORT=8080
-Environment=FORCE_HTTPS=0
-ExecStart=/home/admin/.nvm/versions/node/v22.22.0/bin/node /home/admin/work/packaging-system/src/server.js
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-```
-
-生效与启动：
+将数据包传到新服务器项目目录之外，例如 `$BACKUP_DIR/incoming/`。解密后设置：
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable packaging-system.service
-sudo systemctl restart packaging-system.service
-sudo systemctl status packaging-system.service --no-pager -l
+sudo chown -R "$APP_USER:$APP_USER" "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
+find "$BACKUP_DIR" -type f -exec chmod 600 {} \;
+cd "$APP_DIR"
+npm ci
+npm run runtime:verify -- --bundle "$BACKUP_DIR/incoming/runtime-data-时间戳"
 ```
 
-日志查看：
+校验失败时立即停止，重新传输健康数据包，禁止手工跳过校验。
+
+## 9. 安全恢复数据
+
+首次安装时服务尚未运行，可以从健康数据包恢复。以下命令中的 `BUNDLE` 必须指向刚通过验证的数据包：
 
 ```bash
-journalctl -u packaging-system.service -f
+export BUNDLE="$BACKUP_DIR/incoming/runtime-data-时间戳"
+sudo systemctl stop packaging-system.service 2>/dev/null || true
+install -d -m 0700 "$APP_DIR/data"
+install -m 0600 "$BUNDLE/database/app.db" "$APP_DIR/data/app.db"
+cp -a "$BUNDLE/config/data/." "$APP_DIR/data/"
+if [[ -d "$BUNDLE/files/public/uploads" ]]; then
+  install -d -m 0700 "$APP_DIR/public/uploads"
+  cp -a "$BUNDLE/files/public/uploads/." "$APP_DIR/public/uploads/"
+fi
+if [[ -d "$BUNDLE/files/data/uploads" ]]; then
+  install -d -m 0700 "$APP_DIR/data/uploads"
+  cp -a "$BUNDLE/files/data/uploads/." "$APP_DIR/data/uploads/"
+fi
+chmod 600 "$APP_DIR/data/app.db"
 ```
 
----
+这段流程只适用于首次安装或已确认服务停止的恢复窗口。已有生产服务恢复时，必须先创建恢复前快照，再恢复到临时路径、校验并原子切换；不能对运行中的 `app.db` 执行覆盖。
 
-## 7. Nginx 反向代理
+## 10. 恢复环境变量
 
-站点配置示例：`/etc/nginx/sites-available/packaging-system`
+从密码管理器创建项目外部的私密环境文件，或使用 systemd 凭据机制。变量名参考 `.env.example`。不得把真实密码写入 `.env.example` 或提交 Git。
 
-```nginx
-server {
-    listen 80;
-    server_name cahs.top www.cahs.top _;
+至少核对：
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
+- `DB_PATH`；
+- 邮箱账号和应用专用密码；
+- 消息同步令牌；
+- 其他生产环境密钥。
 
-启用：
+## 11. 自动构建和启动
 
 ```bash
-sudo ln -sf /etc/nginx/sites-available/packaging-system /etc/nginx/sites-enabled/packaging-system
-sudo nginx -t
-sudo systemctl reload nginx
+cd "$APP_DIR"
+APP_DIR="$APP_DIR" APP_USER="$APP_USER" BACKUP_DIR="$BACKUP_DIR" INSTALL_BACKUP_TIMER=1 bash deploy/scripts/bootstrap.sh
 ```
 
----
+脚本将执行锁定依赖安装、前端构建、systemd 模板渲染、Nginx 配置检查、应用启动和本机健康检查。
 
-## 8. 健康检查与验收
+检查：
 
 ```bash
-# 应用本地
-curl -sS http://127.0.0.1:8080/health
-
-# Nginx 转发层
-curl -sS http://127.0.0.1/health
-
-# 公网
-curl -sS http://198.11.183.14/health
+systemctl status packaging-system.service --no-pager -l
+systemctl status runtime-backup.timer --no-pager
+journalctl -u packaging-system.service -n 100 --no-pager
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1/health
 ```
 
-页面验收建议：
-- 登录
-- 订单管理（新增、排序、工序推进）
-- 成本核算（至少跑 1 个标准样例）
-- 报价导出（客户版 / 内部版）
+## 12. DNS 和 HTTPS
 
----
-
-## 9. 回归与上线门禁（非常重要）
-
-核心计算改动后必须跑：
+迁移前至少24小时把域名 TTL 调整为300秒。新服务器本地验收通过后更新 A/AAAA 记录，再申请证书：
 
 ```bash
-cd /home/admin/work/packaging-system
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN"
+sudo certbot renew --dry-run
+curl -fsS "https://$DOMAIN/health"
+```
+
+没有使用 `www` 子域名时，从命令中移除对应参数。证书成功后再按项目要求启用 `FORCE_HTTPS=1`。
+
+## 13. 业务验收清单
+
+上线前使用只读或可回滚方式逐项检查：
+
+- 管理员和普通角色登录；
+- 角色菜单及成本页面权限没有扩大；
+- 订单总量、最近订单、工序状态和历史记录；
+- 开单总量、最近开单、预览和导出；
+- 成本快照数量、材料价格和历史结果；
+- 用户、客户、询盘和消息数量；
+- 订单图片及 CRM 附件可访问；
+- PDF、Excel 等导出功能；
+- `npm run verify:smoke` 和 `npm run baseline:verify`。
+
+不要为了验收在正式库中创建无法清理的测试数据。
+
+## 14. 最终切换
+
+第一次预迁移验证完成后安排短暂停写窗口：
+
+1. 通知用户停止写入旧服务器。
+2. 停止旧应用服务或通过网关进入维护模式。
+3. 在旧服务器生成并验证最终数据包。
+4. 传输到新服务器并再次验证。
+5. 停止新服务器应用，按第9节恢复最终包。
+6. 启动新应用并重复技术及业务验收。
+7. 切换 DNS，持续观察错误日志和关键接口。
+8. 旧服务器保持停止写入和可回滚状态，不立即销毁。
+
+## 15. 回滚
+
+若新服务器验收失败：
+
+1. 停止新服务器应用，避免产生两套写入数据。
+2. 把 DNS 指回旧服务器。
+3. 启动旧服务器应用。
+4. 检查旧服务器健康状态和最新数据。
+5. 保存新服务器日志和失败数据包用于分析。
+
+若新服务器已经产生新业务数据，不能直接回切，必须先制定数据合并方案。
+
+## 16. 自动备份与恢复演练
+
+定时器默认每小时生成一致性快照：
+
+```bash
+systemctl list-timers runtime-backup.timer
+sudo systemctl start runtime-backup.service
+journalctl -u runtime-backup.service -n 100 --no-pager
+```
+
+长期策略建议：小时备份保留48小时、每日30天、每周12周、每月12个月，并保留至少一份加密异地副本。当前工具不会自动删除旧包；在正式增加保留清理前，必须确保新包验证健康且不会删除最后一份健康备份。
+
+每月至少选择一个备份，在临时目录执行校验和恢复演练。演练不能覆盖生产 `data/app.db`。
+
+## 17. 常见故障
+
+- `SQLITE_CANTOPEN`：检查数据库父目录、文件所有者、权限和 `DB_PATH`。
+- 校验和不一致：数据包损坏或被修改，重新传输，禁止强行恢复。
+- Nginx 502：检查应用服务、8080监听和 `journalctl`。
+- 前端未更新：确认 `frontend-next` 构建成功且输出目录正确。
+- 附件404：查看审计报告中的缺失引用，并核对数据包 `files/`。
+- HTTPS失败：检查 DNS 是否已指向新服务器、80/443是否开放。
+
+## 18. 一页式快速重建清单
+
+```bash
+# 1. 定义变量
+export APP_USER=admin APP_DIR=/home/admin/work/packaging-system
+export REPO_URL=私有仓库地址 RELEASE_REF=已验收提交号
+export BACKUP_DIR=/var/lib/packaging-system-backups DOMAIN=实际域名
+
+# 2. 克隆仓库
+git clone "$REPO_URL" "$APP_DIR"
+cd "$APP_DIR" && git checkout "$RELEASE_REF" && npm ci
+
+# 3. 传入私密数据包后验证
+npm run runtime:verify -- --bundle "$BACKUP_DIR/incoming/runtime-data-时间戳"
+
+# 4. 确认服务停止后，按第9节恢复数据库、附件和配置
+
+# 5. 构建并启动
+APP_DIR="$APP_DIR" APP_USER="$APP_USER" BACKUP_DIR="$BACKUP_DIR" INSTALL_BACKUP_TIMER=1 bash deploy/scripts/bootstrap.sh
+
+# 6. 验收
+npm run verify:smoke
 npm run baseline:verify
+curl -fsS http://127.0.0.1:8080/health
+
+# 7. 配置 DNS 和 HTTPS，完成第13、14节业务验收后再切流量
 ```
 
-期望：`PASS 10/10`（或你的最新基准总数）
-
-前端模板字符串/DOM 改动后，务必做语法检查：
-
-```bash
-# 从 public/index.html 提取 script 后 node -c 检查（建议写成脚本）
-```
-
-并再次检查：
-- `/health` 正常
-- 手机端核心页面可操作（成本核算 / 统计分析 / 开单）
-
----
-
-## 10. 给 Codex 的优化工作方式（建议）
-
-你要让 Codex 持续优化订单管理，建议采用这个流程：
-
-1. 在仓库根目录准备上下文文件：
-   - `IDENTITY.md`
-   - `AGENTS.md`
-   - 本文档 `docs/DEPLOYMENT_FULL_REPRO.md`
-2. 每次给 Codex 明确任务边界（例：只改订单页三段式布局，不动报价模块）
-3. 每个 PR 必须包含：
-   - 变更说明
-   - 风险点
-   - 回滚方式
-   - 验证结果（`baseline:verify` + `/health`）
-4. 先在测试机部署验证，再上生产
-
-可直接给 Codex 的任务模板：
-
-```text
-目标：优化订单管理页（移动端优先）。
-限制：不改成本核算公式，不改导出接口。
-必须通过：npm run baseline:verify、/health 检查。
-输出：改动文件列表、回滚步骤、测试截图清单。
-```
-
----
-
-## 11. 一键迁移清单（最小必带）
-
-推到私人仓库时至少包含：
-
-- `src/`
-- `public/`
-- `scripts/`
-- `baseline/`
-- `package.json` + `package-lock.json`
-- `docs/DEPLOYMENT_FULL_REPRO.md`
-- （可选）`deploy/` 下的 systemd/nginx 模板
-
-不要入库：
-
-- `node_modules/`
-- 真实生产数据库（除非你刻意做脱敏样本）
-- 私钥、token、敏感配置
-
----
-
-## 12. 常用运维命令速查
-
-```bash
-# 服务
-sudo systemctl restart packaging-system.service
-sudo systemctl status packaging-system.service --no-pager -l
-journalctl -u packaging-system.service -n 200 --no-pager
-
-# Nginx
-sudo nginx -t
-sudo systemctl reload nginx
-
-# 端口
-ss -ltnp | grep -E ':80|:8080'
-
-# 健康
-curl -sS http://127.0.0.1:8080/health
-curl -sS http://127.0.0.1/health
-```
-
----
-
-## 13. 版本化建议（你推私人仓库时）
-
-建议新增：
-
-- `deploy/systemd/packaging-system.service`
-- `deploy/nginx/packaging-system.conf`
-- `deploy/scripts/bootstrap.sh`（安装依赖 + 启动服务）
-- `docs/CHANGELOG_DEPLOY.md`
-
-这样你换新机器时，文档 + 配置 + 脚本三件套就齐了。
-
----
-
-## 14. 当前线上配置基线（便于对照）
-
-- systemd WorkingDirectory: `/home/admin/work/packaging-system`
-- ExecStart: `/home/admin/.nvm/versions/node/v22.22.0/bin/node /home/admin/work/packaging-system/src/server.js`
-- Node PORT: `8080`
-- Nginx: `80 -> 127.0.0.1:8080`
-
----
-
-如果你愿意，我下一步可以直接给你生成：
-
-1. `deploy/systemd/packaging-system.service` 标准模板
-2. `deploy/nginx/packaging-system.conf` 标准模板
-3. `deploy/scripts/bootstrap.sh` 一键部署脚本
-
-你推到私人仓库后，换机器基本就是：`clone -> bootstrap -> restore db -> done`。
+快速清单不能替代首次迁移时的完整流程，尤其不能跳过旧服务器原始备份、私密数据包校验、停写窗口和回滚准备。

@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Runtime Recovery Snapshot
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=runtime-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -7,7 +7,10 @@
     "start": "node src/server.js",
     "baseline:verify": "node scripts/verify-baseline.js",
     "verify:smoke": "node scripts/smoke-test.js",
-    "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js"
+    "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+    "runtime:audit": "node scripts/runtime-audit.js",
+    "runtime:backup": "node scripts/runtime-backup.js",
+    "runtime:verify": "node scripts/runtime-verify.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -64,18 +64,17 @@ PORT=8080 node src/server.js
 
 ## 数据备份与恢复
 
-### 备份
+运行中的 SQLite 数据库必须使用 SQLite 在线备份机制生成一致性快照；只有应用完全停止后，才可以把数据库文件作为离线副本复制。不要直接复制正在使用的 `data/app.db`。
+
+项目提供只读审计、在线备份和独立验证命令：
+
 ```bash
-tar czf backup-$(date +%Y%m%d).tar.gz data/
+npm run runtime:audit -- --db /绝对路径/app.db --root /项目路径 --out /项目外审计目录
+npm run runtime:backup -- --db /绝对路径/app.db --root /项目路径 --out /项目外备份目录
+npm run runtime:verify -- --bundle /私密数据包目录
 ```
 
-### 恢复
-```bash
-tar xzf backup-YYYYMMDD.tar.gz
-PORT=8080 DB_PATH=./data/app.db node src/server.js
-```
-
-数据库为单文件 SQLite，备份即复制文件，无需 `pg_dump` 或 `mysqldump`。
+完整的服务器迁移、数据恢复、Nginx、systemd、DNS、HTTPS、验收和回滚流程见 [`docs/DEPLOYMENT_FULL_REPRO.md`](docs/DEPLOYMENT_FULL_REPRO.md)。
 
 ## 本地开发
 
