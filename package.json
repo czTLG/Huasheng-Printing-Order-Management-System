@@ -11,7 +11,8 @@
     "test:private-baseline": "node scripts/test-private-baseline.js",
     "runtime:audit": "node scripts/runtime-audit.js",
     "runtime:backup": "node scripts/runtime-backup.js",
-    "runtime:verify": "node scripts/runtime-verify.js"
+    "runtime:verify": "node scripts/runtime-verify.js",
+    "baseline:generate-private": "node scripts/generate-private-baseline.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

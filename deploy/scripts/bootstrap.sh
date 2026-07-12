@@ -4,6 +4,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 APP_USER="${APP_USER:-$(id -un)}"
 BACKUP_DIR="${BACKUP_DIR:-/var/lib/packaging-system-backups}"
+GOLDEN_BASELINE_PATH="${GOLDEN_BASELINE_PATH:-}"
 SERVICE_NAME="packaging-system.service"
 INSTALL_BACKUP_TIMER="${INSTALL_BACKUP_TIMER:-0}"
 
@@ -52,10 +53,11 @@ sudo nginx -t
 
 echo "[7/9] 可选安装定时备份"
 if [[ "$INSTALL_BACKUP_TIMER" == "1" ]]; then
+  [[ -f "$GOLDEN_BASELINE_PATH" ]] || { echo "启用定时备份前必须设置有效的 GOLDEN_BASELINE_PATH。"; exit 3; }
   sudo install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$BACKUP_DIR"
   for unit in runtime-backup.service runtime-backup.timer; do
     tmp_unit="$(mktemp)"
-    sed -e "s|__APP_DIR__|$APP_DIR|g" -e "s|__APP_USER__|$APP_USER|g" -e "s|__NODE_BIN__|$NODE_BIN|g" -e "s|__BACKUP_DIR__|$BACKUP_DIR|g" "deploy/systemd/$unit" > "$tmp_unit"
+    sed -e "s|__APP_DIR__|$APP_DIR|g" -e "s|__APP_USER__|$APP_USER|g" -e "s|__NODE_BIN__|$NODE_BIN|g" -e "s|__BACKUP_DIR__|$BACKUP_DIR|g" -e "s|__GOLDEN_BASELINE_PATH__|$GOLDEN_BASELINE_PATH|g" "deploy/systemd/$unit" > "$tmp_unit"
     sudo install -m 0644 "$tmp_unit" "/etc/systemd/system/$unit"
     rm -f "$tmp_unit"
   done

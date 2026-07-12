@@ -82,6 +82,12 @@ npm run runtime:verify -- --bundle /私密数据包目录
 GOLDEN_BASELINE_PATH=/私密目录/private-golden-baseline.json npm run baseline:verify
 ```
 
+从历史复算一致记录生成项目外私密基线：
+
+```bash
+npm run baseline:generate-private -- --db /绝对路径/app.db --out /项目外私密目录
+```
+
 验证器只复放静态黄金结果，不再维护第二套期望公式。缺少私密文件、成本引擎哈希变化或结果被篡改时，验证会明确失败。
 
 ## 本地开发

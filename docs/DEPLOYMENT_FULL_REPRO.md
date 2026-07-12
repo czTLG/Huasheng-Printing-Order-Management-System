@@ -89,6 +89,16 @@ LATEST_BUNDLE="$(find "$BACKUP_DIR" -maxdepth 1 -type d -name 'runtime-data-*' |
 npm run runtime:verify -- --bundle "$LATEST_BUNDLE"
 ```
 
+正式备份应先生成或确认私密黄金基线，并把它一并装入数据包：
+
+```bash
+BASELINE_DIR="$BACKUP_DIR/private-baseline"
+npm run baseline:generate-private -- --db "$APP_DIR/data/app.db" --out "$BASELINE_DIR"
+GOLDEN_BASELINE_PATH="$BASELINE_DIR/private-golden-baseline.json"
+npm run baseline:verify
+npm run runtime:backup -- --db "$APP_DIR/data/app.db" --root "$APP_DIR" --out "$BACKUP_DIR" --baseline "$GOLDEN_BASELINE_PATH"
+```
+
 确认 `verification.json` 的状态为 `healthy` 后才允许传输。建议在传输前用组织批准的加密工具加密；密码或私钥必须通过另一条通道保存。
 
 ## 6. 新服务器基础准备
@@ -171,7 +181,7 @@ chmod 600 "$APP_DIR/data/app.db"
 
 ```bash
 cd "$APP_DIR"
-APP_DIR="$APP_DIR" APP_USER="$APP_USER" BACKUP_DIR="$BACKUP_DIR" INSTALL_BACKUP_TIMER=1 bash deploy/scripts/bootstrap.sh
+APP_DIR="$APP_DIR" APP_USER="$APP_USER" BACKUP_DIR="$BACKUP_DIR" GOLDEN_BASELINE_PATH="$BACKUP_DIR/private-baseline/private-golden-baseline.json" INSTALL_BACKUP_TIMER=1 bash deploy/scripts/bootstrap.sh
 ```
 
 脚本将执行锁定依赖安装、前端构建、systemd 模板渲染、Nginx 配置检查、应用启动和本机健康检查。

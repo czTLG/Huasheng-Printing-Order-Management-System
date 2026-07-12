@@ -12,6 +12,7 @@ const projectRoot = path.join(tmpRoot, 'project');
 const dbPath = path.join(projectRoot, 'data', 'app.db');
 const auditOut = path.join(tmpRoot, 'audit');
 const bundleOut = path.join(tmpRoot, 'bundles');
+const goldenPath = path.join(tmpRoot, 'private-golden.json');
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -52,6 +53,7 @@ function setup() {
   db.close();
   fs.writeFileSync(path.join(projectRoot, 'public', 'uploads', 'orders', 'a.bin'), 'same');
   fs.writeFileSync(path.join(projectRoot, 'public', 'uploads', 'orders', 'b.bin'), 'same');
+  fs.writeFileSync(goldenPath, JSON.stringify({ format_version: 1, status: 'technical_baseline_confirmed', engine_sha256: 'test', cases: [] }));
 }
 
 function main() {
@@ -68,10 +70,15 @@ function main() {
   assert(audit.files.missingReferences.includes('public/uploads/orders/missing.jpg'), '应报告缺失附件');
   assert(fs.readFileSync(path.join(auditOut, 'runtime-audit.md'), 'utf8').includes('本次仅审计，未删除任何数据'));
 
-  run('runtime-backup.js', ['--db', dbPath, '--root', projectRoot, '--out', bundleOut]);
+  run('runtime-backup.js', ['--db', dbPath, '--root', projectRoot, '--out', bundleOut, '--baseline', goldenPath]);
   const bundles = fs.readdirSync(bundleOut).filter(name => name.startsWith('runtime-data-'));
   assert.strictEqual(bundles.length, 1);
   const bundle = path.join(bundleOut, bundles[0]);
+  assert(fs.existsSync(path.join(bundle, 'private', 'golden-baseline.json')), '数据包应包含私密黄金基线');
+  const files = [];
+  const collect = dir => fs.readdirSync(dir, { withFileTypes: true }).forEach(entry => entry.isDirectory() ? collect(path.join(dir, entry.name)) : files.push(path.join(dir, entry.name)));
+  collect(bundle);
+  assert(files.every(file => (fs.statSync(file).mode & 0o777) === 0o600), '数据包内所有文件权限必须为600');
   run('runtime-verify.js', ['--bundle', bundle]);
   const snapshot = new Database(path.join(bundle, 'database', 'app.db'), { readonly: true });
   assert.strictEqual(snapshot.prepare('SELECT count(*) n FROM orders').get().n, 1);
