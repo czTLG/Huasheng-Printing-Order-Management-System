@@ -8,10 +8,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const Database = require('better-sqlite3');
-const { createCacheIndexView } = require('../src/lib/cacheIndexView');
+const { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE } = require('../src/lib/cacheIndexView');
 
 const ROOT = path.resolve(__dirname, '..');
-const ELIGIBLE = "r.country_code NOT IN ('CN','IN') AND r.stage_code <> 'suppressed' AND r.status IN ('valid','needs_review')";
+const ELIGIBLE = RECOMMENDATION_WHERE;
 const FOCUSED_TESTS = [
   'scripts/test-cache-index-view.js',
   'scripts/test-packet-gate.js',
@@ -42,15 +42,15 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
   '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '1afec87793316e0f1c679845548073e3c0eef53f6d2277a7c8241305b56b11c4',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '257d3c736f5532ab0bf0dd2ab8888ff8bfed85966b518056b3f2f59112da61f4',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '29db865fe76583d64f335d9f54a3df922cb95d37e8500b02a77b53a6b8a22a80',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': 'ce090ea576cec5713477b9bc2f7ef29b942bcbbdf4a7a461bf899c36a0c7ec1c',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': 'a81605c2e0767e7d54e4b49151a24f36a4975c4955a90f0d37fd5dfefe1f6c8d',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '9b9bbb83a861d119d43590d2ba25fc8a9458289c9d04a6d3fe0bbe5570e80c35',
   'src/db.js': '93c745363f7b078e11dc3c85de18952d1565377df266e839b75fb8123b1ee74e',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
-  'src/lib/cacheIndexView.js': '5dccd7b5f61eed60e4985d16dabcc493692bf01c6f4deb45576710922830d30c',
+  'src/lib/cacheIndexView.js': 'f00e1177c587f19330b09aa2dfa43c133230af8dc1fdff6d269cf35d6aae5ee3',
   'src/lib/packetGate.js': '6f17659556e0b427df555cd4d3f01f25cf390fea3b1e56e37772bd31abda8ab5',
-  'src/routes/matrix.js': '6f566cecdacbc5fda8faa0edf18597f3f18c712b3be68d426a1a4dead165cdfe',
+  'src/routes/matrix.js': 'b23ef4fc9f6eb36bf53d19e474b1320cb759701c71c25944652e1ad4a89a75f3',
   'scripts/matrix-bind-actor.js': 'e9e2dd9843bedef5f97889cab662f5b5464b85e12f57efd9c815a27775590efa'
 };
 
@@ -104,7 +104,7 @@ function createCandidateFixture(root) {
     INSERT INTO cache_records VALUES (
       @id,@company,@country,'',@domain,@url,@categories,@formats,@sizes,'medium',
       '', '', '', @contact,@priority,@score,@score,70,0.9,@status,@assessment,
-      '核实公开联系入口','observed','audited',NULL,NULL,'2026-07-17T00:00:00.000Z'
+      '核实公开联系入口','observed','audited',NULL,'2026-07-17T00:00:00.000Z','2026-07-17T00:00:00.000Z'
     )
   `);
   const rows = [
@@ -155,13 +155,43 @@ function inspectCandidates(dbPath) {
     const excludedCountries = db.prepare("SELECT COUNT(*) AS count FROM cache_records WHERE country_code IN ('CN','IN')").get().count;
     const missingEvidence = db.prepare(`
       SELECT COUNT(*) AS count FROM cache_records r
-      WHERE ${ELIGIBLE} AND NOT EXISTS (SELECT 1 FROM cache_evidence e WHERE e.record_id = r.id)
+      WHERE ${BASE_WHERE} AND NOT EXISTS (
+        SELECT 1 FROM cache_evidence e
+        WHERE e.record_id = r.id AND e.source_type = 'official_website' AND trim(COALESCE(e.source_url, '')) <> ''
+      )
     `).get().count;
     const missingDiscovery = db.prepare(`
       SELECT COUNT(*) AS count FROM cache_records r
-      WHERE ${ELIGIBLE} AND NOT EXISTS (SELECT 1 FROM cache_discovery d WHERE d.record_id = r.id)
+      WHERE ${BASE_WHERE} AND NOT EXISTS (SELECT 1 FROM cache_discovery d WHERE d.record_id = r.id)
     `).get().count;
-    return { candidateIntegrity, candidateMode, candidateCount, duplicateDomains, excludedCountries, missingEvidence, missingDiscovery };
+    const recommendationMissingOfficialEvidence = db.prepare(`
+      SELECT COUNT(*) AS count FROM cache_records r WHERE ${ELIGIBLE}
+      AND NOT EXISTS (
+        SELECT 1 FROM cache_evidence e
+        WHERE e.record_id = r.id AND e.source_type = 'official_website' AND trim(COALESCE(e.source_url, '')) <> ''
+      )
+    `).get().count;
+    const recommendationMissingDiscovery = db.prepare(`
+      SELECT COUNT(*) AS count FROM cache_records r WHERE ${ELIGIBLE}
+      AND NOT EXISTS (SELECT 1 FROM cache_discovery d WHERE d.record_id = r.id)
+    `).get().count;
+    const recommendationMissingContact = db.prepare(`
+      SELECT COUNT(*) AS count FROM cache_records r WHERE ${ELIGIBLE}
+      AND trim(COALESCE(r.public_email, '')) = ''
+      AND trim(COALESCE(r.public_phone, '')) = ''
+      AND trim(COALESCE(r.public_whatsapp, '')) = ''
+      AND trim(COALESCE(r.contact_url, '')) = ''
+    `).get().count;
+    const recommendationStaleReview = db.prepare(`
+      SELECT COUNT(*) AS count FROM cache_records r WHERE ${ELIGIBLE} AND NOT (${CURRENT_REVIEW_WHERE})
+    `).get().count;
+    return {
+      candidateIntegrity, candidateMode, candidateCount,
+      recommendationEligibleCount: candidateCount,
+      recommendationMissingOfficialEvidence, recommendationMissingDiscovery,
+      recommendationMissingContact, recommendationStaleReview,
+      duplicateDomains, excludedCountries, missingEvidence, missingDiscovery
+    };
   } finally {
     db.close();
   }
@@ -370,8 +400,10 @@ function main() {
     assert.strictEqual(metrics.candidateMode, '600');
     assert.strictEqual(metrics.duplicateDomains, 0);
     assert.strictEqual(metrics.excludedCountries, 0);
-    assert.strictEqual(metrics.missingEvidence, 0);
-    assert.strictEqual(metrics.missingDiscovery, 0);
+    assert.strictEqual(metrics.recommendationMissingOfficialEvidence, 0);
+    assert.strictEqual(metrics.recommendationMissingDiscovery, 0);
+    assert.strictEqual(metrics.recommendationMissingContact, 0);
+    assert.strictEqual(metrics.recommendationStaleReview, 0);
     assert.ok(selected.length <= 5);
     assert.strictEqual(delivery, '0');
     assert.strictEqual(adapters.length, 0);
@@ -380,12 +412,17 @@ function main() {
     runFocusedTests();
     process.stdout.write(`${JSON.stringify({
       candidate_count: metrics.candidateCount,
+      recommendation_eligible_count: metrics.recommendationEligibleCount,
       candidate_integrity: metrics.candidateIntegrity,
       candidate_mode: metrics.candidateMode,
       duplicate_domains: metrics.duplicateDomains,
       excluded_countries: metrics.excludedCountries,
-      missing_evidence: metrics.missingEvidence,
-      missing_discovery: metrics.missingDiscovery,
+      ordinary_missing_official_evidence: metrics.missingEvidence,
+      ordinary_missing_discovery: metrics.missingDiscovery,
+      recommendation_missing_official_evidence: metrics.recommendationMissingOfficialEvidence,
+      recommendation_missing_discovery: metrics.recommendationMissingDiscovery,
+      recommendation_missing_contact: metrics.recommendationMissingContact,
+      recommendation_stale_review: metrics.recommendationStaleReview,
       recommendations: selected.length,
       idempotent_selection_events: idempotentEvents,
       delivery_enabled: false,

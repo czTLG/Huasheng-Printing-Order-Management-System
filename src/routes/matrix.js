@@ -153,7 +153,13 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
   });
 
   router.get('/recommendations/today', (req, res) => {
-    try { res.json(view.list(normalizedListFilters(req.query, { recommendation: true }))); }
+    try {
+      const filters = normalizedListFilters(req.query, { recommendation: true });
+      const { page: _page, page_size: pageSize, ...recommendationFilters } = filters;
+      const rows = view.recommend({ limit: pageSize, excludeIds: [], filters: recommendationFilters });
+      const snapshotKey = crypto.createHash('sha256').update(JSON.stringify(rows.map(row => [row.id, row.updated_at]))).digest('hex');
+      res.json({ rows, page: 1, page_size: pageSize, total: rows.length, total_pages: rows.length ? 1 : 0, snapshot_key: snapshotKey });
+    }
     catch (error) { res.status(400).json({ error: error.message }); }
   });
 

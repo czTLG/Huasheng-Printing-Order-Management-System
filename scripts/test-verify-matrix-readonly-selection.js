@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const Database = require('better-sqlite3');
 const verifier = require('./verify-matrix-readonly-selection');
 
 assert.strictEqual(typeof verifier.recommendFromView, 'function');
@@ -43,7 +44,20 @@ try {
 
   const fixtureInput = verifier.candidateInput({ root, temporary, env: { MATRIX_VERIFY_FIXTURE: '1' } });
   assert.strictEqual(fixtureInput.source, 'explicit-fixture');
-  assert.strictEqual(verifier.inspectCandidates(fixtureInput.dbPath).candidateIntegrity, 'ok');
+  const fixtureMetrics = verifier.inspectCandidates(fixtureInput.dbPath);
+  assert.strictEqual(fixtureMetrics.candidateIntegrity, 'ok');
+  assert.strictEqual(fixtureMetrics.recommendationEligibleCount, 2);
+  assert.strictEqual(fixtureMetrics.recommendationMissingOfficialEvidence, 0);
+  assert.strictEqual(fixtureMetrics.recommendationMissingDiscovery, 0);
+  assert.strictEqual(fixtureMetrics.recommendationMissingContact, 0);
+  assert.strictEqual(fixtureMetrics.recommendationStaleReview, 0);
+  const broaderDb = new Database(fixtureInput.dbPath);
+  broaderDb.prepare('DELETE FROM cache_evidence WHERE record_id = 2').run();
+  broaderDb.close();
+  const broaderMetrics = verifier.inspectCandidates(fixtureInput.dbPath);
+  assert.strictEqual(broaderMetrics.candidateCount, 1, 'strict recommendation count must exclude a broad-list row without official evidence');
+  assert.strictEqual(broaderMetrics.missingEvidence, 1, 'ordinary-list quality gaps remain visible as statistics');
+  assert.strictEqual(broaderMetrics.recommendationMissingOfficialEvidence, 0, 'strict recommendation set itself has no evidence gaps');
   assert.throws(() => verifier.candidateInput({
     root, temporary,
     env: { MATRIX_VERIFY_FIXTURE: '1', MATRIX_STREAM_DB_PATH: '/tmp/ambiguous.db' }

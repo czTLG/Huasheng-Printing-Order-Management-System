@@ -12,7 +12,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-index-view-'));
 const dbPath = path.join(dir, 'matrix.db');
 
 function record(overrides) {
-  return {
+  const row = {
     id: 1,
     company_name: 'Alpha Foods',
     country_code: 'US',
@@ -37,6 +37,8 @@ function record(overrides) {
     updated_at: '2026-07-16T00:00:00Z',
     ...overrides
   };
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'audited_at')) row.audited_at = row.updated_at;
+  return row;
 }
 
 const db = new Database(dbPath);
@@ -64,7 +66,7 @@ try {
   const insertRecord = db.prepare(`INSERT INTO cache_records VALUES (
     @id,@company_name,@country_code,'',@domain,@url,@categories,@formats,@sizes,'medium',
     @email,@phone,@whatsapp,@contact_url,@priority,@fit,@demand_fit,@access,@confidence,
-    @status,@assessment,'核实联系入口',@stage_code,@audit_state,NULL,NULL,@updated_at
+    @status,@assessment,'核实联系入口',@stage_code,@audit_state,NULL,@audited_at,@updated_at
   )`);
   [
     record({}),
@@ -78,11 +80,20 @@ try {
     record({ id: 9, company_name: 'Zeta Tea', country_code: 'AU', domain: 'zeta.test', url: 'https://zeta.test/', categories: '["tea"]', priority: 'P1', fit: 96, demand_fit: 96, access: 90, audit_state: 'unreviewed' }),
     record({ id: 10, company_name: 'Blocked CN', country_code: 'CN', domain: 'blocked-cn.test', url: 'https://blocked-cn.test/', priority: 'P0', fit: 100, demand_fit: 100, access: 100 }),
     record({ id: 11, company_name: 'Invalid Status', country_code: 'CA', domain: 'invalid.test', url: 'https://invalid.test/', priority: 'P0', fit: 100, demand_fit: 100, access: 100, status: 'invalid' }),
-    record({ id: 12, company_name: 'Review Queue', country_code: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["coffee"]', priority: 'P3', fit: 60, demand_fit: 60, access: 20, status: 'needs_review' })
+    record({ id: 12, company_name: 'Review Queue', country_code: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["coffee"]', priority: 'P3', fit: 60, demand_fit: 60, access: 20, status: 'needs_review' }),
+    record({ id: 13, company_name: 'No Contact', country_code: 'JP', domain: 'no-contact.test', url: 'https://no-contact.test/', categories: '["cosmetics"]', email: '', phone: '', whatsapp: '', contact_url: '', priority: 'P2' }),
+    record({ id: 14, company_name: 'Stale Audit', country_code: 'JP', domain: 'stale-audit.test', url: 'https://stale-audit.test/', categories: '["cosmetics"]', priority: 'P2', audited_at: '2026-07-15T00:00:00Z', updated_at: '2026-07-16T00:00:00Z' }),
+    record({ id: 15, company_name: 'Missing Audit Time', country_code: 'JP', domain: 'missing-audit-time.test', url: 'https://missing-audit-time.test/', categories: '["cosmetics"]', priority: 'P2', audited_at: null })
   ].forEach(row => insertRecord.run(row));
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-16T00:00:00Z', 'Coffee products', 'e1');
   db.prepare('INSERT INTO cache_evidence VALUES (2,1,?,?,?,?,?,?)').run('https://association.test/members', 'official_association_directory', 'Member directory', '2026-07-15T00:00:00Z', 'Association listing', 'e2');
   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members', 'https://alpha.test/', 'official_association_directory', '2026-07-16T00:00:00Z', 'd1');
+  let evidenceId = 10;
+  let discoveryId = 10;
+  const addOfficial = id => db.prepare('INSERT INTO cache_evidence VALUES (?,?,?,?,?,?,?,?)').run(evidenceId++, id, `https://record-${id}.test/products`, 'official_website', 'Products', '2026-07-16T00:00:00Z', 'Public products', `e-${id}`);
+  const addDiscovery = id => db.prepare('INSERT INTO cache_discovery VALUES (?,?,?,?,?,?,?,?,?)').run(discoveryId++, id, `record-${id}.test`, 'official_directory', `https://directory.test/${id}`, `https://record-${id}.test/`, 'official_directory', '2026-07-16T00:00:00Z', `d-${id}`);
+  for (const id of [5, 7, 12, 13, 14, 15]) addOfficial(id);
+  for (const id of [5, 6, 12, 13, 14, 15]) addDiscovery(id);
 } finally {
   db.close();
 }
@@ -95,6 +106,7 @@ try {
   assert.strictEqual(page.rows[0].contacts.phone, '***0123');
   assert.strictEqual(page.rows[0].contacts.whatsapp, '***0456');
   assert.strictEqual(page.rows[0].contacts.contact_page, '[available]');
+  assert.strictEqual(page.rows[0].stage_code, 'observed');
   assert.strictEqual(page.page, 1);
   assert.strictEqual(page.page_size, 10);
   assert.strictEqual(page.total, 2);
@@ -129,6 +141,7 @@ try {
   assert.strictEqual(detail.contacts.email, 't***@alpha.test');
   assert.strictEqual(detail.contacts.contact_page, '[available]');
   assert.strictEqual(detail.discovery.discovery_url, 'https://association.test/members');
+  assert.strictEqual(detail.stage_code, 'observed');
   assert.notStrictEqual(detail.official_evidence[0].source_url, detail.discovery.discovery_url);
 
   const revealed = view.detail(1, { revealContacts: true });
@@ -141,13 +154,14 @@ try {
   assert.strictEqual(view.detail(10), null);
   assert.strictEqual(view.detail(11), null);
   assert.strictEqual(view.detail(12).status, 'needs_review');
-  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [] }).map(row => row.id), [1, 5, 8, 6, 2]);
-  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [1, 5] }).map(row => row.id), [8, 6, 2, 9, 7]);
-  assert.deepStrictEqual(view.recommend({ limit: 2.9 }).map(row => row.id), [1, 5]);
+  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [] }).map(row => row.id), [1, 12]);
+  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [1] }).map(row => row.id), [12]);
+  assert.deepStrictEqual(view.recommend({ limit: 2.9 }).map(row => row.id), [1, 12]);
   assert.deepStrictEqual(view.recommend({ limit: -3 }), []);
   assert.deepStrictEqual(view.recommend({ limit: 'invalid' }), []);
   assert.deepStrictEqual(view.recommend({ limit: Infinity }), []);
-  assert.strictEqual(view.recommend().length, 5);
+  assert.strictEqual(view.recommend().length, 2);
+  assert.ok(view.recommend().every(row => row.stage_code === 'observed'));
 
   const allowedRegions = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
   const requiredIsoCodes = ['AQ', 'AX', 'BL', 'BV', 'CC', 'CX', 'EH', 'FO', 'GG', 'GI', 'GS', 'HM', 'IM', 'IO', 'JE', 'MF', 'SH', 'SJ', 'TF', 'UM'];
@@ -162,7 +176,7 @@ try {
   process.env.MATRIX_STREAM_DB_PATH = path.join(dir, 'missing.db');
   try {
     const explicitView = createCacheIndexView({ dbPath });
-    assert.strictEqual(explicitView.facets().countries.length, 7);
+    assert.strictEqual(explicitView.facets().countries.length, 8);
     explicitView.close();
   } finally {
     if (previousPath === undefined) delete process.env.MATRIX_STREAM_DB_PATH;

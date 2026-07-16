@@ -9,6 +9,8 @@ This catalog records only the code contract and acceptance gate. It contains no 
 - Feishu entry: exact trimmed `开发客户` returns at most five stable overseas choices labelled A–E without asking a geographic question. A–E replies and card buttons are session/version bound.
 - Mobile constraint: the full recommendation card is limited to 1,500 Unicode code points, uses no Markdown table, and retains name, reason, category, data status, verification gap, and next action.
 - 来源分离: discovery channel/URL identifies how the company was found; official evidence URLs support product/category claims. Detail views label unconfirmed information as `待核实`.
+- Recommendation truth: ordinary candidate lists remain broad, but daily recommendations separately require an allowed country/status/stage, `audit_state=audited`, a current review, at least one non-empty official-website evidence URL, one discovery row, and one public organizational contact route. “Current” means both `audited_at` and `updated_at` are parseable and `audited_at >= updated_at`; missing timestamps never imply freshness.
+- Presentation truth: API summaries and details expose the real `stage_code`, while cards render its Chinese workflow label. Observed signals with explicit units/dimensions are shown as confirmed specifications; other non-empty observed values are shown as confirmed public signals, not mislabeled as specifications. Only an empty specification set is marked for verification.
 - Delivery boundary: `MATRIX_DELIVERY_ENABLED=0` is mandatory. This slice only selects and records candidates; 不存在外发适配器, and it does not send email, WhatsApp, or website requests.
 - Reminder safety: local delivery prioritizes at-most-once behavior. A pending reminder is claimed as inflight before the single managed-card attempt; an inflight record without a matching receipt is always treated as ambiguous and requires manual reconciliation. It is never retried automatically, even after the platform idempotency window, so a crash can cause a missed reminder rather than a duplicate.
 
@@ -19,7 +21,7 @@ Run `npm run verify:matrix-readonly-selection`. This deployment gate uses `MATRI
 Disposable fixture verification is separate and explicit: `MATRIX_VERIFY_FIXTURE=1 npm run verify:matrix-readonly-selection`. Fixture mode cannot be combined with `MATRIX_STREAM_DB_PATH` and is never enabled by the package script itself. It checks:
 
 - SQLite integrity and mode `0600`;
-- no duplicate normalized domains, excluded CN/IN rows, or eligible records missing evidence/discovery;
+- no duplicate normalized domains or excluded CN/IN rows; ordinary-pool evidence/discovery gaps are reported as statistics, while recommendation-eligible rows must have current audit, official evidence, discovery, and a public organizational contact route;
 - the adapter's real oversized `recommend` request still returns no more than five recommendations;
 - delivery disabled and no outbound adapter capability in the Matrix slice;
 - one event after the same idempotent selection is submitted twice;

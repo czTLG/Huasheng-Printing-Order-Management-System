@@ -11,6 +11,34 @@ const BASE_WHERE = `
   AND r.status IN ('valid','needs_review')
 `;
 
+// A review is current only when an explicit audit timestamp exists and the
+// record has not been updated after that audit. Missing/unparseable timestamps
+// never imply freshness.
+const CURRENT_REVIEW_WHERE = `
+  r.audit_state = 'audited'
+  AND julianday(r.audited_at) IS NOT NULL
+  AND julianday(r.updated_at) IS NOT NULL
+  AND julianday(r.audited_at) >= julianday(r.updated_at)
+`;
+
+const RECOMMENDATION_WHERE = `
+  ${BASE_WHERE}
+  AND ${CURRENT_REVIEW_WHERE}
+  AND EXISTS (
+    SELECT 1 FROM cache_evidence recommendation_evidence
+    WHERE recommendation_evidence.record_id = r.id
+      AND recommendation_evidence.source_type = 'official_website'
+      AND trim(COALESCE(recommendation_evidence.source_url, '')) <> ''
+  )
+  AND EXISTS (SELECT 1 FROM cache_discovery recommendation_discovery WHERE recommendation_discovery.record_id = r.id)
+  AND (
+    trim(COALESCE(r.public_email, '')) <> ''
+    OR trim(COALESCE(r.public_phone, '')) <> ''
+    OR trim(COALESCE(r.public_whatsapp, '')) <> ''
+    OR trim(COALESCE(r.contact_url, '')) <> ''
+  )
+`;
+
 const STABLE_ORDER = `
   CASE r.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
   CASE r.audit_state WHEN 'audited' THEN 0 ELSE 1 END,
@@ -76,6 +104,7 @@ function summary(row, revealContacts = false) {
     access_score: row.access_score,
     confidence: row.confidence,
     status: row.status,
+    stage_code: row.stage_code,
     audit_state: row.audit_state,
     assessment_cn: row.assessment_cn || '',
     next_action_cn: row.next_action_cn || '',
@@ -84,8 +113,8 @@ function summary(row, revealContacts = false) {
   };
 }
 
-function filterSql(filters = {}) {
-  const clauses = [BASE_WHERE];
+function filterSql(filters = {}, baseWhere = BASE_WHERE) {
+  const clauses = [baseWhere];
   const params = [];
   if (filters.region) {
     const codes = Object.entries(regionByCountry).filter(([, region]) => region === filters.region).map(([code]) => code);
@@ -209,16 +238,17 @@ function detail(db, id, { revealContacts = false } = {}) {
   };
 }
 
-function recommend(db, limit, excludeIds) {
+function recommend(db, limit, excludeIds, filters = {}) {
   if (limit <= 0) return [];
   const ids = [...new Set((excludeIds || []).map(Number).filter(Number.isInteger))];
   const exclusion = ids.length ? `AND r.id NOT IN (${ids.map(() => '?').join(',')})` : '';
+  const { where, params } = filterSql(filters, RECOMMENDATION_WHERE);
   return db.prepare(`
     SELECT r.* FROM cache_records r
-    WHERE ${BASE_WHERE} ${exclusion}
+    WHERE ${where} ${exclusion}
     ORDER BY ${STABLE_ORDER}
     LIMIT ?
-  `).all(...ids, limit).map(row => summary(row));
+  `).all(...params, ...ids, limit).map(row => summary(row));
 }
 
 function recommendationLimit(value) {
@@ -235,9 +265,9 @@ function createCacheIndexView({ dbPath } = {}) {
     facets: () => facets(db),
     list: filters => list(db, filters),
     detail: (id, options) => detail(db, id, options),
-    recommend: ({ limit = 5, excludeIds = [] } = {}) => recommend(db, recommendationLimit(limit), excludeIds),
+    recommend: ({ limit = 5, excludeIds = [], filters = {} } = {}) => recommend(db, recommendationLimit(limit), excludeIds, filters),
     close: () => db.close()
   };
 }
 
-module.exports = { createCacheIndexView };
+module.exports = { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE };

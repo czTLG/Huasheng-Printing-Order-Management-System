@@ -118,7 +118,7 @@ function seedCandidateDb() {
     INSERT INTO cache_records VALUES (
       @id,@company,@country,'',@domain,@url,@categories,'["pouches"]','["exports"]','medium',
       @email,@phone,@whatsapp,@contact,@priority,@score,@score,80,0.9,@status,
-      '公开信息确认','核实公开联系入口','observed','audited',NULL,NULL,@updated,'SECRET-COST-FORMULA'
+      '公开信息确认','核实公开联系入口','observed','audited',NULL,@updated,@updated,'SECRET-COST-FORMULA'
     )
   `);
   insert.run({ id: 1, company: 'Alpha Coffee', country: 'US', domain: 'alpha.test', url: 'https://alpha.test/', categories: '["coffee"]', email: 'team@alpha.test', phone: '+1 202 555 0123', whatsapp: '+1 202 555 0456', contact: 'https://alpha.test/contact', priority: 'P0', score: 95, status: 'valid', updated: '2026-07-17T00:00:00Z' });
@@ -206,6 +206,7 @@ async function stopServer() {
     assert.match(list.body.snapshot_key, /^[a-f0-9]{64}$/);
     assert.strictEqual(list.body.page_size, 20);
     assert.strictEqual(list.body.rows.length, 1);
+    assert.strictEqual(list.body.rows[0].stage_code, 'observed');
     const listText = JSON.stringify(list.body);
     assert.ok(listText.includes('t***@alpha.test'));
     assert.ok(!listText.includes('team@alpha.test'));
@@ -225,12 +226,14 @@ async function stopServer() {
 
     const recommendations = await request('/api/matrix/recommendations/today?page_size=99', { token: crmAdminToken });
     assert.strictEqual(recommendations.status, 200);
-    assert.ok(recommendations.body.rows.length <= 5);
+    assert.deepStrictEqual(recommendations.body.rows.map(row => row.id), [1]);
     assert.strictEqual(recommendations.body.page_size, 5);
+    assert.strictEqual(recommendations.body.rows[0].stage_code, 'observed');
 
     const detail = await request('/api/matrix/candidates/1', { token: crmAdminToken });
     assert.strictEqual(detail.status, 200);
     assert.strictEqual(detail.body.discovery.discovered_via, 'official_association_directory');
+    assert.strictEqual(detail.body.stage_code, 'observed');
     assert.strictEqual(detail.body.contacts.email, 'team@alpha.test');
     assert.ok(!JSON.stringify(detail.body).includes('SECRET-COST-FORMULA'));
     assert.strictEqual((await request('/api/matrix/candidates/not-a-number', { token: rootToken })).status, 400);

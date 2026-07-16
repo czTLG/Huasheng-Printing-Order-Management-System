@@ -87,10 +87,37 @@ function clip(value, maximum = 80) {
   return text.length > maximum ? `${text.slice(0, maximum - 1)}…` : text;
 }
 
+function stageLabel(value) {
+  return ({ observed: '已观察', selected: '已选择', draft_pending: '草稿待处理', review_pending: '审核待处理', suppressed: '已抑制' })[value] || '待核实';
+}
+
+function confirmedSignals(values) {
+  const signals = Array.isArray(values) ? values.map(value => String(value || '').trim()).filter(Boolean) : [];
+  const isSpecification = value => /\d+(?:[.,]\d+)?\s*(?:μm|um|microns?|mm|cm|kg|mg|g|ml|cl|l|oz|lbs?|inches?|inch)\b/i.test(value)
+    || /\d+(?:[.,]\d+)?\s*["”]/.test(value)
+    || /\d+(?:[.,]\d+)?\s*[x×*]\s*\d+(?:[.,]\d+)?/i.test(value);
+  return {
+    specifications: signals.filter(isSpecification),
+    observations: signals.filter(value => !isSpecification(value))
+  };
+}
+
 function reminderCard(rows) {
   const selected = (rows || []).slice(0, 5);
   const content = selected.length
-    ? selected.map((row, index) => `${String.fromCharCode(65 + index)}｜${clip(row.company_name, 42)}｜${clip(row.country_code, 8)}｜${clip(row.priority, 4)}\n推荐理由：${clip(row.assessment_cn, 90)}\n品类：${clip((row.categories || []).join('、'), 60)}\n下一步：${clip(row.next_action_cn, 70)}`).join('\n\n')
+    ? selected.map((row, index) => {
+      const signals = confirmedSignals(row.size_signals);
+      return [
+        `${String.fromCharCode(65 + index)}｜${clip(row.company_name, 42)}｜${clip(row.country_code, 8)}｜${clip(row.priority, 4)}`,
+        `推荐理由：${clip(row.assessment_cn, 90)}`,
+        `品类：${clip((row.categories || []).join('、'), 60)}`,
+        `阶段：${stageLabel(row.stage_code)}`,
+        ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), 40)}`] : []),
+        ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), 40)}`] : []),
+        `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
+        `下一步：${clip(row.next_action_cn, 70)}`
+      ].join('\n');
+    }).join('\n\n')
     : '今日没有达到证据标准的候选';
   return {
     schema: '2.0',

@@ -102,18 +102,36 @@ function statusLabel(value) {
   return ({ valid: '有效', needs_review: '待核实' })[value] || '待核实';
 }
 
+function stageLabel(value) {
+  return ({ observed: '已观察', selected: '已选择', draft_pending: '草稿待处理', review_pending: '审核待处理', suppressed: '已抑制' })[value] || '待核实';
+}
+
+function confirmedSignals(values) {
+  const signals = Array.isArray(values) ? values.map(value => String(value || '').trim()).filter(Boolean) : [];
+  const isSpecification = value => /\d+(?:[.,]\d+)?\s*(?:μm|um|microns?|mm|cm|kg|mg|g|ml|cl|l|oz|lbs?|inches?|inch)\b/i.test(value)
+    || /\d+(?:[.,]\d+)?\s*["”]/.test(value)
+    || /\d+(?:[.,]\d+)?\s*[x×*]\s*\d+(?:[.,]\d+)?/i.test(value);
+  return {
+    specifications: signals.filter(isSpecification),
+    observations: signals.filter(value => !isSpecification(value))
+  };
+}
+
 function renderCandidates(state, cardHelpers) {
   const { card, md, note, hr, actions, button } = cardHelpers;
   const elements = [];
   state.candidates.slice(0, 5).forEach((candidate, index) => {
     const label = LETTERS[index];
     const categories = Array.isArray(candidate.categories) && candidate.categories.length ? candidate.categories.join('、') : '待核实';
+    const signals = confirmedSignals(candidate.size_signals);
     elements.push(md([
       `**${label}｜${clip(candidate.company_name, 26)}｜${clip(candidate.country_code, 4)}｜${clip(candidate.priority, 3)}**`,
-      `推荐理由：${clip(candidate.assessment_cn, 36)}`,
-      `品类：${clip(categories, 20)}`,
-      `数据状态：${statusLabel(candidate.status)}`,
-      `待核实：${Array.isArray(candidate.size_signals) && candidate.size_signals.length ? clip(candidate.size_signals.join('、'), 24) : '规格与联系人角色'}`,
+      `推荐理由：${clip(candidate.assessment_cn, 28)}`,
+      `品类：${clip(categories, 16)}`,
+      `数据状态：${statusLabel(candidate.status)}｜阶段：${stageLabel(candidate.stage_code)}`,
+      ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), 12)}`] : []),
+      ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), 12)}`] : []),
+      `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
       `下一步：${clip(candidate.next_action_cn, 28)}`
     ].join('\n')));
     elements.push(actions([
@@ -136,7 +154,7 @@ function renderDetail(detail, state, cardHelpers, chatId) {
   const discovery = detail.discovery || {};
   const evidence = Array.isArray(detail.official_evidence) ? detail.official_evidence.slice(0, 3) : [];
   const formats = Array.isArray(detail.format_signals) && detail.format_signals.length ? detail.format_signals.join('、') : '待核实';
-  const sizes = Array.isArray(detail.size_signals) && detail.size_signals.length ? detail.size_signals.join('、') : '待核实';
+  const signals = confirmedSignals(detail.size_signals);
   const restricted = new Set(String(process.env.MATRIX_RESTRICTED_CHAT_IDS || '').split(',').map(item => item.trim()).filter(Boolean)).has(String(chatId));
   const contactTypes = Object.entries(detail.contacts || {}).filter(([, value]) => Boolean(value)).map(([key]) => key).join('、') || '待核实';
   const contactLine = restricted
@@ -149,8 +167,9 @@ function renderDetail(detail, state, cardHelpers, chatId) {
     `发现来源：${clip(discovery.discovery_url, 120)}`,
     `官网：${clip(detail.official_url, 120)}`,
     `证据：\n${evidenceLines}`,
-    `已确认：品类 ${clip((detail.categories || []).join('、'), 70)}；形式 ${clip(formats, 70)}`,
-    `待核实：规格 ${clip(sizes, 70)}；联系人角色`,
+    `阶段：${stageLabel(detail.stage_code)}`,
+    `已确认：品类 ${clip((detail.categories || []).join('、'), 70)}；形式 ${clip(formats, 70)}${signals.specifications.length ? `；规格 ${clip(signals.specifications.join('、'), 70)}` : ''}${signals.observations.length ? `；公开信号 ${clip(signals.observations.join('、'), 70)}` : ''}`,
+    `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
     `联系方式：${contactLine}`,
     `下一步：${clip(detail.next_action_cn, 80)}`
   ].join('\n'))];

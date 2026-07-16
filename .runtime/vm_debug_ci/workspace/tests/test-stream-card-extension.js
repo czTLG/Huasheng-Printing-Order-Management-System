@@ -57,7 +57,7 @@ async function testReadOnlyWatcher() {
   const readOnlyClient = {
     today: async (openId, filters) => {
       calls.push({ openId, filters });
-      return { rows: Array.from({ length: 7 }, (_, index) => ({ id: index + 1, company_name: `Watch ${index + 1}`, country_code: 'US', priority: 'P1', assessment_cn: '公开理由', categories: ['coffee'], next_action_cn: '核实公开信息' })) };
+      return { rows: Array.from({ length: 7 }, (_, index) => ({ id: index + 1, company_name: `Watch ${index + 1}`, country_code: 'US', priority: 'P1', stage_code: 'observed', assessment_cn: '公开理由', categories: ['coffee'], size_signals: index === 0 ? ['250g', 'own factory'] : [], next_action_cn: '核实公开信息' })) };
     }
   };
   const first = await watcher.runDue({
@@ -75,6 +75,9 @@ async function testReadOnlyWatcher() {
   assert.ok(watchText.includes('Watch 1'));
   assert.ok(watchText.includes('Watch 5'));
   assert.ok(!watchText.includes('Watch 6'));
+  assert.ok(watchText.includes('阶段：已观察'));
+  assert.ok(watchText.includes('已确认规格：250g'));
+  assert.ok(watchText.includes('已确认公开信号：own factory'));
   assert.deepStrictEqual(first, { last_success_date: '2026-07-17', last_message_id: 'message-watch-1' });
   const second = await watcher.runDue({
     now: new Date('2026-07-17T01:05:00.000Z'), state: first, client: readOnlyClient,
@@ -292,7 +295,7 @@ async function testWholeCardBudget() {
     official_domain: `long-${index + 1}.test`, official_url: `https://long-${index + 1}.test/`,
     categories: [long, long], format_signals: [long], size_signals: [long], scale_tier: 'large',
     priority: 'P0', fit_score: 99, demand_fit_score: 99, access_score: 99, confidence: 0.99,
-    status: index === 1 ? 'needs_review' : 'valid', audit_state: 'audited',
+    status: index === 1 ? 'needs_review' : 'valid', stage_code: 'observed', audit_state: 'audited',
     assessment_cn: long, next_action_cn: long, updated_at: '2026-07-17T00:00:00.000Z',
     contacts: { email: '', phone: '', whatsapp: '', contact_page: '[available]' }
   }));
@@ -327,7 +330,7 @@ async function testExpiredSessionRecovery() {
     official_domain: 'expiry.test', official_url: 'https://expiry.test/', categories: ['coffee'],
     format_signals: ['pouch'], size_signals: [], scale_tier: 'medium', priority: 'P1',
     fit_score: 80, demand_fit_score: 80, access_score: 70, confidence: 0.9, status: 'valid',
-    audit_state: 'audited', assessment_cn: '官网公开证据', next_action_cn: '核实公开联系入口',
+    stage_code: 'observed', audit_state: 'audited', assessment_cn: '官网公开证据', next_action_cn: '核实公开联系入口',
     updated_at: '2026-07-17T00:00:00.000Z', contacts: { email: '', phone: '', whatsapp: '', contact_page: '[available]' }
   };
   const client = {
@@ -425,13 +428,14 @@ async function testExpiredSessionRecovery() {
     assessment_cn: `公开证据理由 ${index + 1}`,
     next_action_cn: '核实公开联系入口',
     format_signals: ['stand-up pouch'],
-    size_signals: [],
+    size_signals: index === 0 ? ['250g', 'own factory'] : [],
     scale_tier: 'medium',
     fit_score: 80,
     demand_fit_score: 80,
     access_score: 70,
     confidence: 0.9,
     status: index === 1 ? 'needs_review' : 'valid',
+    stage_code: 'observed',
     audit_state: 'audited',
     updated_at: '2026-07-17T00:00:00.000Z',
     contacts: { email: '', phone: '', whatsapp: '', contact_page: '[available]' },
@@ -498,12 +502,20 @@ async function testExpiredSessionRecovery() {
   assert.ok(!text.includes('SENTINEL-INTERNAL'));
   assert.ok(text.includes('数据状态：有效'));
   assert.ok(text.includes('数据状态：待核实'));
-  assert.ok(!text.includes('阶段：valid'));
-  assert.ok(!text.includes('阶段：needs_review'));
+  assert.ok(text.includes('阶段：已观察'));
+  assert.ok(text.includes('已确认规格：250g'));
+  assert.ok(text.includes('已确认公开信号：own factory'));
+  assert.ok(!text.includes('已确认规格：own factory'));
+  assert.ok(!text.includes('待核实：250g'));
   assert.strictEqual(await registered.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
   assert.ok(calls.some(item => item[0] === 'candidateDetail' && item[2] === 1));
   const detailText = visibleText(sent.at(-1).card);
   for (const expected of ['official_association_directory', 'https://association.test/member', 'https://company.test/', 'https://company.test/products', '已确认', '待核实']) assert.ok(detailText.includes(expected));
+  assert.ok(detailText.includes('阶段：已观察'));
+  assert.ok(detailText.includes('规格 250g'));
+  assert.ok(detailText.includes('公开信号 own factory'));
+  assert.ok(!detailText.includes('规格 own factory'));
+  assert.ok(!detailText.includes('待核实：规格 250g'));
   assert.ok(!detailText.includes('public@company.test'));
 
   const callbackEvent = { operator: { openId: 'ou-1' }, chatId: 'chat-1', threadId: 'thread-1', messageId: 'callback-1' };
