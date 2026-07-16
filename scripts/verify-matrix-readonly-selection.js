@@ -46,10 +46,10 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '7827552970849c41dd4df94f2bb0e1b3d87b8522e3917c53016091e6d2251f9d',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': 'ce090ea576cec5713477b9bc2f7ef29b942bcbbdf4a7a461bf899c36a0c7ec1c',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '5d8d3053ddd0369cb93c5d87926035ffe34e611fee189e5a643bc72acdfc846e',
-  'src/db.js': '48e99c09d72ce248790b31f300ba22613b54d4956dde39ae1c722763f6724c3c',
+  'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
   'src/lib/cacheIndexView.js': 'f00e1177c587f19330b09aa2dfa43c133230af8dc1fdff6d269cf35d6aae5ee3',
-  'src/lib/packetGate.js': 'a952eed38d570a441c23f4124f83e29f7147778c8d2fa0e5bba7d2da1238c829',
+  'src/lib/packetGate.js': 'deae77857f447bcfec5e33b19fc54a966390b93b9f8bbba19ce505748b35a7c3',
   'src/routes/matrix.js': 'b71e09ef13946a323131f049180d0991c2b69e13276a446105aaf89df9e510b8',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
 };

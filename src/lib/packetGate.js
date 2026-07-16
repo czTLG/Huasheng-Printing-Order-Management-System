@@ -4,6 +4,7 @@ const FILTER_KEYS = new Set(['region', 'country', 'category', 'priority', 'statu
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
 const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
 const STATUSES = new Set(['valid', 'needs_review']);
+const CURRENT_SESSION_PAGE_SIZE = 100;
 
 function positiveInteger(value, label) {
   const number = Number(value);
@@ -223,12 +224,25 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     const chat = String(chatId || '').trim();
     if (!chat) throw new Error('chat id required');
     const thread = String(threadId || '').trim();
-    const session = db.prepare(`
+    const at = timestamp();
+    const firstPage = db.prepare(`
       SELECT * FROM matrix_sessions
       WHERE actor_user_id = ? AND chat_id = ? AND thread_id = ?
-        AND julianday(expires_at) IS NOT NULL AND julianday(expires_at) > julianday(?)
-      ORDER BY updated_at DESC, id DESC LIMIT 1
-    `).get(owner, chat, thread, timestamp());
+      ORDER BY updated_at DESC, id DESC LIMIT ?
+    `);
+    const nextPage = db.prepare(`
+      SELECT * FROM matrix_sessions
+      WHERE actor_user_id = ? AND chat_id = ? AND thread_id = ?
+        AND (updated_at < ? OR (updated_at = ? AND id < ?))
+      ORDER BY updated_at DESC, id DESC LIMIT ?
+    `);
+    let sessions = firstPage.all(owner, chat, thread, CURRENT_SESSION_PAGE_SIZE);
+    let session = sessions.find(row => activeUntil(row.expires_at, at));
+    while (!session && sessions.length === CURRENT_SESSION_PAGE_SIZE) {
+      const cursor = sessions[sessions.length - 1];
+      sessions = nextPage.all(owner, chat, thread, cursor.updated_at, cursor.updated_at, cursor.id, CURRENT_SESSION_PAGE_SIZE);
+      session = sessions.find(row => activeUntil(row.expires_at, at));
+    }
     if (!session) throw new Error('session not found');
     return sessionResult(session);
   }

@@ -182,6 +182,22 @@ try {
   assert.strictEqual(gate.getCurrentSession({ actorUserId: 7, chatId: 'offset-future', threadId: '' }).id, offsetFuture.id);
   assert.throws(() => gate.getSession({ sessionId: invalidExpiryId, actorUserId: 7, chatId: 'offset-invalid', threadId: '' }), /expired/);
   assert.throws(() => gate.getCurrentSession({ actorUserId: 7, chatId: 'offset-invalid', threadId: '' }), /not found/);
+
+  clock = '2026-07-16T23:00:00.000Z';
+  const olderActive = gate.createSession({ actorUserId: 7, feishuOpenId: 'ou-7', chatId: 'shadow-chat', filters: {}, snapshotKey: '2'.repeat(64), candidateIds: [204], expiresAt: '2026-07-17T05:00:00.000Z' });
+  gate.createSession({ actorUserId: 7, feishuOpenId: 'ou-7', chatId: 'shadow-chat', filters: {}, snapshotKey: '3'.repeat(64), candidateIds: [205], expiresAt: '2026-07-17T00:00:00.000Z' });
+  const insertShadow = db.prepare(`INSERT INTO matrix_sessions (actor_user_id, chat_id, thread_id, filters_json, snapshot_key, candidate_ids_json, page, version, expires_at, created_at, updated_at) VALUES (7, 'shadow-chat', '', '{}', ?, '[205]', 1, 1, ?, ?, ?)`);
+  for (let index = 0; index < 101; index += 1) {
+    const recent = `2026-07-17T00:${String(index % 30).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`;
+    insertShadow.run('5'.repeat(64), index % 2 ? 'not-a-time' : '2026-07-17T00:00:00.000Z', recent, recent);
+  }
+  const rfcFuture = gate.createSession({ actorUserId: 7, feishuOpenId: 'ou-7', chatId: 'rfc-future', filters: {}, snapshotKey: '4'.repeat(64), candidateIds: [206], expiresAt: 'Fri, 17 Jul 2026 03:00:00 GMT' });
+  clock = '2026-07-17T00:30:00.000Z';
+  assert.strictEqual(gate.getCurrentSession({ actorUserId: 7, chatId: 'shadow-chat', threadId: '' }).id, olderActive.id);
+  assert.strictEqual(gate.getSession({ sessionId: rfcFuture.id, actorUserId: 7, chatId: 'rfc-future', threadId: '' }).id, rfcFuture.id);
+  assert.strictEqual(gate.getCurrentSession({ actorUserId: 7, chatId: 'rfc-future', threadId: '' }).id, rfcFuture.id);
+  const rfcUpdated = gate.updateSession({ sessionId: rfcFuture.id, actorUserId: 7, expectedVersion: 1, patch: {} });
+  assert.strictEqual(rfcUpdated.version, 2);
   clock = '2026-07-17T00:00:00.000Z';
   assert.throws(() => gate.getSession({ sessionId: session.id, actorUserId: 8, chatId: 'chat-1', threadId: 'thread-1' }), /not authorized/);
   assert.throws(() => gate.getSession({ sessionId: session.id, actorUserId: 7, chatId: 'other-chat', threadId: 'thread-1' }), /context/);
@@ -422,6 +438,8 @@ try {
   );
   assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(actor8Session.id).version, 1);
   assert.strictEqual(db.prepare("SELECT COUNT(*) n FROM matrix_selection_events WHERE idempotency_key = 'evt-inactive-user'").get().n, 0);
+
+  assert.strictEqual(gate.selectCandidate({ candidateId: 206, actorUserId: 7, sessionId: rfcFuture.id, expectedVersion: 2, idempotencyKey: 'rfc-future-selection', nextAction: '核实公开信息' }).candidate_id, 206);
 
   db.prepare("UPDATE matrix_actor_bindings SET status = 'revoked', revoked_at = ? WHERE feishu_open_id = 'ou-7'").run(clock);
   assert.strictEqual(gate.resolveActor({ feishuOpenId: 'ou-7' }), null);
