@@ -68,6 +68,7 @@ function normalizeFilters(value) {
       if (!REGIONS.has(text)) throw new Error('region filter invalid');
     } else if (key === 'country') {
       if (!/^[A-Z]{2}$/.test(text)) throw new Error('country filter invalid');
+      if (text === 'CN' || text === 'IN') throw new Error('country filter excluded');
     } else if (key === 'category') {
       if (!/^\p{L}[\p{L}\p{N} &+/_-]{0,63}$/u.test(text)) throw new Error('category filter invalid');
     } else if (key === 'priority') {

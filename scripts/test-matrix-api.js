@@ -7,6 +7,8 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { createMatrixBridgeAuth } = require('../src/routes/matrix');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-api-'));
 const appDbPath = path.join(root, 'app.db');
@@ -16,6 +18,56 @@ const jwtSecret = 'matrix-api-test-jwt-secret';
 const bridgeToken = 'matrix-api-test-bridge-token-0123456789abcdef';
 let child;
 let serverOutput = '';
+
+function testConstantTimeTokenComparison() {
+  const middleware = createMatrixBridgeAuth({
+    bridgeToken,
+    db: {
+      prepare: () => ({
+        get: () => ({ id: 103, username: 'matrix-crm', full_name: '', role: 'foreign_trade_crm_admin', permissions_json: null, binding_id: 1 })
+      })
+    }
+  });
+  const original = crypto.timingSafeEqual;
+  let calls = 0;
+  crypto.timingSafeEqual = (left, right) => {
+    calls += 1;
+    assert.strictEqual(left.length, 32);
+    assert.strictEqual(right.length, 32);
+    return original(left, right);
+  };
+  try {
+    for (const supplied of ['', 'short', 'x'.repeat(bridgeToken.length), bridgeToken]) {
+      let status = 200;
+      let nextCalled = false;
+      middleware(
+        { get: name => name === 'x-matrix-bridge-token' ? supplied : 'ou-test' },
+        { status: code => { status = code; return { json: () => undefined }; } },
+        () => { nextCalled = true; }
+      );
+      assert.strictEqual(nextCalled, supplied === bridgeToken);
+      assert.strictEqual(status, supplied === bridgeToken ? 200 : 401);
+    }
+    assert.strictEqual(calls, 4);
+
+    const disabledMiddleware = createMatrixBridgeAuth({
+      bridgeToken: '',
+      db: { prepare: () => ({ get: () => { throw new Error('disabled bridge must not query bindings'); } }) }
+    });
+    let disabledStatus = 200;
+    let disabledNext = false;
+    disabledMiddleware(
+      { get: name => name === 'x-matrix-bridge-token' ? '' : 'ou-test' },
+      { status: code => { disabledStatus = code; return { json: () => undefined }; } },
+      () => { disabledNext = true; }
+    );
+    assert.strictEqual(disabledStatus, 401);
+    assert.strictEqual(disabledNext, false);
+    assert.strictEqual(calls, 5);
+  } finally {
+    crypto.timingSafeEqual = original;
+  }
+}
 
 function seedApplicationDb() {
   process.env.DB_PATH = appDbPath;
@@ -72,6 +124,7 @@ function seedCandidateDb() {
   insert.run({ id: 1, company: 'Alpha Coffee', country: 'US', domain: 'alpha.test', url: 'https://alpha.test/', categories: '["coffee"]', email: 'team@alpha.test', phone: '+1 202 555 0123', whatsapp: '+1 202 555 0456', contact: 'https://alpha.test/contact', priority: 'P0', score: 95, status: 'valid', updated: '2026-07-17T00:00:00Z' });
   insert.run({ id: 2, company: 'Beta Tea', country: 'GB', domain: 'beta.test', url: 'https://beta.test/', categories: '["tea"]', email: 'sales@beta.test', phone: '', whatsapp: '', contact: 'https://beta.test/contact', priority: 'P1', score: 88, status: 'valid', updated: '2026-07-16T00:00:00Z' });
   insert.run({ id: 3, company: 'India Blocked', country: 'IN', domain: 'blocked.test', url: 'https://blocked.test/', categories: '["coffee"]', email: '', phone: '', whatsapp: '', contact: '', priority: 'P0', score: 99, status: 'valid', updated: '2026-07-17T00:00:00Z' });
+  insert.run({ id: 4, company: 'Review Snacks', country: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["snacks"]', email: '', phone: '', whatsapp: '', contact: 'https://review.test/contact', priority: 'P2', score: 70, status: 'needs_review', updated: '2026-07-15T00:00:00Z' });
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-17T00:00:00Z', 'Coffee', 'e1');
   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members/alpha', 'https://alpha.test/', 'official_association_directory', '2026-07-17T00:00:00Z', 'd1');
   db.close();
@@ -116,6 +169,7 @@ async function stopServer() {
 
 (async () => {
   try {
+    testConstantTimeTokenComparison();
     seedApplicationDb();
     seedCandidateDb();
     child = spawn(process.execPath, ['src/server.js'], {
@@ -158,6 +212,17 @@ async function stopServer() {
     assert.ok(!listText.includes('SECRET-COST-FORMULA'));
     assert.ok(!/internal_formula|material_price|cost_formula/.test(listText));
 
+    const priorityList = await request('/api/matrix/candidates?priority=P1&page_size=20', { token: rootToken });
+    const statusList = await request('/api/matrix/candidates?status=needs_review&page_size=20', { token: rootToken });
+    assert.strictEqual(priorityList.status, 200);
+    assert.deepStrictEqual(priorityList.body.rows.map(row => row.id), [2]);
+    assert.strictEqual(priorityList.body.total, 1);
+    assert.strictEqual(statusList.status, 200);
+    assert.deepStrictEqual(statusList.body.rows.map(row => row.id), [4]);
+    assert.strictEqual(statusList.body.total, 1);
+    assert.notStrictEqual(priorityList.body.snapshot_key, statusList.body.snapshot_key);
+    assert.notStrictEqual(priorityList.body.snapshot_key, list.body.snapshot_key);
+
     const recommendations = await request('/api/matrix/recommendations/today?page_size=99', { token: crmAdminToken });
     assert.strictEqual(recommendations.status, 200);
     assert.ok(recommendations.body.rows.length <= 5);
@@ -181,6 +246,14 @@ async function stopServer() {
     });
     assert.strictEqual(rejectedSession.status, 400);
 
+    for (const country of ['CN', 'IN']) {
+      const excludedCreate = await request('/api/matrix/sessions', {
+        method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { chat_id: `chat-${country}`, filters: { country }, expires_at: '2099-01-01T00:00:00.000Z' }
+      });
+      assert.strictEqual(excludedCreate.status, 400);
+    }
+
     const missingChat = await request('/api/matrix/sessions', {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
       body: { filters: { region: 'americas' }, expires_at: '2099-01-01T00:00:00.000Z' }
@@ -202,6 +275,14 @@ async function stopServer() {
     assert.strictEqual(patchedSession.status, 200);
     assert.strictEqual(patchedSession.body.version, 2);
     assert.strictEqual(patchedSession.body.page, 2);
+
+    for (const country of ['CN', 'IN']) {
+      const excludedPatch = await request(`/api/matrix/sessions/${createdSession.body.id}`, {
+        method: 'PATCH', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { expected_version: 2, page: 9, filters: { country } }
+      });
+      assert.strictEqual(excludedPatch.status, 400);
+    }
 
     const selectionBody = {
       candidate_id: 1,

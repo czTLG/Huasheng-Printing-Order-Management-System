@@ -106,6 +106,14 @@ function filterSql(filters = {}) {
     )`);
     params.push(String(filters.category));
   }
+  if (filters.priority) {
+    clauses.push('r.priority = ?');
+    params.push(String(filters.priority));
+  }
+  if (filters.status) {
+    clauses.push('r.status = ?');
+    params.push(String(filters.status));
+  }
   return { where: clauses.map(clause => `(${clause})`).join(' AND '), params };
 }
 
@@ -148,7 +156,13 @@ function list(db, filters = {}) {
   `).all(...params, pageSize, (page - 1) * pageSize);
   const rows = rawRows.map(row => summary(row));
   const snapshotKey = crypto.createHash('sha256').update(JSON.stringify({
-    filters: { region: filters.region || '', country: filters.country || '', category: filters.category || '' },
+    filters: {
+      region: filters.region || '',
+      country: filters.country || '',
+      category: filters.category || '',
+      priority: filters.priority || '',
+      status: filters.status || ''
+    },
     page,
     page_size: pageSize,
     total,

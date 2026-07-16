@@ -126,6 +126,18 @@ try {
     }),
     /unknown filter: page/
   );
+  for (const country of ['CN', 'IN']) {
+    assert.throws(
+      () => gate.createSession({
+        actorUserId: 7,
+        feishuOpenId: 'ou-7',
+        chatId: `chat-excluded-${country}`,
+        filters: { country },
+        expiresAt: '2026-07-18T00:00:00.000Z'
+      }),
+      /country filter excluded/
+    );
+  }
   assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_sessions').get().n, sessionCountBeforeUnsafeFilters);
 
   const session = gate.createSession({
@@ -165,6 +177,21 @@ try {
   );
   assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(session.id).version, 2);
   assert.strictEqual(db.prepare('SELECT page FROM matrix_sessions WHERE id = ?').get(session.id).page, 2);
+  for (const country of ['CN', 'IN']) {
+    assert.throws(
+      () => gate.updateSession({
+        sessionId: session.id,
+        actorUserId: 7,
+        expectedVersion: 2,
+        patch: { page: 9, filters: { country } }
+      }),
+      /country filter excluded/
+    );
+    const unchanged = db.prepare('SELECT page, version, filters_json FROM matrix_sessions WHERE id = ?').get(session.id);
+    assert.strictEqual(unchanged.page, 2);
+    assert.strictEqual(unchanged.version, 2);
+    assert.deepStrictEqual(JSON.parse(unchanged.filters_json), { region: 'americas' });
+  }
   assert.throws(
     () => gate.updateSession({
       sessionId: session.id,

@@ -101,6 +101,17 @@ try {
   assert.strictEqual(page.total_pages, 1);
   assert.match(page.snapshot_key, /^[a-f0-9]{64}$/);
 
+  const unfiltered = view.list({ page: 1, pageSize: 50 });
+  const priorityP0 = view.list({ priority: 'P0', page: 1, pageSize: 50 });
+  const needsReview = view.list({ status: 'needs_review', page: 1, pageSize: 50 });
+  assert.deepStrictEqual(priorityP0.rows.map(row => row.id), [1, 5]);
+  assert.strictEqual(priorityP0.total, 2);
+  assert.deepStrictEqual(needsReview.rows.map(row => row.id), [12]);
+  assert.strictEqual(needsReview.total, 1);
+  assert.notStrictEqual(priorityP0.snapshot_key, unfiltered.snapshot_key);
+  assert.notStrictEqual(needsReview.snapshot_key, unfiltered.snapshot_key);
+  assert.notStrictEqual(priorityP0.snapshot_key, needsReview.snapshot_key);
+
   const facets = view.facets();
   assert.ok(facets.regions.some(item => item.value === 'americas' && item.count === 3));
   assert.ok(facets.countries.some(item => item.value === 'US' && item.count === 2));

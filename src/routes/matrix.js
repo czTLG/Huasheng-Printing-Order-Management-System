@@ -67,9 +67,8 @@ function normalizedListFilters(query, { recommendation = false } = {}) {
 }
 
 function safeEqual(left, right) {
-  const a = Buffer.from(String(left || ''), 'utf8');
-  const b = Buffer.from(String(right || ''), 'utf8');
-  if (!a.length || a.length !== b.length) return false;
+  const a = crypto.createHash('sha256').update(String(left || ''), 'utf8').digest();
+  const b = crypto.createHash('sha256').update(String(right || ''), 'utf8').digest();
   return crypto.timingSafeEqual(a, b);
 }
 
@@ -83,7 +82,8 @@ function createMatrixBridgeAuth({ db, bridgeToken = process.env.MATRIX_BRIDGE_TO
     const openIdHeader = req.get('x-feishu-open-id');
     if (suppliedToken === undefined && openIdHeader === undefined) return next();
     const openId = String(openIdHeader || '').trim();
-    if (!safeEqual(suppliedToken, configuredToken) || !openId || openId.length > 128) {
+    const tokenMatches = safeEqual(suppliedToken, configuredToken);
+    if (!configuredToken || !tokenMatches || !openId || openId.length > 128) {
       return res.status(401).json({ error: 'invalid matrix bridge credentials' });
     }
     const row = db.prepare(`
