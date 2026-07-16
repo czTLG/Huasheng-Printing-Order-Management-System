@@ -1,7 +1,6 @@
 'use strict';
 
 const assert = require('node:assert');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -9,42 +8,44 @@ const { spawnSync } = require('node:child_process');
 const { ORIGINAL_SHA256, patchFile, sha256 } = require('../.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs');
 
 const VERSION = '0.6.9';
-const TARBALL_SHA1 = '13a66585528127d4c49344cec3fa166624285ee9';
 
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, ...options });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command} failed: ${(result.stderr || result.stdout || '').trim()}`);
-  return result;
+function resolveArtifactSource({ env = process.env, candidates } = {}) {
+  const configured = String(env.MATRIX_BRIDGE_ARTIFACT_DIR || '').trim();
+  if (configured) {
+    const explicit = path.resolve(configured);
+    if (!fs.existsSync(explicit)) throw new Error(`configured local bridge artifact not found: ${explicit}`);
+    return explicit;
+  }
+  const prefix = String(env.npm_config_prefix || '').trim();
+  const localCandidates = candidates || [
+    '/tmp/matrix-bridge-artifact-0.6.9/package',
+    ...(prefix ? [path.join(prefix, 'lib/node_modules/@modelzen/feishu-codex-bridge')] : []),
+    path.resolve(path.dirname(process.execPath), '../lib/node_modules/@modelzen/feishu-codex-bridge'),
+    '/usr/local/lib/node_modules/@modelzen/feishu-codex-bridge',
+    '/usr/lib/node_modules/@modelzen/feishu-codex-bridge'
+  ];
+  const source = localCandidates.map(candidate => path.resolve(candidate)).find(candidate => fs.existsSync(path.join(candidate, 'package.json')));
+  if (!source) {
+    throw new Error('verified local bridge artifact required; run a separate explicit bootstrap step and set MATRIX_BRIDGE_ARTIFACT_DIR');
+  }
+  return source;
 }
 
-function verifiedArtifact(root) {
-  const configured = String(process.env.MATRIX_BRIDGE_ARTIFACT_DIR || '').trim();
-  const cached = '/tmp/matrix-bridge-artifact-0.6.9/package';
-  let source = configured || (fs.existsSync(path.join(cached, 'node_modules')) ? cached : '');
-  if (!source) {
-    const download = path.join(root, 'download');
-    fs.mkdirSync(download);
-    const packed = run('npm', ['pack', `@modelzen/feishu-codex-bridge@${VERSION}`, '--pack-destination', download], { cwd: root });
-    const filename = packed.stdout.trim().split(/\r?\n/).at(-1);
-    const tarball = path.join(download, filename);
-    assert.strictEqual(crypto.createHash('sha1').update(fs.readFileSync(tarball)).digest('hex'), TARBALL_SHA1);
-    run('tar', ['-xzf', tarball, '-C', download]);
-    source = path.join(download, 'package');
-    run('npm', ['install', '--ignore-scripts', '--omit=dev'], { cwd: source });
-  }
+function verifiedArtifact() {
+  const source = resolveArtifactSource();
   const manifest = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
   assert.strictEqual(manifest.name, '@modelzen/feishu-codex-bridge');
   assert.strictEqual(manifest.version, VERSION);
   assert.strictEqual(manifest.type, 'module');
   assert.strictEqual(sha256(fs.readFileSync(path.join(source, 'dist/cli.js'))), ORIGINAL_SHA256);
-  assert.ok(fs.existsSync(path.join(source, 'node_modules/@larksuiteoapi/node-sdk')));
+  assert.ok(fs.existsSync(path.join(source, 'node_modules/@larksuiteoapi/node-sdk')), 'local artifact runtime dependencies missing; bootstrap them separately');
   return source;
 }
 
+function main() {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-bridge-esm-'));
 try {
-  const source = verifiedArtifact(root);
+  const source = verifiedArtifact();
   const artifact = path.join(root, 'package');
   fs.cpSync(source, artifact, { recursive: true });
   const cliPath = path.join(artifact, 'dist/cli.js');
@@ -119,3 +120,8 @@ try {
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
+}
+
+if (require.main === module) main();
+
+module.exports = { resolveArtifactSource, verifiedArtifact, main };

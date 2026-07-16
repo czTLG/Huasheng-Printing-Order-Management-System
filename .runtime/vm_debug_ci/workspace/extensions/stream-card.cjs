@@ -1,10 +1,31 @@
 'use strict';
 
 const crypto = require('crypto');
+const fs = require('fs');
 
 const ACTIONS = ['mx.today', 'mx.pick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
+const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+
+async function deliverQueuedReminder({
+  spoolPath = REMINDER_SPOOL_PATH,
+  expectedChatId = process.env.STREAM_CHAT_ID,
+  channel,
+  sendManagedCard
+}) {
+  let raw;
+  try { raw = fs.readFileSync(spoolPath, 'utf8'); }
+  catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+  const queued = JSON.parse(raw);
+  const keys = Object.keys(queued || {}).sort();
+  if (JSON.stringify(keys) !== JSON.stringify(['card', 'chat_id', 'id', 'version'])) throw new Error('invalid reminder spool fields');
+  if (queued.version !== 1 || !queued.id || String(queued.chat_id) !== String(expectedChatId || '')) throw new Error('invalid reminder spool binding');
+  if (!queued.card || typeof queued.card !== 'object' || Array.isArray(queued.card)) throw new Error('invalid reminder spool card');
+  await sendManagedCard(channel, queued.chat_id, queued.card, '', false);
+  fs.unlinkSync(spoolPath);
+  return true;
+}
 
 function clip(value, maximum = 90) {
   const text = String(value == null || value === '' ? '待核实' : value).replace(/[\r\n]+/g, ' ').trim();
@@ -123,6 +144,24 @@ function register(context) {
   const now = typeof context.now === 'function' ? context.now : () => Date.now();
   const sessions = new Map();
   const selectionEvents = new Map();
+  const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
+  let reminderPollActive = false;
+  const pollReminder = async () => {
+    if (reminderPollActive) return;
+    reminderPollActive = true;
+    try {
+      await deliverQueuedReminder({
+        channel, sendManagedCard,
+        spoolPath: context.reminderSpoolPath || REMINDER_SPOOL_PATH
+      });
+    } catch (error) {
+      process.stderr.write(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}\n`);
+    } finally {
+      reminderPollActive = false;
+    }
+  };
+  const reminderTimer = scheduleReminderPoll(pollReminder, Math.max(1000, Number(context.reminderPollMs || 5000)));
+  reminderTimer.unref?.();
 
   function clockMillis() {
     const value = now();
@@ -357,4 +396,4 @@ function register(context) {
   };
 }
 
-module.exports = { register };
+module.exports = { register, deliverQueuedReminder };

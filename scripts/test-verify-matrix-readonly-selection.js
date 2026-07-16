@@ -49,10 +49,26 @@ try {
   const runtimeRoot = path.join(root, 'runtime');
   fs.mkdirSync(path.join(runtimeRoot, 'nested'), { recursive: true });
   fs.writeFileSync(path.join(runtimeRoot, 'safe.js'), "module.exports = true;\n");
-  fs.writeFileSync(path.join(runtimeRoot, 'nested', 'adapter.cjs'), "require('nodemailer');\n");
+  const rejectedCapabilities = {
+    'external-fetch.js': "fetch('https://outside.invalid/data');\n",
+    'axios.cjs': "require('axios').get('https://outside.invalid/data');\n",
+    'undici.cjs': "require('undici').request('https://outside.invalid/data');\n",
+    'http-request.cjs': "require('node:http').request('http://outside.invalid/data');\n",
+    'https-get.cjs': "require('node:https').get('https://outside.invalid/data');\n",
+    'net-connect.cjs': "require('node:net').connect(443, 'outside.invalid');\n",
+    'tls-connect.cjs': "require('node:tls').connect(443, 'outside.invalid');\n",
+    'exec-curl.cjs': "require('node:child_process').exec('curl https://outside.invalid/data');\n"
+  };
+  for (const [name, source] of Object.entries(rejectedCapabilities)) {
+    fs.writeFileSync(path.join(runtimeRoot, 'nested', name), source);
+  }
   const surface = verifier.runtimeSurfaceFiles([runtimeRoot]);
-  assert.strictEqual(surface.length, 2);
-  assert.deepStrictEqual(verifier.outboundAdapterFiles(surface), [path.join(runtimeRoot, 'nested', 'adapter.cjs')]);
+  assert.strictEqual(surface.length, 9);
+  assert.deepStrictEqual(
+    verifier.outboundAdapterFiles(surface).map(file => path.basename(file)).sort(),
+    Object.keys(rejectedCapabilities).sort()
+  );
+  assert.deepStrictEqual(verifier.outboundAdapterFiles(verifier.runtimeSurfaceFiles()), [], 'reviewed client/supervisor capabilities must be the only production exceptions');
 
   verifier.validateComposeConfig({ runCompose: () => ({
     status: 0,

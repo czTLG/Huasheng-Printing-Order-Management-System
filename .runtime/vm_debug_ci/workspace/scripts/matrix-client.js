@@ -3,6 +3,7 @@
 const BASE = new URL(String(process.env.MATRIX_API_BASE_URL || ''));
 if (!['http:', 'https:'].includes(BASE.protocol) || BASE.username || BASE.password) throw new Error('valid MATRIX_API_BASE_URL is required');
 const BASE_PATH = BASE.pathname.replace(/\/$/, '');
+if (BASE_PATH !== '/api/matrix') throw new Error('MATRIX_API_BASE_URL path must be /api/matrix');
 
 function operatorId(value) {
   const text = String(value || '').trim();

@@ -2,10 +2,9 @@
 'use strict';
 
 const fs = require('node:fs');
-const { execFileSync } = require('node:child_process');
 
 const STATE_PATH = '/workspace/store/matrix-watch-state.json';
-const FEISHU_BASE = 'https://open.feishu.cn/open-apis';
+const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 
 function shanghaiParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -33,6 +32,17 @@ function saveState(state) {
   const temporary = `${STATE_PATH}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(clean), { mode: 0o600 });
   fs.renameSync(temporary, STATE_PATH);
+}
+
+function queueReminder(card, chatId, spoolPath = REMINDER_SPOOL_PATH) {
+  const targetChat = String(chatId || '').trim();
+  if (!targetChat || !card || typeof card !== 'object' || Array.isArray(card)) throw new Error('valid reminder card and chat required');
+  if (fs.existsSync(spoolPath)) throw new Error('previous reminder is still pending delivery');
+  const id = `${Date.now()}-${process.pid}`;
+  const temporary = `${spoolPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, id, chat_id: targetChat, card })}\n`, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temporary, spoolPath);
+  return id;
 }
 
 function clip(value, maximum = 80) {
@@ -65,64 +75,31 @@ async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatI
   return { last_success_date: current.date, last_message_id: String(messageId || '') };
 }
 
-function readSecret(appId) {
-  const id = `app-${appId}`;
-  const output = execFileSync('feishu-codex-bridge', ['secrets', 'get'], {
-    input: JSON.stringify({ ids: [id] }), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']
-  });
-  const value = JSON.parse(output).values?.[id];
-  if (!value) throw new Error('Feishu application secret unavailable');
-  return value;
-}
-
-async function jsonCall(url, options) {
-  const response = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(10000) });
-  const type = String(response.headers.get('content-type') || '');
-  if (!type.includes('application/json')) throw new Error('Feishu API returned non-JSON response');
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) throw new Error(`Feishu API request failed (${response.status})`);
-  return body;
-}
-
-async function tenantToken(appId) {
-  const body = await jsonCall(`${FEISHU_BASE}/auth/v3/tenant_access_token/internal`, {
-    method: 'POST', headers: { 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({ app_id: appId, app_secret: readSecret(appId) })
-  });
-  if (!body.tenant_access_token) throw new Error('Feishu tenant token unavailable');
-  return body.tenant_access_token;
-}
-
-async function sendCard(appId, chatId, card) {
-  const token = await tenantToken(appId);
-  const body = await jsonCall(`${FEISHU_BASE}/im/v1/messages?receive_id_type=chat_id`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({ receive_id: chatId, msg_type: 'interactive', content: JSON.stringify(card) })
-  });
-  return body.data?.message_id || '';
-}
-
 async function main() {
-  const appId = String(process.env.STREAM_APP_ID || '');
-  const chatId = String(process.env.STREAM_CHAT_ID || '');
-  const ownerOpenId = String(process.env.MATRIX_OWNER_OPEN_ID || '');
-  if (!appId || !chatId || !ownerOpenId) throw new Error('watcher environment incomplete');
+  const pollMs = Math.max(60000, Number(process.env.MATRIX_RECOMMEND_POLL_MS || 60000));
+  if (String(process.env.MATRIX_DELIVERY_ENABLED || '0') !== '0') {
+    throw new Error('watcher delivery capability is not installed');
+  }
+  const ownerOpenId = String(process.env.MATRIX_OWNER_OPEN_ID || '').trim();
+  const chatId = String(process.env.STREAM_CHAT_ID || '').trim();
+  if (!ownerOpenId || !chatId) throw new Error('watcher environment incomplete');
   const client = require('./matrix-client.js');
   const hour = Number(process.env.MATRIX_RECOMMEND_HOUR || 9);
   const minute = Number(process.env.MATRIX_RECOMMEND_MINUTE || 0);
-  const pollMs = Math.max(60000, Number(process.env.MATRIX_RECOMMEND_POLL_MS || 60000));
   let state = loadState();
   while (true) {
     try {
-      const next = await runDue({ now: new Date(), state, client, ownerOpenId, chatId, hour, minute, send: card => sendCard(appId, chatId, card) });
+      const next = await runDue({
+        now: new Date(), state, client, ownerOpenId, chatId, hour, minute,
+        send: card => queueReminder(card, chatId)
+      });
       if (next.last_success_date !== state.last_success_date) {
         state = next;
         saveState(state);
-        process.stdout.write(`[matrix-watch] reminder sent for ${state.last_success_date}\n`);
+        process.stdout.write(`[matrix-watch] reminder queued for ${state.last_success_date}\n`);
       }
     } catch (error) {
-      process.stderr.write(`[matrix-watch] reminder failed: ${error?.message || 'unknown error'}\n`);
+      process.stderr.write(`[matrix-watch] reminder queue failed: ${error?.message || 'unknown error'}\n`);
     }
     await new Promise(resolve => setTimeout(resolve, pollMs));
   }
@@ -133,4 +110,4 @@ if (require.main === module) main().catch(error => {
   process.exit(1);
 });
 
-module.exports = { runDue, reminderCard, shanghaiParts };
+module.exports = { runDue, reminderCard, shanghaiParts, queueReminder };

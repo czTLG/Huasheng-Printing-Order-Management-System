@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 process.env.MATRIX_DELIVERY_ENABLED = '0';
@@ -89,6 +90,68 @@ async function testReadOnlyWatcher() {
     send: async card => { emptyDeliveries.push(card); return 'empty-message'; }
   });
   assert.ok(visibleText(emptyDeliveries[0]).includes('今日没有达到证据标准的候选'));
+
+  assert.strictEqual(typeof watcher.queueReminder, 'function');
+  assert.strictEqual(typeof extension.deliverQueuedReminder, 'function');
+  const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reminder-spool-'));
+  try {
+    const spoolPath = path.join(spoolRoot, 'pending.json');
+    const queuedId = watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', spoolPath);
+    assert.ok(queuedId);
+    const sentFromSpool = [];
+    assert.strictEqual(await extension.deliverQueuedReminder({
+      spoolPath, expectedChatId: 'chat-watch', channel: {},
+      sendManagedCard: async (_channel, chatId, card) => sentFromSpool.push({ chatId, card })
+    }), true);
+    assert.deepStrictEqual(sentFromSpool, [{ chatId: 'chat-watch', card: { schema: '2.0', body: { elements: [] } } }]);
+    assert.strictEqual(fs.existsSync(spoolPath), false);
+    assert.strictEqual(await extension.deliverQueuedReminder({ spoolPath, expectedChatId: 'chat-watch', channel: {}, sendManagedCard: async () => {} }), false);
+  } finally {
+    fs.rmSync(spoolRoot, { recursive: true, force: true });
+  }
+}
+
+async function testReminderPollingAndRetry() {
+  const watcher = require('../scripts/matrix-watch.js');
+  const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reminder-poll-'));
+  const spoolPath = path.join(spoolRoot, 'pending.json');
+  let poll;
+  let attempts = 0;
+  let releaseSlowSend;
+  try {
+    process.env.STREAM_CHAT_ID = 'chat-poll';
+    const registered = extension.register({
+      channel: {}, dispatcher: { on: () => undefined }, card: helpers(), client: {},
+      reminderSpoolPath: spoolPath,
+      scheduleReminderPoll: callback => { poll = callback; return { unref() {} }; },
+      sendManagedCard: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('temporary send failure');
+        if (attempts >= 3) await new Promise(resolve => { releaseSlowSend = resolve; });
+      }
+    });
+    assert.strictEqual(typeof poll, 'function', 'extension registration must schedule spool polling');
+    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', spoolPath);
+    await poll();
+    assert.strictEqual(fs.existsSync(spoolPath), true, 'failed delivery must remain pending for retry');
+    assert.strictEqual(await registered.onMessage({ msg: { content: '普通消息', chatId: 'chat-poll', senderId: 'ou-poll' } }), false);
+    assert.strictEqual(attempts, 1, 'ordinary messages must not consume or duplicate a reminder');
+    await poll();
+    assert.strictEqual(attempts, 2);
+    assert.strictEqual(fs.existsSync(spoolPath), false, 'successful delivery must acknowledge the pending file');
+    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', spoolPath);
+    const slowPoll = poll();
+    await new Promise(resolve => setImmediate(resolve));
+    const overlappingPoll = poll();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(attempts, 3, 'overlapping timer ticks must not duplicate delivery');
+    releaseSlowSend();
+    await Promise.all([slowPoll, overlappingPoll]);
+    assert.strictEqual(fs.existsSync(spoolPath), false);
+  } finally {
+    delete process.env.STREAM_CHAT_ID;
+    fs.rmSync(spoolRoot, { recursive: true, force: true });
+  }
 }
 
 function testSanitizedCompose() {
@@ -262,6 +325,7 @@ async function testExpiredSessionRecovery() {
 (async () => {
   await testNarrowClient();
   await testReadOnlyWatcher();
+  await testReminderPollingAndRetry();
   await testWholeCardBudget();
   await testExpiredSessionRecovery();
   testSanitizedCompose();

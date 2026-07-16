@@ -18,6 +18,7 @@ const FOCUSED_TESTS = [
   '.runtime/vm_debug_ci/workspace/tests/test-bridge-patch.js',
   '.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js',
   '.runtime/vm_debug_ci/workspace/tests/test-runtime-supervisor.js',
+  'scripts/test-bridge-artifact-local-input.js',
   'scripts/test-bridge-artifact-0.6.9.js',
   'scripts/test-verify-matrix-readonly-selection.js'
 ];
@@ -172,8 +173,46 @@ function runtimeSurfaceFiles(roots = RUNTIME_SURFACE_ROOTS) {
 }
 
 function outboundAdapterFiles(files = runtimeSurfaceFiles()) {
-  const capability = /\b(?:nodemailer|imapflow|SMTP_[A-Z0-9_]*|IMAP_[A-Z0-9_]*|WHATSAPP[A-Z0-9_]*|sendMail\s*\()/;
-  return files.filter(file => capability.test(fs.readFileSync(file, 'utf8')));
+  const clientPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js');
+  const supervisorPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js');
+  const patterns = [
+    /\bfetch\b/,
+    /\baxios\b/,
+    /\bundici\b/,
+    /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?https?['"]/,
+    /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?(?:net|tls)['"]/,
+    /(?:node:)?child_process/,
+    /\b(?:curl|wget|ncat|socat)\b/,
+    /\b(?:nodemailer|imapflow|SMTP_[A-Z0-9_]*|IMAP_[A-Z0-9_]*|WHATSAPP[A-Z0-9_]*)\b/,
+    /\bsendMail\s*\(/
+  ];
+  const hasCapability = source => patterns.some(pattern => pattern.test(source));
+  const approvedClient = source => {
+    if (!hasCapability(source)) return false;
+    return (source.match(/\bfetch\s*\(/g) || []).length === 1 &&
+      source.includes("if (BASE_PATH !== '/api/matrix') throw new Error('MATRIX_API_BASE_URL path must be /api/matrix');") &&
+      source.includes('if (url.origin !== BASE.origin || !url.pathname.startsWith(`${BASE_PATH}/`))') &&
+      !/https?:\/\//i.test(source) &&
+      !patterns.slice(1).some(pattern => pattern.test(source));
+  };
+  const approvedSupervisor = source => {
+    const spawnCalls = source.match(/\bspawn\s*\(/g) || [];
+    return spawnCalls.length === 2 &&
+      source.includes("spawn(process.execPath, ['/workspace/scripts/matrix-watch.js']") &&
+      source.includes("spawn('feishu-codex-bridge', ['run', '--bot', 'stream-node']") &&
+      source.includes("return new URL('/health', base.origin).href;") &&
+      !/https?:\/\//i.test(source) &&
+      !/\b(?:exec|execFile|execSync|execFileSync|fork)\s*\(/.test(source) &&
+      !patterns.slice(1, 6).some((pattern, index) => index !== 4 && pattern.test(source)) &&
+      !patterns.slice(6).some(pattern => pattern.test(source));
+  };
+  return files.filter(file => {
+    const source = fs.readFileSync(file, 'utf8');
+    if (!hasCapability(source)) return false;
+    if (path.resolve(file) === clientPath) return !approvedClient(source);
+    if (path.resolve(file) === supervisorPath) return !approvedSupervisor(source);
+    return true;
+  });
 }
 
 function validateComposeConfig({ runCompose } = {}) {
