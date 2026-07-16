@@ -41,6 +41,7 @@ public/new/
 backup/
 data/*.db.xz
 .playwright-mcp/
+.worktrees/
 page-screenshot.png
 data/email-ai-prompts/
 data/email-ai-outputs/
