@@ -9,6 +9,7 @@
     "verify:smoke": "node scripts/smoke-test.js",
     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
     "test:private-baseline": "node scripts/test-private-baseline.js",
+    "test:matrix-rank": "node scripts/test-schema-rank.js",
     "runtime:audit": "node scripts/runtime-audit.js",
     "runtime:backup": "node scripts/runtime-backup.js",
     "runtime:verify": "node scripts/runtime-verify.js",
