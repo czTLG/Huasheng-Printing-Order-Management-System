@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `智能桓` deterministically present region/category options, recommend up to five evidence-backed candidates, show full provenance/detail, and persist human selection, stage, and next action while all outbound delivery remains disabled.
+**Goal:** Make `智能桓` immediately recommend up to five evidence-backed overseas candidates as stable A–E choices, show full provenance/detail, and persist human selection, stage, and next action while all outbound delivery remains disabled.
 
 **Architecture:** The main application opens `data/matrix-stream.db` through a dedicated read-only adapter and stores only sessions, bindings, work items, and append-only selection events in the existing application database. A narrow authenticated `/api/matrix` router serves both JWT-authorized CRM users and a Feishu bridge service identity mapped to an application user. The pinned Feishu bridge receives a checksum-verified extension seam; a project-local CommonJS extension handles the exact `开发客户` intent and card callbacks before the general agent.
 
@@ -18,6 +18,8 @@
 - The natural-language trigger `开发客户` remains supported because it is user input, not an internal capability name.
 - China and India remain excluded from discovery and recommendations.
 - Domestic legacy customers remain outside this workflow.
+- `开发客户` returns the current global-overseas recommendation set immediately; it never asks for a region, city, or category first.
+- Region, country, and category controls exist only under `高级筛选`.
 - An official directory may discover a company but cannot replace official-site verification.
 - No material structure, thickness, dimension, price, MOQ, compatibility, purchasing plan, or contact role is invented.
 - Unsupported values remain `待核实`.
@@ -547,20 +549,24 @@ git commit -m "feat: add pinned bridge extension seam"
 
 - Consumes: Task 3 HTTP API and Task 4 extension contract.
 - Produces deterministic actions:
-  - `mx.region`
-  - `mx.category`
   - `mx.today`
+  - `mx.pick`
   - `mx.page`
   - `mx.detail`
   - `mx.back`
   - `mx.select`
   - `mx.work`
+  - `mx.filters`
+  - `mx.region`
+  - `mx.category`
 
 - [ ] **Step 1: Write failing extension tests**
 
 Use fake `channel`, `dispatcher`, card helpers, and API client. Assert:
 
-- Exact trimmed text `开发客户` returns `true` and sends region choices.
+- Exact trimmed text `开发客户` returns `true`, calls `today()`, and sends up to five global-overseas candidates labelled `A` through `E` without asking for region/city/category.
+- A plain `A`, `B`, `C`, `D`, or `E` reply inside the active session opens the matching candidate detail; the same letter outside an active session returns a short restart instruction.
+- `高级筛选` is the only action that exposes region/country/category choices; Guangzhou and all other domestic-city choices are absent.
 - Unrelated text returns `false` and reaches the general agent.
 - Region/category callbacks preserve server-side session and version.
 - Candidate card shows company, country, priority, category, reason, stage, and next action.
@@ -589,7 +595,7 @@ Export named methods only: `facets`, `createSession`, `listCandidates`, `candida
 
 - [ ] **Step 4: Implement cards and callback authorization**
 
-`register()` attaches all `mx.*` handlers to the provided dispatcher and returns `onMessage`. Every handler validates:
+`register()` attaches all `mx.*` handlers to the provided dispatcher and returns `onMessage`. `onMessage` first matches exact `开发客户`, then active-session letter replies `A` through `E`; it does not ask a free-form geographic question. Every handler validates:
 
 - `evt.operator.openId` exists.
 - Card value contains an opaque session ID, expected version, and action event ID only.
@@ -602,6 +608,17 @@ Candidate summaries must use buttons with values such as:
 button('查看详情', { a: 'mx.detail', s: session.id, v: session.version, c: candidate.id }, 'default')
 button('选择', { a: 'mx.select', s: session.id, v: session.version, c: candidate.id, e: actionEventId }, 'primary')
 ```
+
+The initial card renders candidates in stable order as:
+
+```text
+A｜Company｜Country｜P0
+推荐理由：one evidence-backed sentence
+品类：confirmed categories
+下一步：current next action
+```
+
+Repeat for `B` through `E`, followed by `查看详情`, `选择`, `换一批`, `高级筛选`, and `查看进行中`. `换一批` advances the stable snapshot page; `高级筛选` opens explicit overseas regions/countries/categories and never generates city names.
 
 Contact values appear only in detail cards returned to an authorized operator. Group detail cards prefer contact type plus a CRM detail link; raw addresses are omitted when the chat is not an approved restricted chat.
 
@@ -749,13 +766,15 @@ Expected: container is `Up`; logs show one bridge connection and extension regis
 
 Using an authorized bound account:
 
-1. `@智能桓 开发客户` returns region choices.
-2. Select a region and category; list contains at most five recommendations.
-3. Open a detail; discovery and evidence URLs are distinct and clickable.
-4. Select one candidate twice; only one work item/event exists.
-5. Open `查看进行中`; stage and next action match the application DB.
-6. Repeat on Feishu mobile; compact cards require no horizontal scrolling and expose the same actions.
-7. Confirm no email, WhatsApp, or website request was generated.
+1. `@智能桓 开发客户` immediately returns at most five global-overseas recommendations labelled `A`–`E`, with no geographic question.
+2. Reply `A`; the detail for candidate A opens. Repeat with a card button and confirm the same record opens.
+3. Confirm every recommendation includes an evidence-backed reason, confirmed categories, priority, stage, and next action.
+4. Open `高级筛选`; only overseas region/country/category filters appear, with no Guangzhou or other domestic-city option.
+5. Open a detail; discovery and evidence URLs are distinct and clickable.
+6. Select one candidate twice; only one work item/event exists.
+7. Open `查看进行中`; stage and next action match the application DB.
+8. Repeat on Feishu mobile; compact cards require no horizontal scrolling and expose the same A–E choices and actions.
+9. Confirm no email, WhatsApp, or website request was generated.
 
 - [ ] **Step 7: Commit Task 6**
 

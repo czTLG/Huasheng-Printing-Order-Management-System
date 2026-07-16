@@ -114,11 +114,11 @@ If fewer than 5 candidates qualify, the bot recommends fewer. It never fills the
 
 ### Entry
 
-When an authorized user `@智能桓` and enters `开发客户`, the deterministic handler responds before the general agent:
+When an authorized user `@智能桓` and enters `开发客户`, the deterministic handler responds before the general agent and immediately returns the current evidence-backed overseas recommendations. It does not ask the user to choose a region, city, or category first.
 
-1. Choose region or country.
-2. Choose product category.
-3. Choose `今日推荐`, `继续筛选`, or `查看进行中`.
+The default scope is global overseas companies, excluding China, India, and domestic legacy customers. The first response contains up to five candidates labelled `A` through `E`, plus card buttons. The user may reply with a single letter or click a candidate action.
+
+Secondary actions are `换一批`, `高级筛选`, and `查看进行中`. Region, country, and category choices appear only after the user explicitly opens `高级筛选`; city choices such as Guangzhou must never appear in the overseas recommendation flow.
 
 The filter snapshot, page, operator, chat/thread, state version, and expiration are stored server-side. Buttons carry opaque action IDs only.
 
@@ -133,6 +133,8 @@ The compact card shows:
 - Current workflow stage and next action.
 
 Actions: `查看详情`, `暂不处理`, `待核实`, `选择`.
+
+The same five candidates are assigned stable letters `A` through `E` for the lifetime of the filter snapshot. A plain reply of `A`, `B`, `C`, `D`, or `E` opens that candidate's detail. A letter outside an active, unexpired recommendation session is rejected with a short instruction to enter `开发客户` again.
 
 ### Candidate Detail
 
@@ -324,7 +326,9 @@ The Feishu container receives read-only access to the candidate database. All wr
 
 ### Feishu and Authorization
 
-- `开发客户` always enters the deterministic selection flow for authorized users.
+- `开发客户` always returns the current overseas recommendation set for authorized users without first asking for region, city, or category.
+- The initial recommendation set contains at most five stable `A`–`E` choices and evidence-backed reasons.
+- Region/country/category prompts appear only after `高级筛选`; domestic-city options never appear.
 - Pagination and back navigation preserve filters and stable ordering.
 - Unauthorized operators cannot view unmasked contact details or change state.
 - Repeated selection or approval clicks are idempotent.
