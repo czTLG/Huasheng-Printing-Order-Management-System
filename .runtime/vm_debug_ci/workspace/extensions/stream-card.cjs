@@ -103,7 +103,7 @@ function statusLabel(value) {
 }
 
 function stageLabel(value) {
-  return ({ observed: '已观察', selected: '已选择', draft_pending: '草稿待处理', review_pending: '审核待处理', suppressed: '已抑制' })[value] || '待核实';
+  return ({ observed: '已观察', recommendation_ready: '推荐就绪', selected: '已选择', draft_pending: '草稿待处理', review_pending: '审核待处理', suppressed: '已抑制' })[value] || '待核实';
 }
 
 function confirmedSignals(values) {

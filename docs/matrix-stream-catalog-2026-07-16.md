@@ -20,6 +20,8 @@ This catalog records only the code contract and acceptance gate. It contains no 
 - Reminder safety: local delivery prioritizes at-most-once behavior. A pending reminder is claimed as inflight before the single managed-card attempt; an inflight record without a matching receipt is always treated as ambiguous and requires manual reconciliation. It is never retried automatically, even after the platform idempotency window, so a crash can cause a missed reminder rather than a duplicate.
 - Readiness: the runtime probes authenticated `/api/matrix/ready` with the configured service identity. The endpoint verifies active binding, read-only/query-only candidate access, required schema, and execution of the strict recommendation query without returning candidate content. Generic application health cannot satisfy this gate.
 - Selection replay: a repeated selection callback reaches persisted server idempotency even after bridge restart; the same event returns its authoritative prior result, while an unseen stale event fails closed.
+- Selection-time truth: every unseen selection reuses the exact strict recommendation predicate synchronously before any work item, event, or session-version write. A candidate that became review-needed, disallowed-stage, stale-audit, evidence/discovery-less, or unreachable cannot be newly selected; an already persisted event still replays authoritatively.
+- Stage presentation: `recommendation_ready` is rendered as `推荐就绪` in both interactive and scheduled cards.
 
 ## Automated acceptance
 

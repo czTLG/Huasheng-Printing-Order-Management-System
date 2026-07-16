@@ -118,7 +118,7 @@ function errorStatus(error) {
 function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_STREAM_DB_PATH, clock } = {}) {
   const router = express.Router();
   const view = createCacheIndexView({ dbPath: candidateDbPath });
-  const gate = createPacketGate({ db, now: clock });
+  const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
 
   router.use(requireMatrixRole);
 
@@ -263,11 +263,6 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
       const key = String(body.idempotency_key || '').trim();
       const replay = gate.replaySelection({ idempotencyKey: key, actorUserId: req.user.id });
       if (replay) return res.status(200).json(replay);
-      if (!view.detail(candidateId)) {
-        const racedReplay = gate.replaySelection({ idempotencyKey: key, actorUserId: req.user.id });
-        if (racedReplay) return res.status(200).json(racedReplay);
-        return res.status(404).json({ error: 'candidate not found' });
-      }
       const result = gate.selectCandidate({
         candidateId,
         actorUserId: req.user.id,

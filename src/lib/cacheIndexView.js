@@ -277,6 +277,11 @@ function recommend(db, limit, excludeIds, filters = {}) {
   `).all(...params, ...ids, limit).map(row => summary(row));
 }
 
+function recommendationById(db, id) {
+  const row = db.prepare(`SELECT r.* FROM cache_records r WHERE r.id = ? AND ${RECOMMENDATION_WHERE}`).get(id);
+  return row ? summary(row) : null;
+}
+
 function recommendationLimit(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
@@ -303,6 +308,7 @@ function createCacheIndexView({ dbPath, afterRecommendationMembership } = {}) {
     facets: () => facets(db),
     list: filters => list(db, filters),
     recommendPage: filters => recommendPage(db, filters, afterRecommendationMembership),
+    recommendationById: id => recommendationById(db, id),
     detail: (id, options) => detail(db, id, options),
     recommend: ({ limit = 5, excludeIds = [], filters = {} } = {}) => recommend(db, recommendationLimit(limit), excludeIds, filters),
     ready,

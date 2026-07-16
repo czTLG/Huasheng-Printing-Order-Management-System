@@ -102,10 +102,11 @@ function normalizeFilters(value) {
   return filters;
 }
 
-function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
+function createPacketGate({ db, now = () => new Date().toISOString(), candidateValidator } = {}) {
   if (!db || typeof db.prepare !== 'function' || typeof db.transaction !== 'function') {
     throw new Error('application db required');
   }
+  if (typeof candidateValidator !== 'function') throw new Error('candidate validator required');
 
   function timestamp() {
     const value = String(now());
@@ -329,6 +330,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     const session = checkedSession({ sessionId, actorUserId, expectedVersion, at });
     const mappedCandidateIds = parseJson(session.candidate_ids_json, []);
     if (!mappedCandidateIds.includes(candidateId)) throw new Error('candidate not in session mapping');
+    if (!candidateValidator(candidateId)) throw new Error('candidate not strictly eligible');
 
     let item = db.prepare('SELECT * FROM matrix_work_items WHERE candidate_id = ?').get(candidateId);
     let before = {};

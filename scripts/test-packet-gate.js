@@ -48,7 +48,8 @@ try {
   assert.strictEqual(migratedLegacyRow.snapshot_key, '');
   assert.deepStrictEqual(JSON.parse(migratedLegacyRow.candidate_ids_json), []);
 
-  const gate = createPacketGate({ db, now: () => clock });
+  let candidateEligible = true;
+  const gate = createPacketGate({ db, now: () => clock, candidateValidator: () => candidateEligible });
   assert.strictEqual(gate.send, undefined);
   assert.strictEqual(gate.sendEmail, undefined);
 
@@ -284,6 +285,13 @@ try {
   );
   assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(selectionSession.id).version, 1);
 
+  candidateEligible = false;
+  assert.throws(() => gate.selectCandidate({ candidateId: 42, actorUserId: 7, sessionId: selectionSession.id, expectedVersion: 1, idempotencyKey: 'evt-ineligible', nextAction: '不应成功' }), /strictly eligible/);
+  assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(selectionSession.id).version, 1);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_work_items').get().n, 0);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_selection_events').get().n, 0);
+  candidateEligible = true;
+
   assert.throws(
     () => gate.selectCandidate({ candidateId: 42, actorUserId: 7, sessionId: selectionSession.id, expectedVersion: 1, idempotencyKey: '', nextAction: '查看产品页' }),
     /idempotency key required/
@@ -303,6 +311,7 @@ try {
     nextAction: '查看产品页和联系页'
   });
   const firstEvent = db.prepare('SELECT * FROM matrix_selection_events WHERE idempotency_key = ?').get('evt-001');
+  candidateEligible = false;
   const second = gate.selectCandidate({
     candidateId: 42,
     actorUserId: 7,
@@ -311,6 +320,7 @@ try {
     idempotencyKey: 'evt-001',
     nextAction: '查看产品页和联系页'
   });
+  candidateEligible = true;
   assert.strictEqual(gate.replaySelection({ idempotencyKey: 'evt-001', actorUserId: 7 }).event_id, first.event_id);
   assert.strictEqual(gate.replaySelection({ idempotencyKey: 'evt-unseen', actorUserId: 7 }), null);
   assert.throws(() => gate.replaySelection({ idempotencyKey: 'evt-001', actorUserId: 8 }), /not authorized/);

@@ -335,14 +335,38 @@ async function stopServer() {
       next_action: '核实公开联系入口'
     };
     const firstSelection = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: selectionBody });
-    const mutableCandidateDb = new Database(candidateDbPath);
-    try { mutableCandidateDb.prepare("UPDATE cache_records SET country_code = 'IN', stage_code = 'suppressed' WHERE id = 1").run(); }
-    finally { mutableCandidateDb.close(); }
-    const secondSelection = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: selectionBody });
     assert.strictEqual(firstSelection.status, 201);
+    const driftCases = [
+      ['needs-review', db => db.prepare("UPDATE cache_records SET status = 'needs_review' WHERE id = 1").run()],
+      ...['bounced', 'opted_out', 'delivered', 'unknown'].map(stage => [`stage-${stage}`, db => db.prepare('UPDATE cache_records SET stage_code = ? WHERE id = 1').run(stage)]),
+      ['stale-audit', db => db.prepare("UPDATE cache_records SET audited_at = '2026-07-16T00:00:00Z', updated_at = '2026-07-17T00:00:00Z' WHERE id = 1").run()],
+      ['missing-evidence', db => db.prepare('DELETE FROM cache_evidence WHERE record_id = 1').run()],
+      ['missing-discovery', db => db.prepare('DELETE FROM cache_discovery WHERE record_id = 1').run()],
+      ['missing-contact', db => db.prepare("UPDATE cache_records SET public_email='', public_phone='', public_whatsapp='', contact_url='' WHERE id = 1").run()]
+    ];
+    for (const [name, mutate] of driftCases) {
+      const mutableCandidateDb = new Database(candidateDbPath);
+      try {
+        mutableCandidateDb.prepare("UPDATE cache_records SET country_code='US', status='valid', stage_code='observed', audited_at='2026-07-17T00:00:00Z', updated_at='2026-07-17T00:00:00Z', public_email='team@alpha.test', public_phone='+1 202 555 0123', public_whatsapp='+1 202 555 0456', contact_url='https://alpha.test/contact' WHERE id=1").run();
+        mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','Coffee','e1')").run();
+        mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_discovery VALUES (1,1,'alpha.test','official_association_directory','https://association.test/members/alpha','https://alpha.test/','official_association_directory','2026-07-17T00:00:00Z','d1')").run();
+        mutate(mutableCandidateDb);
+      } finally { mutableCandidateDb.close(); }
+      const replayed = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: selectionBody });
+      assert.strictEqual(replayed.status, 200, `${name} replay must remain authoritative`);
+      assert.strictEqual(replayed.body.event_id, firstSelection.body.event_id);
+      const rejected = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...selectionBody, idempotency_key: `api-event-new-${name}`, expected_version: firstSelection.body.session_version } });
+      assert.strictEqual(rejected.status, 400, `${name} new selection must fail strict eligibility`);
+      const stateDb = new Database(appDbPath, { readonly: true });
+      try {
+        assert.strictEqual(stateDb.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(createdSession.body.id).version, firstSelection.body.session_version);
+        assert.strictEqual(stateDb.prepare('SELECT COUNT(*) n FROM matrix_work_items').get().n, 1);
+        assert.strictEqual(stateDb.prepare('SELECT COUNT(*) n FROM matrix_selection_events').get().n, 1);
+      } finally { stateDb.close(); }
+    }
+    const secondSelection = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: selectionBody });
     assert.strictEqual(secondSelection.status, 200);
     assert.strictEqual(firstSelection.body.work_item_id, secondSelection.body.work_item_id);
-    assert.strictEqual((await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...selectionBody, idempotency_key: 'api-event-new-after-suppression', expected_version: firstSelection.body.session_version } })).status, 404);
     assert.strictEqual((await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...selectionBody, extra: true } })).status, 400);
 
     const workItems = await request('/api/matrix/work-items', { serviceToken: bridgeToken, openId: 'ou-service' });

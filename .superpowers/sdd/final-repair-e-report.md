@@ -28,6 +28,13 @@ Base: `4083b5a`
 - A WAL regression commits a new top-ranked valid record from a second connection exactly after membership is read. The in-flight call returns the old membership and old rows consistently; the next independent call sees the new member and a new key.
 - An injected failure between the two reads proves the transaction rolls back and the view closes cleanly.
 
+## Signing Review Repair — Selection-Time Strictness
+
+- The cache view exposes a synchronous strict summary/eligibility lookup by ID that directly reuses `RECOMMENDATION_WHERE`.
+- Packet-gate construction requires a candidate validator. After persisted replay and before any work/event/session write, unseen selections must pass it; failure leaves all three application states unchanged.
+- API regressions mutate a previously displayed candidate through review-needed status, bounced/opted-out/delivered/unknown stages, stale audit, missing official evidence, missing discovery, and missing public contact. Every new key is rejected with unchanged version and one work/event, while the original successful key remains an authoritative replay for every drift.
+- Interactive and scheduled cards render `recommendation_ready` as `推荐就绪`.
+
 ### 蒸馏进度
 
 - 已确认模块：valid-only推荐、正向阶段白名单、全成员跨页快照、漂移关闭与筛选新快照。

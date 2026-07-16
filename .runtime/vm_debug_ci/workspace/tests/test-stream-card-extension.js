@@ -58,7 +58,7 @@ async function testReadOnlyWatcher() {
   const readOnlyClient = {
     today: async (openId, filters) => {
       calls.push({ openId, filters });
-      return { rows: Array.from({ length: 7 }, (_, index) => ({ id: index + 1, company_name: `Watch ${index + 1}`, country_code: 'US', priority: 'P1', stage_code: 'observed', assessment_cn: '公开理由', categories: ['coffee'], size_signals: index === 0 ? ['250g', 'own factory'] : [], next_action_cn: '核实公开信息' })) };
+      return { rows: Array.from({ length: 7 }, (_, index) => ({ id: index + 1, company_name: `Watch ${index + 1}`, country_code: 'US', priority: 'P1', stage_code: index === 4 ? 'recommendation_ready' : 'observed', assessment_cn: '公开理由', categories: ['coffee'], size_signals: index === 0 ? ['250g', 'own factory'] : [], next_action_cn: '核实公开信息' })) };
     }
   };
   const first = await watcher.runDue({
@@ -77,6 +77,7 @@ async function testReadOnlyWatcher() {
   assert.ok(watchText.includes('Watch 5'));
   assert.ok(!watchText.includes('Watch 6'));
   assert.ok(watchText.includes('阶段：已观察'));
+  assert.ok(watchText.includes('阶段：推荐就绪'));
   assert.ok(watchText.includes('已确认规格：250g'));
   assert.ok(watchText.includes('已确认公开信号：own factory'));
   assert.deepStrictEqual(first, { last_success_date: '2026-07-17', last_message_id: 'message-watch-1' });
@@ -133,7 +134,7 @@ function testWatcherWholeCardBudget() {
     company_name: `定时公司${index + 1}${long}`,
     country_code: 'US',
     priority: 'P0',
-    stage_code: 'observed',
+    stage_code: index === 4 ? 'recommendation_ready' : 'observed',
     assessment_cn: `理由${index + 1}${long}`,
     categories: [`品类${index + 1}${long}`, long],
     size_signals: [`250g ${long}`, `own factory ${long}`],
@@ -591,7 +592,7 @@ async function testRecommendationSnapshotTransitions() {
     access_score: 70,
     confidence: 0.9,
     status: index === 1 ? 'needs_review' : 'valid',
-    stage_code: 'observed',
+    stage_code: index === 4 ? 'recommendation_ready' : 'observed',
     audit_state: 'audited',
     updated_at: '2026-07-17T00:00:00.000Z',
     contacts: { email: '', phone: '', whatsapp: '', contact_page: '[available]' },
@@ -677,6 +678,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(text.includes('数据状态：有效'));
   assert.ok(text.includes('数据状态：待核实'));
   assert.ok(text.includes('阶段：已观察'));
+  assert.ok(text.includes('阶段：推荐就绪'));
   assert.ok(text.includes('已确认规格：250g'));
   assert.ok(text.includes('已确认公开信号：own factory'));
   assert.ok(!text.includes('已确认规格：own factory'));

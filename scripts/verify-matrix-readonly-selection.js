@@ -42,15 +42,15 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
   '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': 'e24ef36f404a005750492c259f99f8ec56e982ef6721dd7e7a5853fc137bdb17',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '277efe5306668eba520bf428958de1ba616a4e0967c116b9a2eed56c8b882087',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '5d8d3053ddd0369cb93c5d87926035ffe34e611fee189e5a643bc72acdfc846e',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': 'a262e666c86f1f3d496a6683fbd09d111d587dbfb2aa18c7878f07f45c9abaa9',
   'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
-  'src/lib/cacheIndexView.js': '4ebe8786a9ee7e4c8134a3510b474367da0b6d3f6754c61980c4865d0b33ad28',
-  'src/lib/packetGate.js': 'ff6e8176d2cddabcaf6419e19ba3927c831db87f2de5c76a80ed3fbee56a01a6',
-  'src/routes/matrix.js': '81058e3ed7e261f6cf73f64f1c0d93c36a80215caa5dc9486a9c270455276ce9',
+  'src/lib/cacheIndexView.js': '0805f295d96ef179c776dc07af6b61e8773b145edbf989d98be450ab74e33148',
+  'src/lib/packetGate.js': '2fea59af911c177dc4f35b3b29b5984d07e1181128545ec64063fdf4ffba6d6a',
+  'src/routes/matrix.js': '60e80e0c8bee787d22ff0ff7ff2fd6429941079171d440c1b0eb3abb4d9f48d2',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
 };
 
@@ -345,7 +345,7 @@ function duplicateSelectionCount(root) {
     const insertUser = db.prepare("INSERT INTO users (id, username, password, role, status, created_at) VALUES (?, ?, 'test-only', 'manager', 'active', ?)");
     insertUser.run(7001, 'matrix-verifier-actor', at);
     insertUser.run(7002, 'matrix-verifier-admin', at);
-    const gate = createPacketGate({ db, now: () => at });
+    const gate = createPacketGate({ db, now: () => at, candidateValidator: () => true });
     gate.bindActor({ feishuOpenId: 'ou-matrix-verifier', userId: 7001, boundByUserId: 7002 });
     const session = gate.createSession({
       actorUserId: 7001, feishuOpenId: 'ou-matrix-verifier', chatId: 'verification-chat',
