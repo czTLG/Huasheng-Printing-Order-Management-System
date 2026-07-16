@@ -22,7 +22,8 @@ services:
       - -lc
       - node --no-warnings /workspace/scripts/matrix-watch.js & exec feishu-codex-bridge run --bot stream-node
     volumes:
-      - ./workspace:/workspace:ro
+      - ./workspace/extensions:/workspace/extensions:ro
+      - ./workspace/scripts:/workspace/scripts:ro
       - stream-store:/workspace/store
       - stream-bridge-state:/home/node/.feishu-codex-bridge
       - stream-runtime-state:/home/node/.codex

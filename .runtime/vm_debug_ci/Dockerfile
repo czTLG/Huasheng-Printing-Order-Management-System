@@ -8,8 +8,8 @@ RUN node /tmp/patch-stream-card.cjs "$(npm root -g)/@modelzen/feishu-codex-bridg
 # Docker hosts without an IPv6 egress can still receive AAAA records for
 # chatgpt.com. Prefer IPv4 so Codex does not stall on an unreachable route.
 RUN printf 'precedence ::ffff:0:0/96  100\n' >> /etc/gai.conf \
-    && mkdir /refs \
-    && chown node:node /refs
+    && mkdir -p /refs /workspace/store \
+    && chown node:node /refs /workspace /workspace/store
 
 USER node
 WORKDIR /workspace

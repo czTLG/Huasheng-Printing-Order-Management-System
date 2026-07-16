@@ -4,10 +4,12 @@ const crypto = require('crypto');
 
 const ACTIONS = ['mx.today', 'mx.pick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
+const SESSION_TTL_MS = 30 * 60 * 1000;
 
 function clip(value, maximum = 90) {
   const text = String(value == null || value === '' ? '待核实' : value).replace(/[\r\n]+/g, ' ').trim();
-  return text.length > maximum ? `${text.slice(0, maximum - 1)}…` : text;
+  const points = [...text];
+  return points.length > maximum ? `${points.slice(0, maximum - 1).join('')}…` : text;
 }
 
 function eventId(session, candidate) {
@@ -18,23 +20,23 @@ function sessionKey(chatId, openId) {
   return `${String(chatId || '')}\u0000${String(openId || '')}`;
 }
 
+function statusLabel(value) {
+  return ({ valid: '有效', needs_review: '待核实' })[value] || '待核实';
+}
+
 function renderCandidates(state, cardHelpers) {
   const { card, md, note, hr, actions, button } = cardHelpers;
   const elements = [];
   state.candidates.slice(0, 5).forEach((candidate, index) => {
     const label = LETTERS[index];
     const categories = Array.isArray(candidate.categories) && candidate.categories.length ? candidate.categories.join('、') : '待核实';
-    const confirmed = Array.isArray(candidate.format_signals) && candidate.format_signals.length
-      ? candidate.format_signals.join('、')
-      : categories;
     elements.push(md([
-      `**${label}｜${clip(candidate.company_name, 42)}｜${clip(candidate.country_code, 8)}｜${clip(candidate.priority, 4)}**`,
-      `推荐理由：${clip(candidate.assessment_cn, 100)}`,
-      `品类：${clip(categories, 70)}`,
-      `阶段：${clip(candidate.stage_code || candidate.status, 28)}`,
-      `已确认：${clip(confirmed, 70)}`,
-      `待核实：${Array.isArray(candidate.size_signals) && candidate.size_signals.length ? clip(candidate.size_signals.join('、'), 60) : '规格与联系人角色'}`,
-      `下一步：${clip(candidate.next_action_cn, 72)}`
+      `**${label}｜${clip(candidate.company_name, 26)}｜${clip(candidate.country_code, 4)}｜${clip(candidate.priority, 3)}**`,
+      `推荐理由：${clip(candidate.assessment_cn, 36)}`,
+      `品类：${clip(categories, 20)}`,
+      `数据状态：${statusLabel(candidate.status)}`,
+      `待核实：${Array.isArray(candidate.size_signals) && candidate.size_signals.length ? clip(candidate.size_signals.join('、'), 24) : '规格与联系人角色'}`,
+      `下一步：${clip(candidate.next_action_cn, 28)}`
     ].join('\n')));
     elements.push(actions([
       button('查看详情', { a: 'mx.detail', s: state.session.id, v: state.session.version, c: candidate.id }, 'default'),
@@ -118,8 +120,36 @@ function register(context) {
   if (process.env.MATRIX_DELIVERY_ENABLED !== '0') throw new Error('MATRIX_DELIVERY_ENABLED must be exactly 0');
   const { channel, dispatcher, sendManagedCard, card: cardHelpers } = context;
   const client = context.client || require('../scripts/matrix-client.js');
+  const now = typeof context.now === 'function' ? context.now : () => Date.now();
   const sessions = new Map();
   const selectionEvents = new Map();
+
+  function clockMillis() {
+    const value = now();
+    const millis = value instanceof Date ? value.getTime() : Number(value);
+    if (!Number.isFinite(millis)) throw new Error('invalid extension clock');
+    return millis;
+  }
+
+  function invalidSessionError(error) {
+    return Boolean(error?.matrixSessionInvalid)
+      || Number(error?.status) === 409
+      || /session.*(?:expired|stale)|(?:expired|stale).*session|callback (?:session expired|stale version|session context mismatch)/i.test(String(error?.message || ''));
+  }
+
+  function stateExpired(state) {
+    const expiresAt = Date.parse(state?.session?.expires_at || '');
+    return !Number.isFinite(expiresAt) || expiresAt <= clockMillis();
+  }
+
+  async function sessionBound(request) {
+    try {
+      return await request();
+    } catch (error) {
+      if ([400, 409].includes(Number(error?.status)) || invalidSessionError(error)) error.matrixSessionInvalid = true;
+      throw error;
+    }
+  }
 
   async function start(msg) {
     const openId = String(msg.senderId || '').trim();
@@ -129,7 +159,7 @@ function register(context) {
       chat_id: msg.chatId,
       thread_id: msg.threadId || '',
       filters: { page_size: 5 },
-      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString()
+      expires_at: new Date(clockMillis() + SESSION_TTL_MS).toISOString()
     });
     const state = {
       session,
@@ -144,12 +174,12 @@ function register(context) {
   async function refreshSession(openId, state, chatId, threadId, patch = {}) {
     const filters = patch.filters || state.filters;
     const page = patch.page || state.session.page;
-    const session = await client.createSession(openId, {
+    const session = await sessionBound(() => client.createSession(openId, {
       session_id: state.session.id,
       expected_version: state.session.version,
       page,
       filters
-    });
+    }));
     if (String(session.chat_id) !== String(chatId || '') || String(session.thread_id || '') !== String(threadId || '')) {
       throw new Error('callback session context mismatch');
     }
@@ -165,8 +195,14 @@ function register(context) {
   function callbackState(evt, value, { allowReplay = false } = {}) {
     const openId = String(evt?.operator?.openId || '').trim();
     if (!openId) throw new Error('operator openId required');
-    const state = sessions.get(sessionKey(evt.chatId, openId));
-    if (!state || Number(value?.s) !== Number(state.session.id)) throw new Error('callback session expired');
+    const key = sessionKey(evt.chatId, openId);
+    const state = sessions.get(key);
+    if (!state || stateExpired(state) || Number(value?.s) !== Number(state.session.id)) {
+      sessions.delete(key);
+      const error = new Error('callback session expired');
+      error.matrixSessionInvalid = true;
+      throw error;
+    }
     if (String(state.session.chat_id) !== String(evt.chatId || '') || String(state.session.thread_id || '') !== String(evt.threadId || '')) {
       throw new Error('callback session context mismatch');
     }
@@ -181,7 +217,7 @@ function register(context) {
     const candidate = state.candidates.find(item => Number(item.id) === Number(value.c));
     if (!candidate) throw new Error('candidate not in active list');
     await refreshSession(openId, state, evt.chatId, evt.threadId);
-    const detail = await client.candidateDetail(openId, candidate.id);
+    const detail = await sessionBound(() => client.candidateDetail(openId, candidate.id));
     await sendForEvent(evt, renderDetail(detail, state, cardHelpers, evt.chatId));
   }
 
@@ -274,8 +310,12 @@ function register(context) {
       try {
         await actionHandlers[action](payload);
       } catch (error) {
-        const stale = /stale|expired|version|context mismatch/i.test(String(error?.message || '')) || Number(error?.status) === 409;
-        await sendForEvent(payload.evt, infoCard(cardHelpers, stale ? '此卡片已过期，请发送“开发客户”刷新。' : '操作未完成，请稍后重试。'));
+        if (invalidSessionError(error)) {
+          sessions.delete(sessionKey(payload.evt?.chatId, payload.evt?.operator?.openId));
+          await sendForEvent(payload.evt, restartCard(cardHelpers));
+        } else {
+          await sendForEvent(payload.evt, infoCard(cardHelpers, '操作未完成，请稍后重试。'));
+        }
       }
     });
   }
@@ -289,8 +329,10 @@ function register(context) {
       }
       if (/^[A-E]$/.test(text)) {
         const openId = String(msg?.senderId || '').trim();
-        const state = sessions.get(sessionKey(msg?.chatId, openId));
-        if (!state) {
+        const key = sessionKey(msg?.chatId, openId);
+        const state = sessions.get(key);
+        if (!state || stateExpired(state)) {
+          sessions.delete(key);
           await sendManagedCard(channel, msg.chatId, restartCard(cardHelpers), msg.messageId, Boolean(msg.threadId));
           return true;
         }
@@ -299,9 +341,15 @@ function register(context) {
           await sendManagedCard(channel, msg.chatId, restartCard(cardHelpers), msg.messageId, Boolean(msg.threadId));
           return true;
         }
-        await refreshSession(openId, state, msg.chatId, msg.threadId);
-        const detail = await client.candidateDetail(openId, candidate.id);
-        await sendManagedCard(channel, msg.chatId, renderDetail(detail, state, cardHelpers, msg.chatId), msg.messageId, Boolean(msg.threadId));
+        try {
+          await refreshSession(openId, state, msg.chatId, msg.threadId);
+          const detail = await sessionBound(() => client.candidateDetail(openId, candidate.id));
+          await sendManagedCard(channel, msg.chatId, renderDetail(detail, state, cardHelpers, msg.chatId), msg.messageId, Boolean(msg.threadId));
+        } catch (error) {
+          if (!invalidSessionError(error)) throw error;
+          sessions.delete(key);
+          await sendManagedCard(channel, msg.chatId, restartCard(cardHelpers), msg.messageId, Boolean(msg.threadId));
+        }
         return true;
       }
       return false;

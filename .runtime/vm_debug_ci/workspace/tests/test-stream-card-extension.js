@@ -94,6 +94,7 @@ async function testReadOnlyWatcher() {
 function testSanitizedCompose() {
   const composePath = path.resolve(__dirname, '../../compose.yaml');
   const source = fs.readFileSync(composePath, 'utf8');
+  const dockerfile = fs.readFileSync(path.resolve(__dirname, '../../Dockerfile'), 'utf8');
   for (const expected of [
     'STREAM_CARD_EXTENSION: /workspace/extensions/stream-card.cjs',
     'MATRIX_API_BASE_URL: http://host.docker.internal:3333/api/matrix',
@@ -102,10 +103,17 @@ function testSanitizedCompose() {
     'MATRIX_RECOMMEND_HOUR: "9"',
     'MATRIX_RECOMMEND_MINUTE: "0"',
     'host.docker.internal:host-gateway',
+    './workspace/extensions:/workspace/extensions:ro',
+    './workspace/scripts:/workspace/scripts:ro',
     '/home/admin/work/packaging-system/data/matrix-stream.db:/refs/matrix-stream.db:ro'
   ]) assert.ok(source.includes(expected), `compose missing ${expected}`);
+  assert.ok(!source.includes('./workspace:/workspace:ro'), 'read-only parent mount must not hide the prepared store mountpoint');
   assert.ok(!/SMTP_|IMAP_|WHATSAPP/i.test(source));
   assert.ok(!/(app_secret|tenant_access_token)/i.test(source));
+  const prepareStore = dockerfile.indexOf('mkdir -p /refs /workspace/store');
+  const ownStore = dockerfile.indexOf('chown node:node /refs /workspace /workspace/store');
+  const nodeUser = dockerfile.indexOf('USER node');
+  assert.ok(prepareStore >= 0 && ownStore > prepareStore && nodeUser > ownStore, 'Dockerfile must prepare the watcher store for node before USER');
 }
 
 function helpers() {
@@ -136,9 +144,126 @@ function buttons(value, output = []) {
   return output;
 }
 
+async function testWholeCardBudget() {
+  const sent = [];
+  const long = '很长的公开信息'.repeat(80);
+  const rows = Array.from({ length: 5 }, (_, index) => ({
+    id: 100 + index, company_name: `极限公司${index + 1}${long}`, country_code: 'US', region: 'americas', city: '',
+    official_domain: `long-${index + 1}.test`, official_url: `https://long-${index + 1}.test/`,
+    categories: [long, long], format_signals: [long], size_signals: [long], scale_tier: 'large',
+    priority: 'P0', fit_score: 99, demand_fit_score: 99, access_score: 99, confidence: 0.99,
+    status: index === 1 ? 'needs_review' : 'valid', audit_state: 'audited',
+    assessment_cn: long, next_action_cn: long, updated_at: '2026-07-17T00:00:00.000Z',
+    contacts: { email: '', phone: '', whatsapp: '', contact_page: '[available]' }
+  }));
+  const now = Date.parse('2026-07-17T00:00:00.000Z');
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: () => undefined }, card: helpers(), now: () => now,
+    sendManagedCard: async (_channel, _chatId, card) => { sent.push(card); },
+    client: {
+      today: async () => ({ rows, snapshot_key: 'long-snapshot', page: 1, page_size: 5 }),
+      createSession: async (_openId, input) => ({
+        id: 99, actor_user_id: 7, chat_id: input.chat_id, thread_id: input.thread_id,
+        filters: input.filters, page: 1, version: 1, expires_at: input.expires_at,
+        created_at: '2026-07-17T00:00:00.000Z', updated_at: '2026-07-17T00:00:00.000Z'
+      })
+    }
+  });
+  await registered.onMessage({ msg: { content: '开发客户', chatId: 'chat-long', threadId: '', senderId: 'ou-long' } });
+  const text = visibleText(sent[0]);
+  assert.ok([...text].length <= 1500, `whole card uses ${[...text].length} code points`);
+  for (let index = 0; index < 5; index += 1) assert.ok(text.includes(`${String.fromCharCode(65 + index)}｜极限公司${index + 1}`));
+  for (const core of ['推荐理由：', '待核实：', '下一步：']) assert.ok(text.includes(core));
+}
+
+async function testExpiredSessionRecovery() {
+  let now = Date.parse('2026-07-17T00:00:00.000Z');
+  let failRefresh = false;
+  let failDetail = false;
+  const sent = [];
+  const handlers = new Map();
+  const row = {
+    id: 501, company_name: 'Expiry Company', country_code: 'US', region: 'americas', city: '',
+    official_domain: 'expiry.test', official_url: 'https://expiry.test/', categories: ['coffee'],
+    format_signals: ['pouch'], size_signals: [], scale_tier: 'medium', priority: 'P1',
+    fit_score: 80, demand_fit_score: 80, access_score: 70, confidence: 0.9, status: 'valid',
+    audit_state: 'audited', assessment_cn: '官网公开证据', next_action_cn: '核实公开联系入口',
+    updated_at: '2026-07-17T00:00:00.000Z', contacts: { email: '', phone: '', whatsapp: '', contact_page: '[available]' }
+  };
+  const client = {
+    today: async () => ({ rows: [row], snapshot_key: 'expiry-snapshot', page: 1, page_size: 5 }),
+    createSession: async (_openId, input) => {
+      if (input.session_id && failRefresh) {
+        const error = new Error('matrix API HTTP 409');
+        error.status = 409;
+        throw error;
+      }
+      return {
+        id: 51, actor_user_id: 7, chat_id: input.chat_id || 'chat-expiry', thread_id: input.thread_id || '',
+        filters: input.filters || { page_size: 5 }, page: input.page || 1,
+        version: input.session_id ? input.expected_version + 1 : 1,
+        expires_at: input.expires_at || '2026-07-17T00:30:00.000Z',
+        created_at: '2026-07-17T00:00:00.000Z', updated_at: '2026-07-17T00:00:00.000Z'
+      };
+    },
+    candidateDetail: async () => {
+      if (failDetail) {
+        const error = new Error('matrix API HTTP 400');
+        error.status = 400;
+        throw error;
+      }
+      return { ...row, discovery: null, official_evidence: [] };
+    }
+  };
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: (name, handler) => handlers.set(name, handler) }, card: helpers(), now: () => now,
+    sendManagedCard: async (_channel, _chatId, card) => { sent.push(card); }, client
+  });
+  const message = { content: '开发客户', chatId: 'chat-expiry', threadId: '', senderId: 'ou-expiry' };
+  await registered.onMessage({ msg: message });
+  now += 30 * 60 * 1000 + 1;
+  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
+  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
+  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+
+  await registered.onMessage({ msg: message });
+  const locallyExpiredButton = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.detail');
+  now += 30 * 60 * 1000 + 1;
+  await handlers.get('mx.detail')({
+    evt: { operator: { openId: 'ou-expiry' }, chatId: 'chat-expiry', threadId: '', messageId: 'evt-local-expiry' },
+    value: locallyExpiredButton.value
+  });
+  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+
+  now = Date.parse('2026-07-17T01:00:00.000Z');
+  await registered.onMessage({ msg: message });
+  failRefresh = true;
+  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
+  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+  failRefresh = false;
+
+  await registered.onMessage({ msg: message });
+  const detailButton = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.detail');
+  failDetail = true;
+  await handlers.get('mx.detail')({
+    evt: { operator: { openId: 'ou-expiry' }, chatId: 'chat-expiry', threadId: '', messageId: 'evt-expiry' },
+    value: detailButton.value
+  });
+  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+  failDetail = false;
+  await handlers.get('mx.detail')({
+    evt: { operator: { openId: 'ou-expiry' }, chatId: 'chat-expiry', threadId: '', messageId: 'evt-expiry-2' },
+    value: detailButton.value
+  });
+  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+}
+
 (async () => {
   await testNarrowClient();
   await testReadOnlyWatcher();
+  await testWholeCardBudget();
+  await testExpiredSessionRecovery();
   testSanitizedCompose();
   process.env.MATRIX_DELIVERY_ENABLED = '1';
   assert.throws(() => extension.register({}), /MATRIX_DELIVERY_ENABLED/);
@@ -150,22 +275,41 @@ function buttons(value, output = []) {
     id: index + 1,
     company_name: `Company ${index + 1}`,
     country_code: index % 2 ? 'GB' : 'US',
+    region: index % 2 ? 'europe' : 'americas',
+    city: '',
+    official_domain: `company-${index + 1}.test`,
+    official_url: `https://company-${index + 1}.test/`,
     priority: `P${Math.min(index, 3)}`,
     categories: ['coffee'],
     assessment_cn: `公开证据理由 ${index + 1}`,
-    stage_code: 'observed',
     next_action_cn: '核实公开联系入口',
     format_signals: ['stand-up pouch'],
     size_signals: [],
-    status: 'valid',
+    scale_tier: 'medium',
+    fit_score: 80,
+    demand_fit_score: 80,
+    access_score: 70,
+    confidence: 0.9,
+    status: index === 1 ? 'needs_review' : 'valid',
+    audit_state: 'audited',
+    updated_at: '2026-07-17T00:00:00.000Z',
+    contacts: { email: '', phone: '', whatsapp: '', contact_page: '[available]' },
     internal_formula: index === 0 ? 'SENTINEL-INTERNAL-FORMULA' : '',
     internal_cost: index === 0 ? 'SENTINEL-INTERNAL-COST' : ''
   }));
+  let sessionExpiry = '';
   const client = {
     today: async (openId, filters) => { calls.push(['today', openId, filters]); return { rows: candidates, snapshot_key: 'snap-1', page: 1, page_size: 5 }; },
     createSession: async (openId, input) => {
       calls.push(['createSession', openId, input]);
-      return { id: 11, chat_id: 'chat-1', thread_id: 'thread-1', filters: input.filters || { page_size: 5 }, page: input.page || 1, version: input.session_id ? input.expected_version + 1 : 1 };
+      if (input.expires_at) sessionExpiry = input.expires_at;
+      return {
+        id: 11, actor_user_id: 7, chat_id: 'chat-1', thread_id: 'thread-1',
+        filters: input.filters || { page_size: 5 }, page: input.page || 1,
+        version: input.session_id ? input.expected_version + 1 : 1,
+        expires_at: sessionExpiry,
+        created_at: '2026-07-17T00:00:00.000Z', updated_at: '2026-07-17T00:00:00.000Z'
+      };
     },
     candidateDetail: async (openId, id) => {
       calls.push(['candidateDetail', openId, id]);
@@ -196,7 +340,8 @@ function buttons(value, output = []) {
     sendManagedCard: async (_channel, chatId, card) => { sent.push({ chatId, card }); return 'message-1'; },
     updateManagedCard: async () => true,
     card: helpers(),
-    client
+    client,
+    now: () => Date.parse('2026-07-17T00:00:00.000Z')
   });
 
   assert.strictEqual(await registered.onMessage({ msg: { content: 'unrelated', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), false);
@@ -210,6 +355,10 @@ function buttons(value, output = []) {
   assert.ok(text.length < 1500);
   assert.ok(!text.includes('|'));
   assert.ok(!text.includes('SENTINEL-INTERNAL'));
+  assert.ok(text.includes('数据状态：有效'));
+  assert.ok(text.includes('数据状态：待核实'));
+  assert.ok(!text.includes('阶段：valid'));
+  assert.ok(!text.includes('阶段：needs_review'));
   assert.strictEqual(await registered.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
   assert.ok(calls.some(item => item[0] === 'candidateDetail' && item[2] === 1));
   const detailText = visibleText(sent.at(-1).card);
@@ -241,11 +390,6 @@ function buttons(value, output = []) {
   assert.strictEqual(categoryPatch.expected_version, categoryButton.value.v);
   assert.strictEqual(calls.filter(item => item[0] === 'listCandidates').at(-1)[2].category, 'coffee');
 
-  const selectBeforeStale = calls.filter(item => item[0] === 'selectCandidate').length;
-  await handlers.get('mx.select')({ evt: callbackEvent, value: { a: 'mx.select', s: 11, v: 999, c: 1, e: 'stale-event' } });
-  assert.strictEqual(calls.filter(item => item[0] === 'selectCandidate').length, selectBeforeStale);
-  assert.ok(/已过期|刷新/.test(visibleText(sent.at(-1).card)));
-
   const selectButton = buttons(sent.slice().reverse().find(item => buttons(item.card).some(button => button.value?.a === 'mx.select'))?.card).find(item => item.value?.a === 'mx.select');
   assert.ok(selectButton);
   await handlers.get('mx.select')({ evt: callbackEvent, value: selectButton.value });
@@ -255,6 +399,11 @@ function buttons(value, output = []) {
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectionCalls[1][2].idempotency_key);
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectButton.value.e);
 
+  const selectBeforeStale = calls.filter(item => item[0] === 'selectCandidate').length;
+  await handlers.get('mx.select')({ evt: callbackEvent, value: { a: 'mx.select', s: 11, v: 999, c: 1, e: 'stale-event' } });
+  assert.strictEqual(calls.filter(item => item[0] === 'selectCandidate').length, selectBeforeStale);
+  assert.ok(visibleText(sent.at(-1).card).includes('开发客户'));
+
   const freshSent = [];
   const fresh = extension.register({
     channel: {},
@@ -262,7 +411,8 @@ function buttons(value, output = []) {
     sendManagedCard: async (_channel, chatId, card) => { freshSent.push({ chatId, card }); },
     updateManagedCard: async () => true,
     card: helpers(),
-    client
+    client,
+    now: () => Date.parse('2026-07-17T00:00:00.000Z')
   });
   assert.strictEqual(await fresh.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
   assert.ok(visibleText(freshSent[0].card).includes('开发客户'));
