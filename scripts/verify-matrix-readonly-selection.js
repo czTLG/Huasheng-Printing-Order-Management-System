@@ -2,6 +2,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -35,6 +36,23 @@ const RUNTIME_SURFACE_ROOTS = [
   'src/routes/matrix.js',
   'scripts/matrix-bind-actor.js'
 ].map(file => path.join(ROOT, file));
+// Reviewed production-only surface. Tests and verifier sources are deliberately excluded.
+// Any production edit requires review plus an explicit digest update here.
+const RUNTIME_MANIFEST = {
+  '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
+  '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
+  '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '5535f4fb8629fbd63a8b50a28c799c3aaf2dbe08bd10ffe464215ec09148a544',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': 'd7e1f95a87dd7eefbd9cd9177ff6f80162fafa44fd885ebb929b269b43d42357',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '29db865fe76583d64f335d9f54a3df922cb95d37e8500b02a77b53a6b8a22a80',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': 'ce090ea576cec5713477b9bc2f7ef29b942bcbbdf4a7a461bf899c36a0c7ec1c',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '2e4eb5868ecfb18bbff7d8189b6d839cc7ff12a19d4f9c41fe483049797202b6',
+  'src/db.js': '93c745363f7b078e11dc3c85de18952d1565377df266e839b75fb8123b1ee74e',
+  'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
+  'src/lib/cacheIndexView.js': '5dccd7b5f61eed60e4985d16dabcc493692bf01c6f4deb45576710922830d30c',
+  'src/lib/packetGate.js': '6f17659556e0b427df555cd4d3f01f25cf390fea3b1e56e37772bd31abda8ab5',
+  'src/routes/matrix.js': '6f566cecdacbc5fda8faa0edf18597f3f18c712b3be68d426a1a4dead165cdfe',
+  'scripts/matrix-bind-actor.js': 'e9e2dd9843bedef5f97889cab662f5b5464b85e12f57efd9c815a27775590efa'
+};
 
 function repositoryContract() {
   const env = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
@@ -172,45 +190,84 @@ function runtimeSurfaceFiles(roots = RUNTIME_SURFACE_ROOTS) {
   return files;
 }
 
-function outboundAdapterFiles(files = runtimeSurfaceFiles()) {
-  const clientPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js');
-  const supervisorPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js');
-  const patterns = [
-    /\bfetch\b/,
-    /\baxios\b/,
-    /\bundici\b/,
-    /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?https?['"]/,
-    /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?(?:net|tls)['"]/,
-    /(?:node:)?child_process/,
-    /\b(?:curl|wget|ncat|socat)\b/,
-    /\b(?:nodemailer|imapflow|SMTP_[A-Z0-9_]*|IMAP_[A-Z0-9_]*|WHATSAPP[A-Z0-9_]*)\b/,
-    /\bsendMail\s*\(/
-  ];
-  const hasCapability = source => patterns.some(pattern => pattern.test(source));
-  const approvedClient = source => {
-    if (!hasCapability(source)) return false;
-    return (source.match(/\bfetch\s*\(/g) || []).length === 1 &&
+function runtimeManifest() {
+  return { ...RUNTIME_MANIFEST };
+}
+
+function validateRuntimeManifest({ files = runtimeSurfaceFiles(), root = ROOT, manifest = RUNTIME_MANIFEST } = {}) {
+  const actual = files.map(file => path.relative(root, path.resolve(file)).split(path.sep).join('/')).sort();
+  const expected = Object.keys(manifest).sort();
+  const missing = expected.filter(file => !actual.includes(file));
+  const unexpected = actual.filter(file => !expected.includes(file));
+  if (missing.length || unexpected.length) {
+    throw new Error(`runtime manifest set mismatch: missing=${missing.join(',') || '-'} unexpected=${unexpected.join(',') || '-'}`);
+  }
+  for (const relative of expected) {
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, relative))).digest('hex');
+    if (digest !== manifest[relative]) throw new Error(`runtime manifest hash mismatch: ${relative}`);
+  }
+  return true;
+}
+
+const CAPABILITY_PATTERNS = [
+  /\bfetch\b/,
+  /\baxios\b/,
+  /\bundici\b/,
+  /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?(?:http|https|http2)['"]/,
+  /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?(?:net|tls|dgram)['"]/,
+  /\b(?:WebSocket|EventSource)\b/,
+  /(?:node:)?child_process/,
+  /\b(?:curl|wget|ncat|socat)\b/,
+  /\b(?:nodemailer|imapflow|SMTP_[A-Z0-9_]*|IMAP_[A-Z0-9_]*|WHATSAPP[A-Z0-9_]*)\b/,
+  /\bsendMail\s*\(/
+];
+const APPROVED_CAPABILITY_SHA256 = {
+  client: '29db865fe76583d64f335d9f54a3df922cb95d37e8500b02a77b53a6b8a22a80',
+  supervisor: 'ce090ea576cec5713477b9bc2f7ef29b942bcbbdf4a7a461bf899c36a0c7ec1c'
+};
+
+function approvedCapabilitySource(kind, sourceValue) {
+  const source = String(sourceValue);
+  if (crypto.createHash('sha256').update(source).digest('hex') !== APPROVED_CAPABILITY_SHA256[kind]) return false;
+  const unsafeEvaluation = /\beval\s*\(|\bFunction\s*\(|\bimport\s*\(/.test(source);
+  if (unsafeEvaluation || /https?:\/\//i.test(source)) return false;
+  if (kind === 'client') {
+    const envNames = [...source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)].map(match => match[1]).sort();
+    return JSON.stringify(envNames) === JSON.stringify(['MATRIX_API_BASE_URL', 'MATRIX_BRIDGE_TOKEN']) &&
+      (source.match(/\bfetch\s*\(/g) || []).length === 1 &&
+      (source.match(/\bfetch\s*\(url,\s*\{/g) || []).length === 1 &&
       source.includes("if (BASE_PATH !== '/api/matrix') throw new Error('MATRIX_API_BASE_URL path must be /api/matrix');") &&
+      source.includes('const url = target(pathname, query);') &&
       source.includes('if (url.origin !== BASE.origin || !url.pathname.startsWith(`${BASE_PATH}/`))') &&
-      !/https?:\/\//i.test(source) &&
-      !patterns.slice(1).some(pattern => pattern.test(source));
-  };
-  const approvedSupervisor = source => {
+      !CAPABILITY_PATTERNS.slice(1).some(pattern => pattern.test(source));
+  }
+  if (kind === 'supervisor') {
     const spawnCalls = source.match(/\bspawn\s*\(/g) || [];
-    return spawnCalls.length === 2 &&
+    const namedEnv = [...source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)].map(match => match[1]);
+    const allowedEnv = new Set(['MATRIX_API_BASE_URL', 'MATRIX_RUNTIME_STATE_PATH', 'MATRIX_API_STARTUP_ATTEMPTS']);
+    return namedEnv.every(name => allowedEnv.has(name)) &&
+      (source.match(/\bfetch\b/g) || []).length === 2 &&
+      (source.match(/\bfetchImpl\s*\(url,/g) || []).length === 1 &&
+      source.includes('const url = healthUrl(baseUrl);') &&
+      spawnCalls.length === 2 &&
       source.includes("spawn(process.execPath, ['/workspace/scripts/matrix-watch.js']") &&
       source.includes("spawn('feishu-codex-bridge', ['run', '--bot', 'stream-node']") &&
       source.includes("return new URL('/health', base.origin).href;") &&
-      !/https?:\/\//i.test(source) &&
       !/\b(?:exec|execFile|execSync|execFileSync|fork)\s*\(/.test(source) &&
-      !patterns.slice(1, 6).some((pattern, index) => index !== 4 && pattern.test(source)) &&
-      !patterns.slice(6).some(pattern => pattern.test(source));
-  };
+      !CAPABILITY_PATTERNS.slice(1, 6).some(pattern => pattern.test(source)) &&
+      !CAPABILITY_PATTERNS.slice(7).some(pattern => pattern.test(source));
+  }
+  return false;
+}
+
+function outboundAdapterFiles(files = runtimeSurfaceFiles()) {
+  const clientPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js');
+  const supervisorPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js');
   return files.filter(file => {
     const source = fs.readFileSync(file, 'utf8');
-    if (!hasCapability(source)) return false;
-    if (path.resolve(file) === clientPath) return !approvedClient(source);
-    if (path.resolve(file) === supervisorPath) return !approvedSupervisor(source);
+    if (!CAPABILITY_PATTERNS.some(pattern => pattern.test(source))) return false;
+    if (path.resolve(file) === clientPath) return !approvedCapabilitySource('client', source);
+    if (path.resolve(file) === supervisorPath) return !approvedCapabilitySource('supervisor', source);
     return true;
   });
 }
@@ -298,6 +355,7 @@ function runFocusedTests() {
 function main() {
   repositoryContract();
   validateComposeConfig();
+  validateRuntimeManifest();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-readonly-verifier-'));
   try {
     const input = candidateInput({ root: ROOT, temporary: root, env: process.env });
@@ -348,5 +406,6 @@ if (require.main === module) {
 
 module.exports = {
   recommendations, recommendFromView, candidateInput, inspectCandidates,
-  runtimeSurfaceFiles, outboundAdapterFiles, validateComposeConfig
+  runtimeSurfaceFiles, runtimeManifest, validateRuntimeManifest,
+  outboundAdapterFiles, validateComposeConfig, approvedCapabilitySource
 };

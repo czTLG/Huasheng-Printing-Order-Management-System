@@ -92,19 +92,26 @@ async function testReadOnlyWatcher() {
   assert.ok(visibleText(emptyDeliveries[0]).includes('今日没有达到证据标准的候选'));
 
   assert.strictEqual(typeof watcher.queueReminder, 'function');
+  assert.strictEqual(typeof watcher.deliveryId, 'function');
   assert.strictEqual(typeof extension.deliverQueuedReminder, 'function');
   const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reminder-spool-'));
   try {
     const spoolPath = path.join(spoolRoot, 'pending.json');
-    const queuedId = watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', spoolPath);
-    assert.ok(queuedId);
+    const date = '2026-07-18';
+    const queuedId = watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', { date, spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json') });
+    assert.match(queuedId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.strictEqual(watcher.deliveryId(date, 'chat-watch'), queuedId);
+    assert.strictEqual(watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', { date, spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json') }), queuedId);
+    assert.strictEqual(JSON.parse(fs.readFileSync(spoolPath, 'utf8')).date, date);
     const sentFromSpool = [];
     assert.strictEqual(await extension.deliverQueuedReminder({
       spoolPath, expectedChatId: 'chat-watch', channel: {},
-      sendManagedCard: async (_channel, chatId, card) => sentFromSpool.push({ chatId, card })
+      receiptPath: path.join(spoolRoot, 'receipt.json'),
+      sendManagedCard: async (_channel, chatId, card, _reply, _thread, _receiveType, uuid) => sentFromSpool.push({ chatId, card, uuid })
     }), true);
-    assert.deepStrictEqual(sentFromSpool, [{ chatId: 'chat-watch', card: { schema: '2.0', body: { elements: [] } } }]);
+    assert.deepStrictEqual(sentFromSpool, [{ chatId: 'chat-watch', card: { schema: '2.0', body: { elements: [] } }, uuid: queuedId }]);
     assert.strictEqual(fs.existsSync(spoolPath), false);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(spoolRoot, 'receipt.json'), 'utf8')).id, queuedId);
     assert.strictEqual(await extension.deliverQueuedReminder({ spoolPath, expectedChatId: 'chat-watch', channel: {}, sendManagedCard: async () => {} }), false);
   } finally {
     fs.rmSync(spoolRoot, { recursive: true, force: true });
@@ -118,28 +125,51 @@ async function testReminderPollingAndRetry() {
   let poll;
   let attempts = 0;
   let releaseSlowSend;
+  let failReceiptOnce = true;
+  let failRemoveOnce = false;
+  const remoteMessages = new Map();
+  let activeTimers = 0;
   try {
     process.env.STREAM_CHAT_ID = 'chat-poll';
     const registered = extension.register({
       channel: {}, dispatcher: { on: () => undefined }, card: helpers(), client: {},
       reminderSpoolPath: spoolPath,
-      scheduleReminderPoll: callback => { poll = callback; return { unref() {} }; },
-      sendManagedCard: async () => {
+      reminderReceiptPath: path.join(spoolRoot, 'receipt.json'),
+      scheduleReminderPoll: callback => { poll = callback; activeTimers += 1; return { unref() {} }; },
+      clearReminderPoll: () => { activeTimers -= 1; },
+      writeReminderReceipt: (receiptPath, receipt) => {
+        if (failReceiptOnce) { failReceiptOnce = false; throw new Error('crash before local receipt'); }
+        fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+      },
+      removeReminderPending: pendingPath => {
+        if (failRemoveOnce) { failRemoveOnce = false; throw new Error('crash after receipt before pending cleanup'); }
+        fs.unlinkSync(pendingPath);
+      },
+      sendManagedCard: async (_channel, _chatId, _card, _reply, _thread, _receiveType, uuid) => {
         attempts += 1;
-        if (attempts === 1) throw new Error('temporary send failure');
+        if (!remoteMessages.has(uuid)) remoteMessages.set(uuid, `message-${remoteMessages.size + 1}`);
         if (attempts >= 3) await new Promise(resolve => { releaseSlowSend = resolve; });
+        return { messageId: remoteMessages.get(uuid), cardId: 'card-1' };
       }
     });
     assert.strictEqual(typeof poll, 'function', 'extension registration must schedule spool polling');
-    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', spoolPath);
+    const deliveryId = watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', {
+      date: '2026-07-18', spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json')
+    });
     await poll();
-    assert.strictEqual(fs.existsSync(spoolPath), true, 'failed delivery must remain pending for retry');
+    assert.strictEqual(fs.existsSync(spoolPath), true, 'post-send receipt crash must remain pending for retry');
+    assert.strictEqual(remoteMessages.size, 1);
     assert.strictEqual(await registered.onMessage({ msg: { content: '普通消息', chatId: 'chat-poll', senderId: 'ou-poll' } }), false);
     assert.strictEqual(attempts, 1, 'ordinary messages must not consume or duplicate a reminder');
     await poll();
     assert.strictEqual(attempts, 2);
+    assert.strictEqual(remoteMessages.size, 1, 'same remote uuid must deduplicate post-send retry');
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(spoolRoot, 'receipt.json'), 'utf8')).id, deliveryId);
     assert.strictEqual(fs.existsSync(spoolPath), false, 'successful delivery must acknowledge the pending file');
-    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', spoolPath);
+    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', {
+      date: '2026-07-19', spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json')
+    });
+    failRemoveOnce = true;
     const slowPoll = poll();
     await new Promise(resolve => setImmediate(resolve));
     const overlappingPoll = poll();
@@ -147,7 +177,26 @@ async function testReminderPollingAndRetry() {
     assert.strictEqual(attempts, 3, 'overlapping timer ticks must not duplicate delivery');
     releaseSlowSend();
     await Promise.all([slowPoll, overlappingPoll]);
+    assert.strictEqual(fs.existsSync(spoolPath), true, 'post-receipt cleanup crash must retain pending evidence');
+    const attemptsBeforeReceiptRecovery = attempts;
+    await poll();
+    assert.strictEqual(attempts, attemptsBeforeReceiptRecovery, 'matching receipt must suppress remote resend');
     assert.strictEqual(fs.existsSync(spoolPath), false);
+    assert.strictEqual(typeof registered.dispose, 'function');
+    assert.strictEqual(activeTimers, 1);
+    registered.dispose();
+    registered.dispose();
+    assert.strictEqual(activeTimers, 0, 'dispose must clear exactly one registration timer');
+    const registeredAgain = extension.register({
+      channel: {}, dispatcher: { on: () => undefined }, card: helpers(), client: {},
+      reminderSpoolPath: spoolPath,
+      scheduleReminderPoll: () => { activeTimers += 1; return { unref() {} }; },
+      clearReminderPoll: () => { activeTimers -= 1; },
+      sendManagedCard: async () => ({ messageId: 'unused' })
+    });
+    assert.strictEqual(activeTimers, 1, 're-registration must create only its own timer');
+    registeredAgain.dispose();
+    assert.strictEqual(activeTimers, 0, 're-registration cleanup must not accumulate timers');
   } finally {
     delete process.env.STREAM_CHAT_ID;
     fs.rmSync(spoolRoot, { recursive: true, force: true });

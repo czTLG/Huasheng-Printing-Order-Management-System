@@ -12,10 +12,21 @@ const dockerfilePath = path.resolve(__dirname, '..', '..', 'Dockerfile');
 const { ORIGINAL_SHA256, PATCHED_SHA256, patchSource, patchFile } = require(patcherPath);
 
 const fixture = `var __defProp = Object.defineProperty;
+async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id") {
+  stampRenderToken(card2);
+  const sent = await channel.rawClient.im.v1.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: { receive_id: to, msg_type: "interactive", content }
+  });
+  return sent;
+}
 async function intake(msg, project) {
   const text = msg.content.trim();
   const cmd = parseCommand(text);
   return cmd;
+}
+async function shutdown() {
+  clearInterval(reaper);
 }
 function boot(channel, cfg, cliBridge) {
   const dispatcher = new CardDispatcher(channel, cfg);
@@ -24,12 +35,23 @@ function boot(channel, cfg, cliBridge) {
 `;
 
 const behaviorFixture = `var __defProp = Object.defineProperty;
+async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id") {
+  stampRenderToken(card2);
+  const content = JSON.stringify(card2);
+  const sent = await channel.rawClient.im.v1.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: { receive_id: to, msg_type: "interactive", content }
+  });
+  return sent;
+}
 class CardDispatcher { constructor(channel, cfg) {} }
+async function shutdown() {
+  clearInterval(reaper);
+}
 export default async function run(msg, project) {
   const channel = {};
   const cfg = {};
   const cliBridge = null;
-  const sendManagedCard = () => {};
   const updateManagedCard = () => {};
   const card = () => {};
   const md = () => {};
@@ -56,6 +78,9 @@ const registrationBlock = `const streamCardPath = process.env.STREAM_CARD_EXTENS
   });`;
 const messageLine = 'if (streamCardHandler?.onMessage && await streamCardHandler.onMessage({ msg, project })) return;';
 const loaderLine = 'import { createRequire as createStreamCardRequire } from "node:module";';
+const managedSignature = 'async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id", messageUuid) {';
+const managedCreateData = 'data: { receive_id: to, msg_type: "interactive", content, ...messageUuid ? { uuid: messageUuid } : {} }';
+const disposeLine = 'streamCardHandler?.dispose?.();';
 
 function count(text, needle) {
   return text.split(needle).length - 1;
@@ -65,7 +90,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-patch-'));
 (async () => {
 try {
   assert.strictEqual(ORIGINAL_SHA256, 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233');
-  assert.strictEqual(PATCHED_SHA256, '95e6b56e8158124dda6a976bff7b1471d23f14386c772776386483c517de3078');
+  assert.strictEqual(PATCHED_SHA256, '59e7e1e1b23bb89abe75ecbea13ddea0606d8419c7c37b576ef6cbad86b18c9f');
   assert.notStrictEqual(PATCHED_SHA256, ORIGINAL_SHA256);
   const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
   assert.ok(dockerfile.includes('npm install -g @openai/codex @modelzen/feishu-codex-bridge@0.6.9'));
@@ -86,6 +111,10 @@ try {
 
   const patched = patchSource(fixture);
   assert.strictEqual(count(patched, loaderLine), 1);
+  assert.strictEqual(count(patched, managedSignature), 1);
+  assert.strictEqual(count(patched, managedCreateData), 1);
+  assert.ok(patched.includes('invalid managed-card message uuid'));
+  assert.strictEqual(count(patched, disposeLine), 1);
   assert.strictEqual(count(patched, registrationBlock), 1);
   assert.strictEqual(count(patched, messageLine), 1);
   assert.ok(patched.indexOf(messageLine) < patched.indexOf('const cmd = parseCommand(text);'));

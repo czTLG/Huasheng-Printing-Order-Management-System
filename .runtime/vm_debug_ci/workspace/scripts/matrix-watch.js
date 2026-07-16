@@ -2,9 +2,11 @@
 'use strict';
 
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 
 const STATE_PATH = '/workspace/store/matrix-watch-state.json';
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
 
 function shanghaiParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -34,13 +36,37 @@ function saveState(state) {
   fs.renameSync(temporary, STATE_PATH);
 }
 
-function queueReminder(card, chatId, spoolPath = REMINDER_SPOOL_PATH) {
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+}
+
+function deliveryId(date, chatId) {
+  const day = String(date || '');
+  const chat = String(chatId || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !chat) throw new Error('valid reminder date and chat required');
+  const bytes = crypto.createHash('sha256').update(`matrix-reminder\0${day}\0${chat}`).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function queueReminder(card, chatId, {
+  date,
+  spoolPath = REMINDER_SPOOL_PATH,
+  receiptPath = REMINDER_RECEIPT_PATH
+} = {}) {
   const targetChat = String(chatId || '').trim();
   if (!targetChat || !card || typeof card !== 'object' || Array.isArray(card)) throw new Error('valid reminder card and chat required');
-  if (fs.existsSync(spoolPath)) throw new Error('previous reminder is still pending delivery');
-  const id = `${Date.now()}-${process.pid}`;
+  const id = deliveryId(date, targetChat);
+  const receipt = readJson(receiptPath);
+  if (receipt?.id === id) return id;
+  const pending = readJson(spoolPath);
+  if (pending?.id === id) return id;
+  if (pending) throw new Error('previous reminder is still pending delivery');
   const temporary = `${spoolPath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, id, chat_id: targetChat, card })}\n`, { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, date, id, chat_id: targetChat, card })}\n`, { mode: 0o600, flag: 'wx' });
   fs.renameSync(temporary, spoolPath);
   return id;
 }
@@ -71,7 +97,7 @@ async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatI
   const passed = current.hour > hour || (current.hour === hour && current.minute >= minute);
   if (!passed || clean.last_success_date === current.date) return clean;
   const result = await client.today(ownerOpenId, { page_size: 5 });
-  const messageId = await send(reminderCard((result.rows || []).slice(0, 5)), chatId);
+  const messageId = await send(reminderCard((result.rows || []).slice(0, 5)), chatId, current.date);
   return { last_success_date: current.date, last_message_id: String(messageId || '') };
 }
 
@@ -91,7 +117,7 @@ async function main() {
     try {
       const next = await runDue({
         now: new Date(), state, client, ownerOpenId, chatId, hour, minute,
-        send: card => queueReminder(card, chatId)
+        send: (card, _chat, date) => queueReminder(card, chatId, { date })
       });
       if (next.last_success_date !== state.last_success_date) {
         state = next;
@@ -110,4 +136,4 @@ if (require.main === module) main().catch(error => {
   process.exit(1);
 });
 
-module.exports = { runDue, reminderCard, shanghaiParts, queueReminder };
+module.exports = { runDue, reminderCard, shanghaiParts, queueReminder, deliveryId };

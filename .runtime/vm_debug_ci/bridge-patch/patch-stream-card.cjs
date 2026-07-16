@@ -6,11 +6,17 @@ const fs = require('fs');
 const path = require('path');
 
 const ORIGINAL_SHA256 = 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233';
-const PATCHED_SHA256 = '95e6b56e8158124dda6a976bff7b1471d23f14386c772776386483c517de3078';
+const PATCHED_SHA256 = '59e7e1e1b23bb89abe75ecbea13ddea0606d8419c7c37b576ef6cbad86b18c9f';
 const MESSAGE_CALL = 'if (streamCardHandler?.onMessage && await streamCardHandler.onMessage({ msg, project })) return;';
 const REGISTRATION_FIRST_LINE = 'const streamCardPath = process.env.STREAM_CARD_EXTENSION;';
 const LOADER_ANCHOR = 'var __defProp = Object.defineProperty;';
 const LOADER_LINE = 'import { createRequire as createStreamCardRequire } from "node:module";';
+const MANAGED_SIGNATURE_ORIGINAL = 'async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id") {';
+const MANAGED_SIGNATURE_PATCHED = 'async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id", messageUuid) {';
+const MANAGED_CREATE_ORIGINAL = 'data: { receive_id: to, msg_type: "interactive", content }';
+const MANAGED_CREATE_PATCHED = 'data: { receive_id: to, msg_type: "interactive", content, ...messageUuid ? { uuid: messageUuid } : {} }';
+const MANAGED_UUID_VALIDATION = 'if (messageUuid !== void 0 && !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(messageUuid)) throw new Error("invalid managed-card message uuid");';
+const DISPOSE_LINE = 'streamCardHandler?.dispose?.();';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -44,13 +50,24 @@ function exactPair(source, first, second, label) {
   return { text: matches[0][0], indent: matches[0][1], index: matches[0].index };
 }
 
+function exactFunctionStart(source, signature, nestedLine, label) {
+  if (occurrences(source, signature) !== 1) throw new Error(`${label} must appear exactly once`);
+  const escaped = signature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedNested = nestedLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = [...source.matchAll(new RegExp(`^(\\s*)${escaped}\\n\\1  ${escapedNested}$`, 'gm'))];
+  if (matches.length !== 1) throw new Error(`${label} must appear exactly once`);
+  return { text: matches[0][0], indent: matches[0][1], index: matches[0].index };
+}
+
 function patchSource(sourceValue) {
   const source = String(sourceValue);
   const loaderCount = occurrences(source, LOADER_LINE);
   const registrationCount = occurrences(source, REGISTRATION_FIRST_LINE);
   const messageCount = occurrences(source, MESSAGE_CALL);
-  if (loaderCount || registrationCount || messageCount) {
-    if (loaderCount !== 1 || registrationCount !== 1 || messageCount !== 1) throw new Error('partial or repeated stream-card patch');
+  const managedCount = occurrences(source, MANAGED_SIGNATURE_PATCHED);
+  const disposeCount = occurrences(source, DISPOSE_LINE);
+  if (loaderCount || registrationCount || messageCount || managedCount || disposeCount) {
+    if (loaderCount !== 1 || registrationCount !== 1 || messageCount !== 1 || managedCount !== 1 || disposeCount !== 1) throw new Error('partial or repeated stream-card patch');
     exactPair(
       source,
       REGISTRATION_FIRST_LINE,
@@ -59,6 +76,9 @@ function patchSource(sourceValue) {
     );
     if (occurrences(source, 'const streamCardExtension = streamCardPath ? streamCardRequire(streamCardPath) : null;') !== 1) {
       throw new Error('patched extension loader must appear exactly once');
+    }
+    if (occurrences(source, MANAGED_CREATE_PATCHED) !== 1 || occurrences(source, MANAGED_UUID_VALIDATION) !== 1) {
+      throw new Error('patched managed-card uuid support must appear exactly once');
     }
     if (occurrences(source, 'const cmd = parseCommand(text);') !== 1) throw new Error('patched message anchor must appear exactly once');
     return source;
@@ -76,6 +96,9 @@ function patchSource(sourceValue) {
     'cliBridge?.register(dispatcher);',
     'registration anchor'
   );
+  const managedAnchor = exactFunctionStart(source, MANAGED_SIGNATURE_ORIGINAL, 'stampRenderToken(card2);', 'managed-card signature anchor');
+  const shutdownAnchor = exactFunctionStart(source, 'async function shutdown() {', 'clearInterval(reaper);', 'shutdown anchor');
+  if (occurrences(source, MANAGED_CREATE_ORIGINAL) !== 1) throw new Error('managed-card create anchor must appear exactly once');
   if (occurrences(source, LOADER_ANCHOR) !== 1) throw new Error('loader anchor must appear exactly once');
 
   const patchedMessage = [
@@ -87,17 +110,29 @@ function patchSource(sourceValue) {
     registrationAnchor.text,
     registrationBlock(registrationAnchor.indent)
   ].join('\n');
+  const patchedManaged = [
+    `${managedAnchor.indent}${MANAGED_SIGNATURE_PATCHED}`,
+    `${managedAnchor.indent}  stampRenderToken(card2);`,
+    `${managedAnchor.indent}  ${MANAGED_UUID_VALIDATION}`
+  ].join('\n');
+  const patchedShutdown = [
+    shutdownAnchor.text,
+    `${shutdownAnchor.indent}  ${DISPOSE_LINE}`
+  ].join('\n');
 
   const replacements = [
     { index: messageAnchor.index, before: messageAnchor.text, after: patchedMessage },
     { index: registrationAnchor.index, before: registrationAnchor.text, after: patchedRegistration },
+    { index: managedAnchor.index, before: managedAnchor.text, after: patchedManaged },
+    { index: shutdownAnchor.index, before: shutdownAnchor.text, after: patchedShutdown },
+    { index: source.indexOf(MANAGED_CREATE_ORIGINAL), before: MANAGED_CREATE_ORIGINAL, after: MANAGED_CREATE_PATCHED },
     { index: source.indexOf(LOADER_ANCHOR), before: '', after: `${LOADER_LINE}\n` }
   ].sort((left, right) => right.index - left.index);
   let output = source;
   for (const replacement of replacements) {
     output = `${output.slice(0, replacement.index)}${replacement.after}${output.slice(replacement.index + replacement.before.length)}`;
   }
-  if (occurrences(output, LOADER_LINE) !== 1 || occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1) {
+  if (occurrences(output, LOADER_LINE) !== 1 || occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1 || occurrences(output, MANAGED_SIGNATURE_PATCHED) !== 1 || occurrences(output, MANAGED_CREATE_PATCHED) !== 1 || occurrences(output, MANAGED_UUID_VALIDATION) !== 1 || occurrences(output, DISPOSE_LINE) !== 1) {
     throw new Error('patch postcondition failed');
   }
   return output;

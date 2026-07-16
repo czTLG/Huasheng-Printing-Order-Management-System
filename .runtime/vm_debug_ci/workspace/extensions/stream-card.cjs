@@ -7,23 +7,47 @@ const ACTIONS = ['mx.today', 'mx.pick', 'mx.page', 'mx.detail', 'mx.back', 'mx.s
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
+
+function readOptionalJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+}
+
+function writeReceiptAtomic(receiptPath, receipt) {
+  const temporary = `${receiptPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(receipt)}\n`, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temporary, receiptPath);
+}
 
 async function deliverQueuedReminder({
   spoolPath = REMINDER_SPOOL_PATH,
+  receiptPath = REMINDER_RECEIPT_PATH,
   expectedChatId = process.env.STREAM_CHAT_ID,
   channel,
-  sendManagedCard
+  sendManagedCard,
+  writeReceipt = writeReceiptAtomic,
+  removePending = file => fs.unlinkSync(file)
 }) {
   let raw;
   try { raw = fs.readFileSync(spoolPath, 'utf8'); }
   catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
   const queued = JSON.parse(raw);
   const keys = Object.keys(queued || {}).sort();
-  if (JSON.stringify(keys) !== JSON.stringify(['card', 'chat_id', 'id', 'version'])) throw new Error('invalid reminder spool fields');
-  if (queued.version !== 1 || !queued.id || String(queued.chat_id) !== String(expectedChatId || '')) throw new Error('invalid reminder spool binding');
+  if (JSON.stringify(keys) !== JSON.stringify(['card', 'chat_id', 'date', 'id', 'version'])) throw new Error('invalid reminder spool fields');
+  if (queued.version !== 1 || !/^\d{4}-\d{2}-\d{2}$/.test(queued.date) || !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(queued.id) || String(queued.chat_id) !== String(expectedChatId || '')) throw new Error('invalid reminder spool binding');
   if (!queued.card || typeof queued.card !== 'object' || Array.isArray(queued.card)) throw new Error('invalid reminder spool card');
-  await sendManagedCard(channel, queued.chat_id, queued.card, '', false);
-  fs.unlinkSync(spoolPath);
+  const priorReceipt = readOptionalJson(receiptPath);
+  if (priorReceipt?.id === queued.id) {
+    removePending(spoolPath);
+    return true;
+  }
+  const sent = await sendManagedCard(channel, queued.chat_id, queued.card, '', false, 'chat_id', queued.id);
+  writeReceipt(receiptPath, {
+    version: 1, date: queued.date, id: queued.id, chat_id: queued.chat_id,
+    message_id: String(sent?.messageId || ''), delivered_at: new Date().toISOString()
+  });
+  removePending(spoolPath);
   return true;
 }
 
@@ -145,6 +169,7 @@ function register(context) {
   const sessions = new Map();
   const selectionEvents = new Map();
   const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
+  const clearReminderPoll = context.clearReminderPoll || (timer => clearInterval(timer));
   let reminderPollActive = false;
   const pollReminder = async () => {
     if (reminderPollActive) return;
@@ -152,7 +177,10 @@ function register(context) {
     try {
       await deliverQueuedReminder({
         channel, sendManagedCard,
-        spoolPath: context.reminderSpoolPath || REMINDER_SPOOL_PATH
+        spoolPath: context.reminderSpoolPath || REMINDER_SPOOL_PATH,
+        receiptPath: context.reminderReceiptPath || REMINDER_RECEIPT_PATH,
+        writeReceipt: context.writeReminderReceipt || writeReceiptAtomic,
+        removePending: context.removeReminderPending || (file => fs.unlinkSync(file))
       });
     } catch (error) {
       process.stderr.write(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}\n`);
@@ -162,6 +190,7 @@ function register(context) {
   };
   const reminderTimer = scheduleReminderPoll(pollReminder, Math.max(1000, Number(context.reminderPollMs || 5000)));
   reminderTimer.unref?.();
+  let disposed = false;
 
   function clockMillis() {
     const value = now();
@@ -360,6 +389,11 @@ function register(context) {
   }
 
   return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      clearReminderPoll(reminderTimer);
+    },
     async onMessage({ msg }) {
       const text = String(msg?.content || '').trim();
       if (text === '开发客户') {

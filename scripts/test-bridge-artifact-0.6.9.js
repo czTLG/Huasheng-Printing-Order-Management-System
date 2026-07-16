@@ -66,13 +66,21 @@ try {
   }));
 
   const sentinel = path.join(root, 'registered.txt');
+  const messageUuid = 'c0ffee00-1234-5abc-8def-0123456789ab';
   const extension = path.join(root, 'extension.cjs');
   fs.writeFileSync(extension, [
     "'use strict';",
     "const fs = require('node:fs');",
-    "module.exports.register = () => {",
-    "  fs.writeFileSync(process.env.MATRIX_ARTIFACT_SENTINEL, 'registered');",
-    "  throw new Error('MATRIX_ARTIFACT_REGISTRATION_SENTINEL');",
+    "module.exports.register = ({ sendManagedCard }) => {",
+    "  const captured = {};",
+    "  const fakeChannel = { rawClient: {",
+    "    cardkit: { v1: { card: { create: async input => { captured.cardCreate = input; return { data: { card_id: 'card_fixture' } }; } } } },",
+    "    im: { v1: { message: { create: async input => { captured.messageCreate = input; return { data: { message_id: 'message_fixture' } }; } } } }",
+    "  } };",
+    "  void sendManagedCard(fakeChannel, 'chat_fixture', { schema: '2.0', body: { elements: [] } }, undefined, false, 'chat_id', process.env.MATRIX_ARTIFACT_MESSAGE_UUID)",
+    "    .then(() => { fs.writeFileSync(process.env.MATRIX_ARTIFACT_SENTINEL, JSON.stringify(captured)); setImmediate(() => { throw new Error('MATRIX_ARTIFACT_REGISTRATION_SENTINEL'); }); })",
+    "    .catch(error => { setImmediate(() => { throw error; }); });",
+    "  return { onMessage: async () => false };",
     "};",
     ''
   ].join('\n'));
@@ -105,7 +113,8 @@ try {
       NODE_OPTIONS: `--require=${preload}`,
       STREAM_CARD_EXTENSION: extension,
       MATRIX_ARTIFACT_SENTINEL: sentinel,
-      MATRIX_ARTIFACT_TRACE: trace
+      MATRIX_ARTIFACT_TRACE: trace,
+      MATRIX_ARTIFACT_MESSAGE_UUID: messageUuid
     },
     encoding: 'utf8',
     timeout: 15000,
@@ -114,7 +123,9 @@ try {
   const childEvidence = `status=${child.status} signal=${child.signal}\nTRACE:\n${fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '<missing>'}\nSTDERR:\n${child.stderr}\nSTDOUT:\n${child.stdout}`;
   assert.strictEqual(child.signal, null, `artifact runtime timed out: ${childEvidence}`);
   assert.strictEqual(fs.existsSync(sentinel), true, `real ESM registration did not execute: ${childEvidence}`);
-  assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'registered');
+  const captured = JSON.parse(fs.readFileSync(sentinel, 'utf8'));
+  assert.strictEqual(captured.messageCreate.data.uuid, messageUuid);
+  assert.strictEqual(captured.messageCreate.data.receive_id, 'chat_fixture');
   assert.match(childEvidence, /MATRIX_ARTIFACT_REGISTRATION_SENTINEL/);
   console.log('bridge 0.6.9 artifact compatibility tests passed');
 } finally {
