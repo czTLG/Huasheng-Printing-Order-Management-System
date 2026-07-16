@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const Database = require('better-sqlite3');
 const { createCacheIndexView } = require('../src/lib/cacheIndexView');
+const regionByCountry = require('../src/lib/matrixRegions.json');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-index-view-'));
 const dbPath = path.join(dir, 'matrix.db');
@@ -74,9 +75,13 @@ try {
     record({ id: 6, company_name: 'Gamma Coffee', country_code: 'US', domain: 'gamma.test', url: 'https://gamma.test/', categories: '["coffee"]', priority: 'P1', fit: 85, demand_fit: 85, access: 50 }),
     record({ id: 7, company_name: 'Eta Snacks', country_code: 'FR', domain: 'eta.test', url: 'https://eta.test/', categories: '["snacks"]', priority: 'P2', fit: 90, demand_fit: 90, access: 80 }),
     record({ id: 8, company_name: 'Epsilon Snacks', country_code: 'BR', domain: 'epsilon.test', url: 'https://epsilon.test/', categories: '["snacks"]', priority: 'P1', fit: 85, demand_fit: 85, access: 70 }),
-    record({ id: 9, company_name: 'Zeta Tea', country_code: 'AU', domain: 'zeta.test', url: 'https://zeta.test/', categories: '["tea"]', priority: 'P1', fit: 96, demand_fit: 96, access: 90, audit_state: 'unreviewed' })
+    record({ id: 9, company_name: 'Zeta Tea', country_code: 'AU', domain: 'zeta.test', url: 'https://zeta.test/', categories: '["tea"]', priority: 'P1', fit: 96, demand_fit: 96, access: 90, audit_state: 'unreviewed' }),
+    record({ id: 10, company_name: 'Blocked CN', country_code: 'CN', domain: 'blocked-cn.test', url: 'https://blocked-cn.test/', priority: 'P0', fit: 100, demand_fit: 100, access: 100 }),
+    record({ id: 11, company_name: 'Invalid Status', country_code: 'CA', domain: 'invalid.test', url: 'https://invalid.test/', priority: 'P0', fit: 100, demand_fit: 100, access: 100, status: 'invalid' }),
+    record({ id: 12, company_name: 'Review Queue', country_code: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["coffee"]', priority: 'P3', fit: 60, demand_fit: 60, access: 20, status: 'needs_review' })
   ].forEach(row => insertRecord.run(row));
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-16T00:00:00Z', 'Coffee products', 'e1');
+  db.prepare('INSERT INTO cache_evidence VALUES (2,1,?,?,?,?,?,?)').run('https://association.test/members', 'official_association_directory', 'Member directory', '2026-07-15T00:00:00Z', 'Association listing', 'e2');
   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members', 'https://alpha.test/', 'official_association_directory', '2026-07-16T00:00:00Z', 'd1');
 } finally {
   db.close();
@@ -99,16 +104,21 @@ try {
   const facets = view.facets();
   assert.ok(facets.regions.some(item => item.value === 'americas' && item.count === 3));
   assert.ok(facets.countries.some(item => item.value === 'US' && item.count === 2));
-  assert.ok(facets.categories.some(item => item.value === 'coffee' && item.count === 2));
+  assert.ok(facets.categories.some(item => item.value === 'coffee' && item.count === 3));
   assert.ok(!facets.countries.some(item => item.value === 'IN'));
+  assert.ok(!facets.countries.some(item => item.value === 'CN'));
+  assert.ok(!facets.countries.some(item => item.value === 'CA'));
+  assert.ok(facets.countries.some(item => item.value === 'NZ' && item.count === 1));
 
   const detail = view.detail(1);
   assert.strictEqual(detail.discovery.discovered_via, 'official_association_directory');
-  assert.strictEqual(detail.evidence[0].source_url, 'https://alpha.test/products');
+  assert.deepStrictEqual(detail.evidence, detail.official_evidence);
+  assert.deepStrictEqual(detail.official_evidence.map(item => item.source_url), ['https://alpha.test/products']);
+  assert.deepStrictEqual(detail.supporting_evidence.map(item => item.source_url), ['https://association.test/members']);
   assert.strictEqual(detail.contacts.email, 't***@alpha.test');
   assert.strictEqual(detail.contacts.contact_page, '[available]');
   assert.strictEqual(detail.discovery.discovery_url, 'https://association.test/members');
-  assert.notStrictEqual(detail.evidence[0].source_url, detail.discovery.discovery_url);
+  assert.notStrictEqual(detail.official_evidence[0].source_url, detail.discovery.discovery_url);
 
   const revealed = view.detail(1, { revealContacts: true });
   assert.strictEqual(revealed.contacts.email, 'team@alpha.test');
@@ -117,14 +127,31 @@ try {
   assert.strictEqual(revealed.contacts.contact_page, 'https://alpha.test/contact');
 
   assert.strictEqual(view.detail(3), null);
+  assert.strictEqual(view.detail(10), null);
+  assert.strictEqual(view.detail(11), null);
+  assert.strictEqual(view.detail(12).status, 'needs_review');
   assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [] }).map(row => row.id), [1, 5, 8, 6, 2]);
   assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [1, 5] }).map(row => row.id), [8, 6, 2, 9, 7]);
+  assert.deepStrictEqual(view.recommend({ limit: 2.9 }).map(row => row.id), [1, 5]);
+  assert.deepStrictEqual(view.recommend({ limit: -3 }), []);
+  assert.deepStrictEqual(view.recommend({ limit: 'invalid' }), []);
+  assert.deepStrictEqual(view.recommend({ limit: Infinity }), []);
+  assert.strictEqual(view.recommend().length, 5);
+
+  const allowedRegions = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
+  const requiredIsoCodes = ['AQ', 'AX', 'BL', 'BV', 'CC', 'CX', 'EH', 'FO', 'GG', 'GI', 'GS', 'HM', 'IM', 'IO', 'JE', 'MF', 'SH', 'SJ', 'TF', 'UM'];
+  assert.strictEqual(Object.keys(regionByCountry).length, 247);
+  assert.ok(requiredIsoCodes.every(code => allowedRegions.has(regionByCountry[code])));
+  assert.strictEqual(regionByCountry.CN, undefined);
+  assert.strictEqual(regionByCountry.IN, undefined);
+  assert.strictEqual(regionByCountry.XK, undefined);
+  assert.ok(Object.values(regionByCountry).every(region => allowedRegions.has(region)));
 
   const previousPath = process.env.MATRIX_STREAM_DB_PATH;
   process.env.MATRIX_STREAM_DB_PATH = path.join(dir, 'missing.db');
   try {
     const explicitView = createCacheIndexView({ dbPath });
-    assert.strictEqual(explicitView.facets().countries.length, 6);
+    assert.strictEqual(explicitView.facets().countries.length, 7);
     explicitView.close();
   } finally {
     if (previousPath === undefined) delete process.env.MATRIX_STREAM_DB_PATH;

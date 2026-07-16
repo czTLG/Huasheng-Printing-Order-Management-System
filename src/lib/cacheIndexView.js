@@ -170,15 +170,29 @@ function detail(db, id, { revealContacts = false } = {}) {
     WHERE r.id = ? AND ${BASE_WHERE}
   `).get(id);
   if (!row) return null;
-  const evidence = db.prepare(`
+  const officialEvidence = db.prepare(`
     SELECT source_url, source_type, page_title, observed_at, excerpt
-    FROM cache_evidence WHERE record_id = ? ORDER BY observed_at DESC, id ASC
+    FROM cache_evidence
+    WHERE record_id = ? AND source_type = 'official_website'
+    ORDER BY observed_at DESC, id ASC
+  `).all(id);
+  const supportingEvidence = db.prepare(`
+    SELECT source_url, source_type, page_title, observed_at, excerpt
+    FROM cache_evidence
+    WHERE record_id = ? AND (source_type IS NULL OR source_type <> 'official_website')
+    ORDER BY observed_at DESC, id ASC
   `).all(id);
   const discovery = db.prepare(`
     SELECT discovered_via, discovery_url, official_url, source_type, verified_at
     FROM cache_discovery WHERE record_id = ? ORDER BY verified_at DESC, id ASC LIMIT 1
   `).get(id) || null;
-  return { ...summary(row, revealContacts), discovery, evidence };
+  return {
+    ...summary(row, revealContacts),
+    discovery,
+    official_evidence: officialEvidence,
+    supporting_evidence: supportingEvidence,
+    evidence: officialEvidence
+  };
 }
 
 function recommend(db, limit, excludeIds) {
@@ -193,6 +207,12 @@ function recommend(db, limit, excludeIds) {
   `).all(...ids, limit).map(row => summary(row));
 }
 
+function recommendationLimit(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(5, Math.max(0, Math.trunc(numeric)));
+}
+
 function createCacheIndexView({ dbPath } = {}) {
   const selectedPath = dbPath || process.env.MATRIX_STREAM_DB_PATH || path.resolve(__dirname, '..', '..', 'data', 'matrix-stream.db');
   const db = new Database(selectedPath, { readonly: true, fileMustExist: true });
@@ -201,7 +221,7 @@ function createCacheIndexView({ dbPath } = {}) {
     facets: () => facets(db),
     list: filters => list(db, filters),
     detail: (id, options) => detail(db, id, options),
-    recommend: ({ limit = 5, excludeIds = [] } = {}) => recommend(db, Math.min(5, Number(limit) || 0), excludeIds),
+    recommend: ({ limit = 5, excludeIds = [] } = {}) => recommend(db, recommendationLimit(limit), excludeIds),
     close: () => db.close()
   };
 }
