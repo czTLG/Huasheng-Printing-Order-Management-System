@@ -14,12 +14,18 @@ const { ORIGINAL_SHA256, PATCHED_SHA256, patchSource, patchFile } = require(patc
 const fixture = `var __defProp = Object.defineProperty;
 async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id") {
   stampRenderToken(card2);
-  const sent = await channel.rawClient.im.v1.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: { receive_id: to, msg_type: "interactive", content }
-  });
-  return sent;
+  const attempt = async () => {
+    const sent = await channel.rawClient.im.v1.message.create({
+      params: { receive_id_type: receiveIdType },
+      data: { receive_id: to, msg_type: "interactive", content }
+    });
+    return sent;
+  };
+  for (let i = 0; ; i++) {
+    try { return await attempt(); } catch (err) { if (i >= 2) throw err; }
+  }
 }
+async function updateManagedCard() {}
 async function intake(msg, project) {
   const text = msg.content.trim();
   const cmd = parseCommand(text);
@@ -38,12 +44,18 @@ const behaviorFixture = `var __defProp = Object.defineProperty;
 async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id") {
   stampRenderToken(card2);
   const content = JSON.stringify(card2);
-  const sent = await channel.rawClient.im.v1.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: { receive_id: to, msg_type: "interactive", content }
-  });
-  return sent;
+  const attempt = async () => {
+    const sent = await channel.rawClient.im.v1.message.create({
+      params: { receive_id_type: receiveIdType },
+      data: { receive_id: to, msg_type: "interactive", content }
+    });
+    return sent;
+  };
+  for (let i = 0; ; i++) {
+    try { return await attempt(); } catch (err) { if (i >= 2) throw err; }
+  }
 }
+async function updateManagedCard() {}
 class CardDispatcher { constructor(channel, cfg) {} }
 async function shutdown() {
   clearInterval(reaper);
@@ -80,6 +92,8 @@ const messageLine = 'if (streamCardHandler?.onMessage && await streamCardHandler
 const loaderLine = 'import { createRequire as createStreamCardRequire } from "node:module";';
 const managedSignature = 'async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id", messageUuid) {';
 const managedCreateData = 'data: { receive_id: to, msg_type: "interactive", content, ...messageUuid ? { uuid: messageUuid } : {} }';
+const managedSingleAttempt = 'if (messageUuid !== void 0) return await attempt();';
+const managedRetryLoop = 'for (let i = 0; ; i++) {';
 const disposeLine = 'streamCardHandler?.dispose?.();';
 
 function count(text, needle) {
@@ -90,7 +104,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-patch-'));
 (async () => {
 try {
   assert.strictEqual(ORIGINAL_SHA256, 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233');
-  assert.strictEqual(PATCHED_SHA256, '59e7e1e1b23bb89abe75ecbea13ddea0606d8419c7c37b576ef6cbad86b18c9f');
+  assert.strictEqual(PATCHED_SHA256, '6e47c9074a4872f4fd748ccd1eb54ceeadc3ebcf5d167492ac034841d86115a9');
   assert.notStrictEqual(PATCHED_SHA256, ORIGINAL_SHA256);
   const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
   assert.ok(dockerfile.includes('npm install -g @openai/codex @modelzen/feishu-codex-bridge@0.6.9'));
@@ -113,6 +127,8 @@ try {
   assert.strictEqual(count(patched, loaderLine), 1);
   assert.strictEqual(count(patched, managedSignature), 1);
   assert.strictEqual(count(patched, managedCreateData), 1);
+  assert.strictEqual(count(patched, managedSingleAttempt), 1);
+  assert.ok(patched.indexOf(managedSingleAttempt) < patched.indexOf(managedRetryLoop), 'UUID path must bypass the retained ordinary-card retry loop');
   assert.ok(patched.includes('invalid managed-card message uuid'));
   assert.strictEqual(count(patched, disposeLine), 1);
   assert.strictEqual(count(patched, registrationBlock), 1);

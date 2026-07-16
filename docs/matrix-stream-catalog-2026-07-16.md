@@ -10,6 +10,7 @@ This catalog records only the code contract and acceptance gate. It contains no 
 - Mobile constraint: the full recommendation card is limited to 1,500 Unicode code points, uses no Markdown table, and retains name, reason, category, data status, verification gap, and next action.
 - 来源分离: discovery channel/URL identifies how the company was found; official evidence URLs support product/category claims. Detail views label unconfirmed information as `待核实`.
 - Delivery boundary: `MATRIX_DELIVERY_ENABLED=0` is mandatory. This slice only selects and records candidates; 不存在外发适配器, and it does not send email, WhatsApp, or website requests.
+- Reminder safety: local delivery prioritizes at-most-once behavior. A pending reminder is claimed as inflight before the single managed-card attempt; an inflight record without a matching receipt is always treated as ambiguous and requires manual reconciliation. It is never retried automatically, even after the platform idempotency window, so a crash can cause a missed reminder rather than a duplicate.
 
 ## Automated acceptance
 

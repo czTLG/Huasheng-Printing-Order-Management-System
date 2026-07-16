@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 
 const STATE_PATH = '/workspace/store/matrix-watch-state.json';
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
 
 function shanghaiParts(now = new Date()) {
@@ -55,19 +56,29 @@ function deliveryId(date, chatId) {
 function queueReminder(card, chatId, {
   date,
   spoolPath = REMINDER_SPOOL_PATH,
+  inflightPath = REMINDER_INFLIGHT_PATH,
   receiptPath = REMINDER_RECEIPT_PATH
 } = {}) {
   const targetChat = String(chatId || '').trim();
   if (!targetChat || !card || typeof card !== 'object' || Array.isArray(card)) throw new Error('valid reminder card and chat required');
   const id = deliveryId(date, targetChat);
   const receipt = readJson(receiptPath);
+  const inflight = readJson(inflightPath);
+  if (inflight) {
+    if (receipt?.id !== inflight.id) throw new Error(`ambiguous reminder delivery ${inflight.id}; manual reconciliation required`);
+    throw new Error(`previous reminder ${inflight.id} awaits inflight cleanup`);
+  }
   if (receipt?.id === id) return id;
   const pending = readJson(spoolPath);
   if (pending?.id === id) return id;
   if (pending) throw new Error('previous reminder is still pending delivery');
-  const temporary = `${spoolPath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, date, id, chat_id: targetChat, card })}\n`, { mode: 0o600, flag: 'wx' });
-  fs.renameSync(temporary, spoolPath);
+  const temporary = `${spoolPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, date, id, chat_id: targetChat, card, attempted_at: null })}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, spoolPath);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  }
   return id;
 }
 

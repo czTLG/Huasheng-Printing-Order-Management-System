@@ -72,12 +72,20 @@ try {
     "'use strict';",
     "const fs = require('node:fs');",
     "module.exports.register = ({ sendManagedCard }) => {",
-    "  const captured = {};",
+    "  const captured = { cardCreateCount: 0, messageCreateCount: 0, retryCardCreateCount: 0, retryMessageCreateCount: 0 };",
     "  const fakeChannel = { rawClient: {",
-    "    cardkit: { v1: { card: { create: async input => { captured.cardCreate = input; return { data: { card_id: 'card_fixture' } }; } } } },",
-    "    im: { v1: { message: { create: async input => { captured.messageCreate = input; return { data: { message_id: 'message_fixture' } }; } } } }",
+    "    cardkit: { v1: { card: { create: async input => { captured.cardCreateCount += 1; captured.cardCreate = input; return { data: { card_id: 'card_fixture' } }; } } } },",
+    "    im: { v1: { message: { create: async input => { captured.messageCreateCount += 1; captured.messageCreate = input; return { data: { message_id: 'message_fixture' } }; } } } }",
     "  } };",
-    "  void sendManagedCard(fakeChannel, 'chat_fixture', { schema: '2.0', body: { elements: [] } }, undefined, false, 'chat_id', process.env.MATRIX_ARTIFACT_MESSAGE_UUID)",
+    "  const retryChannel = { rawClient: {",
+    "    cardkit: { v1: { card: { create: async () => { captured.retryCardCreateCount += 1; const error = new Error('fixture card id not ready'); error.response = { data: { code: 230099 } }; throw error; } } } },",
+    "    im: { v1: { message: { create: async () => { captured.retryMessageCreateCount += 1; return { data: { message_id: 'must-not-send' } }; } } } }",
+    "  } };",
+    "  const uuid = process.env.MATRIX_ARTIFACT_MESSAGE_UUID;",
+    "  void Promise.all([",
+    "    sendManagedCard(fakeChannel, 'chat_fixture', { schema: '2.0', body: { elements: [] } }, undefined, false, 'chat_id', uuid),",
+    "    sendManagedCard(retryChannel, 'chat_fixture', { schema: '2.0', body: { elements: [] } }, undefined, false, 'chat_id', uuid).then(() => { throw new Error('retry fixture unexpectedly succeeded'); }).catch(error => { captured.retryError = error.message; })",
+    "  ])",
     "    .then(() => { fs.writeFileSync(process.env.MATRIX_ARTIFACT_SENTINEL, JSON.stringify(captured)); setImmediate(() => { throw new Error('MATRIX_ARTIFACT_REGISTRATION_SENTINEL'); }); })",
     "    .catch(error => { setImmediate(() => { throw error; }); });",
     "  return { onMessage: async () => false };",
@@ -126,6 +134,11 @@ try {
   const captured = JSON.parse(fs.readFileSync(sentinel, 'utf8'));
   assert.strictEqual(captured.messageCreate.data.uuid, messageUuid);
   assert.strictEqual(captured.messageCreate.data.receive_id, 'chat_fixture');
+  assert.strictEqual(captured.cardCreateCount, 1, 'UUID-managed success must create one card');
+  assert.strictEqual(captured.messageCreateCount, 1, 'UUID-managed success must create at most one message');
+  assert.strictEqual(captured.retryCardCreateCount, 1, 'UUID-managed retryable failure must not recreate its card');
+  assert.strictEqual(captured.retryMessageCreateCount, 0, 'card-create failure must not reach message creation');
+  assert.match(captured.retryError, /fixture card id not ready/);
   assert.match(childEvidence, /MATRIX_ARTIFACT_REGISTRATION_SENTINEL/);
   console.log('bridge 0.6.9 artifact compatibility tests passed');
 } finally {

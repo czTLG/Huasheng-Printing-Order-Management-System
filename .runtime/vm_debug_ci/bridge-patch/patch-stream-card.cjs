@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ORIGINAL_SHA256 = 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233';
-const PATCHED_SHA256 = '59e7e1e1b23bb89abe75ecbea13ddea0606d8419c7c37b576ef6cbad86b18c9f';
+const PATCHED_SHA256 = '6e47c9074a4872f4fd748ccd1eb54ceeadc3ebcf5d167492ac034841d86115a9';
 const MESSAGE_CALL = 'if (streamCardHandler?.onMessage && await streamCardHandler.onMessage({ msg, project })) return;';
 const REGISTRATION_FIRST_LINE = 'const streamCardPath = process.env.STREAM_CARD_EXTENSION;';
 const LOADER_ANCHOR = 'var __defProp = Object.defineProperty;';
@@ -16,6 +16,8 @@ const MANAGED_SIGNATURE_PATCHED = 'async function sendManagedCard(channel, to, c
 const MANAGED_CREATE_ORIGINAL = 'data: { receive_id: to, msg_type: "interactive", content }';
 const MANAGED_CREATE_PATCHED = 'data: { receive_id: to, msg_type: "interactive", content, ...messageUuid ? { uuid: messageUuid } : {} }';
 const MANAGED_UUID_VALIDATION = 'if (messageUuid !== void 0 && !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(messageUuid)) throw new Error("invalid managed-card message uuid");';
+const MANAGED_SINGLE_ATTEMPT = 'if (messageUuid !== void 0) return await attempt();';
+const MANAGED_END_ANCHOR = 'async function updateManagedCard';
 const DISPOSE_LINE = 'streamCardHandler?.dispose?.();';
 
 function sha256(value) {
@@ -59,6 +61,15 @@ function exactFunctionStart(source, signature, nestedLine, label) {
   return { text: matches[0][0], indent: matches[0][1], index: matches[0].index };
 }
 
+function managedRetryAnchor(source, managedStart) {
+  const end = source.indexOf(MANAGED_END_ANCHOR, managedStart);
+  if (end < 0) throw new Error('managed-card retry boundary must appear after sender');
+  const region = source.slice(managedStart, end);
+  const retryLine = '  for (let i = 0; ; i++) {';
+  if (occurrences(region, retryLine) !== 1) throw new Error('managed-card retry anchor must appear exactly once');
+  return managedStart + region.indexOf(retryLine);
+}
+
 function patchSource(sourceValue) {
   const source = String(sourceValue);
   const loaderCount = occurrences(source, LOADER_LINE);
@@ -77,7 +88,7 @@ function patchSource(sourceValue) {
     if (occurrences(source, 'const streamCardExtension = streamCardPath ? streamCardRequire(streamCardPath) : null;') !== 1) {
       throw new Error('patched extension loader must appear exactly once');
     }
-    if (occurrences(source, MANAGED_CREATE_PATCHED) !== 1 || occurrences(source, MANAGED_UUID_VALIDATION) !== 1) {
+    if (occurrences(source, MANAGED_CREATE_PATCHED) !== 1 || occurrences(source, MANAGED_UUID_VALIDATION) !== 1 || occurrences(source, MANAGED_SINGLE_ATTEMPT) !== 1) {
       throw new Error('patched managed-card uuid support must appear exactly once');
     }
     if (occurrences(source, 'const cmd = parseCommand(text);') !== 1) throw new Error('patched message anchor must appear exactly once');
@@ -100,6 +111,7 @@ function patchSource(sourceValue) {
   const shutdownAnchor = exactFunctionStart(source, 'async function shutdown() {', 'clearInterval(reaper);', 'shutdown anchor');
   if (occurrences(source, MANAGED_CREATE_ORIGINAL) !== 1) throw new Error('managed-card create anchor must appear exactly once');
   if (occurrences(source, LOADER_ANCHOR) !== 1) throw new Error('loader anchor must appear exactly once');
+  const retryAnchor = managedRetryAnchor(source, managedAnchor.index);
 
   const patchedMessage = [
     `${messageAnchor.indent}const text = msg.content.trim();`,
@@ -126,13 +138,14 @@ function patchSource(sourceValue) {
     { index: managedAnchor.index, before: managedAnchor.text, after: patchedManaged },
     { index: shutdownAnchor.index, before: shutdownAnchor.text, after: patchedShutdown },
     { index: source.indexOf(MANAGED_CREATE_ORIGINAL), before: MANAGED_CREATE_ORIGINAL, after: MANAGED_CREATE_PATCHED },
+    { index: retryAnchor, before: '', after: `  ${MANAGED_SINGLE_ATTEMPT}\n` },
     { index: source.indexOf(LOADER_ANCHOR), before: '', after: `${LOADER_LINE}\n` }
   ].sort((left, right) => right.index - left.index);
   let output = source;
   for (const replacement of replacements) {
     output = `${output.slice(0, replacement.index)}${replacement.after}${output.slice(replacement.index + replacement.before.length)}`;
   }
-  if (occurrences(output, LOADER_LINE) !== 1 || occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1 || occurrences(output, MANAGED_SIGNATURE_PATCHED) !== 1 || occurrences(output, MANAGED_CREATE_PATCHED) !== 1 || occurrences(output, MANAGED_UUID_VALIDATION) !== 1 || occurrences(output, DISPOSE_LINE) !== 1) {
+  if (occurrences(output, LOADER_LINE) !== 1 || occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1 || occurrences(output, MANAGED_SIGNATURE_PATCHED) !== 1 || occurrences(output, MANAGED_CREATE_PATCHED) !== 1 || occurrences(output, MANAGED_UUID_VALIDATION) !== 1 || occurrences(output, MANAGED_SINGLE_ATTEMPT) !== 1 || occurrences(output, DISPOSE_LINE) !== 1) {
     throw new Error('patch postcondition failed');
   }
   return output;

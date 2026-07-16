@@ -7,6 +7,7 @@ const ACTIONS = ['mx.today', 'mx.pick', 'mx.page', 'mx.detail', 'mx.back', 'mx.s
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
 
 function readOptionalJson(file) {
@@ -14,41 +15,73 @@ function readOptionalJson(file) {
   catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
 }
 
+function writeJsonAtomic(targetPath, value) {
+  const temporary = `${targetPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, targetPath);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  }
+}
+
 function writeReceiptAtomic(receiptPath, receipt) {
-  const temporary = `${receiptPath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(receipt)}\n`, { mode: 0o600, flag: 'wx' });
-  fs.renameSync(temporary, receiptPath);
+  writeJsonAtomic(receiptPath, receipt);
+}
+
+function validateReminder(record, expectedChatId, state) {
+  const keys = Object.keys(record || {}).sort();
+  const expected = ['attempted_at', 'card', 'chat_id', 'date', 'id', 'version'];
+  if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new Error(`invalid reminder ${state} fields`);
+  if (record.version !== 1 || !/^\d{4}-\d{2}-\d{2}$/.test(record.date) || !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(record.id) || String(record.chat_id) !== String(expectedChatId || '')) throw new Error(`invalid reminder ${state} binding`);
+  if (!record.card || typeof record.card !== 'object' || Array.isArray(record.card)) throw new Error(`invalid reminder ${state} card`);
+  if (record.attempted_at !== null && !Number.isFinite(Date.parse(record.attempted_at))) throw new Error(`invalid reminder ${state} attempt time`);
+  return record;
 }
 
 async function deliverQueuedReminder({
   spoolPath = REMINDER_SPOOL_PATH,
+  inflightPath = REMINDER_INFLIGHT_PATH,
   receiptPath = REMINDER_RECEIPT_PATH,
   expectedChatId = process.env.STREAM_CHAT_ID,
   channel,
   sendManagedCard,
   writeReceipt = writeReceiptAtomic,
-  removePending = file => fs.unlinkSync(file)
+  removeInflight = file => fs.unlinkSync(file),
+  clock = () => new Date()
 }) {
-  let raw;
-  try { raw = fs.readFileSync(spoolPath, 'utf8'); }
-  catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
-  const queued = JSON.parse(raw);
-  const keys = Object.keys(queued || {}).sort();
-  if (JSON.stringify(keys) !== JSON.stringify(['card', 'chat_id', 'date', 'id', 'version'])) throw new Error('invalid reminder spool fields');
-  if (queued.version !== 1 || !/^\d{4}-\d{2}-\d{2}$/.test(queued.date) || !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(queued.id) || String(queued.chat_id) !== String(expectedChatId || '')) throw new Error('invalid reminder spool binding');
-  if (!queued.card || typeof queued.card !== 'object' || Array.isArray(queued.card)) throw new Error('invalid reminder spool card');
   const priorReceipt = readOptionalJson(receiptPath);
-  if (priorReceipt?.id === queued.id) {
-    removePending(spoolPath);
-    return true;
+  const existingInflight = readOptionalJson(inflightPath);
+  if (existingInflight) {
+    validateReminder(existingInflight, expectedChatId, 'inflight');
+    if (priorReceipt?.id === existingInflight.id) {
+      removeInflight(inflightPath);
+      return { status: 'delivered', id: existingInflight.id };
+    }
+    return { status: 'ambiguous', id: existingInflight.id, manual_reconciliation: true };
   }
-  const sent = await sendManagedCard(channel, queued.chat_id, queued.card, '', false, 'chat_id', queued.id);
+
+  const queued = readOptionalJson(spoolPath);
+  if (!queued) return false;
+  validateReminder(queued, expectedChatId, 'pending');
+  if (priorReceipt?.id === queued.id) {
+    fs.unlinkSync(spoolPath);
+    return { status: 'delivered', id: queued.id };
+  }
+
+  fs.renameSync(spoolPath, inflightPath);
+  const attemptedAt = clock();
+  const attemptedDate = attemptedAt instanceof Date ? attemptedAt : new Date(attemptedAt);
+  if (!Number.isFinite(attemptedDate.getTime())) throw new Error('invalid reminder delivery clock');
+  const inflight = { ...queued, attempted_at: attemptedDate.toISOString() };
+  writeJsonAtomic(inflightPath, inflight);
+  const sent = await sendManagedCard(channel, inflight.chat_id, inflight.card, '', false, 'chat_id', inflight.id);
   writeReceipt(receiptPath, {
-    version: 1, date: queued.date, id: queued.id, chat_id: queued.chat_id,
+    version: 1, date: inflight.date, id: inflight.id, chat_id: inflight.chat_id,
     message_id: String(sent?.messageId || ''), delivered_at: new Date().toISOString()
   });
-  removePending(spoolPath);
-  return true;
+  removeInflight(inflightPath);
+  return { status: 'delivered', id: inflight.id };
 }
 
 function clip(value, maximum = 90) {
@@ -170,20 +203,25 @@ function register(context) {
   const selectionEvents = new Map();
   const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
   const clearReminderPoll = context.clearReminderPoll || (timer => clearInterval(timer));
+  const logReminder = context.logReminder || (message => process.stderr.write(`${message}\n`));
   let reminderPollActive = false;
   const pollReminder = async () => {
     if (reminderPollActive) return;
     reminderPollActive = true;
     try {
-      await deliverQueuedReminder({
+      const result = await deliverQueuedReminder({
         channel, sendManagedCard,
         spoolPath: context.reminderSpoolPath || REMINDER_SPOOL_PATH,
+        inflightPath: context.reminderInflightPath || REMINDER_INFLIGHT_PATH,
         receiptPath: context.reminderReceiptPath || REMINDER_RECEIPT_PATH,
         writeReceipt: context.writeReminderReceipt || writeReceiptAtomic,
-        removePending: context.removeReminderPending || (file => fs.unlinkSync(file))
+        removeInflight: context.removeReminderInflight || (file => fs.unlinkSync(file))
       });
+      if (result?.status === 'ambiguous') {
+        logReminder(`[stream-card] reminder delivery ambiguous: ${result.id}; manual reconciliation required`);
+      }
     } catch (error) {
-      process.stderr.write(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}\n`);
+      logReminder(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}`);
     } finally {
       reminderPollActive = false;
     }

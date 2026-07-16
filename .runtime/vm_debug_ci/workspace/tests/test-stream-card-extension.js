@@ -97,22 +97,25 @@ async function testReadOnlyWatcher() {
   const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reminder-spool-'));
   try {
     const spoolPath = path.join(spoolRoot, 'pending.json');
+    const inflightPath = path.join(spoolRoot, 'inflight.json');
+    const receiptPath = path.join(spoolRoot, 'receipt.json');
     const date = '2026-07-18';
-    const queuedId = watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', { date, spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json') });
+    fs.writeFileSync(`${spoolPath}.${process.pid}.tmp`, 'stale');
+    const queuedId = watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', { date, spoolPath, inflightPath, receiptPath });
     assert.match(queuedId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     assert.strictEqual(watcher.deliveryId(date, 'chat-watch'), queuedId);
-    assert.strictEqual(watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', { date, spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json') }), queuedId);
+    assert.strictEqual(watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-watch', { date, spoolPath, inflightPath, receiptPath }), queuedId);
     assert.strictEqual(JSON.parse(fs.readFileSync(spoolPath, 'utf8')).date, date);
     const sentFromSpool = [];
-    assert.strictEqual(await extension.deliverQueuedReminder({
-      spoolPath, expectedChatId: 'chat-watch', channel: {},
-      receiptPath: path.join(spoolRoot, 'receipt.json'),
+    fs.writeFileSync(`${receiptPath}.${process.pid}.tmp`, 'stale');
+    assert.deepStrictEqual(await extension.deliverQueuedReminder({
+      spoolPath, inflightPath, expectedChatId: 'chat-watch', channel: {}, receiptPath,
       sendManagedCard: async (_channel, chatId, card, _reply, _thread, _receiveType, uuid) => sentFromSpool.push({ chatId, card, uuid })
-    }), true);
+    }), { status: 'delivered', id: queuedId });
     assert.deepStrictEqual(sentFromSpool, [{ chatId: 'chat-watch', card: { schema: '2.0', body: { elements: [] } }, uuid: queuedId }]);
     assert.strictEqual(fs.existsSync(spoolPath), false);
-    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(spoolRoot, 'receipt.json'), 'utf8')).id, queuedId);
-    assert.strictEqual(await extension.deliverQueuedReminder({ spoolPath, expectedChatId: 'chat-watch', channel: {}, sendManagedCard: async () => {} }), false);
+    assert.strictEqual(JSON.parse(fs.readFileSync(receiptPath, 'utf8')).id, queuedId);
+    assert.strictEqual(await extension.deliverQueuedReminder({ spoolPath, inflightPath, receiptPath, expectedChatId: 'chat-watch', channel: {}, sendManagedCard: async () => {} }), false);
   } finally {
     fs.rmSync(spoolRoot, { recursive: true, force: true });
   }
@@ -122,69 +125,94 @@ async function testReminderPollingAndRetry() {
   const watcher = require('../scripts/matrix-watch.js');
   const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reminder-poll-'));
   const spoolPath = path.join(spoolRoot, 'pending.json');
+  const inflightPath = path.join(spoolRoot, 'inflight.json');
+  const receiptPath = path.join(spoolRoot, 'receipt.json');
   let poll;
   let attempts = 0;
-  let releaseSlowSend;
+  let releaseFirstSend;
   let failReceiptOnce = true;
   let failRemoveOnce = false;
-  const remoteMessages = new Map();
   let activeTimers = 0;
+  const reminderLogs = [];
   try {
     process.env.STREAM_CHAT_ID = 'chat-poll';
     const registered = extension.register({
       channel: {}, dispatcher: { on: () => undefined }, card: helpers(), client: {},
       reminderSpoolPath: spoolPath,
-      reminderReceiptPath: path.join(spoolRoot, 'receipt.json'),
+      reminderInflightPath: inflightPath,
+      reminderReceiptPath: receiptPath,
+      logReminder: message => reminderLogs.push(message),
       scheduleReminderPoll: callback => { poll = callback; activeTimers += 1; return { unref() {} }; },
       clearReminderPoll: () => { activeTimers -= 1; },
       writeReminderReceipt: (receiptPath, receipt) => {
         if (failReceiptOnce) { failReceiptOnce = false; throw new Error('crash before local receipt'); }
         fs.writeFileSync(receiptPath, JSON.stringify(receipt));
       },
-      removeReminderPending: pendingPath => {
+      removeReminderInflight: pendingPath => {
         if (failRemoveOnce) { failRemoveOnce = false; throw new Error('crash after receipt before pending cleanup'); }
         fs.unlinkSync(pendingPath);
       },
       sendManagedCard: async (_channel, _chatId, _card, _reply, _thread, _receiveType, uuid) => {
         attempts += 1;
-        if (!remoteMessages.has(uuid)) remoteMessages.set(uuid, `message-${remoteMessages.size + 1}`);
-        if (attempts >= 3) await new Promise(resolve => { releaseSlowSend = resolve; });
-        return { messageId: remoteMessages.get(uuid), cardId: 'card-1' };
+        if (attempts === 1) await new Promise(resolve => { releaseFirstSend = resolve; });
+        return { messageId: `message-${uuid}`, cardId: 'card-1' };
       }
     });
     assert.strictEqual(typeof poll, 'function', 'extension registration must schedule spool polling');
     const deliveryId = watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', {
-      date: '2026-07-18', spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json')
+      date: '2026-07-18', spoolPath, inflightPath, receiptPath
     });
-    await poll();
-    assert.strictEqual(fs.existsSync(spoolPath), true, 'post-send receipt crash must remain pending for retry');
-    assert.strictEqual(remoteMessages.size, 1);
-    assert.strictEqual(await registered.onMessage({ msg: { content: '普通消息', chatId: 'chat-poll', senderId: 'ou-poll' } }), false);
-    assert.strictEqual(attempts, 1, 'ordinary messages must not consume or duplicate a reminder');
-    await poll();
-    assert.strictEqual(attempts, 2);
-    assert.strictEqual(remoteMessages.size, 1, 'same remote uuid must deduplicate post-send retry');
-    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(spoolRoot, 'receipt.json'), 'utf8')).id, deliveryId);
-    assert.strictEqual(fs.existsSync(spoolPath), false, 'successful delivery must acknowledge the pending file');
-    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', {
-      date: '2026-07-19', spoolPath, receiptPath: path.join(spoolRoot, 'receipt.json')
-    });
-    failRemoveOnce = true;
-    const slowPoll = poll();
+    const firstPoll = poll();
     await new Promise(resolve => setImmediate(resolve));
     const overlappingPoll = poll();
     await new Promise(resolve => setImmediate(resolve));
-    assert.strictEqual(attempts, 3, 'overlapping timer ticks must not duplicate delivery');
-    releaseSlowSend();
-    await Promise.all([slowPoll, overlappingPoll]);
-    assert.strictEqual(fs.existsSync(spoolPath), true, 'post-receipt cleanup crash must retain pending evidence');
+    assert.strictEqual(attempts, 1, 'overlapping timer ticks must not duplicate delivery');
+    releaseFirstSend();
+    await Promise.all([firstPoll, overlappingPoll]);
+    assert.strictEqual(fs.existsSync(spoolPath), false);
+    assert.strictEqual(fs.existsSync(inflightPath), true, 'post-send receipt crash must remain inflight');
+    const inflight = JSON.parse(fs.readFileSync(inflightPath, 'utf8'));
+    assert.strictEqual(inflight.id, deliveryId);
+    assert.ok(Date.parse(inflight.attempted_at));
+    assert.strictEqual(await registered.onMessage({ msg: { content: '普通消息', chatId: 'chat-poll', senderId: 'ou-poll' } }), false);
+    assert.strictEqual(attempts, 1, 'ordinary messages must not consume or duplicate a reminder');
+    inflight.attempted_at = '2026-07-18T00:00:00.000Z';
+    fs.writeFileSync(inflightPath, JSON.stringify(inflight));
+    await poll();
+    assert.strictEqual(attempts, 1, 'ambiguous inflight must never resend, including after one hour');
+    assert.match(reminderLogs.at(-1), /ambiguous.*manual reconciliation required/i);
+    fs.writeFileSync(receiptPath, JSON.stringify({ version: 1, date: inflight.date, id: inflight.id, chat_id: inflight.chat_id }));
+    await poll();
+    assert.strictEqual(fs.existsSync(inflightPath), false, 'manual receipt reconciliation permits cleanup');
+    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', {
+      date: '2026-07-19', spoolPath, inflightPath, receiptPath
+    });
+    failRemoveOnce = true;
+    await poll();
+    assert.strictEqual(fs.existsSync(inflightPath), true, 'post-receipt cleanup crash must retain inflight evidence');
     const attemptsBeforeReceiptRecovery = attempts;
     await poll();
     assert.strictEqual(attempts, attemptsBeforeReceiptRecovery, 'matching receipt must suppress remote resend');
-    assert.strictEqual(fs.existsSync(spoolPath), false);
+    assert.strictEqual(fs.existsSync(inflightPath), false);
+    watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', {
+      date: '2026-07-20', spoolPath, inflightPath, receiptPath
+    });
+    const sendFailure = new Error('single send attempt failed');
+    await assert.rejects(() => extension.deliverQueuedReminder({
+      spoolPath, inflightPath, receiptPath, expectedChatId: 'chat-poll', channel: {},
+      sendManagedCard: async () => { attempts += 1; throw sendFailure; }
+    }), /single send attempt failed/);
+    const failedAttempts = attempts;
+    assert.throws(() => watcher.queueReminder({ schema: '2.0', body: { elements: [] } }, 'chat-poll', {
+      date: '2026-07-21', spoolPath, inflightPath, receiptPath
+    }), /ambiguous.*manual reconciliation/i, 'next-day queue must not overwrite ambiguous inflight evidence');
+    assert.deepStrictEqual(await extension.deliverQueuedReminder({
+      spoolPath, inflightPath, receiptPath, expectedChatId: 'chat-poll', channel: {},
+      sendManagedCard: async () => { attempts += 1; }
+    }), { status: 'ambiguous', id: watcher.deliveryId('2026-07-20', 'chat-poll'), manual_reconciliation: true });
+    assert.strictEqual(attempts, failedAttempts, 'send failure inflight must not automatically retry');
     assert.strictEqual(typeof registered.dispose, 'function');
     assert.strictEqual(activeTimers, 1);
-    registered.dispose();
     registered.dispose();
     assert.strictEqual(activeTimers, 0, 'dispose must clear exactly one registration timer');
     const registeredAgain = extension.register({
