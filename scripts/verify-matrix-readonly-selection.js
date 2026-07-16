@@ -16,7 +16,8 @@ const FOCUSED_TESTS = [
   'scripts/test-packet-gate.js',
   'scripts/test-matrix-api.js',
   '.runtime/vm_debug_ci/workspace/tests/test-bridge-patch.js',
-  '.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js'
+  '.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js',
+  'scripts/test-verify-matrix-readonly-selection.js'
 ];
 
 function repositoryContract() {
@@ -37,6 +38,7 @@ function repositoryContract() {
   for (const marker of [
     '/api/matrix', 'matrix-bind-actor.js', '开发客户', '1,500',
     '来源分离', '不存在外发适配器', 'MATRIX_DELIVERY_ENABLED=0',
+    'MATRIX_VERIFY_FIXTURE=1', 'fail closed',
     '桌面端', '移动端', '等待明确部署授权'
   ]) assert.ok(catalog.includes(marker), `catalog missing ${marker}`);
 }
@@ -85,6 +87,22 @@ function createCandidateFixture(root) {
   return dbPath;
 }
 
+function candidateInput({ root = ROOT, temporary, env = process.env } = {}) {
+  const fixtureSetting = String(env.MATRIX_VERIFY_FIXTURE || '').trim();
+  if (fixtureSetting && fixtureSetting !== '1') throw new Error('MATRIX_VERIFY_FIXTURE must be exactly 1 when enabled');
+  const configuredPath = String(env.MATRIX_STREAM_DB_PATH || '').trim();
+  if (fixtureSetting === '1') {
+    if (configuredPath) throw new Error('MATRIX_VERIFY_FIXTURE cannot be combined with MATRIX_STREAM_DB_PATH');
+    if (!temporary) throw new Error('temporary fixture directory required');
+    return { dbPath: createCandidateFixture(temporary), source: 'explicit-fixture' };
+  }
+  const selected = configuredPath || './data/matrix-stream.db';
+  return {
+    dbPath: path.resolve(root, selected),
+    source: configuredPath ? 'configured-readonly-database' : 'default-readonly-database'
+  };
+}
+
 function inspectCandidates(dbPath) {
   const stat = fs.statSync(dbPath);
   const candidateMode = (stat.mode & 0o777).toString(8).padStart(3, '0');
@@ -115,9 +133,13 @@ function inspectCandidates(dbPath) {
   }
 }
 
+function recommendFromView(view) {
+  return view.recommend({ limit: Number.MAX_SAFE_INTEGER, excludeIds: [] });
+}
+
 function recommendations(dbPath) {
   const view = createCacheIndexView({ dbPath });
-  try { return view.list({ page: 1, pageSize: 5 }).rows; }
+  try { return recommendFromView(view); }
   finally { view.close(); }
 }
 
@@ -193,8 +215,8 @@ function main() {
   repositoryContract();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-readonly-verifier-'));
   try {
-    const configuredPath = String(process.env.MATRIX_STREAM_DB_PATH || '').trim();
-    const dbPath = configuredPath ? path.resolve(ROOT, configuredPath) : createCandidateFixture(root);
+    const input = candidateInput({ root: ROOT, temporary: root, env: process.env });
+    const dbPath = input.dbPath;
     const metrics = inspectCandidates(dbPath);
     const selected = recommendations(dbPath);
     const adapters = outboundAdapterFiles();
@@ -224,15 +246,19 @@ function main() {
       recommendations: selected.length,
       idempotent_selection_events: idempotentEvents,
       delivery_enabled: false,
-      source: configuredPath ? 'configured-readonly-database' : 'repeatable-fixture'
+      source: input.source
     }, null, 2)}\n`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
-try { main(); }
-catch (error) {
-  process.stderr.write(`matrix read-only verification failed: ${error?.message || 'unknown error'}\n`);
-  process.exitCode = 1;
+if (require.main === module) {
+  try { main(); }
+  catch (error) {
+    process.stderr.write(`matrix read-only verification failed: ${error?.message || 'unknown error'}\n`);
+    process.exitCode = 1;
+  }
 }
+
+module.exports = { recommendations, recommendFromView, candidateInput, inspectCandidates };

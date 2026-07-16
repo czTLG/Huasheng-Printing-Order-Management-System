@@ -13,11 +13,13 @@ This catalog records only the code contract and acceptance gate. It contains no 
 
 ## Automated acceptance
 
-Run `npm run verify:matrix-readonly-selection`. The verifier uses a repeatable temporary fixture unless `MATRIX_STREAM_DB_PATH` explicitly points to a read-only candidate database. It checks:
+Run `npm run verify:matrix-readonly-selection`. This deployment gate uses `MATRIX_STREAM_DB_PATH` or the safe default `./data/matrix-stream.db` and will **fail closed** when that file is missing, corrupt, incorrectly permissioned, or incomplete.
+
+Disposable fixture verification is separate and explicit: `MATRIX_VERIFY_FIXTURE=1 npm run verify:matrix-readonly-selection`. Fixture mode cannot be combined with `MATRIX_STREAM_DB_PATH` and is never enabled by the package script itself. It checks:
 
 - SQLite integrity and mode `0600`;
 - no duplicate normalized domains, excluded CN/IN rows, or eligible records missing evidence/discovery;
-- no more than five recommendations;
+- the adapter's real oversized `recommend` request still returns no more than five recommendations;
 - delivery disabled and no outbound adapter capability in the Matrix slice;
 - one event after the same idempotent selection is submitted twice;
 - focused tests for the adapter, packet gate, API, bridge seam, and card extension.
