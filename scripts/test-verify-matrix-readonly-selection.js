@@ -20,6 +20,9 @@ assert.strictEqual(rows.length, 5);
 
 assert.strictEqual(typeof verifier.candidateInput, 'function');
 assert.strictEqual(typeof verifier.inspectCandidates, 'function');
+assert.strictEqual(typeof verifier.runtimeSurfaceFiles, 'function');
+assert.strictEqual(typeof verifier.outboundAdapterFiles, 'function');
+assert.strictEqual(typeof verifier.validateComposeConfig, 'function');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-verifier-input-'));
 try {
   const temporary = path.join(root, 'temporary');
@@ -42,6 +45,21 @@ try {
     root, temporary,
     env: { MATRIX_VERIFY_FIXTURE: '1', MATRIX_STREAM_DB_PATH: '/tmp/ambiguous.db' }
   }), /cannot be combined|ambiguous/i);
+
+  const runtimeRoot = path.join(root, 'runtime');
+  fs.mkdirSync(path.join(runtimeRoot, 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(runtimeRoot, 'safe.js'), "module.exports = true;\n");
+  fs.writeFileSync(path.join(runtimeRoot, 'nested', 'adapter.cjs'), "require('nodemailer');\n");
+  const surface = verifier.runtimeSurfaceFiles([runtimeRoot]);
+  assert.strictEqual(surface.length, 2);
+  assert.deepStrictEqual(verifier.outboundAdapterFiles(surface), [path.join(runtimeRoot, 'nested', 'adapter.cjs')]);
+
+  verifier.validateComposeConfig({ runCompose: () => ({
+    status: 0,
+    stdout: 'MATRIX_API_BASE_URL: http://host.docker.internal:8080/api/matrix\nhealthcheck:\n  test: node /workspace/scripts/matrix-runtime.js health\nextra_hosts:\n  host.docker.internal: host-gateway\n',
+    stderr: ''
+  }) });
+  assert.throws(() => verifier.validateComposeConfig({ runCompose: () => ({ status: 1, stdout: '', stderr: 'invalid compose' }) }), /invalid compose/);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

@@ -5,12 +5,13 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 const patcherPath = path.resolve(__dirname, '..', '..', 'bridge-patch', 'patch-stream-card.cjs');
 const dockerfilePath = path.resolve(__dirname, '..', '..', 'Dockerfile');
 const { ORIGINAL_SHA256, PATCHED_SHA256, patchSource, patchFile } = require(patcherPath);
 
-const fixture = `'use strict';
+const fixture = `var __defProp = Object.defineProperty;
 async function intake(msg, project) {
   const text = msg.content.trim();
   const cmd = parseCommand(text);
@@ -22,9 +23,9 @@ function boot(channel, cfg, cliBridge) {
 }
 `;
 
-const behaviorFixture = `'use strict';
+const behaviorFixture = `var __defProp = Object.defineProperty;
 class CardDispatcher { constructor(channel, cfg) {} }
-module.exports = async function run(msg, project) {
+export default async function run(msg, project) {
   const channel = {};
   const cfg = {};
   const cliBridge = null;
@@ -47,12 +48,14 @@ module.exports = async function run(msg, project) {
 `;
 
 const registrationBlock = `const streamCardPath = process.env.STREAM_CARD_EXTENSION;
-  const streamCardExtension = streamCardPath ? require(streamCardPath) : null;
+  const streamCardRequire = createStreamCardRequire(import.meta.url);
+  const streamCardExtension = streamCardPath ? streamCardRequire(streamCardPath) : null;
   const streamCardHandler = streamCardExtension?.register?.({
     channel, dispatcher, sendManagedCard, updateManagedCard,
     card: { card, md, note, hr, actions, button, linkButton }
   });`;
 const messageLine = 'if (streamCardHandler?.onMessage && await streamCardHandler.onMessage({ msg, project })) return;';
+const loaderLine = 'import { createRequire as createStreamCardRequire } from "node:module";';
 
 function count(text, needle) {
   return text.split(needle).length - 1;
@@ -62,7 +65,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-patch-'));
 (async () => {
 try {
   assert.strictEqual(ORIGINAL_SHA256, 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233');
-  assert.strictEqual(PATCHED_SHA256, 'd7b1d21243068166fd6dee1754d16814ab6c84805bc9250d13511fec74dea96d');
+  assert.strictEqual(PATCHED_SHA256, '95e6b56e8158124dda6a976bff7b1471d23f14386c772776386483c517de3078');
   assert.notStrictEqual(PATCHED_SHA256, ORIGINAL_SHA256);
   const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
   assert.ok(dockerfile.includes('npm install -g @openai/codex @modelzen/feishu-codex-bridge@0.6.9'));
@@ -82,6 +85,7 @@ try {
   assert.throws(() => patchSource(fixture.replace('  cliBridge?.register(dispatcher);\n', '  cliBridge?.register(dispatcher);\n  cliBridge?.register(dispatcher);\n')), /registration anchor.*exactly once/);
 
   const patched = patchSource(fixture);
+  assert.strictEqual(count(patched, loaderLine), 1);
   assert.strictEqual(count(patched, registrationBlock), 1);
   assert.strictEqual(count(patched, messageLine), 1);
   assert.ok(patched.indexOf(messageLine) < patched.indexOf('const cmd = parseCommand(text);'));
@@ -90,13 +94,13 @@ try {
   assert.strictEqual(count(patchSource(patched), messageLine), 1);
 
   const extensionPath = path.join(tmp, 'extension.cjs');
-  const behaviorPath = path.join(tmp, 'behavior.cjs');
+  const behaviorPath = path.join(tmp, 'behavior.mjs');
   fs.writeFileSync(extensionPath, `module.exports.register = () => ({ onMessage: async ({ msg, project }) => { project.events.push('extension:' + msg.content); return msg.content === 'handled'; } });\n`);
   fs.writeFileSync(behaviorPath, patchSource(behaviorFixture));
   const previousExtension = process.env.STREAM_CARD_EXTENSION;
   process.env.STREAM_CARD_EXTENSION = extensionPath;
   try {
-    const run = require(behaviorPath);
+    const { default: run } = await import(pathToFileURL(behaviorPath).href);
     const unknownProject = { events: [] };
     assert.strictEqual(await run({ content: 'unknown' }, unknownProject), 'unknown');
     assert.deepStrictEqual(unknownProject.events, ['extension:unknown', 'generic:unknown']);

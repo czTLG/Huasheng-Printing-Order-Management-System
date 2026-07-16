@@ -17,8 +17,23 @@ const FOCUSED_TESTS = [
   'scripts/test-matrix-api.js',
   '.runtime/vm_debug_ci/workspace/tests/test-bridge-patch.js',
   '.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js',
+  '.runtime/vm_debug_ci/workspace/tests/test-runtime-supervisor.js',
+  'scripts/test-bridge-artifact-0.6.9.js',
   'scripts/test-verify-matrix-readonly-selection.js'
 ];
+const RUNTIME_SURFACE_ROOTS = [
+  '.runtime/vm_debug_ci/Dockerfile',
+  '.runtime/vm_debug_ci/compose.yaml',
+  '.runtime/vm_debug_ci/bridge-patch',
+  '.runtime/vm_debug_ci/workspace/extensions',
+  '.runtime/vm_debug_ci/workspace/scripts',
+  'src/db.js',
+  'src/server.js',
+  'src/lib/cacheIndexView.js',
+  'src/lib/packetGate.js',
+  'src/routes/matrix.js',
+  'scripts/matrix-bind-actor.js'
+].map(file => path.join(ROOT, file));
 
 function repositoryContract() {
   const env = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
@@ -143,16 +158,46 @@ function recommendations(dbPath) {
   finally { view.close(); }
 }
 
-function outboundAdapterFiles() {
-  const files = [
-    'src/lib/cacheIndexView.js', 'src/lib/packetGate.js', 'src/routes/matrix.js',
-    'scripts/matrix-bind-actor.js',
-    '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs',
-    '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js',
-    '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js'
-  ];
-  const capability = /\b(?:nodemailer|imapflow|sendMail|SMTP_|IMAP_|WHATSAPP)\b/;
-  return files.filter(file => capability.test(fs.readFileSync(path.join(ROOT, file), 'utf8')));
+function runtimeSurfaceFiles(roots = RUNTIME_SURFACE_ROOTS) {
+  const files = [];
+  const visit = target => {
+    const stat = fs.lstatSync(target);
+    if (stat.isSymbolicLink()) throw new Error(`runtime surface must not contain symlinks: ${target}`);
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(target).sort()) visit(path.join(target, entry));
+    } else if (stat.isFile()) files.push(target);
+  };
+  for (const root of roots) visit(path.resolve(root));
+  return files;
+}
+
+function outboundAdapterFiles(files = runtimeSurfaceFiles()) {
+  const capability = /\b(?:nodemailer|imapflow|SMTP_[A-Z0-9_]*|IMAP_[A-Z0-9_]*|WHATSAPP[A-Z0-9_]*|sendMail\s*\()/;
+  return files.filter(file => capability.test(fs.readFileSync(file, 'utf8')));
+}
+
+function validateComposeConfig({ runCompose } = {}) {
+  const composePath = path.join(ROOT, '.runtime/vm_debug_ci/compose.yaml');
+  const execute = runCompose || (() => spawnSync('docker', ['compose', '-f', composePath, 'config'], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      MATRIX_API_HOST_PORT: '8080',
+      MATRIX_BRIDGE_TOKEN: 'sanitized-verifier-token',
+      MATRIX_OWNER_OPEN_ID: 'ou_sanitized_verifier',
+      STREAM_APP_ID: 'cli_sanitized_verifier',
+      STREAM_CHAT_ID: 'oc_sanitized_verifier'
+    },
+    encoding: 'utf8'
+  }));
+  const result = execute();
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || 'docker compose config failed').trim());
+  const config = String(result.stdout || '');
+  assert.ok(config.includes('http://host.docker.internal:8080/api/matrix'), 'Compose API default did not resolve to port 8080');
+  assert.ok(config.includes('/workspace/scripts/matrix-runtime.js') && config.includes('health'), 'Compose health gate missing');
+  assert.ok(config.includes('host-gateway'), 'Compose host gateway missing');
+  return config;
 }
 
 function duplicateSelectionCount(root) {
@@ -213,6 +258,7 @@ function runFocusedTests() {
 
 function main() {
   repositoryContract();
+  validateComposeConfig();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-readonly-verifier-'));
   try {
     const input = candidateInput({ root: ROOT, temporary: root, env: process.env });
@@ -261,4 +307,7 @@ if (require.main === module) {
   }
 }
 
-module.exports = { recommendations, recommendFromView, candidateInput, inspectCandidates };
+module.exports = {
+  recommendations, recommendFromView, candidateInput, inspectCandidates,
+  runtimeSurfaceFiles, outboundAdapterFiles, validateComposeConfig
+};

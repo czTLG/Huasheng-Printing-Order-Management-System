@@ -97,7 +97,7 @@ function testSanitizedCompose() {
   const dockerfile = fs.readFileSync(path.resolve(__dirname, '../../Dockerfile'), 'utf8');
   for (const expected of [
     'STREAM_CARD_EXTENSION: /workspace/extensions/stream-card.cjs',
-    'MATRIX_API_BASE_URL: http://host.docker.internal:3333/api/matrix',
+    'MATRIX_API_BASE_URL: http://host.docker.internal:${MATRIX_API_HOST_PORT:-8080}/api/matrix',
     'MATRIX_BRIDGE_TOKEN: ${MATRIX_BRIDGE_TOKEN:?MATRIX_BRIDGE_TOKEN must be set}',
     'MATRIX_DELIVERY_ENABLED: "0"',
     'MATRIX_RECOMMEND_HOUR: "9"',

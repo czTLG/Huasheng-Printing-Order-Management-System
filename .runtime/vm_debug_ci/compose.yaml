@@ -7,7 +7,7 @@ services:
     read_only: true
     environment:
       STREAM_CARD_EXTENSION: /workspace/extensions/stream-card.cjs
-      MATRIX_API_BASE_URL: http://host.docker.internal:3333/api/matrix
+      MATRIX_API_BASE_URL: http://host.docker.internal:${MATRIX_API_HOST_PORT:-8080}/api/matrix
       MATRIX_BRIDGE_TOKEN: ${MATRIX_BRIDGE_TOKEN:?MATRIX_BRIDGE_TOKEN must be set}
       MATRIX_DELIVERY_ENABLED: "0"
       MATRIX_RECOMMEND_HOUR: "9"
@@ -18,9 +18,14 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:
-      - sh
-      - -lc
-      - node --no-warnings /workspace/scripts/matrix-watch.js & exec feishu-codex-bridge run --bot stream-node
+      - node
+      - /workspace/scripts/matrix-runtime.js
+    healthcheck:
+      test: ["CMD", "node", "/workspace/scripts/matrix-runtime.js", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     volumes:
       - ./workspace/extensions:/workspace/extensions:ro
       - ./workspace/scripts:/workspace/scripts:ro

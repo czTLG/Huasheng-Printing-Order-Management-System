@@ -6,9 +6,11 @@ const fs = require('fs');
 const path = require('path');
 
 const ORIGINAL_SHA256 = 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233';
-const PATCHED_SHA256 = 'd7b1d21243068166fd6dee1754d16814ab6c84805bc9250d13511fec74dea96d';
+const PATCHED_SHA256 = '95e6b56e8158124dda6a976bff7b1471d23f14386c772776386483c517de3078';
 const MESSAGE_CALL = 'if (streamCardHandler?.onMessage && await streamCardHandler.onMessage({ msg, project })) return;';
 const REGISTRATION_FIRST_LINE = 'const streamCardPath = process.env.STREAM_CARD_EXTENSION;';
+const LOADER_ANCHOR = 'var __defProp = Object.defineProperty;';
+const LOADER_LINE = 'import { createRequire as createStreamCardRequire } from "node:module";';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -21,7 +23,8 @@ function occurrences(source, needle) {
 function registrationBlock(indent) {
   return [
     `${indent}const streamCardPath = process.env.STREAM_CARD_EXTENSION;`,
-    `${indent}const streamCardExtension = streamCardPath ? require(streamCardPath) : null;`,
+    `${indent}const streamCardRequire = createStreamCardRequire(import.meta.url);`,
+    `${indent}const streamCardExtension = streamCardPath ? streamCardRequire(streamCardPath) : null;`,
     `${indent}const streamCardHandler = streamCardExtension?.register?.({`,
     `${indent}  channel, dispatcher, sendManagedCard, updateManagedCard,`,
     `${indent}  card: { card, md, note, hr, actions, button, linkButton }`,
@@ -43,16 +46,20 @@ function exactPair(source, first, second, label) {
 
 function patchSource(sourceValue) {
   const source = String(sourceValue);
+  const loaderCount = occurrences(source, LOADER_LINE);
   const registrationCount = occurrences(source, REGISTRATION_FIRST_LINE);
   const messageCount = occurrences(source, MESSAGE_CALL);
-  if (registrationCount || messageCount) {
-    if (registrationCount !== 1 || messageCount !== 1) throw new Error('partial or repeated stream-card patch');
+  if (loaderCount || registrationCount || messageCount) {
+    if (loaderCount !== 1 || registrationCount !== 1 || messageCount !== 1) throw new Error('partial or repeated stream-card patch');
     exactPair(
       source,
       REGISTRATION_FIRST_LINE,
-      'const streamCardExtension = streamCardPath ? require(streamCardPath) : null;',
+      'const streamCardRequire = createStreamCardRequire(import.meta.url);',
       'patched registration anchor'
     );
+    if (occurrences(source, 'const streamCardExtension = streamCardPath ? streamCardRequire(streamCardPath) : null;') !== 1) {
+      throw new Error('patched extension loader must appear exactly once');
+    }
     if (occurrences(source, 'const cmd = parseCommand(text);') !== 1) throw new Error('patched message anchor must appear exactly once');
     return source;
   }
@@ -69,6 +76,7 @@ function patchSource(sourceValue) {
     'cliBridge?.register(dispatcher);',
     'registration anchor'
   );
+  if (occurrences(source, LOADER_ANCHOR) !== 1) throw new Error('loader anchor must appear exactly once');
 
   const patchedMessage = [
     `${messageAnchor.indent}const text = msg.content.trim();`,
@@ -82,13 +90,14 @@ function patchSource(sourceValue) {
 
   const replacements = [
     { index: messageAnchor.index, before: messageAnchor.text, after: patchedMessage },
-    { index: registrationAnchor.index, before: registrationAnchor.text, after: patchedRegistration }
+    { index: registrationAnchor.index, before: registrationAnchor.text, after: patchedRegistration },
+    { index: source.indexOf(LOADER_ANCHOR), before: '', after: `${LOADER_LINE}\n` }
   ].sort((left, right) => right.index - left.index);
   let output = source;
   for (const replacement of replacements) {
     output = `${output.slice(0, replacement.index)}${replacement.after}${output.slice(replacement.index + replacement.before.length)}`;
   }
-  if (occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1) {
+  if (occurrences(output, LOADER_LINE) !== 1 || occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1) {
     throw new Error('patch postcondition failed');
   }
   return output;
