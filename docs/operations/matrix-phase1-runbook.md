@@ -32,8 +32,10 @@ node scripts/matrix-classify-current.js
 只有需要保留不含私密预览的审计结果时才指定工作区内路径：
 
 ```bash
-node scripts/matrix-classify-current.js --output ./tmp/matrix-current-summary.json
+node scripts/matrix-classify-current.js --output ./matrix-current-summary.json
 ```
+
+`--output` 当前只接受工作区根目录中的普通文件；不能使用 `./tmp/...` 等子目录路径。目标存在时必须仍是单硬链接普通文件。核对完成后按内部留存规则处理该报告，不要把它加入 Git。
 
 输出前后应记录数据库文件校验和；校验和变化即停止操作并调查。
 
@@ -78,7 +80,7 @@ node scripts/matrix-classify-current.js --output ./tmp/matrix-current-summary.js
 
 ## 计数与抽检
 
-每次导入保存 run ID，并记录以下计数：
+`importDiscoveryBatch(...)` 返回内存中的 `summary`，包含以下计数：
 
 - `input`：输入总数，包含随后排除或报错的记录；
 - `excluded`：India 等明确排除记录；
@@ -88,14 +90,16 @@ node scripts/matrix-classify-current.js --output ./tmp/matrix-current-summary.js
 - `valid`：通过当前规则的候选；
 - `errors`：URL、证据、国家上限或存储校验失败。
 
-计数必须满足 `input = excluded + test + noise + needs_review + valid + errors`。若不相等、任一国家超过 20、总输入超过 120、出现 India 实体，立即停止。
+受控 runner 必须把 run ID 与返回的完整 summary 同时打印到命令标准输出；操作员将该段输出写入本次审计记录。当前实现不会把 import 返回的 summary 更新到 `matrix_runs.counters_json`，不得把该列当作本次导入计数来源，也不得手工伪造其内容。
+
+summary 必须满足 `input = excluded + test + noise + needs_review + valid + errors`。若不相等、任一国家超过 20、总输入超过 120、出现 India 实体，立即停止。
 
 人工抽检至少覆盖每个国家和每个非零分类；每组抽取 10%，不足 10 条时至少 1 条。逐项核对 official domain、证据 URL、检索时间、confidence、分类 reason code，并确认 API 只展示掩码联系方式。`needs_review` 和 `errors` 不得按 valid 使用。
 
 可用只读 SQL 复核：
 
 ```sql
-SELECT id, status, ruleset_version, counters_json, created_at
+SELECT id, status, ruleset_version, created_at
 FROM matrix_runs
 WHERE id = :run_id;
 

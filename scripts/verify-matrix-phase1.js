@@ -211,6 +211,23 @@ function assertDeliveryUnavailable() {
   );
 }
 
+function assertRunbookAccuracy() {
+  const runbook = fs.readFileSync(path.join(root, 'docs/operations/matrix-phase1-runbook.md'), 'utf8');
+  assert(
+    runbook.includes('node scripts/matrix-classify-current.js --output ./matrix-current-summary.json'),
+    'runbook output example must use a file in the workspace root'
+  );
+  assert(!runbook.includes('--output ./tmp/'), 'runbook must not use a CLI-rejected nested output path');
+  assert(
+    !/SELECT\s+id,\s+status,\s+ruleset_version,\s+counters_json/mi.test(runbook),
+    'runbook must not imply import summaries are persisted in matrix_runs.counters_json'
+  );
+  assert(
+    /importDiscoveryBatch[^\n]*返回[^\n]*summary/.test(runbook),
+    'runbook must identify importDiscoveryBatch returned summary as the counter source'
+  );
+}
+
 function availablePort() {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
@@ -286,12 +303,13 @@ async function main() {
   assertCurrentCrmReadOnly();
   assertDeliveryUnavailable();
   await assertReadOnlyApi();
+  assertRunbookAccuracy();
 
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(
     packageJson.scripts && packageJson.scripts['verify:matrix-phase1'],
-    'node scripts/verify-matrix-phase1.js',
-    'package command must wire the phase-one verifier'
+    'npm run test:matrix-stream && npm run test:matrix-api && node scripts/verify-matrix-phase1.js',
+    'unified package command must wire guarded-import and full API contracts before integration verification'
   );
   console.log('matrix phase-one verification passed');
 }
