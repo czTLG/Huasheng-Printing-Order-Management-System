@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "verify:matrix-readonly-selection": "node scripts/verify-matrix-readonly-selection.js",
     "baseline:verify": "node scripts/verify-baseline.js",
     "verify:smoke": "node scripts/smoke-test.js",
     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
