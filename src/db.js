@@ -799,6 +799,64 @@ function initDb() {
       created_at TEXT NOT NULL,
       UNIQUE(trade_date, code)
     );
+
+    CREATE TABLE IF NOT EXISTS matrix_actor_bindings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feishu_open_id TEXT NOT NULL UNIQUE,
+      user_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked')),
+      bound_by INTEGER NOT NULL,
+      bound_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(bound_by) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id INTEGER NOT NULL,
+      chat_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL DEFAULT '',
+      filters_json TEXT NOT NULL,
+      page INTEGER NOT NULL DEFAULT 1 CHECK(page >= 1),
+      version INTEGER NOT NULL DEFAULT 1,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_work_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      candidate_id INTEGER NOT NULL UNIQUE,
+      stage TEXT NOT NULL DEFAULT 'selected' CHECK(stage IN ('selected','draft_pending','review_pending','suppressed')),
+      owner_user_id INTEGER NOT NULL,
+      current_summary TEXT NOT NULL DEFAULT '',
+      next_action TEXT NOT NULL DEFAULT '',
+      next_followup_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(owner_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_selection_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL,
+      candidate_id INTEGER NOT NULL,
+      actor_user_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      before_json TEXT NOT NULL,
+      after_json TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
   `);
 
   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
