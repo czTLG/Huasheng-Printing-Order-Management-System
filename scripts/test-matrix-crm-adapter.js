@@ -8,6 +8,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const jwt = require('jsonwebtoken');
 const { spawnSync } = require('child_process');
+const { REASON_CODES, PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-crm-'));
 const dbPath = path.join(tempDir, 'fixture.db');
@@ -303,6 +304,18 @@ try {
   assert(errorReport.records.every((record) => record.classification === 'needs_review'));
   assert(errorReport.records.every((record) => record.reason_codes.includes('classification_error')));
   assert(errorReport.records.every((record) => record.identity_id && record.source_ids));
+  const publicReasonCodeSet = new Set(PUBLIC_REASON_CODES);
+  const observedAdapterCodes = new Set([...report.records, ...errorReport.records].flatMap(record => record.reason_codes));
+  observedAdapterCodes.forEach(code => assert(publicReasonCodeSet.has(code), `matrixCrmAdapter produced non-public reason code: ${code}`));
+  [
+    REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
+    REASON_CODES.BUSINESS_EVIDENCE,
+    REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS,
+    REASON_CODES.MALFORMED_JSON_PAYLOAD,
+    REASON_CODES.UNCERTAIN_DIRECTION,
+    REASON_CODES.MISSING_BUSINESS_EVIDENCE,
+    REASON_CODES.CLASSIFICATION_ERROR
+  ].forEach(code => assert(observedAdapterCodes.has(code), `matrixCrmAdapter contract did not exercise ${code}`));
   assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('unknown_whatsapp_sender'));
   assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('malformed_source_time'));
   assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('duplicated_message_segments'));

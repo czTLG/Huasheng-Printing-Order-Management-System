@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const Database = require('better-sqlite3');
+const { REASON_CODES, PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
 
 const root = path.resolve(__dirname, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-api-'));
@@ -118,12 +119,7 @@ function seed() {
   saveClassification(db, first.id, {
     classification: 'valid',
     priority: 'A',
-    reason_codes: [
-      'approved_country', 'official_domain', 'confirmed_international_whatsapp',
-      'business_evidence', 'duplicated_message_segments', 'malformed_json_payload',
-      'uncertain_direction', 'missing_business_evidence', 'classification_error',
-      'SECRET_REASON_RULE_SENTENCE'
-    ],
+    reason_codes: [...PUBLIC_REASON_CODES, 'SECRET_REASON_RULE_SENTENCE'],
     confidence: 0.95,
     human_override_reason: 'SECRET_OVERRIDE_TEXT',
     human_override_actor: 'private-reviewer'
@@ -139,13 +135,23 @@ function seed() {
 }
 
 async function main() {
-  const { PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
-  assert(Array.isArray(PUBLIC_REASON_CODES), 'schemaRank should export the authoritative public reason-code list');
-  [
-    'approved_country', 'official_domain', 'confirmed_international_whatsapp',
-    'business_evidence', 'duplicated_message_segments', 'malformed_json_payload',
-    'uncertain_direction', 'missing_business_evidence', 'classification_error'
-  ].forEach(code => assert(PUBLIC_REASON_CODES.includes(code), `public reason-code list should include ${code}`));
+  assert(REASON_CODES && typeof REASON_CODES === 'object' && !Array.isArray(REASON_CODES), 'schemaRank should export REASON_CODES');
+  assert(Object.isFrozen(REASON_CODES), 'REASON_CODES should be immutable');
+  assert(Array.isArray(PUBLIC_REASON_CODES) && Object.isFrozen(PUBLIC_REASON_CODES), 'PUBLIC_REASON_CODES should be an immutable collection');
+  const reasonCodeValues = Object.values(REASON_CODES);
+  assert.equal(reasonCodeValues.length, 20, 'reason-code contract should cover all 20 current codes');
+  assert.equal(new Set(reasonCodeValues).size, 20, 'reason-code values should be unique');
+  assert.deepEqual(PUBLIC_REASON_CODES, reasonCodeValues, 'every REASON_CODES value should be public');
+
+  const schemaSource = fs.readFileSync(path.join(root, 'src', 'lib', 'schemaRank.js'), 'utf8');
+  const schemaProducerSource = schemaSource.slice(schemaSource.indexOf('function result'));
+  const crmProducerSource = fs.readFileSync(path.join(root, 'src', 'lib', 'matrixCrmAdapter.js'), 'utf8');
+  for (const code of reasonCodeValues) {
+    const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const literal = new RegExp(`['"]${escaped}['"]`);
+    assert(!literal.test(schemaProducerSource), `schemaRank producer should consume REASON_CODES for ${code}`);
+    assert(!literal.test(crmProducerSource), `matrixCrmAdapter producer should consume REASON_CODES for ${code}`);
+  }
 
   const { firstId } = seed();
   child = spawn(process.execPath, ['src/server.js'], {
@@ -168,11 +174,7 @@ async function main() {
   assert.equal(list.page_size, 1);
   assert.equal(list.total, 1);
   assert.equal(list.rows.length, 1);
-  const publicReasonCodes = [
-    'approved_country', 'official_domain', 'confirmed_international_whatsapp',
-    'business_evidence', 'duplicated_message_segments', 'malformed_json_payload',
-    'uncertain_direction', 'missing_business_evidence', 'classification_error'
-  ];
+  const publicReasonCodes = [...PUBLIC_REASON_CODES];
   assert.deepEqual(list.rows[0].reason_codes, publicReasonCodes);
   assert.deepEqual(list.rows[0].evidence_urls, ['https://alpha.example/products']);
   assert.equal(list.rows[0].contacts.email, 'b***@alpha.example');

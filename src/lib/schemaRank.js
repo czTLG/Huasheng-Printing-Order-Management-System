@@ -15,28 +15,29 @@ const EXCLUDED_COUNTRIES = Object.freeze([
   'India'
 ]);
 
-const PUBLIC_REASON_CODES = Object.freeze([
-  'fixture_marker',
-  'security_notice',
-  'excluded_country',
-  'unapproved_country',
-  'missing_identity',
-  'ambiguous_contact',
-  'unknown_whatsapp_sender',
-  'malformed_source_time',
-  'conflicting_domains',
-  'approved_country',
-  'official_domain',
-  'product_evidence',
-  'valid_source_time',
-  'confirmed_international_whatsapp',
-  'business_evidence',
-  'duplicated_message_segments',
-  'malformed_json_payload',
-  'uncertain_direction',
-  'missing_business_evidence',
-  'classification_error'
-]);
+const REASON_CODES = Object.freeze({
+  FIXTURE_MARKER: 'fixture_marker',
+  SECURITY_NOTICE: 'security_notice',
+  EXCLUDED_COUNTRY: 'excluded_country',
+  UNAPPROVED_COUNTRY: 'unapproved_country',
+  MISSING_IDENTITY: 'missing_identity',
+  AMBIGUOUS_CONTACT: 'ambiguous_contact',
+  UNKNOWN_WHATSAPP_SENDER: 'unknown_whatsapp_sender',
+  MALFORMED_SOURCE_TIME: 'malformed_source_time',
+  CONFLICTING_DOMAINS: 'conflicting_domains',
+  APPROVED_COUNTRY: 'approved_country',
+  OFFICIAL_DOMAIN: 'official_domain',
+  PRODUCT_EVIDENCE: 'product_evidence',
+  VALID_SOURCE_TIME: 'valid_source_time',
+  CONFIRMED_INTERNATIONAL_WHATSAPP: 'confirmed_international_whatsapp',
+  BUSINESS_EVIDENCE: 'business_evidence',
+  DUPLICATED_MESSAGE_SEGMENTS: 'duplicated_message_segments',
+  MALFORMED_JSON_PAYLOAD: 'malformed_json_payload',
+  UNCERTAIN_DIRECTION: 'uncertain_direction',
+  MISSING_BUSINESS_EVIDENCE: 'missing_business_evidence',
+  CLASSIFICATION_ERROR: 'classification_error'
+});
+const PUBLIC_REASON_CODES = Object.freeze(Object.values(REASON_CODES));
 
 const approvedCountryKeys = new Set(APPROVED_COUNTRIES.map(normalizeCountry));
 const excludedCountryKeys = new Set(EXCLUDED_COUNTRIES.map(normalizeCountry));
@@ -121,40 +122,42 @@ function classifyRecord(record = {}, context = {}) {
   const contactDomain = emailDomain(record.business_email);
 
   if (record.fixture_marker) {
-    return result('test', 'C', ['fixture_marker'], 1);
+    return result('test', 'C', [REASON_CODES.FIXTURE_MARKER], 1);
   }
 
-  if (record.source_kind === 'security_notice' || excludedCountryKeys.has(countryKey)) {
-    const reason = record.source_kind === 'security_notice' ? 'security_notice' : 'excluded_country';
+  if (record.source_kind === REASON_CODES.SECURITY_NOTICE || excludedCountryKeys.has(countryKey)) {
+    const reason = record.source_kind === REASON_CODES.SECURITY_NOTICE
+      ? REASON_CODES.SECURITY_NOTICE
+      : REASON_CODES.EXCLUDED_COUNTRY;
     return result('noise', 'C', [reason], 1);
   }
 
   const reviewReasons = [];
-  if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push('unapproved_country');
-  if (!officialDomain || !contactDomain) reviewReasons.push('missing_identity');
-  if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push('ambiguous_contact');
+  if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push(REASON_CODES.UNAPPROVED_COUNTRY);
+  if (!officialDomain || !contactDomain) reviewReasons.push(REASON_CODES.MISSING_IDENTITY);
+  if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push(REASON_CODES.AMBIGUOUS_CONTACT);
   if (record.source_kind === 'whatsapp'
     && !hasIdentityValue(record.sender_name)
     && !hasIdentityValue(record.sender_phone)) {
-    reviewReasons.push('unknown_whatsapp_sender');
+    reviewReasons.push(REASON_CODES.UNKNOWN_WHATSAPP_SENDER);
   }
   if (record.last_interaction_at && !validDate(record.last_interaction_at)) {
-    reviewReasons.push('malformed_source_time');
+    reviewReasons.push(REASON_CODES.MALFORMED_SOURCE_TIME);
   }
   if (officialDomain && contactDomain && !domainsMatch(officialDomain, contactDomain)) {
-    reviewReasons.push('conflicting_domains');
+    reviewReasons.push(REASON_CODES.CONFLICTING_DOMAINS);
   }
 
   if (reviewReasons.length) {
     return result('needs_review', 'B', reviewReasons, 0.5);
   }
 
-  const validReasons = ['approved_country', 'official_domain'];
+  const validReasons = [REASON_CODES.APPROVED_COUNTRY, REASON_CODES.OFFICIAL_DOMAIN];
   if (Array.isArray(record.product_evidence) && record.product_evidence.length) {
-    validReasons.push('product_evidence');
+    validReasons.push(REASON_CODES.PRODUCT_EVIDENCE);
   }
   if (record.last_interaction_at && validDate(record.last_interaction_at)) {
-    validReasons.push('valid_source_time');
+    validReasons.push(REASON_CODES.VALID_SOURCE_TIME);
   }
 
   const now = validDate(context.now) ? Date.parse(context.now) : NaN;
@@ -170,6 +173,7 @@ module.exports = {
   isApprovedCountry,
   APPROVED_COUNTRIES,
   EXCLUDED_COUNTRIES,
+  REASON_CODES,
   PUBLIC_REASON_CODES,
   RULESET_VERSION
 };

@@ -4,8 +4,21 @@ const {
   isApprovedCountry,
   APPROVED_COUNTRIES,
   EXCLUDED_COUNTRIES,
+  REASON_CODES,
+  PUBLIC_REASON_CODES,
   RULESET_VERSION
 } = require('../src/lib/schemaRank');
+
+const publicReasonCodeSet = new Set(PUBLIC_REASON_CODES);
+const observedReasonCodes = new Set();
+
+const assertPublicReasonCodes = (result) => {
+  result.reason_codes.forEach((code) => {
+    assert(publicReasonCodeSet.has(code), `schemaRank produced non-public reason code: ${code}`);
+    observedReasonCodes.add(code);
+  });
+  return result;
+};
 
 const validRecord = (overrides = {}) => ({
   country: 'Indonesia',
@@ -17,7 +30,7 @@ const validRecord = (overrides = {}) => ({
 });
 
 const assertClassification = (record, classification, reasonCode, context = {}) => {
-  const result = classifyRecord(record, context);
+  const result = assertPublicReasonCodes(classifyRecord(record, context));
   assert.equal(result.classification, classification);
   assert(result.reason_codes.includes(reasonCode));
   assert.equal(typeof result.confidence, 'number');
@@ -31,6 +44,7 @@ assert.equal(classifyRecord({ fixture_marker: 'token-verification' }, {}).classi
 assert.equal(classifyRecord({ source_kind: 'security_notice', country: 'Malaysia' }, {}).classification, 'noise');
 assert.equal(classifyRecord({ country: 'Thailand', business_email: 'sales@example.co.th' }, {}).classification, 'needs_review');
 const valid = classifyRecord(validRecord(), { now: '2026-07-16' });
+assertPublicReasonCodes(valid);
 assert.equal(valid.classification, 'valid');
 assert(valid.reason_codes.includes('official_domain'));
 
@@ -122,4 +136,21 @@ assert.equal(staleValid.priority, 'B');
 assert.equal(staleValid.confidence, 0.85);
 
 assert.deepEqual(Object.keys(valid), ['classification', 'priority', 'reason_codes', 'confidence']);
+assertPublicReasonCodes(classifyRecord({ country: 'Unknown' }, {}));
+const schemaRankReasonCodes = [
+  REASON_CODES.FIXTURE_MARKER,
+  REASON_CODES.SECURITY_NOTICE,
+  REASON_CODES.EXCLUDED_COUNTRY,
+  REASON_CODES.UNAPPROVED_COUNTRY,
+  REASON_CODES.MISSING_IDENTITY,
+  REASON_CODES.AMBIGUOUS_CONTACT,
+  REASON_CODES.UNKNOWN_WHATSAPP_SENDER,
+  REASON_CODES.MALFORMED_SOURCE_TIME,
+  REASON_CODES.CONFLICTING_DOMAINS,
+  REASON_CODES.APPROVED_COUNTRY,
+  REASON_CODES.OFFICIAL_DOMAIN,
+  REASON_CODES.PRODUCT_EVIDENCE,
+  REASON_CODES.VALID_SOURCE_TIME
+];
+schemaRankReasonCodes.forEach(code => assert(observedReasonCodes.has(code), `schemaRank contract did not exercise ${code}`));
 console.log('schema-rank tests passed');

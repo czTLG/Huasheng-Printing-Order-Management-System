@@ -1,6 +1,6 @@
 'use strict';
 
-const { classifyRecord, isApprovedCountry, RULESET_VERSION } = require('./schemaRank');
+const { classifyRecord, isApprovedCountry, REASON_CODES, RULESET_VERSION } = require('./schemaRank');
 
 const DOMESTIC_COUNTRIES = new Set([
   'china', 'cn', 'prc', "people's republic of china", '中国', '中国大陆', '中华人民共和国'
@@ -256,7 +256,7 @@ function normalizeGroup(group) {
     business_email: businessEmail,
     sender_name: lower(latestCrm?.direction) === 'outbound' ? '' : text(latestCrm?.sender_name || customer.contact_person),
     sender_phone: normalizePhone(whatsapp),
-    source_kind: isSystemGroup(group) ? 'security_notice' : sourceKind,
+    source_kind: isSystemGroup(group) ? REASON_CODES.SECURITY_NOTICE : sourceKind,
     fixture_marker: hasFixtureMarker(group) ? 'known-verification-artifact' : '',
     product_evidence: businessEvidence(group),
     last_interaction_at: lastInteraction,
@@ -341,22 +341,27 @@ function classifyNormalizedRecord(record, context, classifier = classifyRecord) 
     && record.official_domain
     && record.confirmed_international_whatsapp
     && record.product_evidence.length
-    && base.reason_codes.every((reason) => reason === 'missing_identity')) {
+    && base.reason_codes.every((reason) => reason === REASON_CODES.MISSING_IDENTITY)) {
     result = {
       classification: 'valid',
       priority: 'B',
-      reason_codes: ['approved_country', 'official_domain', 'confirmed_international_whatsapp', 'business_evidence'],
+      reason_codes: [
+        REASON_CODES.APPROVED_COUNTRY,
+        REASON_CODES.OFFICIAL_DOMAIN,
+        REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
+        REASON_CODES.BUSINESS_EVIDENCE
+      ],
       confidence: 0.85
     };
   }
 
   const safetyReasons = [];
-  if (record.duplicated_message_segments) safetyReasons.push('duplicated_message_segments');
-  if (record.has_malformed_source_time) safetyReasons.push('malformed_source_time');
-  if (record.has_malformed_json_payload) safetyReasons.push('malformed_json_payload');
-  if (record.uncertain_direction) safetyReasons.push('uncertain_direction');
+  if (record.duplicated_message_segments) safetyReasons.push(REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS);
+  if (record.has_malformed_source_time) safetyReasons.push(REASON_CODES.MALFORMED_SOURCE_TIME);
+  if (record.has_malformed_json_payload) safetyReasons.push(REASON_CODES.MALFORMED_JSON_PAYLOAD);
+  if (record.uncertain_direction) safetyReasons.push(REASON_CODES.UNCERTAIN_DIRECTION);
   if (result.classification === 'valid' && !record.product_evidence.length) {
-    safetyReasons.push('missing_business_evidence');
+    safetyReasons.push(REASON_CODES.MISSING_BUSINESS_EVIDENCE);
   }
   const reasons = [...new Set([...result.reason_codes, ...safetyReasons])];
   if (!['test', 'noise'].includes(result.classification) && safetyReasons.length) {
@@ -403,7 +408,7 @@ function classifyCurrentCrm(db, options = {}) {
         source_ids: record.source_ids,
         classification: 'needs_review',
         priority: 'B',
-        reason_codes: ['classification_error'],
+        reason_codes: [REASON_CODES.CLASSIFICATION_ERROR],
         confidence: 0
       });
     }
