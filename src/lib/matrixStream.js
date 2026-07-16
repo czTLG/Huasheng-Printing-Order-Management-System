@@ -229,29 +229,41 @@ function normalizeDiscoveryRecord(input = {}) {
   };
 }
 
-function pinnedFetch(url, options = {}) {
+function socketFamily(value) {
+  if (value === 4 || value === '4' || value === 'IPv4') return 4;
+  if (value === 6 || value === '6' || value === 'IPv6') return 6;
+  return 0;
+}
+
+function pinnedRequest(url, options = {}) {
   const parsed = new URL(url);
-  const transport = parsed.protocol === 'https:' ? https : http;
+  const requestFactory = parsed.protocol === 'https:'
+    ? options.requestFactories && options.requestFactories.https || https.request
+    : options.requestFactories && options.requestFactories.http || http.request;
   if (!options.connectAddress || (options.connectFamily !== 4 && options.connectFamily !== 6)) {
     return Promise.reject(new Error('validated connection address is required'));
   }
 
   return new Promise((resolve, reject) => {
-    const request = transport.request({
+    const request = requestFactory({
       protocol: parsed.protocol,
-      hostname: options.connectAddress,
-      family: options.connectFamily,
+      hostname: parsed.hostname.replace(/^\[|\]$/g, ''),
       port: parsed.port || undefined,
       method: options.method || 'HEAD',
       path: `${parsed.pathname}${parsed.search}`,
       headers: options.headers,
       servername: options.servername,
       rejectUnauthorized: options.rejectUnauthorized !== false,
-      agent: false
+      agent: false,
+      lookup(hostname, lookupOptions, callback) {
+        callback(null, options.connectAddress, options.connectFamily);
+      }
     }, response => {
       response.resume();
       resolve({
         status: response.statusCode,
+        connectedAddress: response.socket && response.socket.remoteAddress,
+        connectedFamily: socketFamily(response.socket && response.socket.remoteFamily),
         headers: {
           get(name) {
             const value = response.headers[String(name).toLowerCase()];
@@ -280,7 +292,7 @@ async function validateRedirectChain(input, options) {
 
     let response;
     try {
-      response = await options.fetch(validation.normalized_url, {
+      response = await options.transport(validation.normalized_url, {
         method: 'HEAD',
         redirect: 'manual',
         connectAddress: target.address,
@@ -290,9 +302,14 @@ async function validateRedirectChain(input, options) {
         rejectUnauthorized: true
       });
     } catch {
-      return rejected('fetch_failed');
+      return rejected('transport_failed');
     }
 
+    if (!response
+      || response.connectedAddress !== target.address
+      || response.connectedFamily !== target.family) {
+      return rejected('connection_address_mismatch');
+    }
     if (!response || response.status < 300 || response.status >= 400) return validation;
     const location = response.headers && typeof response.headers.get === 'function'
       ? response.headers.get('location')
@@ -325,12 +342,18 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
   if (records.length > MAX_BATCH_RECORDS) {
     throw new Error(`batch exceeds ${MAX_BATCH_RECORDS} input records`);
   }
+  if (Object.prototype.hasOwnProperty.call(options, 'fetch')) {
+    throw new Error('fetch option is not supported; use the pinned transport contract');
+  }
   const dependencies = {
     dnsLookup: options.dnsLookup || dns.promises.lookup,
-    fetch: options.fetch || pinnedFetch
+    transport: options.transport || ((url, transportOptions) => pinnedRequest(url, {
+      ...transportOptions,
+      requestFactories: options.requestFactories
+    }))
   };
   if (typeof dependencies.dnsLookup !== 'function') throw new Error('dnsLookup must be a function');
-  if (typeof dependencies.fetch !== 'function') throw new Error('fetch must be a function');
+  if (typeof dependencies.transport !== 'function') throw new Error('transport must be a function');
 
   const summary = emptySummary(records.length);
   const countryCounts = new Map();
@@ -406,5 +429,6 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
 module.exports = {
   validatePublicUrl,
   normalizeDiscoveryRecord,
-  importDiscoveryBatch
+  importDiscoveryBatch,
+  pinnedRequest
 };
