@@ -4,8 +4,10 @@ const dns = require('dns');
 const http = require('http');
 const https = require('https');
 const net = require('net');
-const { classifyRecord } = require('./schemaRank');
-const { upsertEntity, appendEvidence, saveClassification } = require('./signalCache');
+const { classifyRecord, isApprovedCountry } = require('./schemaRank');
+const {
+  upsertEntity, appendEvidence, saveClassification, CAMPAIGN_SOURCE_TYPES
+} = require('./signalCache');
 
 const MAX_BATCH_RECORDS = 120;
 const MAX_COUNTRY_RECORDS = 20;
@@ -14,7 +16,7 @@ const ALLOWED_CONTACT_FIELDS = new Set([
   'email', 'phone', 'whatsapp', 'linkedin_url', 'contact_page_url'
 ]);
 const ALLOWED_EVIDENCE_FIELDS = new Set([
-  'field', 'value', 'source_url', 'page_title', 'retrieved_at',
+  'source_type', 'field', 'value', 'source_url', 'page_title', 'retrieved_at',
   'content_fingerprint', 'confidence', 'extraction_method'
 ]);
 
@@ -72,7 +74,12 @@ function isBlockedIPv4(address) {
     || (a === 169 && b === 254)
     || (a === 172 && b >= 16 && b <= 31)
     || (a === 192 && b === 168)
+    || (a === 192 && b === 0)
+    || (a === 192 && b === 2)
+    || (a === 192 && b === 88)
     || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51)
+    || (a === 203 && b === 0)
     || a >= 224;
 }
 
@@ -88,13 +95,21 @@ function isBlockedAddress(address) {
   const loopback = groups.slice(0, 7).every(group => group === 0) && groups[7] === 1;
   const uniqueLocal = (groups[0] & 0xfe00) === 0xfc00;
   const linkLocal = (groups[0] & 0xffc0) === 0xfe80;
+  const siteLocal = (groups[0] & 0xffc0) === 0xfec0;
   const multicast = (groups[0] & 0xff00) === 0xff00;
+  const discardOnly = groups[0] === 0x0100 && groups.slice(1).every(group => group === 0);
+  const documentation = groups[0] === 0x2001 && groups[1] === 0x0db8;
+  const orchid = groups[0] === 0x2001 && (groups[1] & 0xfff0) === 0x0020;
+  const globalUnicast = (groups[0] & 0xe000) === 0x2000;
+  const ianaSpecial2001 = groups[0] === 0x2001 && groups[1] < 0x0200;
+  const documentation3fff = groups[0] === 0x3fff && groups[1] <= 0x0fff;
   const mappedIPv4 = groups.slice(0, 5).every(group => group === 0) && groups[5] === 0xffff;
   if (mappedIPv4) {
     const mapped = `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
     return isBlockedIPv4(mapped);
   }
-  return allZero || loopback || uniqueLocal || linkLocal || multicast;
+  return !globalUnicast || allZero || loopback || uniqueLocal || linkLocal || siteLocal || multicast
+    || discardOnly || documentation || orchid || ianaSpecial2001 || documentation3fff;
 }
 
 function lookupAddresses(result) {
@@ -245,6 +260,13 @@ function pinnedRequest(url, options = {}) {
   }
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(wallTimer);
+      callback(value);
+    };
     const request = requestFactory({
       protocol: parsed.protocol,
       hostname: parsed.hostname.replace(/^\[|\]$/g, ''),
@@ -255,12 +277,13 @@ function pinnedRequest(url, options = {}) {
       servername: options.servername,
       rejectUnauthorized: options.rejectUnauthorized !== false,
       agent: false,
+      maxHeaderSize: 16 * 1024,
       lookup(hostname, lookupOptions, callback) {
         callback(null, options.connectAddress, options.connectFamily);
       }
     }, response => {
       response.resume();
-      resolve({
+      finish(resolve, {
         status: response.statusCode,
         connectedAddress: response.socket && response.socket.remoteAddress,
         connectedFamily: socketFamily(response.socket && response.socket.remoteFamily),
@@ -272,10 +295,11 @@ function pinnedRequest(url, options = {}) {
         }
       });
     });
+    const wallTimer = setTimeout(() => request.destroy(new Error('public URL probe deadline exceeded')), options.deadline_ms || 10000);
     request.setTimeout(options.timeout || 10000, () => {
       request.destroy(new Error('public URL probe timed out'));
     });
-    request.once('error', reject);
+    request.once('error', error => finish(reject, error));
     request.end();
   });
 }
@@ -283,6 +307,9 @@ function pinnedRequest(url, options = {}) {
 async function validateRedirectChain(input, options) {
   let current = input;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+    if (options.allowedHosts && !hostAllowed(officialDomain(current), options.allowedHosts)) {
+      return rejected('host_not_allowed');
+    }
     const resolved = await resolvePublicUrl(current, options.dnsLookup);
     const { validation } = resolved;
     if (!validation.ok) return validation;
@@ -299,7 +326,8 @@ async function validateRedirectChain(input, options) {
         connectFamily: target.family,
         headers: { Host: parsed.host },
         servername: net.isIP(tlsHostname) ? undefined : tlsHostname,
-        rejectUnauthorized: true
+        rejectUnauthorized: true,
+        deadline_ms: options.perProbeDeadlineMs || 10000
       });
     } catch {
       return rejected('transport_failed');
@@ -325,6 +353,51 @@ async function validateRedirectChain(input, options) {
   return rejected('too_many_redirects');
 }
 
+function hostAllowed(hostname, patterns) {
+  const host = String(hostname || '').toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
+  return patterns.some(pattern => {
+    const value = String(pattern || '').toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
+    if (value.startsWith('*.')) return host.endsWith(value.slice(1));
+    return host === value || host.endsWith(`.${value}`);
+  });
+}
+
+function requiredEvidenceFields(record) {
+  const fields = new Set(['official_domain', 'country']);
+  if (record.display_name) fields.add('display_name');
+  if (record.product_evidence.length) fields.add('product');
+  const contactFields = { email: 'public_email', phone: 'public_phone', whatsapp: 'public_whatsapp', contact_page_url: 'contact_page' };
+  for (const key of Object.keys(record.public_contacts)) if (contactFields[key]) fields.add(contactFields[key]);
+  return fields;
+}
+
+function evidenceMatchesRecord(record) {
+  const expected = new Map([
+    ['official_domain', [record.official_domain]],
+    ['country', [record.country]],
+    ['display_name', record.display_name ? [record.display_name] : []],
+    ['public_email', record.public_contacts.email ? [record.public_contacts.email] : []],
+    ['public_phone', record.public_contacts.phone ? [record.public_contacts.phone] : []],
+    ['public_whatsapp', record.public_contacts.whatsapp ? [record.public_contacts.whatsapp] : []],
+    ['contact_page', record.public_contacts.contact_page_url ? [record.public_contacts.contact_page_url] : []],
+    ['product', record.product_evidence]
+  ]);
+  return record.evidence.every(item => {
+    const values = expected.get(item.field);
+    return !values || !values.length || values.some(value => String(value).trim().toLowerCase() === String(item.value).trim().toLowerCase());
+  });
+}
+
+function withinDeadline(promise, milliseconds) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('run deadline exceeded')), Math.max(1, milliseconds));
+    Promise.resolve(promise).then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
 function emptySummary(input) {
   return {
     input,
@@ -345,6 +418,24 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
   if (Object.prototype.hasOwnProperty.call(options, 'fetch')) {
     throw new Error('fetch option is not supported; use the pinned transport contract');
   }
+  const run = db.prepare('SELECT * FROM matrix_runs WHERE id = ?').get(runId);
+  if (!run || run.status !== 'running') throw new Error('run must exist and be running');
+  const claimed = db.prepare(`
+    UPDATE matrix_runs SET counters_json = '{"import_started":true}', updated_at = ?
+    WHERE id = ? AND status = 'running' AND counters_json = '{}'
+  `).run(new Date().toISOString(), runId);
+  if (claimed.changes !== 1) throw new Error('run import is single-use and has already started');
+  const campaign = JSON.parse(run.campaign_json);
+  const runCountries = new Set(campaign.countries);
+  const officialHosts = campaign.official_hosts || [];
+  const thirdPartyHosts = (campaign.third_party_sources || []).map(source => source.host);
+  const allowedSourceTypes = new Set(campaign.allowed_source_types || []);
+  const maxPages = campaign.max_pages_per_company;
+  const maxProbes = campaign.max_probes;
+  const startedAt = Date.now();
+  let probes = 0;
+  const existingDomains = new Set(db.prepare('SELECT normalized_domain FROM matrix_entities').all().map(row => row.normalized_domain));
+  const batchDomains = new Set();
   const dependencies = {
     dnsLookup: options.dnsLookup || dns.promises.lookup,
     transport: options.transport || ((url, transportOptions) => pinnedRequest(url, {
@@ -361,7 +452,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
   for (const rawRecord of records) {
     const record = normalizeDiscoveryRecord(rawRecord);
     const countryKey = record.country.toLowerCase();
-    if (countryKey === 'india') {
+    if (!isApprovedCountry(record.country) || !runCountries.has(record.country)) {
       summary.excluded += 1;
       continue;
     }
@@ -377,22 +468,91 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
       summary.errors += 1;
       continue;
     }
-
-    const officialValidation = await validateRedirectChain(record.official_url, dependencies);
-    if (!officialValidation.ok) {
+    if (campaign.existing_domain_suppression
+      && (existingDomains.has(record.official_domain) || batchDomains.has(record.official_domain))) {
+      summary.excluded += 1;
+      continue;
+    }
+    if (!hostAllowed(officialDomain(record.official_url), officialHosts)) {
+      summary.errors += 1;
+      continue;
+    }
+    const evidenceFields = new Set(record.evidence.map(item => item.field));
+    if ([...requiredEvidenceFields(record)].some(field => !evidenceFields.has(field)) || !evidenceMatchesRecord(record)) {
+      summary.errors += 1;
+      continue;
+    }
+    const evidenceAuthorized = record.evidence.every(item => {
+      if (!CAMPAIGN_SOURCE_TYPES.has(item.source_type) || !allowedSourceTypes.has(item.source_type)) return false;
+      const sourceHost = officialDomain(item.source_url);
+      if (hostAllowed(sourceHost, [record.official_domain])) return item.source_type === 'official_website';
+      const approvedThirdParty = (campaign.third_party_sources || []).find(source => hostAllowed(sourceHost, [source.host]));
+      return Boolean(approvedThirdParty && approvedThirdParty.source_type === item.source_type);
+    });
+    if (!evidenceAuthorized) { summary.errors += 1; continue; }
+    const evidenceUrls = [...new Set(record.evidence.map(item => item.source_url))];
+    if (evidenceUrls.length > maxPages || probes + 1 + evidenceUrls.length > maxProbes) {
       summary.errors += 1;
       continue;
     }
 
+    const remaining = campaign.run_deadline_ms - (Date.now() - startedAt);
+    if (remaining <= 0) { summary.errors += 1; continue; }
+    let officialValidation;
+    try {
+      officialValidation = await withinDeadline(validateRedirectChain(record.official_url, {
+        ...dependencies, allowedHosts: officialHosts, perProbeDeadlineMs: Math.min(10000, remaining)
+      }), remaining);
+    } catch { summary.errors += 1; continue; }
+    probes += 1;
+    if (!officialValidation.ok) {
+      summary.errors += 1;
+      continue;
+    }
+    if (!hostAllowed(officialDomain(officialValidation.normalized_url), officialHosts)) {
+      summary.errors += 1;
+      continue;
+    }
+    const finalOfficialDomain = officialDomain(officialValidation.normalized_url);
+    if (finalOfficialDomain !== record.official_domain) {
+      summary.errors += 1;
+      continue;
+    }
+    if (campaign.existing_domain_suppression
+      && (existingDomains.has(finalOfficialDomain) || batchDomains.has(finalOfficialDomain))) {
+      summary.excluded += 1;
+      continue;
+    }
+
     let evidenceFailed = false;
-    const checkedEvidence = [];
-    for (const evidence of record.evidence) {
-      const validation = await validateRedirectChain(evidence.source_url, dependencies);
+    const checkedUrls = new Map();
+    for (const sourceUrl of evidenceUrls) {
+      const sourceHost = officialDomain(sourceUrl);
+      if (!hostAllowed(sourceHost, [record.official_domain, ...thirdPartyHosts])) { evidenceFailed = true; break; }
+      const deadline = campaign.run_deadline_ms - (Date.now() - startedAt);
+      let validation;
+      try {
+        validation = await withinDeadline(validateRedirectChain(sourceUrl, {
+          ...dependencies,
+          allowedHosts: [record.official_domain, ...thirdPartyHosts],
+          perProbeDeadlineMs: Math.min(10000, deadline)
+        }), deadline);
+      } catch { evidenceFailed = true; break; }
+      probes += 1;
       if (!validation.ok) {
         evidenceFailed = true;
         break;
       }
-      checkedEvidence.push({ ...evidence, source_url: validation.normalized_url });
+      const finalHost = officialDomain(validation.normalized_url);
+      if (!hostAllowed(finalHost, [record.official_domain, ...thirdPartyHosts])) { evidenceFailed = true; break; }
+      const sourceItems = record.evidence.filter(item => item.source_url === sourceUrl);
+      const finalAuthorized = sourceItems.every(item => {
+        if (hostAllowed(finalHost, [record.official_domain])) return item.source_type === 'official_website';
+        const thirdParty = (campaign.third_party_sources || []).find(source => hostAllowed(finalHost, [source.host]));
+        return Boolean(thirdParty && thirdParty.source_type === item.source_type);
+      });
+      if (!finalAuthorized) { evidenceFailed = true; break; }
+      checkedUrls.set(sourceUrl, validation.normalized_url);
     }
     if (evidenceFailed) {
       summary.errors += 1;
@@ -401,7 +561,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
 
     record.official_url = officialValidation.normalized_url;
     record.official_domain = officialDomain(record.official_url);
-    const classification = classifyRecord(record, { now: options.now });
+    let classification;
     try {
       db.transaction(() => {
         const entity = upsertEntity(db, {
@@ -410,11 +570,22 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
           country: record.country,
           public_contacts: record.public_contacts
         });
-        for (const evidence of checkedEvidence) appendEvidence(db, entity.id, evidence);
-        saveClassification(db, entity.id, classification, runId);
+        const storedEvidence = record.evidence.map(evidence => appendEvidence(db, entity.id, {
+          ...evidence,
+          source_url: checkedUrls.get(evidence.source_url)
+        }, runId));
+        classification = classifyRecord({
+          ...record,
+          evidence_refs: storedEvidence.map(item => `evidence:${item.id}`)
+        }, { now: options.now });
+        saveClassification(db, entity.id, {
+          ...classification,
+          evidence_ids: storedEvidence.map(item => item.id)
+        }, runId);
       })();
       if (Object.prototype.hasOwnProperty.call(summary, classification.classification)) {
         summary[classification.classification] += 1;
+        batchDomains.add(record.official_domain);
       } else {
         summary.errors += 1;
       }
@@ -422,6 +593,9 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
       summary.errors += 1;
     }
   }
+
+  db.prepare('UPDATE matrix_runs SET counters_json = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify({ ...summary, probes }), new Date().toISOString(), runId);
 
   return summary;
 }

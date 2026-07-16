@@ -1,6 +1,6 @@
 'use strict';
 
-const RULESET_VERSION = '1.0.0';
+const RULESET_VERSION = '1.1.0';
 
 const APPROVED_COUNTRIES = Object.freeze([
   'Vietnam',
@@ -35,6 +35,16 @@ const REASON_CODES = Object.freeze({
   MALFORMED_JSON_PAYLOAD: 'malformed_json_payload',
   UNCERTAIN_DIRECTION: 'uncertain_direction',
   MISSING_BUSINESS_EVIDENCE: 'missing_business_evidence',
+  MISSING_EVIDENCE_REFERENCES: 'missing_evidence_references',
+  HISTORICAL_INQUIRY: 'historical_inquiry',
+  HISTORICAL_QUOTE: 'historical_quote',
+  SUBSTANTIVE_INTERACTION: 'substantive_interaction',
+  COMPANY_EVIDENCE: 'company_evidence',
+  INTERNAL_ONLY: 'internal_only',
+  UNSUBSCRIBE: 'unsubscribe',
+  REFUSAL: 'refusal',
+  INVALID_ADDRESS: 'invalid_address',
+  DELIVERY_FAILURE: 'delivery_failure',
   CLASSIFICATION_ERROR: 'classification_error'
 });
 const PUBLIC_REASON_CODES = Object.freeze(Object.values(REASON_CODES));
@@ -122,19 +132,27 @@ function classifyRecord(record = {}, context = {}) {
   const contactDomain = emailDomain(record.business_email);
 
   if (record.fixture_marker) {
-    return result('test', 'C', [REASON_CODES.FIXTURE_MARKER], 1);
+    return result('test', null, [REASON_CODES.FIXTURE_MARKER], 1);
   }
 
-  if (record.source_kind === REASON_CODES.SECURITY_NOTICE || excludedCountryKeys.has(countryKey)) {
-    const reason = record.source_kind === REASON_CODES.SECURITY_NOTICE
-      ? REASON_CODES.SECURITY_NOTICE
-      : REASON_CODES.EXCLUDED_COUNTRY;
-    return result('noise', 'C', [reason], 1);
+  const noiseReasons = [];
+  if (record.source_kind === REASON_CODES.SECURITY_NOTICE) noiseReasons.push(REASON_CODES.SECURITY_NOTICE);
+  if (excludedCountryKeys.has(countryKey)) noiseReasons.push(REASON_CODES.EXCLUDED_COUNTRY);
+  if (record.internal_only) noiseReasons.push(REASON_CODES.INTERNAL_ONLY);
+  if (record.unsubscribe) noiseReasons.push(REASON_CODES.UNSUBSCRIBE);
+  if (record.refusal) noiseReasons.push(REASON_CODES.REFUSAL);
+  if (record.invalid_address) noiseReasons.push(REASON_CODES.INVALID_ADDRESS);
+  if (record.delivery_failure) noiseReasons.push(REASON_CODES.DELIVERY_FAILURE);
+  if (noiseReasons.length) {
+    return result('noise', null, noiseReasons, 1);
   }
 
   const reviewReasons = [];
   if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push(REASON_CODES.UNAPPROVED_COUNTRY);
-  if (!officialDomain || !contactDomain) reviewReasons.push(REASON_CODES.MISSING_IDENTITY);
+  const confirmedWhatsapp = record.confirmed_international_whatsapp === true
+    && hasIdentityValue(record.sender_phone);
+  const usableEmail = Boolean(contactDomain && !isAmbiguousContactDomain(contactDomain));
+  if (!usableEmail && !confirmedWhatsapp) reviewReasons.push(REASON_CODES.MISSING_IDENTITY);
   if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push(REASON_CODES.AMBIGUOUS_CONTACT);
   if (record.source_kind === 'whatsapp'
     && !hasIdentityValue(record.sender_name)
@@ -144,18 +162,38 @@ function classifyRecord(record = {}, context = {}) {
   if (record.last_interaction_at && !validDate(record.last_interaction_at)) {
     reviewReasons.push(REASON_CODES.MALFORMED_SOURCE_TIME);
   }
-  if (officialDomain && contactDomain && !domainsMatch(officialDomain, contactDomain)) {
+  if (officialDomain && usableEmail && !domainsMatch(officialDomain, contactDomain)) {
     reviewReasons.push(REASON_CODES.CONFLICTING_DOMAINS);
   }
 
-  if (reviewReasons.length) {
-    return result('needs_review', 'B', reviewReasons, 0.5);
+  const productEvidence = Array.isArray(record.product_evidence)
+    && record.product_evidence.some(hasIdentityValue);
+  const companyEvidence = Array.isArray(record.company_evidence)
+    && record.company_evidence.some(hasIdentityValue);
+  const inquiryEvidence = Array.isArray(record.inquiry_evidence)
+    && record.inquiry_evidence.some(hasIdentityValue);
+  const quoteEvidence = Array.isArray(record.quote_evidence)
+    && record.quote_evidence.some(hasIdentityValue);
+  const substantive = record.substantive_interaction === true;
+  if (!productEvidence && !companyEvidence && !inquiryEvidence && !quoteEvidence && !substantive) {
+    reviewReasons.push(REASON_CODES.MISSING_BUSINESS_EVIDENCE);
+  }
+  if (!Array.isArray(record.evidence_refs) || !record.evidence_refs.some(hasIdentityValue)) {
+    reviewReasons.push(REASON_CODES.MISSING_EVIDENCE_REFERENCES);
   }
 
-  const validReasons = [REASON_CODES.APPROVED_COUNTRY, REASON_CODES.OFFICIAL_DOMAIN];
-  if (Array.isArray(record.product_evidence) && record.product_evidence.length) {
-    validReasons.push(REASON_CODES.PRODUCT_EVIDENCE);
+  if (reviewReasons.length) {
+    return result('needs_review', null, [...new Set(reviewReasons)], 0.5);
   }
+
+  const validReasons = [REASON_CODES.APPROVED_COUNTRY];
+  if (usableEmail) validReasons.push(REASON_CODES.OFFICIAL_DOMAIN);
+  if (confirmedWhatsapp) validReasons.push(REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP);
+  if (productEvidence) validReasons.push(REASON_CODES.PRODUCT_EVIDENCE);
+  if (companyEvidence) validReasons.push(REASON_CODES.COMPANY_EVIDENCE);
+  if (inquiryEvidence) validReasons.push(REASON_CODES.HISTORICAL_INQUIRY);
+  if (quoteEvidence) validReasons.push(REASON_CODES.HISTORICAL_QUOTE);
+  if (substantive) validReasons.push(REASON_CODES.SUBSTANTIVE_INTERACTION);
   if (record.last_interaction_at && validDate(record.last_interaction_at)) {
     validReasons.push(REASON_CODES.VALID_SOURCE_TIME);
   }
@@ -165,7 +203,9 @@ function classifyRecord(record = {}, context = {}) {
   const recent = !Number.isNaN(now) && !Number.isNaN(interaction)
     && now >= interaction && now - interaction <= 30 * 24 * 60 * 60 * 1000;
 
-  return result('valid', recent ? 'A' : 'B', validReasons, recent ? 0.95 : 0.85);
+  const priorityA = recent && productEvidence && substantive && (inquiryEvidence || quoteEvidence);
+  const priority = priorityA ? 'A' : productEvidence ? 'B' : 'C';
+  return result('valid', priority, validReasons, priorityA ? 0.95 : priority === 'B' ? 0.85 : 0.7);
 }
 
 module.exports = {

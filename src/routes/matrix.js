@@ -3,14 +3,14 @@
 const express = require('express');
 const { db, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
-const { listCandidates } = require('../lib/signalCache');
-const { APPROVED_COUNTRIES, EXCLUDED_COUNTRIES, PUBLIC_REASON_CODES } = require('../lib/schemaRank');
+const { listCandidates, countCandidates } = require('../lib/signalCache');
+const { APPROVED_COUNTRIES, PUBLIC_REASON_CODES } = require('../lib/schemaRank');
 
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
 const CLASSIFICATIONS = new Set(['valid', 'needs_review', 'noise', 'test']);
 const PRIORITIES = new Set(['A', 'B', 'C']);
-const COUNTRIES = new Set([...APPROVED_COUNTRIES, ...EXCLUDED_COUNTRIES]);
+const COUNTRIES = new Set(APPROVED_COUNTRIES);
 const PUBLIC_REASON_CODE_SET = new Set(PUBLIC_REASON_CODES);
 
 router.use(allowRoles(...CRM_ROLES));
@@ -52,7 +52,7 @@ function assertQueryFields(query, allowed) {
 }
 
 function candidateFilters(query) {
-  assertQueryFields(query, new Set(['classification', 'priority', 'country', 'page', 'page_size']));
+  assertQueryFields(query, new Set(['classification', 'priority', 'country', 'run_id', 'page', 'page_size']));
   const filters = {};
   if (query.classification !== undefined) {
     if (!CLASSIFICATIONS.has(query.classification)) throw new Error('invalid classification');
@@ -65,6 +65,11 @@ function candidateFilters(query) {
   if (query.country !== undefined) {
     if (!COUNTRIES.has(query.country)) throw new Error('invalid country');
     filters.country = query.country;
+  }
+  if (query.run_id !== undefined) {
+    const runId = Number(query.run_id);
+    if (!/^\d+$/.test(String(query.run_id)) || !Number.isSafeInteger(runId) || runId < 1) throw new Error('invalid run_id');
+    filters.run_id = runId;
   }
   return filters;
 }
@@ -97,6 +102,7 @@ function safeCandidate(row, evidenceUrls = []) {
     country: row.country || null,
     status: row.status,
     classification: row.classification,
+    run_id: Number(row.run_id),
     priority: row.priority || null,
     reason_codes: publicReasonCodes(row.reason_json),
     confidence: row.classification_confidence,
@@ -107,21 +113,22 @@ function safeCandidate(row, evidenceUrls = []) {
   };
 }
 
-function evidenceUrlsByEntity(rows) {
+function evidenceUrlsByClassification(rows) {
   if (!rows.length) return new Map();
-  const ids = rows.map(row => Number(row.id));
+  const ids = rows.map(row => Number(row.classification_id));
   const placeholders = ids.map(() => '?').join(', ');
   const evidence = db.prepare(`
-    SELECT entity_id, source_url
-    FROM matrix_evidence
-    WHERE entity_id IN (${placeholders})
-    ORDER BY id
+    SELECT ce.classification_id, e.source_url
+    FROM matrix_classification_evidence ce
+    JOIN matrix_evidence e ON e.id = ce.evidence_id
+    WHERE ce.classification_id IN (${placeholders})
+    ORDER BY e.id
   `).all(...ids);
   const grouped = new Map();
   for (const item of evidence) {
-    const urls = grouped.get(Number(item.entity_id)) || [];
+    const urls = grouped.get(Number(item.classification_id)) || [];
     urls.push(item.source_url);
-    grouped.set(Number(item.entity_id), urls);
+    grouped.set(Number(item.classification_id), urls);
   }
   return grouped;
 }
@@ -142,11 +149,12 @@ router.get('/runs', (req, res) => {
   try {
     assertQueryFields(req.query, new Set(['page', 'page_size']));
     const { page, pageSize } = pagination(req.query);
+    const total = db.prepare('SELECT COUNT(*) AS count FROM matrix_runs').get().count;
     const rows = db.prepare(`
       SELECT id, campaign_json, status, created_at, updated_at, completed_at
       FROM matrix_runs
-      ORDER BY id DESC
-    `).all().map(row => {
+      ORDER BY id DESC LIMIT ? OFFSET ?
+    `).all(pageSize, (page - 1) * pageSize).map(row => {
       const campaign = parseObject(row.campaign_json);
       return {
         id: Number(row.id),
@@ -160,7 +168,7 @@ router.get('/runs', (req, res) => {
         completed_at: row.completed_at || null
       };
     });
-    res.json(pagedResponse(rows, page, pageSize));
+    res.json({ rows, page, page_size: pageSize, total, total_pages: total ? Math.ceil(total / pageSize) : 0 });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -170,13 +178,11 @@ router.get('/candidates', (req, res) => {
   try {
     const filters = candidateFilters(req.query);
     const { page, pageSize } = pagination(req.query);
-    const matches = listCandidates(db, filters);
-    const total = matches.length;
-    const start = (page - 1) * pageSize;
-    const selected = matches.slice(start, start + pageSize);
-    const evidence = evidenceUrlsByEntity(selected);
+    const total = countCandidates(db, filters);
+    const selected = listCandidates(db, { ...filters, limit: pageSize, offset: (page - 1) * pageSize });
+    const evidence = evidenceUrlsByClassification(selected);
     res.json({
-      rows: selected.map(row => safeCandidate(row, evidence.get(Number(row.id)) || [])),
+      rows: selected.map(row => safeCandidate(row, evidence.get(Number(row.classification_id)) || [])),
       page,
       page_size: pageSize,
       total,
@@ -190,15 +196,26 @@ router.get('/candidates', (req, res) => {
 router.get('/candidates/:id', (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'invalid candidate id' });
-  const row = listCandidates(db).find(candidate => Number(candidate.id) === id);
+  try { assertQueryFields(req.query, new Set(['run_id'])); } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  let runId;
+  if (req.query.run_id !== undefined) {
+    runId = Number(req.query.run_id);
+    if (!/^\d+$/.test(String(req.query.run_id)) || !Number.isSafeInteger(runId) || runId < 1) {
+      return res.status(400).json({ error: 'invalid run_id' });
+    }
+  }
+  const row = listCandidates(db, { id, ...(runId ? { run_id: runId } : {}), limit: 1 })[0];
   if (!row) return res.status(404).json({ error: 'candidate not found' });
 
   const evidence = db.prepare(`
-    SELECT source_url, retrieved_at, confidence
-    FROM matrix_evidence
-    WHERE entity_id = ?
-    ORDER BY id
-  `).all(id);
+    SELECT e.source_url, e.retrieved_at, e.confidence
+    FROM matrix_classification_evidence ce
+    JOIN matrix_evidence e ON e.id = ce.evidence_id
+    WHERE ce.classification_id = ?
+    ORDER BY e.id
+  `).all(row.classification_id);
   audit({
     role: req.user.role,
     userName: req.user.userName,

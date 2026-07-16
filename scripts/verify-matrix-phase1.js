@@ -11,6 +11,7 @@ const root = path.resolve(__dirname, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-phase1-'));
 const dbPath = path.join(tempDir, 'phase1.db');
 process.env.DB_PATH = dbPath;
+process.env.MATRIX_SUPPRESS_BOOTSTRAP_SECRET = '1';
 
 const { db, initDb } = require('../src/db');
 const {
@@ -21,9 +22,10 @@ const {
 } = require('../src/lib/schemaRank');
 const { createRun } = require('../src/lib/signalCache');
 const { importDiscoveryBatch } = require('../src/lib/matrixStream');
+const { runCampaign } = require('../src/lib/matrixRunner');
 const { classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
 
-const PUBLIC_ADDRESS = '203.0.113.10';
+const PUBLIC_ADDRESS = '8.8.8.8';
 const FORMAL_TABLES = Object.freeze([
   'customers',
   'crm_messages',
@@ -42,13 +44,23 @@ function record(country, index) {
     official_url: `https://${domain}/`,
     business_email: `sales@${domain}`,
     product_evidence: ['coffee'],
-    evidence: [{
-      field: 'product',
-      value: 'coffee',
-      source_url: `https://${domain}/products`,
-      retrieved_at: '2026-07-16T00:00:00Z',
-      confidence: 'high'
-    }]
+    evidence: [
+      ['display_name', `${country} Brand ${index}`], ['official_domain', domain],
+      ['country', country], ['public_email', `sales@${domain}`], ['product', 'coffee']
+    ].map(([field, value]) => ({
+      source_type: 'official_website', field, value, source_url: `https://${domain}/products`,
+      retrieved_at: '2026-07-16T00:00:00Z', confidence: 0.9
+    }))
+  };
+}
+
+function campaign(name, countries) {
+  return {
+    name, countries, categories: ['dry_food'], languages: ['en'],
+    max_companies_per_country: 20, max_pages_per_company: 4, max_probes: 240,
+    run_deadline_ms: 120000, allowed_source_types: ['official_website'],
+    official_hosts: ['*.example'], third_party_sources: [], exclusion_terms: ['India'],
+    existing_domain_suppression: true, actor: 'phase1-verifier'
   };
 }
 
@@ -89,7 +101,7 @@ function seedCurrentCrmFixture() {
       received_at, dedupe_hash, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    'whatsapp', 'phase1-fixture', Number(customer.lastInsertRowid), 'inbound',
+    'whatsapp', 'token-verification-fixture', Number(customer.lastInsertRowid), 'inbound',
     'Fixture', '+84912345678', '', 'hello token ok', '{}', now,
     'phase1-fixture-dedupe', now, now
   );
@@ -111,7 +123,7 @@ async function assertBoundedImport() {
     Array.from({ length: 20 }, (_, index) => record(country, index + 1))
   );
   assert.equal(records.length, 120);
-  const run = createRun(db, { name: 'phase-one-verification', countries: APPROVED_COUNTRIES });
+  const run = createRun(db, campaign('phase-one-verification', APPROVED_COUNTRIES));
   const summary = await importDiscoveryBatch(db, run.id, records, {
     dnsLookup: publicDnsLookup,
     transport: safeTransport,
@@ -137,8 +149,9 @@ async function assertBoundedImport() {
     Object.fromEntries(APPROVED_COUNTRIES.map(country => [country, 20]))
   );
 
-  const indiaRun = createRun(db, { name: 'india-exclusion-check', countries: ['India'] });
-  const indiaSummary = await importDiscoveryBatch(db, indiaRun.id, [record('India', 1)], {
+  assert.throws(() => createRun(db, campaign('india-run-rejected', ['India'])), /approved countries/i);
+  const indiaRecordRun = createRun(db, campaign('india-record-rejected', ['Vietnam']));
+  const indiaSummary = await importDiscoveryBatch(db, indiaRecordRun.id, [record('India', 1)], {
     dnsLookup: publicDnsLookup,
     transport: safeTransport,
     now: '2026-07-16'
@@ -146,7 +159,7 @@ async function assertBoundedImport() {
   assert.equal(indiaSummary.excluded, 1);
   assert.equal(db.prepare("SELECT COUNT(*) count FROM matrix_entities WHERE lower(country) = 'india'").get().count, 0);
 
-  const countryLimitRun = createRun(db, { name: 'country-limit-check', countries: ['Vietnam'] });
+  const countryLimitRun = createRun(db, campaign('country-limit-check', ['Vietnam']));
   const countryLimitSummary = await importDiscoveryBatch(
     db,
     countryLimitRun.id,
@@ -156,7 +169,7 @@ async function assertBoundedImport() {
   assert.equal(countryLimitSummary.valid, 20);
   assert.equal(countryLimitSummary.errors, 1);
 
-  const oversizedRun = createRun(db, { name: 'run-limit-check', countries: APPROVED_COUNTRIES });
+  const oversizedRun = createRun(db, campaign('run-limit-check', APPROVED_COUNTRIES));
   await assert.rejects(
     importDiscoveryBatch(
       db,
@@ -166,6 +179,21 @@ async function assertBoundedImport() {
     ),
     /exceeds 120 input records/
   );
+}
+
+async function assertControlledRunner() {
+  const before = formalSnapshot();
+  const result = await runCampaign(db, campaign('controlled-runner-check', ['Vietnam']), [record('Vietnam', 999)], {
+    dnsLookup: publicDnsLookup, transport: safeTransport, now: '2026-07-16'
+  });
+  const run = db.prepare('SELECT * FROM matrix_runs WHERE id = ?').get(result.run_id);
+  assert.equal(run.status, 'completed');
+  assert(run.completed_at);
+  assert.deepEqual(JSON.parse(run.counters_json), { ...result.summary, resume_cursor: null });
+  const actions = db.prepare('SELECT action FROM audit_logs WHERE resource_type = ? AND resource_id = ? ORDER BY id')
+    .all('matrix_run', String(result.run_id)).map(row => row.action);
+  assert.deepEqual(actions, ['matrix_run_started', 'matrix_discovery_recorded', 'matrix_evidence_recorded', 'matrix_classification_recorded', 'matrix_run_completed']);
+  assert.deepEqual(formalSnapshot(), before, 'controlled runner must not write formal CRM tables');
 }
 
 function assertCurrentCrmReadOnly() {
@@ -182,6 +210,8 @@ function assertDeliveryUnavailable() {
     'src/lib/signalCache.js',
     'src/lib/matrixStream.js',
     'src/lib/matrixCrmAdapter.js',
+    'src/lib/matrixRunner.js',
+    'scripts/matrix-run.js',
     'src/routes/matrix.js'
   ];
   const prohibitedImports = /require\(['"](?:nodemailer|imapflow)['"]\)|\b(?:sendMail|sendMessage|deliverCandidate)\s*\(/;
@@ -193,7 +223,8 @@ function assertDeliveryUnavailable() {
     '../src/lib/schemaRank',
     '../src/lib/signalCache',
     '../src/lib/matrixStream',
-    '../src/lib/matrixCrmAdapter'
+    '../src/lib/matrixCrmAdapter',
+    '../src/lib/matrixRunner'
   ]) {
     const exportedNames = Object.keys(require(modulePath));
     assert(
@@ -219,12 +250,8 @@ function assertRunbookAccuracy() {
   );
   assert(!runbook.includes('--output ./tmp/'), 'runbook must not use a CLI-rejected nested output path');
   assert(
-    !/SELECT\s+id,\s+status,\s+ruleset_version,\s+counters_json/mi.test(runbook),
-    'runbook must not imply import summaries are persisted in matrix_runs.counters_json'
-  );
-  assert(
-    /importDiscoveryBatch[^\n]*返回[^\n]*summary/.test(runbook),
-    'runbook must identify importDiscoveryBatch returned summary as the counter source'
+    /matrix_runs\.counters_json/.test(runbook) && /resume_cursor/.test(runbook),
+    'runbook must document persisted runner counters and resume cursor'
   );
 }
 
@@ -299,6 +326,7 @@ async function main() {
   assertClassification();
   const formalBeforeImport = formalSnapshot();
   await assertBoundedImport();
+  await assertControlledRunner();
   assert.deepEqual(formalSnapshot(), formalBeforeImport, 'guarded import must not write formal CRM tables');
   assertCurrentCrmReadOnly();
   assertDeliveryUnavailable();
@@ -308,8 +336,8 @@ async function main() {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(
     packageJson.scripts && packageJson.scripts['verify:matrix-phase1'],
-    'npm run test:matrix-stream && npm run test:matrix-api && node scripts/verify-matrix-phase1.js',
-    'unified package command must wire guarded-import and full API contracts before integration verification'
+    'npm run test:matrix-rank && npm run test:signal-cache && npm run test:matrix-stream && npm run test:matrix-crm && npm run test:matrix-api && node scripts/verify-matrix-phase1.js && npm run verify:smoke && git diff --check',
+    'unified package command must wire every focused, integration, smoke and diff contract'
   );
   console.log('matrix phase-one verification passed');
 }

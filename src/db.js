@@ -826,40 +826,83 @@ function initDb() {
     CREATE TABLE IF NOT EXISTS matrix_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       entity_id INTEGER NOT NULL,
+      run_id INTEGER NOT NULL,
+      source_type TEXT NOT NULL,
       field TEXT NOT NULL,
       value TEXT,
       source_url TEXT NOT NULL,
       page_title TEXT,
       retrieved_at TEXT NOT NULL,
       content_fingerprint TEXT NOT NULL,
-      confidence TEXT,
+      confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
       extraction_method TEXT,
       created_at TEXT NOT NULL,
-      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id)
+      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id),
+      FOREIGN KEY(run_id) REFERENCES matrix_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_entity_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_id INTEGER NOT NULL,
+      run_id INTEGER NOT NULL,
+      normalized_domain TEXT NOT NULL,
+      display_name TEXT,
+      country TEXT NOT NULL,
+      public_contacts_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      UNIQUE(entity_id, run_id),
+      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id),
+      FOREIGN KEY(run_id) REFERENCES matrix_runs(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS matrix_classifications (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       entity_id INTEGER NOT NULL,
       run_id INTEGER NOT NULL,
-      classification TEXT NOT NULL,
-      priority TEXT,
+      snapshot_id INTEGER NOT NULL,
+      classification TEXT NOT NULL CHECK(classification IN ('test','noise','needs_review','valid')),
+      priority TEXT CHECK(priority IS NULL OR priority IN ('A','B','C')),
       reason_json TEXT NOT NULL DEFAULT '[]',
-      confidence REAL,
+      confidence REAL CHECK(confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
       human_override_classification TEXT,
+      human_override_priority TEXT CHECK(human_override_priority IS NULL OR human_override_priority IN ('A','B','C')),
       human_override_reason TEXT,
       human_override_actor TEXT,
       human_override_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(entity_id) REFERENCES matrix_entities(id),
-      FOREIGN KEY(run_id) REFERENCES matrix_runs(id)
+      FOREIGN KEY(run_id) REFERENCES matrix_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY(snapshot_id) REFERENCES matrix_entity_snapshots(id) ON DELETE CASCADE,
+      CHECK((classification = 'valid' AND priority IN ('A','B','C')) OR (classification <> 'valid' AND priority IS NULL))
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_classification_evidence (
+      classification_id INTEGER NOT NULL,
+      evidence_id INTEGER NOT NULL,
+      PRIMARY KEY(classification_id, evidence_id),
+      FOREIGN KEY(classification_id) REFERENCES matrix_classifications(id) ON DELETE CASCADE,
+      FOREIGN KEY(evidence_id) REFERENCES matrix_evidence(id) ON DELETE CASCADE
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_entities_domain
       ON matrix_entities(normalized_domain);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_evidence_identity
-      ON matrix_evidence(entity_id, field, source_url, content_fingerprint);
+      ON matrix_evidence(run_id, entity_id, field, source_url, content_fingerprint);
+  `);
+
+  // Matrix v1.1 keeps legacy rows read-only while all new output is run-owned.
+  const matrixEvidenceColumns = db.prepare("PRAGMA table_info(matrix_evidence)").all().map(c => c.name);
+  if (!matrixEvidenceColumns.includes('run_id')) db.exec('ALTER TABLE matrix_evidence ADD COLUMN run_id INTEGER');
+  if (!matrixEvidenceColumns.includes('source_type')) db.exec("ALTER TABLE matrix_evidence ADD COLUMN source_type TEXT DEFAULT 'legacy'");
+  const matrixClassificationColumns = db.prepare("PRAGMA table_info(matrix_classifications)").all().map(c => c.name);
+  if (!matrixClassificationColumns.includes('snapshot_id')) db.exec('ALTER TABLE matrix_classifications ADD COLUMN snapshot_id INTEGER');
+  if (!matrixClassificationColumns.includes('human_override_priority')) db.exec('ALTER TABLE matrix_classifications ADD COLUMN human_override_priority TEXT');
+  db.exec(`
+    DROP INDEX IF EXISTS idx_matrix_evidence_identity;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_evidence_identity
+      ON matrix_evidence(run_id, entity_id, field, source_url, content_fingerprint);
   `);
 
   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
@@ -1133,8 +1176,10 @@ function initDb() {
     const hash = bcrypt.hashSync(pwd, 10);
     db.prepare("INSERT INTO users (username, password, role, status, created_at, approved_at) VALUES (?, ?, 'super_admin', 'active', ?, ?)")
       .run('admin', hash, now(), now());
-    console.log(`[db] Created default admin account. username=admin password=${pwd}`);
-    console.log('[db] CHANGE THIS PASSWORD immediately after first login.');
+    if (process.env.MATRIX_SUPPRESS_BOOTSTRAP_SECRET !== '1') {
+      console.log(`[db] Created default admin account. username=admin password=${pwd}`);
+      console.log('[db] CHANGE THIS PASSWORD immediately after first login.');
+    }
   } else if (admin.password === 'admin') {
     const pwd = crypto.randomBytes(12).toString('hex');
     const hash = bcrypt.hashSync(pwd, 10);

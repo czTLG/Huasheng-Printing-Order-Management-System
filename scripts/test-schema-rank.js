@@ -25,6 +25,7 @@ const validRecord = (overrides = {}) => ({
   official_domain: 'brand.example',
   business_email: 'sales@brand.example',
   product_evidence: ['coffee'],
+  evidence_refs: ['evidence:1'],
   last_interaction_at: '2026-07-01',
   ...overrides
 });
@@ -48,6 +49,53 @@ assertPublicReasonCodes(valid);
 assert.equal(valid.classification, 'valid');
 assert(valid.reason_codes.includes('official_domain'));
 
+// Final-review canaries: identity and business intent are independent gates.
+const contactPageOnly = classifyRecord({
+  country: 'Vietnam',
+  official_domain: 'brand.example',
+  business_email: 'sales@brand.example',
+  evidence_refs: ['evidence:1']
+}, { now: '2026-07-16' });
+assert.equal(contactPageOnly.classification, 'needs_review');
+assert.equal(contactPageOnly.priority, null);
+assert(contactPageOnly.reason_codes.includes(REASON_CODES.MISSING_BUSINESS_EVIDENCE));
+
+const recentWithoutInquiry = classifyRecord(validRecord({
+  last_interaction_at: '2026-07-15'
+}), { now: '2026-07-16' });
+assert.equal(recentWithoutInquiry.classification, 'valid');
+assert.equal(recentWithoutInquiry.priority, 'B');
+
+const priorityA = classifyRecord(validRecord({
+  inquiry_evidence: ['inquiry:42'],
+  substantive_interaction: true,
+  last_interaction_at: '2026-07-15'
+}), { now: '2026-07-16' });
+assert.equal(priorityA.priority, 'A');
+assert(priorityA.reason_codes.includes(REASON_CODES.HISTORICAL_INQUIRY));
+
+const whatsappOnly = classifyRecord({
+  country: 'Thailand',
+  confirmed_international_whatsapp: true,
+  sender_phone: '+66812345678',
+  product_evidence: ['snack pouch'],
+  evidence_refs: ['crm-message:91']
+}, { now: '2026-07-16' });
+assert.equal(whatsappOnly.classification, 'valid');
+assert.equal(whatsappOnly.priority, 'B');
+assert(whatsappOnly.reason_codes.includes(REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP));
+
+const noReferences = classifyRecord(validRecord({ evidence_refs: [] }), { now: '2026-07-16' });
+assert.equal(noReferences.classification, 'needs_review');
+assert.equal(noReferences.priority, null);
+assert(noReferences.reason_codes.includes(REASON_CODES.MISSING_EVIDENCE_REFERENCES));
+
+for (const nonValid of [
+  classifyRecord({ fixture_marker: 'token-verification' }),
+  classifyRecord({ source_kind: 'security_notice', country: 'Malaysia' }),
+  classifyRecord({ country: 'Vietnam' })
+]) assert.equal(nonValid.priority, null);
+
 const expectedApprovedCountries = [
   'Vietnam',
   'Thailand',
@@ -70,7 +118,7 @@ const testCollision = assertClassification({
   source_kind: 'security_notice',
   country: 'India'
 }, 'test', 'fixture_marker');
-assert.equal(testCollision.priority, 'C');
+assert.equal(testCollision.priority, null);
 assert.equal(testCollision.confidence, 1);
 
 const noiseCollision = assertClassification({
@@ -79,16 +127,16 @@ const noiseCollision = assertClassification({
   official_domain: 'one.example',
   business_email: 'sales@two.example'
 }, 'noise', 'security_notice');
-assert.equal(noiseCollision.priority, 'C');
+assert.equal(noiseCollision.priority, null);
 assert.equal(noiseCollision.confidence, 1);
 
 const excludedCountry = assertClassification(validRecord({
   country: ' India '
 }), 'noise', 'excluded_country');
-assert.equal(excludedCountry.priority, 'C');
+assert.equal(excludedCountry.priority, null);
 
 const missingIdentity = assertClassification({ country: 'Vietnam' }, 'needs_review', 'missing_identity');
-assert.equal(missingIdentity.priority, 'B');
+assert.equal(missingIdentity.priority, null);
 assert.equal(missingIdentity.confidence, 0.5);
 
 assertClassification({
@@ -122,8 +170,8 @@ assertClassification(validRecord({
   business_email: 'sales@gmail.com'
 }), 'needs_review', 'ambiguous_contact');
 
-assert.equal(valid.priority, 'A');
-assert.equal(valid.confidence, 0.95);
+assert.equal(valid.priority, 'B');
+assert.equal(valid.confidence, 0.85);
 assert(valid.reason_codes.includes('approved_country'));
 assert(valid.reason_codes.includes('product_evidence'));
 assert(valid.reason_codes.includes('valid_source_time'));

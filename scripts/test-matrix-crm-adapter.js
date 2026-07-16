@@ -145,6 +145,9 @@ try {
   insertCustomer.run({ ...customerDefaults, id: 20, name: 'Bad Customer Update', company_name: 'Bad Customer Update Brand', country: 'Vietnam', email: 'buyer@customerupdate.example', website: 'customerupdate.example', main_product: 'coffee pouch', updated_at: '2026-02-30' });
   insertCustomer.run({ ...customerDefaults, id: 21, name: 'Bad CRM Update', company_name: 'Bad CRM Update Brand', country: 'Thailand', email: 'buyer@crmupdate.example', website: 'crmupdate.example', main_product: 'snack pouch' });
   insertCustomer.run({ ...customerDefaults, id: 22, name: 'Bad Email Update', company_name: 'Bad Email Update Brand', country: 'Malaysia', email: 'buyer@emailupdate.example', website: 'emailupdate.example', main_product: 'liquid pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 23, name: 'Overseas With Agent Phone', company_name: 'Vietnam Agent Brand', country: 'Vietnam', email: 'buyer@agentbrand.example', phone: '+8613800000000', website: 'agentbrand.example', main_product: 'coffee pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 24, name: 'WhatsApp Only', company_name: 'Thai Snack Brand', country: 'Thailand', whatsapp: '+66888888888', main_product: 'snack pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 25, name: 'Mixed Fixture Text', company_name: 'Malaysia Real Brand', country: 'Malaysia', email: 'buyer@mixedbrand.example', website: 'mixedbrand.example', main_product: 'refill pouch' });
 
   const insertCrm = db.prepare(`
     INSERT INTO crm_messages (
@@ -197,6 +200,11 @@ try {
   insertCrm.run({ ...crmDefaults, id: 190, source_type: 'whatsapp', customer_id: 19, sender_name: 'Buyer', sender_contact: '+60177777777', message_text: 'Need liquid pouch specifications', received_at: '2026/07/01' });
   insertCrm.run({ ...crmDefaults, id: 200, source_type: 'whatsapp', customer_id: 20, sender_name: 'Buyer', sender_contact: '+84966666666', message_text: 'Need coffee pouch specifications' });
   insertCrm.run({ ...crmDefaults, id: 210, source_type: 'whatsapp', customer_id: 21, sender_name: 'Buyer', sender_contact: '+66877777777', message_text: 'Need snack pouch specifications', updated_at: '2026-13-01' });
+  insertCrm.run({ ...crmDefaults, id: 230, source_type: 'whatsapp', customer_id: 23, sender_name: 'Buyer', sender_contact: '+84988888888', message_text: 'Please quote coffee pouches' });
+  insertCrm.run({ ...crmDefaults, id: 240, source_type: 'whatsapp', customer_id: 24, sender_name: 'Buyer', sender_contact: '+66888888888', message_text: 'Need snack pouch specifications' });
+  insertCrm.run({ ...crmDefaults, id: 250, source_type: 'whatsapp', customer_id: 25, sender_name: 'Buyer', sender_contact: '+60188888888', message_text: 'Old forwarded note said token test' });
+  insertCrm.run({ ...crmDefaults, id: 251, source_type: 'whatsapp', customer_id: 25, sender_name: 'Buyer', sender_contact: '+60188888888', message_text: 'Please quote refill pouch specifications' });
+  insertCrm.run({ ...crmDefaults, id: 260, source_type: 'whatsapp', direction: 'internal', sender_name: 'Operator', sender_contact: '+8613900000000', receiver_contact: '+8613800000000', message_text: 'Internal packaging note' });
 
   const insertEmail = db.prepare(`
     INSERT INTO email_messages (
@@ -246,6 +254,10 @@ try {
   insertEmail.run({ ...emailDefaults, id: 100, message_id: '<greeting-100@greeting.example>', from_email: 'hello@greeting.example', subject: 'Hello', text_body: 'Hello', cleaned_text: 'Hello', contact_email: 'hello@greeting.example', matched_customer_id: 10 });
   insertEmail.run({ ...emailDefaults, id: 150, message_id: '<broken-150@brokenmail.example>', from_email: 'buyer@brokenmail.example', subject: 'Coffee pouch inquiry', text_body: 'Need coffee pouch specifications', cleaned_text: 'Need coffee pouch specifications', contact_email: 'buyer@brokenmail.example', matched_customer_id: 15, business_relevance: 'high', bcc_emails: '{broken' });
   insertEmail.run({ ...emailDefaults, id: 220, message_id: '<update-220@emailupdate.example>', from_email: 'buyer@emailupdate.example', subject: 'Liquid pouch inquiry', text_body: 'Need liquid pouch specifications', cleaned_text: 'Need liquid pouch specifications', contact_email: 'buyer@emailupdate.example', matched_customer_id: 22, business_relevance: 'high', updated_at: '2026/07/01' });
+  insertEmail.run({ ...emailDefaults, id: 270, message_id: '<unsubscribe-270@outside.example>', from_email: 'person@outside.example', subject: 'Unsubscribe', text_body: 'Please unsubscribe me', cleaned_text: 'Please unsubscribe me', contact_email: 'person@outside.example' });
+  insertEmail.run({ ...emailDefaults, id: 271, message_id: '<refusal-271@outside.example>', from_email: 'buyer2@outside.example', subject: 'No interest', text_body: 'Do not contact us again', cleaned_text: 'Do not contact us again', contact_email: 'buyer2@outside.example' });
+  insertEmail.run({ ...emailDefaults, id: 272, message_id: '<bounce-272@mailer.example>', from_email: 'mailer-daemon@mailer.example', subject: 'Undeliverable', text_body: 'Invalid recipient address', cleaned_text: 'Invalid recipient address', contact_email: 'mailer-daemon@mailer.example' });
+  insertEmail.run({ ...emailDefaults, id: 273, message_id: '<system-273@vietcoffee.example>', from_email: 'no-reply@vietcoffee.example', subject: 'Security alert', text_body: 'Automated account verification notice', cleaned_text: 'Automated account verification notice', contact_email: 'no-reply@vietcoffee.example', matched_customer_id: 5, noise_level: 'high' });
 
   const before = digest();
   const { readEligibleCrmRecords, classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
@@ -293,6 +305,21 @@ try {
     assert.equal(bySourceId(report, sourceType, id).classification, 'needs_review');
     assert(bySourceId(report, sourceType, id).reason_codes.includes('malformed_source_time'));
   }
+  assert.equal(normalized.excluded_domestic_ids.includes(23), false, 'explicit overseas facts outrank +86 agent contact');
+  assert.equal(bySourceId(report, 'crm_message_ids', 230).classification, 'valid');
+  assert.equal(bySourceId(report, 'crm_message_ids', 240).classification, 'valid', 'confirmed WhatsApp is a usable identity without website/email');
+  assert.equal(bySourceId(report, 'crm_message_ids', 250).classification, 'test');
+  assert.equal(bySourceId(report, 'crm_message_ids', 251).classification, 'valid', 'isolated fixture evidence must not poison a real grouped identity');
+  assert.equal(bySourceId(report, 'crm_message_ids', 260).classification, 'noise');
+  assert(bySourceId(report, 'crm_message_ids', 260).reason_codes.includes(REASON_CODES.INTERNAL_ONLY));
+  assert.equal(bySourceId(report, 'email_message_ids', 270).classification, 'noise');
+  assert(bySourceId(report, 'email_message_ids', 270).reason_codes.includes(REASON_CODES.UNSUBSCRIBE));
+  assert.equal(bySourceId(report, 'email_message_ids', 271).classification, 'noise');
+  assert(bySourceId(report, 'email_message_ids', 271).reason_codes.includes(REASON_CODES.REFUSAL));
+  assert.equal(bySourceId(report, 'email_message_ids', 272).classification, 'noise');
+  assert(bySourceId(report, 'email_message_ids', 272).reason_codes.includes(REASON_CODES.INVALID_ADDRESS));
+  assert.equal(bySourceId(report, 'email_message_ids', 273).classification, 'noise');
+  assert.equal(bySourceId(report, 'email_message_ids', 50).classification, 'valid', 'isolated system mail must not poison substantive customer mail');
 
   const errorReport = classifyCurrentCrm(db, {
     now: '2026-07-16',
@@ -309,7 +336,11 @@ try {
   observedAdapterCodes.forEach(code => assert(publicReasonCodeSet.has(code), `matrixCrmAdapter produced non-public reason code: ${code}`));
   [
     REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
-    REASON_CODES.BUSINESS_EVIDENCE,
+    REASON_CODES.SUBSTANTIVE_INTERACTION,
+    REASON_CODES.INTERNAL_ONLY,
+    REASON_CODES.UNSUBSCRIBE,
+    REASON_CODES.REFUSAL,
+    REASON_CODES.INVALID_ADDRESS,
     REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS,
     REASON_CODES.MALFORMED_JSON_PAYLOAD,
     REASON_CODES.UNCERTAIN_DIRECTION,

@@ -41,11 +41,26 @@ node scripts/matrix-classify-current.js --output ./matrix-current-summary.json
 
 ## 公开证据导入 schema
 
-输入是 JSON 数组。每条记录仅允许公开页面可验证的公司字段：
+输入文件是 `{ campaign, records }` envelope。campaign 必须显式包含六国非空子集、类别、语言、每国公司上限、每公司页面上限、总 probe 上限、run deadline、允许来源类型、official host allowlist、第三方来源 allowlist、排除词和 existing-domain suppression。每条记录仅允许公开页面可验证的公司字段：
 
 ```json
-[
-  {
+{
+  "campaign": {
+    "name": "approved-small-run",
+    "countries": ["Vietnam"],
+    "categories": ["dry_food"],
+    "languages": ["en"],
+    "max_companies_per_country": 20,
+    "max_pages_per_company": 4,
+    "max_probes": 80,
+    "run_deadline_ms": 60000,
+    "allowed_source_types": ["official_website"],
+    "official_hosts": ["example.com"],
+    "third_party_sources": [],
+    "exclusion_terms": ["India"],
+    "existing_domain_suppression": true
+  },
+  "records": [{
     "country": "Vietnam",
     "display_name": "Example Foods",
     "official_url": "https://example.com/",
@@ -60,23 +75,30 @@ node scripts/matrix-classify-current.js --output ./matrix-current-summary.json
     "product_evidence": ["coffee"],
     "evidence": [
       {
+        "source_type": "official_website",
         "field": "product",
         "value": "coffee",
         "source_url": "https://example.com/products",
         "page_title": "Products",
         "retrieved_at": "2026-07-16T00:00:00Z",
         "content_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "confidence": "high",
+        "confidence": 0.9,
         "extraction_method": "public-page-review"
       }
     ]
-  }
-]
+  }]
+}
 ```
 
-`country`、`official_url` 和至少一个 `evidence` 项是必需的；每个 evidence 必须有非空 `field`、`source_url`、`retrieved_at`。`content_fingerprint` 如提供，必须是 32–128 位十六进制摘要。不要存整页 HTML、登录后页面、私人资料、猜测的个人邮箱、cookie、token、API key 或内部规则文本。
+`display_name`、`official_domain`、`country`、每个持久联系方式和每个 product/application 值都必须有同字段、同值的 evidence；每个 evidence 必须有有限事实字段、HTTP(S) URL、带时区 ISO 检索时间及 `[0,1]` confidence。`content_fingerprint` 如提供，必须是 32–128 位十六进制摘要。含 token、signature、key、auth 等敏感查询键的 URL 会被拒绝。
 
-导入必须通过调用 `importDiscoveryBatch(db, runId, records, { dnsLookup, transport, now })` 的受控本地 runner 完成。生产 transport 必须保留地址固定和每跳重定向复验；不得用普通 `fetch` 替代。Phase 1 没有面向操作员的通用导入 CLI，不能临时拼接脚本绕过这些守卫。
+导入必须使用受控 runner，并提供有效的本地管理员 JWT 上下文：
+
+```bash
+MATRIX_LOCAL_OPERATOR_TOKEN=... JWT_SECRET=... npm run matrix:run -- --input ./matrix-run-input.json
+```
+
+runner 会从已认证数据库用户派生 actor，创建 run、调用受限 importer、原子写入完成/失败状态、counters、resume cursor 和 aggregate audit events，并打印 `{ run_id, summary }`。生产 transport 保留地址固定、每跳重定向复验、页面/probe/deadline 上限；不得用普通 `fetch` 替代，也不得临时拼接脚本绕过守卫。
 
 ## 计数与抽检
 
@@ -90,7 +112,7 @@ node scripts/matrix-classify-current.js --output ./matrix-current-summary.json
 - `valid`：通过当前规则的候选；
 - `errors`：URL、证据、国家上限或存储校验失败。
 
-受控 runner 必须把 run ID 与返回的完整 summary 同时打印到命令标准输出；操作员将该段输出写入本次审计记录。当前实现不会把 import 返回的 summary 更新到 `matrix_runs.counters_json`，不得把该列当作本次导入计数来源，也不得手工伪造其内容。
+受控 runner 把 run ID 与完整 summary 打印到标准输出，并把同一 summary 与 `resume_cursor` 写入 `matrix_runs.counters_json`；两者必须完全一致。
 
 summary 必须满足 `input = excluded + test + noise + needs_review + valid + errors`。若不相等、任一国家超过 20、总输入超过 120、出现 India 实体，立即停止。
 
@@ -103,24 +125,24 @@ SELECT id, status, ruleset_version, created_at
 FROM matrix_runs
 WHERE id = :run_id;
 
-SELECT e.country, c.classification, COUNT(*) AS count
+SELECT s.country, c.classification, COUNT(*) AS count
 FROM matrix_classifications c
-JOIN matrix_entities e ON e.id = c.entity_id
+JOIN matrix_entity_snapshots s ON s.id = c.snapshot_id
 WHERE c.run_id = :run_id
-GROUP BY e.country, c.classification
-ORDER BY e.country, c.classification;
+GROUP BY s.country, c.classification
+ORDER BY s.country, c.classification;
 
-SELECT e.id, e.normalized_domain, e.country, c.classification,
+SELECT s.entity_id, s.normalized_domain, s.country, c.classification,
        c.priority, c.reason_json
 FROM matrix_classifications c
-JOIN matrix_entities e ON e.id = c.entity_id
+JOIN matrix_entity_snapshots s ON s.id = c.snapshot_id
 WHERE c.run_id = :run_id
-ORDER BY e.country, e.id;
+ORDER BY s.country, s.entity_id;
 ```
 
 ## 回滚
 
-优先在临时数据库执行整次演练，回滚方式是在关闭连接后删除该临时数据库文件。对持久数据库，Phase 1 能明确证明归属某个 run 的只有 `matrix_classifications.run_id` 和该 `matrix_runs.id`；`matrix_entities` 与 `matrix_evidence` 可被多个 run 复用，不能凭时间或 domain 推测归属并删除。
+优先在临时数据库执行整次演练。持久数据库中的 evidence、snapshot、classification 均有 run 归属；应用层 `deleteRun(db, runId)` 在单事务内删除关联行和孤立 identity，不触碰正式 CRM 表。
 
 先备份数据库并确认 `:run_id`，然后在单个事务中仅删除该 run 明确拥有的 Matrix 行：
 
@@ -134,13 +156,16 @@ WHERE run_id = :run_id;
 DELETE FROM matrix_classifications
 WHERE run_id = :run_id;
 
+DELETE FROM matrix_evidence WHERE run_id = :run_id;
+DELETE FROM matrix_entity_snapshots WHERE run_id = :run_id;
+
 DELETE FROM matrix_runs
 WHERE id = :run_id;
 
 COMMIT;
 ```
 
-不要删除或更新任何非 `matrix_*` 表。不要对 `matrix_entities` 或 `matrix_evidence` 做级联清理；当前 schema 没有足够的 run 所有权信息。若必须清理这些共享行，停止并走单独的变更评审，而不是扩大本回滚。
+不要删除或更新任何非 `matrix_*` 表。只可删除不再被任何 snapshot 引用的孤立 identity；不得按时间或 domain 猜测归属。
 
 ## 秘密隔离与交付状态
 

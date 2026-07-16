@@ -9,6 +9,11 @@ const AUTOMATED_SENDER = /(?:^|[._-])(no[._-]?reply|do[._-]?not[._-]?reply|maile
 const SYSTEM_NOTICE = /(?:security alert|account verification|verify your account|delivery failure|undeliverable|automated (?:report|notice)|machine notification)/i;
 const FIXTURE_MARKER = /(?:\btoken test\b|\bhello token ok\b|token-verification|sync verification|fixture (?:mailbox|payload))/i;
 const BUSINESS_SIGNAL = /(?:inquir|quot|packag|pouch|film|bag|specification|material|dimension|size|product|coffee|snack|detergent|refill)/i;
+const INQUIRY_SIGNAL = /\b(?:inquir(?:y|e)|need|require|request)\b/i;
+const QUOTE_SIGNAL = /\b(?:quot(?:e|ation)|price)\b/i;
+const UNSUBSCRIBE_SIGNAL = /\b(?:unsubscribe|remove me|opt[ -]?out)\b/i;
+const REFUSAL_SIGNAL = /\b(?:do not contact|don't contact|not interested|no interest|stop contacting)\b/i;
+const INVALID_ADDRESS_SIGNAL = /\b(?:invalid (?:recipient|address)|undeliverable|unknown recipient|address rejected)\b/i;
 
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -195,12 +200,30 @@ function hasMalformedJson(group) {
 
 function hasFixtureMarker(group) {
   const values = [
-    group.customer?.name,
-    group.customer?.company_name,
-    ...group.crmMessages.flatMap((row) => [row.sender_name, row.message_text, row.raw_payload_json, row.source_message_id]),
-    ...group.emailMessages.flatMap((row) => [row.from_email, row.subject, row.text_body, row.cleaned_text, row.message_id])
+    group.customer?.name, group.customer?.company_name,
+    ...group.crmMessages.flatMap(row => [row.source_message_id, row.message_text, row.raw_payload_json]),
+    ...group.emailMessages.flatMap(row => [row.message_id, row.from_email, row.subject, row.text_body, row.cleaned_text])
   ];
-  return values.some((value) => FIXTURE_MARKER.test(text(value)));
+  return values.some(value => FIXTURE_MARKER.test(text(value)));
+}
+
+function crmFixtureRow(row, customer) {
+  return FIXTURE_MARKER.test([
+    customer?.name, customer?.company_name, row.source_message_id, row.message_text, row.raw_payload_json
+  ].map(text).join(' '));
+}
+
+function emailFixtureRow(row, customer) {
+  return FIXTURE_MARKER.test([
+    customer?.name, customer?.company_name, row.message_id, row.from_email,
+    row.subject, row.text_body, row.cleaned_text
+  ].map(text).join(' '));
+}
+
+function systemEmailRow(row) {
+  const sender = row.contact_email || row.from_email;
+  const content = `${text(row.subject)} ${text(row.cleaned_text || row.text_body)}`;
+  return AUTOMATED_SENDER.test(text(sender)) || SYSTEM_NOTICE.test(content) || lower(row.noise_level) === 'high';
 }
 
 function isSystemGroup(group) {
@@ -223,6 +246,13 @@ function businessEvidence(group) {
       || Number(row.quote_detected) === 1
       || BUSINESS_SIGNAL.test(`${text(row.subject)} ${text(row.cleaned_text || row.text_body)}`));
   return substantive ? [...evidence, 'substantive_conversation'] : evidence;
+}
+
+function groupContent(group) {
+  return [
+    ...group.crmMessages.map((row) => row.message_text),
+    ...group.emailMessages.flatMap((row) => [row.subject, row.cleaned_text || row.text_body])
+  ].map(text).filter(Boolean).join(' ');
 }
 
 function normalizeGroup(group) {
@@ -248,6 +278,20 @@ function normalizeGroup(group) {
     : group.crmMessages.length
       ? `crm-message:${Math.min(...group.crmMessages.map((row) => Number(row.id)))}`
       : `email-message:${Math.min(...group.emailMessages.map((row) => Number(row.id)))}`;
+  const content = groupContent(group);
+  const sourceIds = {
+    customer_ids: customer.id == null ? [] : [customer.id],
+    crm_message_ids: group.crmMessages.map((row) => row.id),
+    email_message_ids: group.emailMessages.map((row) => row.id)
+  };
+  const evidenceRefs = [
+    ...sourceIds.customer_ids.map((id) => `customer:${id}`),
+    ...sourceIds.crm_message_ids.map((id) => `crm-message:${id}`),
+    ...sourceIds.email_message_ids.map((id) => `email-message:${id}`)
+  ];
+  const internalOnly = group.crmMessages.length > 0
+    && group.emailMessages.length === 0
+    && group.crmMessages.every((row) => lower(row.direction) === 'internal');
 
   return {
     identity_id: internalIdentity,
@@ -259,6 +303,10 @@ function normalizeGroup(group) {
     source_kind: isSystemGroup(group) ? REASON_CODES.SECURITY_NOTICE : sourceKind,
     fixture_marker: hasFixtureMarker(group) ? 'known-verification-artifact' : '',
     product_evidence: businessEvidence(group),
+    inquiry_evidence: INQUIRY_SIGNAL.test(content) ? evidenceRefs : [],
+    quote_evidence: QUOTE_SIGNAL.test(content) ? evidenceRefs : [],
+    substantive_interaction: BUSINESS_SIGNAL.test(content),
+    evidence_refs: evidenceRefs,
     last_interaction_at: lastInteraction,
     duplicated_message_segments: duplicate,
     has_malformed_source_time: hasMalformedTime(group),
@@ -268,11 +316,12 @@ function normalizeGroup(group) {
       return lower(row.source_type) === 'whatsapp' && !['inbound', 'outbound'].includes(direction);
     }),
     confirmed_international_whatsapp: internationalPhone(whatsapp),
-    source_ids: {
-      customer_ids: customer.id == null ? [] : [customer.id],
-      crm_message_ids: group.crmMessages.map((row) => row.id),
-      email_message_ids: group.emailMessages.map((row) => row.id)
-    },
+    internal_only: internalOnly,
+    unsubscribe: UNSUBSCRIBE_SIGNAL.test(content),
+    refusal: REFUSAL_SIGNAL.test(content),
+    invalid_address: INVALID_ADDRESS_SIGNAL.test(content),
+    delivery_failure: /\b(?:delivery failure|hard bounce|mailer daemon)\b/i.test(content),
+    source_ids: sourceIds,
     private_contact: businessEmail || whatsapp || ''
   };
 }
@@ -298,7 +347,7 @@ function readEligibleCrmRecords(db) {
       .map((row) => Number(row.matched_customer_id)).filter(Number.isFinite)
   ]);
   const excludedDomesticIds = customers
-    .filter((customer) => isDomestic(customer)
+    .filter((customer) => (isDomestic(customer) && !customerHasOverseasEvidence(customer))
       || (!customerHasOverseasEvidence(customer) && !linkedCustomerIds.has(Number(customer.id))))
     .map((row) => row.id);
   const excludedSet = new Set(excludedDomesticIds.map(Number));
@@ -312,6 +361,10 @@ function readEligibleCrmRecords(db) {
 
   for (const row of crmMessages) {
     const customer = customerById.get(Number(row.customer_id));
+    if (crmFixtureRow(row, customer)) {
+      addToGroup(groups, `fixture-crm:${row.id}`, customer, 'crm', row);
+      continue;
+    }
     if (customer && excludedSet.has(Number(customer.id))) {
       if (lower(row.source_type) === 'whatsapp' && !crmExternalContact(row)) {
         addToGroup(groups, identityKey('crm', row, null), null, 'crm', row);
@@ -323,6 +376,14 @@ function readEligibleCrmRecords(db) {
 
   for (const row of emailMessages) {
     const customer = customerById.get(Number(row.matched_customer_id));
+    if (emailFixtureRow(row, customer)) {
+      addToGroup(groups, `fixture-email:${row.id}`, customer, 'email', row);
+      continue;
+    }
+    if (systemEmailRow(row)) {
+      addToGroup(groups, `system-email:${row.id}`, customer, 'email', row);
+      continue;
+    }
     if (customer && excludedSet.has(Number(customer.id))) continue;
     addToGroup(groups, identityKey('email', row, customer), customer, 'email', row);
   }
@@ -336,24 +397,6 @@ function readEligibleCrmRecords(db) {
 function classifyNormalizedRecord(record, context, classifier = classifyRecord) {
   const base = classifier(record, context);
   let result = base;
-  if (base.classification === 'needs_review'
-    && isApprovedCountry(record.country)
-    && record.official_domain
-    && record.confirmed_international_whatsapp
-    && record.product_evidence.length
-    && base.reason_codes.every((reason) => reason === REASON_CODES.MISSING_IDENTITY)) {
-    result = {
-      classification: 'valid',
-      priority: 'B',
-      reason_codes: [
-        REASON_CODES.APPROVED_COUNTRY,
-        REASON_CODES.OFFICIAL_DOMAIN,
-        REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
-        REASON_CODES.BUSINESS_EVIDENCE
-      ],
-      confidence: 0.85
-    };
-  }
 
   const safetyReasons = [];
   if (record.duplicated_message_segments) safetyReasons.push(REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS);
@@ -365,7 +408,7 @@ function classifyNormalizedRecord(record, context, classifier = classifyRecord) 
   }
   const reasons = [...new Set([...result.reason_codes, ...safetyReasons])];
   if (!['test', 'noise'].includes(result.classification) && safetyReasons.length) {
-    return { classification: 'needs_review', priority: 'B', reason_codes: reasons, confidence: 0.5 };
+    return { classification: 'needs_review', priority: null, reason_codes: reasons, confidence: 0.5 };
   }
   return { ...result, reason_codes: reasons };
 }
@@ -407,7 +450,7 @@ function classifyCurrentCrm(db, options = {}) {
         identity_id: record.identity_id,
         source_ids: record.source_ids,
         classification: 'needs_review',
-        priority: 'B',
+        priority: null,
         reason_codes: [REASON_CODES.CLASSIFICATION_ERROR],
         confidence: 0
       });

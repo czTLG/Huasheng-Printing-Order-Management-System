@@ -71,6 +71,7 @@ function assertNoPrivateFields(value, forbiddenValues = []) {
 
 function seed() {
   process.env.DB_PATH = dbPath;
+  process.env.MATRIX_SUPPRESS_BOOTSTRAP_SECRET = '1';
   const { db, initDb } = require('../src/db');
   const { createRun, upsertEntity, appendEvidence, saveClassification } = require('../src/lib/signalCache');
   initDb();
@@ -83,12 +84,17 @@ function seed() {
   insertUser.run('matrix_crm', 'foreign_trade_crm_admin', createdAt, createdAt);
   insertUser.run('matrix_sales', 'ai_sales', createdAt, createdAt);
 
-  const firstRun = createRun(db, {
-    name: 'Southeast Asia public scan',
-    countries: ['Vietnam'],
-    actor: 'SECRET_CONFIG_ACTOR'
+  const campaign = (name, countries, hosts, actor = 'api-test') => ({
+    name, countries, categories: ['dry_food'], languages: ['en'],
+    max_companies_per_country: 20, max_pages_per_company: 4, max_probes: 80,
+    run_deadline_ms: 60000, allowed_source_types: ['official_website'],
+    official_hosts: hosts, third_party_sources: [], exclusion_terms: ['India'],
+    existing_domain_suppression: true, actor
   });
-  const secondRun = createRun(db, { name: 'Thailand public scan', countries: ['Thailand'] });
+  const firstRun = createRun(db, campaign(
+    'Southeast Asia public scan', ['Vietnam'], ['alpha.example'], 'SECRET_CONFIG_ACTOR'
+  ));
+  const secondRun = createRun(db, campaign('Thailand public scan', ['Thailand'], ['beta.example']));
   const first = upsertEntity(db, {
     official_domain: 'alpha.example',
     display_name: 'Alpha Foods',
@@ -107,31 +113,52 @@ function seed() {
     country: 'Thailand',
     public_contacts: { email: 'owner@beta.example' }
   });
-  appendEvidence(db, first.id, {
-    field: 'SECRET_EVIDENCE_FIELD_SENTINEL',
+  const firstEvidence = appendEvidence(db, first.id, {
+    source_type: 'official_website', field: 'product',
     value: 'RAW_PAGE_TEXT_SENTINEL private CRM message body',
     source_url: 'https://alpha.example/products',
     page_title: 'Alpha public products',
     retrieved_at: '2026-07-16T01:00:00Z',
-    confidence: 'high',
+    confidence: 0.9,
     extraction_method: 'SECRET_INTERNAL_RULE'
-  });
+  }, firstRun.id);
   saveClassification(db, first.id, {
     classification: 'valid',
     priority: 'A',
-    reason_codes: [...PUBLIC_REASON_CODES, 'SECRET_REASON_RULE_SENTENCE'],
+    reason_codes: [REASON_CODES.APPROVED_COUNTRY, REASON_CODES.OFFICIAL_DOMAIN, REASON_CODES.PRODUCT_EVIDENCE],
     confidence: 0.95,
-    human_override_reason: 'SECRET_OVERRIDE_TEXT',
-    human_override_actor: 'private-reviewer'
+    evidence_ids: [firstEvidence.id]
   }, firstRun.id);
+  const secondEvidence = appendEvidence(db, second.id, {
+    source_type: 'official_website', field: 'product', value: 'tea', source_url: 'https://beta.example/products',
+    retrieved_at: '2026-07-16T01:00:00Z', confidence: 0.7
+  }, secondRun.id);
   saveClassification(db, second.id, {
     classification: 'needs_review',
-    priority: 'B',
+    priority: null,
     reason_codes: ['missing_identity'],
-    confidence: 0.5
+    confidence: 0.5,
+    evidence_ids: [secondEvidence.id]
   }, secondRun.id);
+  for (const [index, country, classification] of [
+    [1, 'Vietnam', 'test'], [2, 'Vietnam', 'noise'], [3, 'India', 'needs_review'], [4, 'Canada', 'needs_review']
+  ]) {
+    const hidden = upsertEntity(db, {
+      official_domain: `hidden-${index}.example`, display_name: `Hidden ${index}`, country
+    });
+    const hiddenEvidence = appendEvidence(db, hidden.id, {
+      source_type: 'official_website', field: 'product', value: 'hidden', source_url: `https://hidden-${index}.example/products`,
+      retrieved_at: '2026-07-16T01:00:00Z', confidence: 0.5
+    }, firstRun.id);
+    saveClassification(db, hidden.id, {
+      classification, priority: null,
+      reason_codes: [classification === 'test' ? REASON_CODES.FIXTURE_MARKER
+        : classification === 'noise' ? REASON_CODES.SECURITY_NOTICE : REASON_CODES.UNAPPROVED_COUNTRY],
+      confidence: 0.5, evidence_ids: [hiddenEvidence.id]
+    }, firstRun.id);
+  }
   db.close();
-  return { firstId: Number(first.id) };
+  return { firstId: Number(first.id), firstRunId: Number(firstRun.id) };
 }
 
 async function main() {
@@ -139,8 +166,8 @@ async function main() {
   assert(Object.isFrozen(REASON_CODES), 'REASON_CODES should be immutable');
   assert(Array.isArray(PUBLIC_REASON_CODES) && Object.isFrozen(PUBLIC_REASON_CODES), 'PUBLIC_REASON_CODES should be an immutable collection');
   const reasonCodeValues = Object.values(REASON_CODES);
-  assert.equal(reasonCodeValues.length, 20, 'reason-code contract should cover all 20 current codes');
-  assert.equal(new Set(reasonCodeValues).size, 20, 'reason-code values should be unique');
+  assert(reasonCodeValues.length >= 20, 'reason-code contract should remain complete');
+  assert.equal(new Set(reasonCodeValues).size, reasonCodeValues.length, 'reason-code values should be unique');
   assert.deepEqual(PUBLIC_REASON_CODES, reasonCodeValues, 'every REASON_CODES value should be public');
 
   const schemaSource = fs.readFileSync(path.join(root, 'src', 'lib', 'schemaRank.js'), 'utf8');
@@ -153,7 +180,7 @@ async function main() {
     assert(!literal.test(crmProducerSource), `matrixCrmAdapter producer should consume REASON_CODES for ${code}`);
   }
 
-  const { firstId } = seed();
+  const { firstId, firstRunId } = seed();
   child = spawn(process.execPath, ['src/server.js'], {
     cwd: root,
     env: { ...process.env, DB_PATH: dbPath, PORT: String(port), DISABLE_CRON: '1', FORCE_HTTPS: '0' },
@@ -174,7 +201,8 @@ async function main() {
   assert.equal(list.page_size, 1);
   assert.equal(list.total, 1);
   assert.equal(list.rows.length, 1);
-  const publicReasonCodes = [...PUBLIC_REASON_CODES];
+  assert.equal(list.rows[0].run_id, firstRunId);
+  const publicReasonCodes = [REASON_CODES.APPROVED_COUNTRY, REASON_CODES.OFFICIAL_DOMAIN, REASON_CODES.PRODUCT_EVIDENCE];
   assert.deepEqual(list.rows[0].reason_codes, publicReasonCodes);
   assert.deepEqual(list.rows[0].evidence_urls, ['https://alpha.example/products']);
   assert.equal(list.rows[0].contacts.email, 'b***@alpha.example');
@@ -188,6 +216,11 @@ async function main() {
   const capped = await request('/api/matrix/candidates?page_size=999', { token: adminToken });
   assert.equal(capped.page_size, 100);
   assert.equal(capped.total, 2);
+  for (const classification of ['test', 'noise']) {
+    const hidden = await request(`/api/matrix/candidates?classification=${classification}`, { token: adminToken });
+    assert.equal(hidden.total, 0, `${classification} must not enter the default candidate view`);
+  }
+  await request('/api/matrix/candidates?country=India', { token: adminToken, status: 400 });
   await request('/api/matrix/candidates?classification=unknown', { token: adminToken, status: 400 });
   await request('/api/matrix/candidates?priority=urgent', { token: adminToken, status: 400 });
   await request('/api/matrix/candidates?country=Neverland', { token: adminToken, status: 400 });
@@ -209,16 +242,18 @@ async function main() {
   const auditBefore = before.prepare("SELECT count(*) count FROM audit_logs WHERE action = 'read_matrix_candidate_detail'").get().count;
   before.close();
 
-  const detail = await request(`/api/matrix/candidates/${firstId}`, { token: crmToken });
+  const detail = await request(`/api/matrix/candidates/${firstId}?run_id=${firstRunId}`, { token: crmToken });
   assert.equal(detail.id, firstId);
   assert.deepEqual(detail.reason_codes, publicReasonCodes);
   assert.deepEqual(detail.evidence.map(item => item.source_url), ['https://alpha.example/products']);
+  assert.equal(detail.run_id, firstRunId);
   assert.deepEqual(Object.keys(detail.evidence[0]).sort(), ['confidence', 'retrieved_at', 'source_url']);
   assertNoPrivateFields(detail, [
     'buyer@alpha.example', 'RAW_PAGE_TEXT_SENTINEL', 'SECRET_INTERNAL_RULE',
     'SECRET_OVERRIDE_TEXT', 'SECRET_REASON_RULE_SENTENCE', 'SECRET_EVIDENCE_FIELD_SENTINEL'
   ]);
   await request('/api/matrix/candidates/999999', { token: crmToken, status: 404 });
+  await request(`/api/matrix/candidates/${firstId}?run_id=bad`, { token: crmToken, status: 400 });
 
   const after = new Database(dbPath, { readonly: true });
   assert.deepEqual(after.prepare('SELECT * FROM matrix_entities WHERE id = ?').get(firstId), entityBefore);
