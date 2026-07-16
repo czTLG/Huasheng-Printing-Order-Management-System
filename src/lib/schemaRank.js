@@ -3,10 +3,12 @@
 const RULESET_VERSION = '1.0.0';
 
 const APPROVED_COUNTRIES = Object.freeze([
-  'Indonesia',
-  'Malaysia',
+  'Vietnam',
   'Thailand',
-  'Vietnam'
+  'Malaysia',
+  'Indonesia',
+  'Philippines',
+  'Kazakhstan'
 ]);
 
 const EXCLUDED_COUNTRIES = Object.freeze([
@@ -15,6 +17,19 @@ const EXCLUDED_COUNTRIES = Object.freeze([
 
 const approvedCountryKeys = new Set(APPROVED_COUNTRIES.map(normalizeCountry));
 const excludedCountryKeys = new Set(EXCLUDED_COUNTRIES.map(normalizeCountry));
+const AMBIGUOUS_CONTACT_DOMAINS = Object.freeze([
+  'gmail.com',
+  'googlemail.com',
+  'hotmail.com',
+  'icloud.com',
+  'live.com',
+  'outlook.com',
+  'proton.me',
+  'protonmail.com',
+  'qq.com',
+  'yahoo.com'
+]);
+const ambiguousContactDomainKeys = new Set(AMBIGUOUS_CONTACT_DOMAINS);
 
 function normalizeCountry(country) {
   return typeof country === 'string'
@@ -43,8 +58,29 @@ function domainsMatch(left, right) {
 }
 
 function validDate(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)) return false;
-  return !Number.isNaN(Date.parse(value));
+  if (typeof value !== 'string') return false;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
+  if (calendarDate.getUTCFullYear() !== year
+    || calendarDate.getUTCMonth() !== month - 1
+    || calendarDate.getUTCDate() !== day) {
+    return false;
+  }
+
+  return !value.includes('T') || !Number.isNaN(Date.parse(value));
+}
+
+function isAmbiguousContactDomain(domain) {
+  return domain.split('.')[0] === 'example' || ambiguousContactDomainKeys.has(domain);
+}
+
+function hasIdentityValue(value) {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function result(classification, priority, reasonCodes, confidence) {
@@ -73,8 +109,10 @@ function classifyRecord(record = {}, context = {}) {
   const reviewReasons = [];
   if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push('unapproved_country');
   if (!officialDomain || !contactDomain) reviewReasons.push('missing_identity');
-  if (contactDomain === 'example.co.th' || contactDomain === 'example.com') reviewReasons.push('ambiguous_contact');
-  if (record.source_kind === 'whatsapp' && !record.sender_name && !record.sender_phone) {
+  if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push('ambiguous_contact');
+  if (record.source_kind === 'whatsapp'
+    && !hasIdentityValue(record.sender_name)
+    && !hasIdentityValue(record.sender_phone)) {
     reviewReasons.push('unknown_whatsapp_sender');
   }
   if (record.last_interaction_at && !validDate(record.last_interaction_at)) {
