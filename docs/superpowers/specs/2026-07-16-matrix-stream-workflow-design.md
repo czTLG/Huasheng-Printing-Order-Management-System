@@ -68,6 +68,28 @@ Only `approved_for_delivery` may call the email delivery adapter. The approval r
 
 ## Discovery
 
+### Approved Initial Campaign
+
+The first dry run is bounded to a maximum of 20 discovered companies per country, 120 before exclusions:
+
+- Vietnam
+- Thailand
+- Malaysia
+- Indonesia
+- Philippines
+- Kazakhstan
+
+India is explicitly excluded from discovery results, evidence imports, and candidate cards.
+
+Initial product/application groups:
+
+- Coffee, tea, nuts, snacks, oats, grains, flour, seasonings, baked foods, biscuits, and confectionery.
+- Laundry liquid, body wash, shampoo, hand wash, and other cleaning or personal-care products publicly shown in refill pouches, spouted pouches, or other flexible formats.
+
+Food and household/personal-care analyses remain separate. Food analysis focuses on confirmed use and possible aroma, oxygen, light, and moisture requirements. Liquid household/personal-care analysis focuses on confirmed formulation context and questions about chemical compatibility, sealing, leakage, drop resistance, and fitment. The system never claims compatibility or a final structure without adequate evidence and required testing.
+
+Evidence that a company uses a China warehouse, sourcing agent, inspection service, factory pickup, EXW, or FOB is a ranking bonus only. Absence of that evidence does not exclude a company and must not be represented as a negative fact. When relevant, the draft may ask the company to confirm its preferred delivery arrangement.
+
 ### Initial Search Inputs
 
 Each discovery run requires an approved campaign definition containing:
@@ -189,6 +211,8 @@ The `智能桓` bot receives `stream-card` messages. The neutral visible feature
 - Warnings, missing facts, and blocked technical questions.
 - Actions: `退回修改`, `提交终审`.
 
+Every proposed message is stored and displayed as an English source version plus a Chinese translation. The English version is the delivery source. Editing either version creates a new version; before final confirmation, the system regenerates or reconciles the paired translation and flags unresolved semantic differences. Translation never adds technical claims absent from the English source.
+
 ### Final Confirmation Card
 
 - Exact recipient, subject, full body, attachments, and sending mailbox.
@@ -219,6 +243,10 @@ On a confident match:
 - Update the workflow to `replied`.
 - Link the reply to the source candidate and delivery record without overwriting customer data.
 - Send a Feishu notification with sender, subject, time, a short authorized summary, and a CRM detail link.
+- Preserve the original reply and create a Chinese translation as a separate versioned artifact.
+- Extract confirmed requirements, questions, objections, delivery preferences, and missing information with source references.
+- Generate an English reply suggestion and paired Chinese translation without sending it.
+- Route the proposed reply through revision and a fresh final-confirmation gate before delivery.
 
 Ambiguous matches enter `needs_review`; no reply content is shown to unauthorized roles.
 
@@ -274,13 +302,16 @@ Ambiguous matches enter `needs_review`; no reply content is shown to unauthorize
 - Domestic legacy customers remain outside the first discovery list.
 - Test, noise, do-not-contact, and ambiguous records cannot reach delivery.
 - Every product assertion is labelled confirmed, hypothesis, or missing and has provenance.
+- Food and household/personal-care analysis rules cannot be silently mixed.
+- China-warehouse, inspection, pickup, EXW, or FOB evidence is a ranking bonus rather than an eligibility requirement.
 - Candidate and review cards expose no unauthorized raw contact or private rule data.
+- English drafts, Chinese translations, inbound-reply translations, and suggested replies are versioned and semantically paired.
 - Editing recipient, subject, body, or attachments invalidates final approval.
 - Duplicate/stale Feishu callbacks cannot send email.
 - No email can be sent without a valid single-use final confirmation.
 - Replies are matched with evidence and ambiguous replies require review.
 - All state changes and side effects are auditable and resumable.
 
-## First Required Input
+## Remaining Required Input
 
-Before implementation runs a real discovery dry run, the user must approve one bounded initial campaign definition: target countries/regions, product/application category, languages, maximum company count, and allowed directory sources. This choice does not block building the generic workflow and tests.
+The initial countries, product/application groups, languages, and maximum company count are approved above. Before using any third-party directory beyond public search results and official company websites, its domain and access terms require explicit allowlisting. This does not block building the generic workflow, official-site discovery, or tests.
