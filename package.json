@@ -13,6 +13,7 @@
     "test:signal-cache": "node scripts/test-signal-cache.js",
     "test:matrix-stream": "node scripts/test-matrix-stream.js",
     "test:matrix-crm": "node scripts/test-matrix-crm-adapter.js",
+    "test:matrix-api": "node scripts/test-matrix-api.js",
     "runtime:audit": "node scripts/runtime-audit.js",
     "runtime:backup": "node scripts/runtime-backup.js",
     "runtime:verify": "node scripts/runtime-verify.js",
