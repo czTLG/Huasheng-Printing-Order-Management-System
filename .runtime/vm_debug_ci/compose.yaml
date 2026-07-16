@@ -1,0 +1,42 @@
+services:
+  stream-node:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      STREAM_CARD_EXTENSION: /workspace/extensions/stream-card.cjs
+      MATRIX_API_BASE_URL: http://host.docker.internal:3333/api/matrix
+      MATRIX_BRIDGE_TOKEN: ${MATRIX_BRIDGE_TOKEN:?MATRIX_BRIDGE_TOKEN must be set}
+      MATRIX_DELIVERY_ENABLED: "0"
+      MATRIX_RECOMMEND_HOUR: "9"
+      MATRIX_RECOMMEND_MINUTE: "0"
+      MATRIX_OWNER_OPEN_ID: ${MATRIX_OWNER_OPEN_ID:?MATRIX_OWNER_OPEN_ID must be set}
+      STREAM_APP_ID: ${STREAM_APP_ID:?STREAM_APP_ID must be set}
+      STREAM_CHAT_ID: ${STREAM_CHAT_ID:?STREAM_CHAT_ID must be set}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - sh
+      - -lc
+      - node --no-warnings /workspace/scripts/matrix-watch.js & exec feishu-codex-bridge run --bot stream-node
+    volumes:
+      - ./workspace:/workspace:ro
+      - stream-store:/workspace/store
+      - stream-bridge-state:/home/node/.feishu-codex-bridge
+      - stream-runtime-state:/home/node/.codex
+      - /home/admin/work/packaging-system/data/matrix-stream.db:/refs/matrix-stream.db:ro
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /home/node/.cache:size=256m,mode=0700,uid=1000,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+
+volumes:
+  stream-store:
+  stream-bridge-state:
+  stream-runtime-state:
