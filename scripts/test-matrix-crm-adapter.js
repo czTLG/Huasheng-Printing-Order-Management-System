@@ -137,6 +137,13 @@ try {
   insertCustomer.run({ ...customerDefaults, id: 13, name: 'Repeated Messages', company_name: 'Repeated Messages Brand', country: 'Indonesia', whatsapp: '+628555555555', website: 'repeatbrand.example', main_product: 'snack pouch' });
   insertCustomer.run({ ...customerDefaults, id: 14, name: 'Unknown Linked Legacy', company_name: 'Unknown Linked Legacy', country: '' });
   insertCustomer.run({ ...customerDefaults, id: 15, name: 'Broken Mail JSON', company_name: 'Broken Mail JSON Brand', country: 'Vietnam', email: 'buyer@brokenmail.example', website: 'brokenmail.example', main_product: 'coffee pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 16, name: 'Company Shell', company_name: 'Company Only', country: 'Vietnam', email: 'buyer@companyshell.example', website: 'companyshell.example', main_product: '' });
+  insertCustomer.run({ ...customerDefaults, id: 17, name: 'Impossible Day', company_name: 'Impossible Day Brand', country: 'Vietnam', email: 'buyer@daybrand.example', website: 'daybrand.example', main_product: 'coffee pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 18, name: 'Impossible Month', company_name: 'Impossible Month Brand', country: 'Thailand', email: 'buyer@monthbrand.example', website: 'monthbrand.example', main_product: 'snack pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 19, name: 'Permissive Date', company_name: 'Permissive Date Brand', country: 'Malaysia', email: 'buyer@datebrand.example', website: 'datebrand.example', main_product: 'liquid pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 20, name: 'Bad Customer Update', company_name: 'Bad Customer Update Brand', country: 'Vietnam', email: 'buyer@customerupdate.example', website: 'customerupdate.example', main_product: 'coffee pouch', updated_at: '2026-02-30' });
+  insertCustomer.run({ ...customerDefaults, id: 21, name: 'Bad CRM Update', company_name: 'Bad CRM Update Brand', country: 'Thailand', email: 'buyer@crmupdate.example', website: 'crmupdate.example', main_product: 'snack pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 22, name: 'Bad Email Update', company_name: 'Bad Email Update Brand', country: 'Malaysia', email: 'buyer@emailupdate.example', website: 'emailupdate.example', main_product: 'liquid pouch' });
 
   const insertCrm = db.prepare(`
     INSERT INTO crm_messages (
@@ -184,6 +191,11 @@ try {
   insertCrm.run({ ...crmDefaults, id: 132, source_type: 'whatsapp', customer_id: 13, sender_name: 'Buyer', sender_contact: '+628555555555', message_text: 'Need the same snack pouch specification with zipper and matte finish' });
   insertCrm.run({ ...crmDefaults, id: 133, source_type: 'whatsapp', customer_id: 13, sender_name: 'Buyer', sender_contact: '+628555555555', message_text: 'Forwarded context: Need the same snack pouch specification with zipper and matte finish. Thanks.' });
   insertCrm.run({ ...crmDefaults, id: 140, source_type: 'whatsapp', customer_id: 14, sender_name: '', sender_contact: '', receiver_contact: '', message_text: 'Unknown overseas identity' });
+  insertCrm.run({ ...crmDefaults, id: 170, source_type: 'whatsapp', customer_id: 17, sender_name: 'Buyer', sender_contact: '+84955555555', message_text: 'Need coffee pouch specifications', received_at: '2026-02-30' });
+  insertCrm.run({ ...crmDefaults, id: 180, source_type: 'whatsapp', customer_id: 18, sender_name: 'Buyer', sender_contact: '+66866666666', message_text: 'Need snack pouch specifications', received_at: '2026-13-01' });
+  insertCrm.run({ ...crmDefaults, id: 190, source_type: 'whatsapp', customer_id: 19, sender_name: 'Buyer', sender_contact: '+60177777777', message_text: 'Need liquid pouch specifications', received_at: '2026/07/01' });
+  insertCrm.run({ ...crmDefaults, id: 200, source_type: 'whatsapp', customer_id: 20, sender_name: 'Buyer', sender_contact: '+84966666666', message_text: 'Need coffee pouch specifications' });
+  insertCrm.run({ ...crmDefaults, id: 210, source_type: 'whatsapp', customer_id: 21, sender_name: 'Buyer', sender_contact: '+66877777777', message_text: 'Need snack pouch specifications', updated_at: '2026-13-01' });
 
   const insertEmail = db.prepare(`
     INSERT INTO email_messages (
@@ -232,6 +244,7 @@ try {
   });
   insertEmail.run({ ...emailDefaults, id: 100, message_id: '<greeting-100@greeting.example>', from_email: 'hello@greeting.example', subject: 'Hello', text_body: 'Hello', cleaned_text: 'Hello', contact_email: 'hello@greeting.example', matched_customer_id: 10 });
   insertEmail.run({ ...emailDefaults, id: 150, message_id: '<broken-150@brokenmail.example>', from_email: 'buyer@brokenmail.example', subject: 'Coffee pouch inquiry', text_body: 'Need coffee pouch specifications', cleaned_text: 'Need coffee pouch specifications', contact_email: 'buyer@brokenmail.example', matched_customer_id: 15, business_relevance: 'high', bcc_emails: '{broken' });
+  insertEmail.run({ ...emailDefaults, id: 220, message_id: '<update-220@emailupdate.example>', from_email: 'buyer@emailupdate.example', subject: 'Liquid pouch inquiry', text_body: 'Need liquid pouch specifications', cleaned_text: 'Need liquid pouch specifications', contact_email: 'buyer@emailupdate.example', matched_customer_id: 22, business_relevance: 'high', updated_at: '2026/07/01' });
 
   const before = digest();
   const { readEligibleCrmRecords, classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
@@ -267,6 +280,18 @@ try {
   assert(bySourceId(report, 'crm_message_ids', 140).reason_codes.includes('unknown_whatsapp_sender'));
   assert.equal(bySourceId(report, 'email_message_ids', 150).classification, 'needs_review');
   assert(bySourceId(report, 'email_message_ids', 150).reason_codes.includes('malformed_json_payload'));
+  const companyShell = report.records.find((record) => record.source_ids.customer_ids.includes(16));
+  assert.equal(companyShell.classification, 'needs_review');
+  assert(companyShell.reason_codes.includes('missing_business_evidence'));
+  for (const id of [170, 180, 190]) {
+    assert.equal(bySourceId(report, 'crm_message_ids', id).classification, 'needs_review');
+    assert(bySourceId(report, 'crm_message_ids', id).reason_codes.includes('malformed_source_time'));
+  }
+  for (const id of [200, 210, 220]) {
+    const sourceType = id === 220 ? 'email_message_ids' : 'crm_message_ids';
+    assert.equal(bySourceId(report, sourceType, id).classification, 'needs_review');
+    assert(bySourceId(report, sourceType, id).reason_codes.includes('malformed_source_time'));
+  }
 
   const errorReport = classifyCurrentCrm(db, {
     now: '2026-07-16',
@@ -360,6 +385,30 @@ try {
   fs.rmSync(directoryLink, { force: true });
   assert.notEqual(ancestorEscape.status, 0, 'output must reject a symlinked parent directory');
   assert.equal(fs.existsSync(path.join(escapedDirectory, 'report.json')), false);
+
+  const externalHardLinkTarget = path.resolve(__dirname, '..', '..', '..', `.matrix-external-hard-link-${process.pid}.json`);
+  const hardLinkOutput = path.join(__dirname, '..', '.matrix-hard-link-output.json');
+  fs.writeFileSync(externalHardLinkTarget, 'external sentinel', { mode: 0o600 });
+  fs.rmSync(hardLinkOutput, { force: true });
+  fs.linkSync(externalHardLinkTarget, hardLinkOutput);
+  const hardLinkWrite = spawnSync(process.execPath, [cliPath, '--output', hardLinkOutput], {
+    env: { ...process.env, DB_PATH: dbPath },
+    encoding: 'utf8'
+  });
+  fs.rmSync(hardLinkOutput, { force: true });
+  assert.notEqual(hardLinkWrite.status, 0, 'output must reject an existing hard link');
+  assert.equal(fs.readFileSync(externalHardLinkTarget, 'utf8'), 'external sentinel');
+  fs.rmSync(externalHardLinkTarget, { force: true });
+
+  const nonRegularOutput = path.join(__dirname, '..', '.matrix-non-regular-output');
+  fs.rmSync(nonRegularOutput, { recursive: true, force: true });
+  fs.mkdirSync(nonRegularOutput);
+  const nonRegularWrite = spawnSync(process.execPath, [cliPath, '--output', nonRegularOutput], {
+    env: { ...process.env, DB_PATH: dbPath },
+    encoding: 'utf8'
+  });
+  fs.rmSync(nonRegularOutput, { recursive: true, force: true });
+  assert.notEqual(nonRegularWrite.status, 0, 'output must reject non-regular files');
 
   const safeOutput = path.join(__dirname, '..', '.matrix-safe-output-test.json');
   fs.rmSync(safeOutput, { force: true });

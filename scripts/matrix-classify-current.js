@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const jwt = require('jsonwebtoken');
 const { classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
@@ -50,7 +51,9 @@ function workspaceOutputPath(value) {
     throw new Error('--output must be a file in the workspace root');
   }
   const outputEntry = fs.lstatSync(output, { throwIfNoEntry: false });
-  if (outputEntry?.isSymbolicLink()) throw new Error('--output cannot be a symbolic link');
+  if (outputEntry && (!outputEntry.isFile() || outputEntry.nlink !== 1)) {
+    throw new Error('--output must be a single-link regular file');
+  }
   let ancestor = path.dirname(output);
   while (!fs.existsSync(ancestor)) {
     const parent = path.dirname(ancestor);
@@ -66,12 +69,35 @@ function workspaceOutputPath(value) {
 
 function writeWorkspaceOutput(output, content) {
   const target = workspaceOutputPath(output);
-  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
-  const fd = fs.openSync(target, flags, 0o600);
+  const workspace = fs.realpathSync(path.resolve(__dirname, '..'));
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+  const temporary = path.join(workspace, `.matrix-output-${process.pid}-${crypto.randomBytes(12).toString('hex')}.tmp`);
+  let fd;
   try {
+    fd = fs.openSync(temporary, flags, 0o600);
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 1) throw new Error('temporary output is not a single-link regular file');
     fs.writeFileSync(fd, content, { encoding: 'utf8' });
-  } finally {
+    fs.fsyncSync(fd);
     fs.closeSync(fd);
+    fd = undefined;
+
+    if (fs.realpathSync(path.dirname(target)) !== workspace) {
+      throw new Error('--output parent changed during write');
+    }
+    const destination = fs.lstatSync(target, { throwIfNoEntry: false });
+    if (destination && (!destination.isFile() || destination.nlink !== 1)) {
+      throw new Error('--output changed to a non-regular or linked file');
+    }
+    const staged = fs.lstatSync(temporary);
+    if (!staged.isFile() || staged.nlink !== 1) throw new Error('temporary output changed during write');
+
+    fs.renameSync(temporary, target);
+    const directoryFd = fs.openSync(workspace, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    fs.rmSync(temporary, { force: true });
   }
 }
 

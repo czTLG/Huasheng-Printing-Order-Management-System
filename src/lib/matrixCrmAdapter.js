@@ -53,13 +53,34 @@ function websiteDomain(value) {
   }
 }
 
+function canonicalTime(value) {
+  const raw = text(value);
+  if (!raw) return '';
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
+    ? `${raw.replace(' ', 'T')}Z`
+    : raw;
+}
+
+function strictSourceTime(value) {
+  const candidate = canonicalTime(value);
+  if (!candidate) return false;
+  const match = candidate.match(/^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
+  if (calendarDate.getUTCFullYear() !== year
+    || calendarDate.getUTCMonth() !== month - 1
+    || calendarDate.getUTCDate() !== day) return false;
+  return !candidate.includes('T') || !Number.isNaN(Date.parse(candidate));
+}
+
 function normalizedTime(value) {
   const raw = text(value);
   if (!raw) return '';
-  const candidate = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
-    ? `${raw.replace(' ', 'T')}Z`
-    : raw;
-  return Number.isNaN(Date.parse(candidate)) ? raw : candidate;
+  const candidate = canonicalTime(raw);
+  return strictSourceTime(candidate) ? candidate : raw;
 }
 
 function isDomestic(customer) {
@@ -144,11 +165,14 @@ function groupTime(group) {
 }
 
 function hasMalformedTime(group) {
-  return [
-    ...group.crmMessages.flatMap((row) => [row.received_at, row.created_at]),
-    ...group.emailMessages.flatMap((row) => [row.received_at, row.sent_at, row.created_at]),
-    group.customer?.last_contact_at
-  ].map(text).filter(Boolean).some((value) => Number.isNaN(Date.parse(normalizedTime(value))));
+  const rowsToCheck = [group.customer, ...group.crmMessages, ...group.emailMessages].filter(Boolean);
+  const values = rowsToCheck.flatMap((row) => Object.entries(row)
+    .filter(([key, value]) => key.endsWith('_at')
+      && value !== null
+      && value !== undefined
+      && String(value).trim())
+    .map(([, value]) => value));
+  return values.some((value) => !strictSourceTime(value));
 }
 
 function hasMalformedJson(group) {
@@ -191,7 +215,7 @@ function isSystemGroup(group) {
 
 function businessEvidence(group) {
   const customer = group.customer || {};
-  const evidence = [customer.company_name, customer.main_product, customer.industry, customer.business_background]
+  const evidence = [customer.main_product, customer.industry, customer.business_background]
     .map(text).filter(Boolean);
   const substantive = group.crmMessages.some((row) => BUSINESS_SIGNAL.test(text(row.message_text)))
     || group.emailMessages.some((row) => lower(row.business_relevance) === 'high'
