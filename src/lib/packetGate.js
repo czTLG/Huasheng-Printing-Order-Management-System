@@ -219,7 +219,8 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     const thread = String(threadId || '').trim();
     const session = db.prepare(`
       SELECT * FROM matrix_sessions
-      WHERE actor_user_id = ? AND chat_id = ? AND thread_id = ? AND expires_at > ?
+      WHERE actor_user_id = ? AND chat_id = ? AND thread_id = ?
+        AND julianday(expires_at) IS NOT NULL AND julianday(expires_at) > julianday(?)
       ORDER BY updated_at DESC, id DESC LIMIT 1
     `).get(owner, chat, thread, timestamp());
     if (!session) throw new Error('session not found');

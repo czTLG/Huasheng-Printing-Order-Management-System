@@ -428,6 +428,45 @@ async function testExpiredSessionRecovery() {
   assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
 }
 
+async function testConcurrentCallbacksFreezeDisplayedVersion() {
+  const handlers = new Map();
+  const sent = [];
+  const patchVersions = [];
+  const pendingReads = [];
+  let serverVersion = 1;
+  const row = { id: 701, company_name: 'Concurrent Company', country_code: 'US', region: 'americas', official_domain: 'concurrent.test', official_url: 'https://concurrent.test/', categories: ['coffee'], format_signals: [], size_signals: [], scale_tier: 'medium', priority: 'P1', fit_score: 80, demand_fit_score: 80, access_score: 70, confidence: 0.9, status: 'valid', stage_code: 'observed', audit_state: 'audited', assessment_cn: '公开证据', next_action_cn: '核实公开入口', updated_at: '2026-07-17T00:00:00Z' };
+  const client = {
+    today: async () => ({ rows: [row], snapshot_key: '7'.repeat(64) }),
+    createSession: async (_openId, input) => {
+      if (!input.session_id) return { id: 71, chat_id: 'chat-concurrent', thread_id: '', filters: { page_size: 5 }, page: 1, version: 1, expires_at: '2026-07-17T00:30:00Z' };
+      patchVersions.push(input.expected_version);
+      if (input.expected_version !== serverVersion) { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; }
+      serverVersion += 1;
+      return { id: 71, chat_id: 'chat-concurrent', thread_id: '', filters: input.filters, snapshot_key: input.snapshot_key, candidate_ids: input.candidate_ids, page: input.page, version: serverVersion, expires_at: '2026-07-17T00:30:00Z' };
+    },
+    listCandidates: async () => new Promise(resolve => pendingReads.push(resolve))
+  };
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: (name, handler) => handlers.set(name, handler) }, card: helpers(), client,
+    now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_channel, _chat, card) => sent.push(card)
+  });
+  await registered.onMessage({ msg: { content: '开发客户', chatId: 'chat-concurrent', threadId: '', senderId: 'ou-concurrent' } });
+  const evt = { operator: { openId: 'ou-concurrent' }, chatId: 'chat-concurrent', threadId: '', messageId: 'evt-concurrent' };
+  const value = { a: 'mx.region', s: 71, v: 1, r: 'americas' };
+  const first = handlers.get('mx.region')({ evt, value });
+  const second = handlers.get('mx.region')({ evt, value });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(pendingReads.length, 2);
+  pendingReads[0]({ rows: [row], snapshot_key: '8'.repeat(64) });
+  await new Promise(resolve => setImmediate(resolve));
+  pendingReads[1]({ rows: [row], snapshot_key: '9'.repeat(64) });
+  await Promise.all([first, second]);
+  assert.deepStrictEqual(patchVersions, [1, 1]);
+  assert.strictEqual(serverVersion, 2);
+  assert.ok(sent.some(card => visibleText(card).includes('开发客户')));
+  registered.dispose();
+}
+
 (async () => {
   await testNarrowClient();
   await testReadOnlyWatcher();
@@ -435,6 +474,7 @@ async function testExpiredSessionRecovery() {
   await testReminderPollingAndRetry();
   await testWholeCardBudget();
   await testExpiredSessionRecovery();
+  await testConcurrentCallbacksFreezeDisplayedVersion();
   testSanitizedCompose();
   process.env.MATRIX_DELIVERY_ENABLED = '1';
   assert.throws(() => extension.register({}), /MATRIX_DELIVERY_ENABLED/);
@@ -631,6 +671,18 @@ async function testExpiredSessionRecovery() {
   assert.ok(calls.some(item => item[0] === 'rehydrateSession' && item[2].session_id === 11));
   assert.ok(visibleText(freshSent.at(-1).card).includes('Company 1'));
   callbackFresh.dispose();
+  const incompleteSent = [];
+  const incompleteHandlers = new Map();
+  const incompleteClient = { ...client, rehydrateSession: async () => { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; } };
+  const incomplete = extension.register({
+    channel: {}, dispatcher: { on: (name, handler) => incompleteHandlers.set(name, handler) }, card: helpers(), client: incompleteClient,
+    now: () => Date.parse('2026-07-17T00:00:00.000Z'), sendManagedCard: async (_channel, _chat, card) => incompleteSent.push(card)
+  });
+  await incomplete.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' } });
+  assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
+  await incompleteHandlers.get('mx.detail')({ evt: callbackEvent, value: { a: 'mx.detail', s: 999, v: 1, c: 1 } });
+  assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
+  incomplete.dispose();
   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
   assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.region', 'mx.select', 'mx.today', 'mx.work']);
 

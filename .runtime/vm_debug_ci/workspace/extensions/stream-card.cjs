@@ -298,12 +298,12 @@ function register(context) {
     await sendManagedCard(channel, msg.chatId, renderCandidates(state, cardHelpers), msg.messageId, Boolean(msg.threadId));
   }
 
-  async function refreshSession(openId, state, chatId, threadId, patch = {}) {
+  async function refreshSession(openId, state, chatId, threadId, expectedVersion, patch = {}) {
     const filters = patch.filters || state.filters;
     const page = patch.page || state.session.page;
     const session = await sessionBound(() => client.createSession(openId, {
       session_id: state.session.id,
-      expected_version: state.session.version,
+      expected_version: expectedVersion,
       page,
       filters,
       snapshot_key: patch.snapshotKey === undefined ? state.snapshotKey : patch.snapshotKey,
@@ -334,6 +334,7 @@ function register(context) {
   async function callbackState(evt, value, { allowReplay = false } = {}) {
     const openId = String(evt?.operator?.openId || '').trim();
     if (!openId) throw new Error('operator openId required');
+    const expectedVersion = Number(value?.v);
     const key = sessionKey(evt.chatId, openId);
     let state = sessions.get(key);
     if (!state) state = await restoreState(openId, evt.chatId, evt.threadId, value?.s);
@@ -346,10 +347,10 @@ function register(context) {
     if (String(state.session.chat_id) !== String(evt.chatId || '') || String(state.session.thread_id || '') !== String(evt.threadId || '')) {
       throw new Error('callback session context mismatch');
     }
-    if (Number(value?.v) !== Number(state.session.version) && !(allowReplay && selectionEvents.has(String(value?.e || '')))) {
+    if (expectedVersion !== Number(state.session.version) && !(allowReplay && selectionEvents.has(String(value?.e || '')))) {
       throw new Error('callback stale version');
     }
-    return { openId, state };
+    return { openId, state, expectedVersion };
   }
 
   async function detailAction({ evt, value }) {
@@ -367,7 +368,7 @@ function register(context) {
   }
 
   async function applyFilters({ evt, value }, kind) {
-    const { openId, state } = await callbackState(evt, value);
+    const { openId, state, expectedVersion } = await callbackState(evt, value);
     const filters = { ...state.filters };
     if (kind === 'category') filters.category = String(value.k || '');
     else if (String(value.r || '').startsWith('country:')) filters.country = String(value.r).slice(8);
@@ -376,19 +377,19 @@ function register(context) {
     const result = await client.listCandidates(openId, { ...filters, page: 1, page_size: 5 });
     const candidates = (result.rows || []).slice(0, 5);
     const snapshotKey = result.snapshot_key || state.snapshotKey;
-    await refreshSession(openId, state, evt.chatId, evt.threadId, { filters, page: 1, candidates, snapshotKey });
+    await refreshSession(openId, state, evt.chatId, evt.threadId, expectedVersion, { filters, page: 1, candidates, snapshotKey });
     state.candidates = candidates;
     state.snapshotKey = snapshotKey;
     await sendForEvent(evt, renderCandidates(state, cardHelpers));
   }
 
   async function pageAction({ evt, value }) {
-    const { openId, state } = await callbackState(evt, value);
+    const { openId, state, expectedVersion } = await callbackState(evt, value);
     const page = Number(state.session.page || 1) + 1;
     const result = await client.listCandidates(openId, { ...state.filters, page, page_size: 5 });
     const candidates = (result.rows || []).slice(0, 5);
     const snapshotKey = result.snapshot_key || state.snapshotKey;
-    await refreshSession(openId, state, evt.chatId, evt.threadId, { page, candidates, snapshotKey });
+    await refreshSession(openId, state, evt.chatId, evt.threadId, expectedVersion, { page, candidates, snapshotKey });
     state.candidates = candidates;
     state.snapshotKey = snapshotKey;
     await sendForEvent(evt, renderCandidates(state, cardHelpers));

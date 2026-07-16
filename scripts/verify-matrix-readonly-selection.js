@@ -42,15 +42,15 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
   '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': 'd8a8ec92f7ad5a0709030109f1aba6f220a21e0908edb036e2b59b0e46c8a1ac',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '866d6c454ae49a95e297248881be41592e58334882853f9c7ee20e10fc9a95a6',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '7827552970849c41dd4df94f2bb0e1b3d87b8522e3917c53016091e6d2251f9d',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': 'ce090ea576cec5713477b9bc2f7ef29b942bcbbdf4a7a461bf899c36a0c7ec1c',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '5d8d3053ddd0369cb93c5d87926035ffe34e611fee189e5a643bc72acdfc846e',
   'src/db.js': '48e99c09d72ce248790b31f300ba22613b54d4956dde39ae1c722763f6724c3c',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
   'src/lib/cacheIndexView.js': 'f00e1177c587f19330b09aa2dfa43c133230af8dc1fdff6d269cf35d6aae5ee3',
-  'src/lib/packetGate.js': 'f4eea8a6ae4115019a55aa4c5feb785f632bdaf5df91ff8ad265e0de3e6e170a',
-  'src/routes/matrix.js': 'e2fe8bae171233b8e9a0c8c6fe761f34c0db7fcf6626d320401c2b33580e45fb',
+  'src/lib/packetGate.js': '0f127fc1b24e86d689b4508015abffb4c6bca1ddbada327c697fc589f199720e',
+  'src/routes/matrix.js': 'b71e09ef13946a323131f049180d0991c2b69e13276a446105aaf89df9e510b8',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
 };
 

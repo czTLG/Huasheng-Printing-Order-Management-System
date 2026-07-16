@@ -109,7 +109,7 @@ function requireMatrixRole(req, res, next) {
 
 function errorStatus(error) {
   const message = String(error?.message || 'request failed');
-  if (/stale version/.test(message)) return 409;
+  if (/stale version|session rehydration incomplete/.test(message)) return 409;
   if (/not authorized|actor binding|required binding|inactive|revoked/.test(message)) return 403;
   if (/not found/.test(message)) return 404;
   return 400;
@@ -198,10 +198,13 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
   });
 
   function hydratedSession(session) {
-    const candidates = session.candidate_ids.map(id => view.detail(id)).filter(Boolean).map(row => {
+    const candidates = session.candidate_ids.map(id => {
+      const row = view.detail(id);
+      if (!row || Number(row.id) !== Number(id)) throw new Error('session rehydration incomplete');
       const { contacts, discovery, evidence, supporting, ...summary } = row;
       return summary;
     });
+    if (candidates.length !== session.candidate_ids.length) throw new Error('session rehydration incomplete');
     return { ...session, candidates };
   }
 

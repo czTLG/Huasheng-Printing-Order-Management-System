@@ -279,6 +279,16 @@ async function stopServer() {
     assert.strictEqual((await request('/api/matrix/candidates/1', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);
     assert.strictEqual((await request(`/api/matrix/candidates/1?session_id=${createdSession.body.id}&chat_id=chat-1&thread_id=thread-1`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 200);
 
+    for (const [chatId, candidateIds] of [['chat-missing', [1, 999]], ['chat-suppressed', [1, 3]]]) {
+      const incomplete = await request('/api/matrix/sessions', {
+        method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { chat_id: chatId, thread_id: '', filters: {}, snapshot_key: 'b'.repeat(64), candidate_ids: candidateIds, expires_at: '2099-01-01T00:00:00.000Z' }
+      });
+      assert.strictEqual(incomplete.status, 201);
+      assert.strictEqual((await request(`/api/matrix/sessions/${incomplete.body.id}?chat_id=${chatId}&thread_id=`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 409);
+      assert.strictEqual((await request(`/api/matrix/sessions/current?chat_id=${chatId}&thread_id=`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 409);
+    }
+
     const patchedSession = await request(`/api/matrix/sessions/${createdSession.body.id}`, {
       method: 'PATCH', serviceToken: bridgeToken, openId: 'ou-service',
       body: { expected_version: 1, page: 2, filters: { region: 'americas', page_size: 10 } }
