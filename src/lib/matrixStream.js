@@ -1,6 +1,8 @@
 'use strict';
 
 const dns = require('dns');
+const http = require('http');
+const https = require('https');
 const net = require('net');
 const { classifyRecord } = require('./schemaRank');
 const { upsertEntity, appendEvidence, saveClassification } = require('./signalCache');
@@ -97,45 +99,66 @@ function isBlockedAddress(address) {
 
 function lookupAddresses(result) {
   const entries = Array.isArray(result) ? result : [result];
-  return entries.map(entry => typeof entry === 'string' ? entry : entry && entry.address).filter(Boolean);
+  return entries.map(entry => {
+    const address = typeof entry === 'string' ? entry : entry && entry.address;
+    const family = typeof entry === 'object' && entry ? Number(entry.family) : net.isIP(address);
+    return address ? { address, family: family || net.isIP(address) } : null;
+  }).filter(entry => entry && (entry.family === 4 || entry.family === 6));
 }
 
-async function validatePublicUrl(input, dnsLookup = dns.promises.lookup) {
+async function resolvePublicUrl(input, dnsLookup) {
   let parsed;
   try {
     parsed = new URL(input);
   } catch {
-    return rejected('invalid_url');
+    return { validation: rejected('invalid_url'), addresses: [] };
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return rejected('unsupported_protocol');
+    return { validation: rejected('unsupported_protocol'), addresses: [] };
   }
-  if (parsed.username || parsed.password) return rejected('credentials_not_allowed');
-  if (parsed.port && parsed.port !== '80' && parsed.port !== '443') return rejected('port_not_allowed');
+  if (parsed.username || parsed.password) {
+    return { validation: rejected('credentials_not_allowed'), addresses: [] };
+  }
+  if (parsed.port && parsed.port !== '80' && parsed.port !== '443') {
+    return { validation: rejected('port_not_allowed'), addresses: [] };
+  }
 
   const hostname = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '').toLowerCase();
   if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) {
-    return rejected('blocked_address');
+    return { validation: rejected('blocked_address'), addresses: [] };
   }
 
   const literalFamily = net.isIP(hostname);
-  if (literalFamily && isBlockedAddress(hostname)) return rejected('blocked_address');
+  if (literalFamily && isBlockedAddress(hostname)) {
+    return { validation: rejected('blocked_address'), addresses: [] };
+  }
 
+  let addresses;
   if (!literalFamily) {
-    let addresses;
     try {
       addresses = lookupAddresses(await dnsLookup(hostname, { all: true, verbatim: true }));
     } catch {
-      return rejected('dns_lookup_failed');
+      return { validation: rejected('dns_lookup_failed'), addresses: [] };
     }
-    if (!addresses.length) return rejected('dns_lookup_failed');
-    if (addresses.some(isBlockedAddress)) return rejected('blocked_address');
+    if (!addresses.length) return { validation: rejected('dns_lookup_failed'), addresses: [] };
+    if (addresses.some(entry => isBlockedAddress(entry.address))) {
+      return { validation: rejected('blocked_address'), addresses: [] };
+    }
+  } else {
+    addresses = [{ address: hostname, family: literalFamily }];
   }
 
   parsed.hash = '';
   parsed.hostname = hostname;
-  return { ok: true, normalized_url: parsed.toString(), reason: null };
+  return {
+    validation: { ok: true, normalized_url: parsed.toString(), reason: null },
+    addresses
+  };
+}
+
+async function validatePublicUrl(input, dnsLookup = dns.promises.lookup) {
+  return (await resolvePublicUrl(input, dnsLookup)).validation;
 }
 
 function trimText(value) {
@@ -206,17 +229,65 @@ function normalizeDiscoveryRecord(input = {}) {
   };
 }
 
+function pinnedFetch(url, options = {}) {
+  const parsed = new URL(url);
+  const transport = parsed.protocol === 'https:' ? https : http;
+  if (!options.connectAddress || (options.connectFamily !== 4 && options.connectFamily !== 6)) {
+    return Promise.reject(new Error('validated connection address is required'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request({
+      protocol: parsed.protocol,
+      hostname: options.connectAddress,
+      family: options.connectFamily,
+      port: parsed.port || undefined,
+      method: options.method || 'HEAD',
+      path: `${parsed.pathname}${parsed.search}`,
+      headers: options.headers,
+      servername: options.servername,
+      rejectUnauthorized: options.rejectUnauthorized !== false,
+      agent: false
+    }, response => {
+      response.resume();
+      resolve({
+        status: response.statusCode,
+        headers: {
+          get(name) {
+            const value = response.headers[String(name).toLowerCase()];
+            return Array.isArray(value) ? value[0] : value || null;
+          }
+        }
+      });
+    });
+    request.setTimeout(options.timeout || 10000, () => {
+      request.destroy(new Error('public URL probe timed out'));
+    });
+    request.once('error', reject);
+    request.end();
+  });
+}
+
 async function validateRedirectChain(input, options) {
   let current = input;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    const validation = await validatePublicUrl(current, options.dnsLookup);
+    const resolved = await resolvePublicUrl(current, options.dnsLookup);
+    const { validation } = resolved;
     if (!validation.ok) return validation;
+    const parsed = new URL(validation.normalized_url);
+    const tlsHostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    const target = resolved.addresses[0];
 
     let response;
     try {
       response = await options.fetch(validation.normalized_url, {
         method: 'HEAD',
-        redirect: 'manual'
+        redirect: 'manual',
+        connectAddress: target.address,
+        connectFamily: target.family,
+        headers: { Host: parsed.host },
+        servername: net.isIP(tlsHostname) ? undefined : tlsHostname,
+        rejectUnauthorized: true
       });
     } catch {
       return rejected('fetch_failed');
@@ -256,7 +327,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
   }
   const dependencies = {
     dnsLookup: options.dnsLookup || dns.promises.lookup,
-    fetch: options.fetch || globalThis.fetch
+    fetch: options.fetch || pinnedFetch
   };
   if (typeof dependencies.dnsLookup !== 'function') throw new Error('dnsLookup must be a function');
   if (typeof dependencies.fetch !== 'function') throw new Error('fetch must be a function');

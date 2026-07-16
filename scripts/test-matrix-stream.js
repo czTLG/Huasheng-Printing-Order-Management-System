@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 
@@ -121,8 +122,27 @@ async function main() {
   const fetchCalls = [];
   const safeFetch = async (url, options) => {
     fetchCalls.push({ url, options });
+    const parsed = new URL(url);
+    const targetHostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    assert.equal(options.connectAddress, net.isIP(targetHostname) ? targetHostname : PUBLIC_ADDRESS);
+    assert.equal(options.headers.Host, parsed.host);
+    assert.equal(options.redirect, 'manual');
+    if (parsed.protocol === 'https:') {
+      const tlsName = targetHostname;
+      assert.equal(options.servername, net.isIP(tlsName) ? undefined : tlsName);
+      assert.equal(options.rejectUnauthorized, true);
+    }
     if (url === 'https://redirect.example/') {
       return response(302, 'http://10.0.0.1/admin');
+    }
+    if (url === 'https://multi-hop.example/') {
+      return response(301, '/second-hop');
+    }
+    if (url === 'https://multi-hop.example/second-hop') {
+      return response(302, '/landing');
+    }
+    if (url === 'https://evidence-redirect.example/start') {
+      return response(302, 'https://evidence-hop.example/final');
     }
     return response(200);
   };
@@ -133,6 +153,8 @@ async function main() {
     discoveryRecord('missing-source', {
       evidence: [{ field: 'product', value: 'coffee', retrieved_at: '2026-07-16T00:00:00Z' }]
     }),
+    discoveryRecord('missing-official', { official_url: '' }),
+    discoveryRecord('empty-evidence', { evidence: [] }),
     discoveryRecord('unsafe-evidence', {
       evidence: [{
         field: 'product',
@@ -150,6 +172,20 @@ async function main() {
         source_url: 'https://redirect.example/products',
         retrieved_at: '2026-07-16T00:00:00Z'
       }]
+    }),
+    discoveryRecord('multi-hop', {
+      official_url: 'https://multi-hop.example/',
+      business_email: 'sales@multi-hop.example'
+    }),
+    discoveryRecord('evidence-redirect', {
+      official_url: 'https://evidence-redirect.example/',
+      business_email: 'sales@evidence-redirect.example',
+      evidence: [{
+        field: 'product',
+        value: 'coffee',
+        source_url: 'https://evidence-redirect.example/start',
+        retrieved_at: '2026-07-16T00:00:00Z'
+      }]
     })
   ];
   const summary = await importDiscoveryBatch(db, run.id, records, {
@@ -158,17 +194,17 @@ async function main() {
     now: '2026-07-16'
   });
   assert.deepEqual(summary, {
-    input: 5,
+    input: 9,
     excluded: 1,
     test: 0,
     noise: 0,
     needs_review: 0,
-    valid: 1,
-    errors: 3
+    valid: 3,
+    errors: 5
   });
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n, 1);
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_evidence').get().n, 1);
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_classifications').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_evidence').get().n, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_classifications').get().n, 3);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM customers').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_messages').get().n, 0);
   assert(fetchCalls.some(call => call.url === 'https://redirect.example/'));
@@ -176,6 +212,76 @@ async function main() {
     !fetchCalls.some(call => call.url === 'http://10.0.0.1/admin'),
     'blocked redirect destination must be revalidated before fetch'
   );
+  assert.deepEqual(
+    fetchCalls.filter(call => new URL(call.url).hostname === 'multi-hop.example')
+      .map(call => call.url),
+    [
+      'https://multi-hop.example/',
+      'https://multi-hop.example/second-hop',
+      'https://multi-hop.example/landing'
+    ]
+  );
+  assert(fetchCalls.some(call => call.url === 'https://evidence-hop.example/final'));
+
+  const rebindingRun = createRun(db, { name: 'dns-rebinding', countries: ['Thailand'] });
+  let rebindingLookups = 0;
+  async function rebindingDnsLookup(hostname, options) {
+    if (hostname !== 'rebind.example') return publicDnsLookup(hostname, options);
+    rebindingLookups += 1;
+    const address = rebindingLookups === 1 ? PUBLIC_ADDRESS : '127.0.0.1';
+    return options && options.all ? [{ address, family: 4 }] : { address, family: 4 };
+  }
+  const reachedAddresses = [];
+  async function rebindingFetch(url, options) {
+    let address = options && options.connectAddress;
+    if (!address) {
+      const answers = await rebindingDnsLookup(new URL(url).hostname, { all: true });
+      address = answers[0].address;
+    }
+    reachedAddresses.push(address);
+    return response(200);
+  }
+  const rebindingSummary = await importDiscoveryBatch(db, rebindingRun.id, [
+    discoveryRecord('rebind', {
+      country: 'Thailand',
+      official_url: 'https://rebind.example/',
+      business_email: 'sales@rebind.example',
+      evidence: [{
+        field: 'product',
+        value: 'coffee',
+        source_url: 'https://rebind-evidence.example/products',
+        retrieved_at: '2026-07-16T00:00:00Z'
+      }]
+    })
+  ], {
+    dnsLookup: rebindingDnsLookup,
+    fetch: rebindingFetch,
+    now: '2026-07-16'
+  });
+  assert.equal(rebindingSummary.valid, 1);
+  assert.equal(rebindingLookups, 1, 'connection must not resolve the original hostname again');
+  assert(!reachedAddresses.includes('127.0.0.1'), 'connection must stay pinned to validated public IP');
+  assert(reachedAddresses.every(address => address === PUBLIC_ADDRESS));
+
+  const ipv6Run = createRun(db, { name: 'public-ipv6', countries: ['Indonesia'] });
+  const ipv6Summary = await importDiscoveryBatch(db, ipv6Run.id, [
+    discoveryRecord('ipv6', {
+      country: 'Indonesia',
+      official_url: 'https://[2001:db8::10]/',
+      business_email: 'sales@ipv6.example',
+      evidence: [{
+        field: 'product',
+        value: 'coffee',
+        source_url: 'https://[2001:db8::10]/products',
+        retrieved_at: '2026-07-16T00:00:00Z'
+      }]
+    })
+  ], {
+    dnsLookup: publicDnsLookup,
+    fetch: safeFetch,
+    now: '2026-07-16'
+  });
+  assert.equal(ipv6Summary.needs_review, 1);
 
   const capRun = createRun(db, { name: 'country-cap', countries: ['Malaysia'] });
   const cappedRecords = Array.from({ length: 21 }, (_, index) => discoveryRecord(`cap-${index}`, {
