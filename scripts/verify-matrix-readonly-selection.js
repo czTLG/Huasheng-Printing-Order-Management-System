@@ -45,7 +45,7 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '257d3c736f5532ab0bf0dd2ab8888ff8bfed85966b518056b3f2f59112da61f4',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '29db865fe76583d64f335d9f54a3df922cb95d37e8500b02a77b53a6b8a22a80',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': 'ce090ea576cec5713477b9bc2f7ef29b942bcbbdf4a7a461bf899c36a0c7ec1c',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '9b9bbb83a861d119d43590d2ba25fc8a9458289c9d04a6d3fe0bbe5570e80c35',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '5d8d3053ddd0369cb93c5d87926035ffe34e611fee189e5a643bc72acdfc846e',
   'src/db.js': '93c745363f7b078e11dc3c85de18952d1565377df266e839b75fb8123b1ee74e',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
   'src/lib/cacheIndexView.js': 'f00e1177c587f19330b09aa2dfa43c133230af8dc1fdff6d269cf35d6aae5ee3',

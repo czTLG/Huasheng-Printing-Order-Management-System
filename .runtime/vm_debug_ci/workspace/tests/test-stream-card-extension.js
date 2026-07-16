@@ -124,6 +124,30 @@ async function testReadOnlyWatcher() {
   }
 }
 
+function testWatcherWholeCardBudget() {
+  const watcher = require('../scripts/matrix-watch.js');
+  const long = '😀极限公开信息'.repeat(90);
+  const rows = Array.from({ length: 5 }, (_, index) => ({
+    id: 700 + index,
+    company_name: `定时公司${index + 1}${long}`,
+    country_code: 'US',
+    priority: 'P0',
+    stage_code: 'observed',
+    assessment_cn: `理由${index + 1}${long}`,
+    categories: [`品类${index + 1}${long}`, long],
+    size_signals: [`250g ${long}`, `own factory ${long}`],
+    next_action_cn: `下一步${index + 1}${long}`
+  }));
+  const text = visibleText(watcher.reminderCard(rows));
+  assert.ok([...text].length <= 1500, `watcher reminder uses ${[...text].length} code points`);
+  for (let index = 0; index < 5; index += 1) {
+    assert.ok(text.includes(`${String.fromCharCode(65 + index)}｜定时公司${index + 1}`));
+  }
+  for (const required of ['推荐理由：', '品类：', '阶段：已观察', '已确认规格：', '已确认公开信号：', '待核实：', '下一步：']) {
+    assert.ok(text.includes(required), `watcher reminder missing ${required}`);
+  }
+}
+
 async function testReminderPollingAndRetry() {
   const watcher = require('../scripts/matrix-watch.js');
   const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reminder-poll-'));
@@ -405,6 +429,7 @@ async function testExpiredSessionRecovery() {
 (async () => {
   await testNarrowClient();
   await testReadOnlyWatcher();
+  testWatcherWholeCardBudget();
   await testReminderPollingAndRetry();
   await testWholeCardBudget();
   await testExpiredSessionRecovery();

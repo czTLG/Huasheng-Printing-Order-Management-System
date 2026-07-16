@@ -84,7 +84,8 @@ function queueReminder(card, chatId, {
 
 function clip(value, maximum = 80) {
   const text = String(value == null || value === '' ? '待核实' : value).replace(/[\r\n]+/g, ' ').trim();
-  return text.length > maximum ? `${text.slice(0, maximum - 1)}…` : text;
+  const points = [...text];
+  return points.length > maximum ? `${points.slice(0, maximum - 1).join('')}…` : text;
 }
 
 function stageLabel(value) {
@@ -102,23 +103,45 @@ function confirmedSignals(values) {
   };
 }
 
+function renderReminderContent(selected, budgets) {
+  return selected.map((row, index) => {
+    const signals = confirmedSignals(row.size_signals);
+    return [
+      `${String.fromCharCode(65 + index)}｜${clip(row.company_name, budgets.company)}｜${clip(row.country_code, 8)}｜${clip(row.priority, 4)}`,
+      `推荐理由：${clip(row.assessment_cn, budgets.reason)}`,
+      `品类：${clip((row.categories || []).join('、'), budgets.categories)}`,
+      `阶段：${stageLabel(row.stage_code)}`,
+      ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), budgets.specifications)}`] : []),
+      ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), budgets.observations)}`] : []),
+      `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
+      `下一步：${clip(row.next_action_cn, budgets.nextAction)}`
+    ].join('\n');
+  }).join('\n\n');
+}
+
+function boundedReminderContent(selected) {
+  if (!selected.length) return '今日没有达到证据标准的候选';
+  const maximumContentPoints = 1450;
+  const budgets = { company: 42, reason: 90, categories: 60, specifications: 40, observations: 40, nextAction: 70 };
+  const minimums = { company: 16, reason: 18, categories: 8, specifications: 8, observations: 8, nextAction: 18 };
+  let content = renderReminderContent(selected, budgets);
+  while ([...content].length > maximumContentPoints) {
+    let changed = false;
+    for (const key of ['observations', 'specifications', 'categories', 'reason', 'nextAction', 'company']) {
+      if (budgets[key] > minimums[key]) {
+        budgets[key] -= 1;
+        changed = true;
+      }
+    }
+    if (!changed) throw new Error('reminder card core fields exceed Unicode budget');
+    content = renderReminderContent(selected, budgets);
+  }
+  return content;
+}
+
 function reminderCard(rows) {
   const selected = (rows || []).slice(0, 5);
-  const content = selected.length
-    ? selected.map((row, index) => {
-      const signals = confirmedSignals(row.size_signals);
-      return [
-        `${String.fromCharCode(65 + index)}｜${clip(row.company_name, 42)}｜${clip(row.country_code, 8)}｜${clip(row.priority, 4)}`,
-        `推荐理由：${clip(row.assessment_cn, 90)}`,
-        `品类：${clip((row.categories || []).join('、'), 60)}`,
-        `阶段：${stageLabel(row.stage_code)}`,
-        ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), 40)}`] : []),
-        ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), 40)}`] : []),
-        `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
-        `下一步：${clip(row.next_action_cn, 70)}`
-      ].join('\n');
-    }).join('\n\n')
-    : '今日没有达到证据标准的候选';
+  const content = boundedReminderContent(selected);
   return {
     schema: '2.0',
     config: { update_multi: true },
