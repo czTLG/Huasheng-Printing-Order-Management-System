@@ -14,7 +14,7 @@ async function testNarrowClient() {
   const clientPath = require.resolve('../scripts/matrix-client.js');
   delete require.cache[clientPath];
   const client = require(clientPath);
-  assert.deepStrictEqual(Object.keys(client).sort(), ['candidateDetail', 'createSession', 'facets', 'listCandidates', 'selectCandidate', 'today', 'workItems']);
+  assert.deepStrictEqual(Object.keys(client).sort(), ['candidateDetail', 'createSession', 'facets', 'listCandidates', 'rehydrateSession', 'selectCandidate', 'today', 'workItems']);
   const originalFetch = global.fetch;
   const requests = [];
   global.fetch = async (url, options) => {
@@ -25,6 +25,7 @@ async function testNarrowClient() {
     await client.facets('ou-client');
     await client.createSession('ou-client', { chat_id: 'chat', filters: {}, expires_at: '2099-01-01T00:00:00Z' });
     await client.createSession('ou-client', { session_id: 7, expected_version: 2, page: 3, filters: { region: 'europe' } });
+    await client.rehydrateSession('ou-client', { session_id: 7, chat_id: 'chat', thread_id: 'thread' });
     await client.listCandidates('ou-client', { region: 'europe', page: 1, page_size: 5 });
     await client.candidateDetail('ou-client', 4);
     await client.today('ou-client', { page_size: 5 });
@@ -373,6 +374,7 @@ async function testExpiredSessionRecovery() {
         created_at: '2026-07-17T00:00:00.000Z', updated_at: '2026-07-17T00:00:00.000Z'
       };
     },
+    rehydrateSession: async () => { const error = new Error('matrix API HTTP 400'); error.status = 400; throw error; },
     candidateDetail: async () => {
       if (failDetail) {
         const error = new Error('matrix API HTTP 400');
@@ -407,7 +409,7 @@ async function testExpiredSessionRecovery() {
   await registered.onMessage({ msg: message });
   failRefresh = true;
   assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
-  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+  assert.ok(visibleText(sent.at(-1)).includes('Expiry Company'));
   failRefresh = false;
 
   await registered.onMessage({ msg: message });
@@ -468,6 +470,7 @@ async function testExpiredSessionRecovery() {
     internal_cost: index === 0 ? 'SENTINEL-INTERNAL-COST' : ''
   }));
   let sessionExpiry = '';
+  let failNextList = false;
   const client = {
     today: async (openId, filters) => { calls.push(['today', openId, filters]); return { rows: candidates, snapshot_key: 'snap-1', page: 1, page_size: 5 }; },
     createSession: async (openId, input) => {
@@ -480,6 +483,10 @@ async function testExpiredSessionRecovery() {
         expires_at: sessionExpiry,
         created_at: '2026-07-17T00:00:00.000Z', updated_at: '2026-07-17T00:00:00.000Z'
       };
+    },
+    rehydrateSession: async (openId, input) => {
+      calls.push(['rehydrateSession', openId, input]);
+      return { id: 11, actor_user_id: 7, chat_id: 'chat-1', thread_id: 'thread-1', filters: { page_size: 5 }, snapshot_key: 'snap-1', candidate_ids: [1, 2, 3, 4, 5], candidates: candidates.slice(0, 5), page: 1, version: 1, expires_at: sessionExpiry };
     },
     candidateDetail: async (openId, id) => {
       calls.push(['candidateDetail', openId, id]);
@@ -500,7 +507,16 @@ async function testExpiredSessionRecovery() {
         cities: [{ value: '广州', count: 99 }]
       };
     },
-    listCandidates: async (openId, filters) => { calls.push(['listCandidates', openId, filters]); return { rows: candidates.slice(0, 5), snapshot_key: `snap-${filters.page || 1}`, page: filters.page || 1, page_size: 5 }; },
+    listCandidates: async (openId, filters) => {
+      calls.push(['listCandidates', openId, filters]);
+      if (failNextList) {
+        const failure = failNextList; failNextList = false;
+        const error = failure === 'timeout' ? new Error('request timed out') : new Error('matrix API HTTP 500');
+        if (failure === 'timeout') error.name = 'TimeoutError'; else error.status = 500;
+        throw error;
+      }
+      return { rows: candidates.slice(0, 5), snapshot_key: `snap-${filters.page || 1}`, page: filters.page || 1, page_size: 5 };
+    },
     selectCandidate: async (openId, input) => { calls.push(['selectCandidate', openId, input]); return { work_item_id: 91, candidate_id: input.candidate_id, session_id: input.session_id, session_version: input.expected_version + 1, next_action: input.next_action }; },
     workItems: async openId => { calls.push(['workItems', openId]); return { rows: [{ id: 91, candidate_id: 1, stage: 'selected', next_action: '核实公开联系入口' }] }; }
   };
@@ -552,6 +568,11 @@ async function testExpiredSessionRecovery() {
   assert.ok(!/广州|国内城市|\bCN\b/.test(filterText));
   const regionButton = buttons(sent.at(-1).card).find(item => item.value?.a === 'mx.region' && item.value?.r === 'americas');
   assert.ok(regionButton);
+  const patchesBeforeFailure = calls.filter(item => item[0] === 'createSession').length;
+  failNextList = true;
+  await handlers.get('mx.region')({ evt: callbackEvent, value: regionButton.value });
+  assert.strictEqual(calls.filter(item => item[0] === 'createSession').length, patchesBeforeFailure);
+  assert.ok(visibleText(sent.at(-1).card).includes('稍后重试'));
   await handlers.get('mx.region')({ evt: callbackEvent, value: regionButton.value });
   const regionPatch = calls.filter(item => item[0] === 'createSession').at(-1)[2];
   assert.strictEqual(regionPatch.session_id, 11);
@@ -562,6 +583,11 @@ async function testExpiredSessionRecovery() {
   await handlers.get('mx.filters')({ evt: callbackEvent, value: nextFilterButton.value });
   const categoryButton = buttons(sent.at(-1).card).find(item => item.value?.a === 'mx.category' && item.value?.k === 'coffee');
   assert.ok(categoryButton);
+  const patchesBeforeTimeout = calls.filter(item => item[0] === 'createSession').length;
+  failNextList = 'timeout';
+  await handlers.get('mx.category')({ evt: callbackEvent, value: categoryButton.value });
+  assert.strictEqual(calls.filter(item => item[0] === 'createSession').length, patchesBeforeTimeout);
+  assert.ok(visibleText(sent.at(-1).card).includes('稍后重试'));
   await handlers.get('mx.category')({ evt: callbackEvent, value: categoryButton.value });
   const categoryPatch = calls.filter(item => item[0] === 'createSession').at(-1)[2];
   assert.strictEqual(categoryPatch.session_id, 11);
@@ -583,9 +609,10 @@ async function testExpiredSessionRecovery() {
   assert.ok(visibleText(sent.at(-1).card).includes('开发客户'));
 
   const freshSent = [];
+  const freshHandlers = new Map();
   const fresh = extension.register({
     channel: {},
-    dispatcher: { on: () => undefined },
+    dispatcher: { on: (name, handler) => freshHandlers.set(name, handler) },
     sendManagedCard: async (_channel, chatId, card) => { freshSent.push({ chatId, card }); },
     updateManagedCard: async () => true,
     card: helpers(),
@@ -593,7 +620,17 @@ async function testExpiredSessionRecovery() {
     now: () => Date.parse('2026-07-17T00:00:00.000Z')
   });
   assert.strictEqual(await fresh.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
-  assert.ok(visibleText(freshSent[0].card).includes('开发客户'));
+  assert.ok(calls.some(item => item[0] === 'rehydrateSession'));
+  assert.ok(visibleText(freshSent[0].card).includes('Company 1'));
+  const callbackFresh = extension.register({
+    channel: {}, dispatcher: { on: (name, handler) => freshHandlers.set(name, handler) },
+    sendManagedCard: async (_channel, chatId, card) => { freshSent.push({ chatId, card }); }, updateManagedCard: async () => true,
+    card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00.000Z')
+  });
+  await freshHandlers.get('mx.detail')({ evt: callbackEvent, value: { a: 'mx.detail', s: 11, v: 1, c: 1 } });
+  assert.ok(calls.some(item => item[0] === 'rehydrateSession' && item[2].session_id === 11));
+  assert.ok(visibleText(freshSent.at(-1).card).includes('Company 1'));
+  callbackFresh.dispose();
   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
   assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.region', 'mx.select', 'mx.today', 'mx.work']);
 

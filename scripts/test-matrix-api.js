@@ -321,6 +321,9 @@ async function stopServer() {
     try {
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM matrix_selection_events WHERE idempotency_key = 'api-event-001'").get().n, 1);
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
+      const persistedSession = JSON.stringify(inspect.prepare('SELECT snapshot_key, candidate_ids_json, filters_json FROM matrix_sessions WHERE id = ?').get(createdSession.body.id));
+      assert.ok(!persistedSession.includes('Alpha Foods'));
+      assert.ok(!persistedSession.includes('team@alpha.test'));
     } finally {
       inspect.close();
     }
@@ -335,10 +338,14 @@ async function stopServer() {
     assert.notStrictEqual(refusedReplace.status, 0);
     const replaced = spawnSync(process.execPath, ['scripts/matrix-bind-actor.js', '--open-id', 'ou-cli', '--username', 'matrix-crm-two', '--bound-by', 'matrix-root', '--replace'], { cwd: path.resolve(__dirname, '..'), env: cliEnv, encoding: 'utf8' });
     assert.strictEqual(replaced.status, 0, replaced.stderr);
+    assert.ok(!`${replaced.stdout}${replaced.stderr}`.includes('ou-cli'));
+    assert.ok(!`${replaced.stdout}${replaced.stderr}`.match(/\b(?:103|104)\b/));
     const cliDb = new Database(appDbPath, { readonly: true });
     try {
       assert.strictEqual(cliDb.prepare("SELECT user_id FROM matrix_actor_bindings WHERE feishu_open_id = 'ou-cli'").get().user_id, 104);
-      assert.ok(cliDb.prepare("SELECT id FROM audit_logs WHERE action = 'matrix_bind_actor' ORDER BY id DESC LIMIT 1").get());
+      const bindingAudit = JSON.parse(cliDb.prepare("SELECT detail FROM audit_logs WHERE action = 'matrix_bind_actor' ORDER BY id DESC LIMIT 1").get().detail);
+      assert.deepStrictEqual(bindingAudit.old, { userId: 103, status: 'active' });
+      assert.deepStrictEqual(bindingAudit.new, { userId: 104, status: 'active' });
     } finally {
       cliDb.close();
     }

@@ -73,7 +73,7 @@ function facets(openId) {
 }
 
 function createSession(openId, input) {
-  const fields = new Set(['session_id', 'expected_version', 'chat_id', 'thread_id', 'filters', 'expires_at', 'page']);
+  const fields = new Set(['session_id', 'expected_version', 'chat_id', 'thread_id', 'filters', 'snapshot_key', 'candidate_ids', 'expires_at', 'page']);
   const body = { ...exactObject(input, fields, 'session') };
   if (body.session_id !== undefined) {
     const id = positiveId(body.session_id, 'session id');
@@ -88,8 +88,16 @@ function listCandidates(openId, filters = {}) {
   return call(openId, '/candidates', { query });
 }
 
-function candidateDetail(openId, candidateId) {
-  return call(openId, `/candidates/${positiveId(candidateId, 'candidate id')}`);
+function candidateDetail(openId, candidateId, context = {}) {
+  const query = exactObject(context, new Set(['session_id', 'chat_id', 'thread_id']), 'candidate context');
+  return call(openId, `/candidates/${positiveId(candidateId, 'candidate id')}`, { query });
+}
+
+function rehydrateSession(openId, input = {}) {
+  const query = exactObject(input, new Set(['session_id', 'chat_id', 'thread_id']), 'session context');
+  const path = query.session_id === undefined ? '/sessions/current' : `/sessions/${positiveId(query.session_id, 'session id')}`;
+  const { session_id: _sessionId, ...context } = query;
+  return call(openId, path, { query: context });
 }
 
 function today(openId, filters = {}) {
@@ -107,4 +115,4 @@ function workItems(openId, filters = {}) {
   return call(openId, '/work-items', { query });
 }
 
-module.exports = { facets, createSession, listCandidates, candidateDetail, today, selectCandidate, workItems };
+module.exports = { facets, createSession, rehydrateSession, listCandidates, candidateDetail, today, selectCandidate, workItems };
