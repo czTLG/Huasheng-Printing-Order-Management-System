@@ -334,10 +334,14 @@ async function stopServer() {
       next_action: '核实公开联系入口'
     };
     const firstSelection = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: selectionBody });
+    const mutableCandidateDb = new Database(candidateDbPath);
+    try { mutableCandidateDb.prepare("UPDATE cache_records SET country_code = 'IN', stage_code = 'suppressed' WHERE id = 1").run(); }
+    finally { mutableCandidateDb.close(); }
     const secondSelection = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: selectionBody });
     assert.strictEqual(firstSelection.status, 201);
     assert.strictEqual(secondSelection.status, 200);
     assert.strictEqual(firstSelection.body.work_item_id, secondSelection.body.work_item_id);
+    assert.strictEqual((await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...selectionBody, idempotency_key: 'api-event-new-after-suppression', expected_version: firstSelection.body.session_version } })).status, 404);
     assert.strictEqual((await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...selectionBody, extra: true } })).status, 400);
 
     const workItems = await request('/api/matrix/work-items', { serviceToken: bridgeToken, openId: 'ou-service' });

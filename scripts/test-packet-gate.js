@@ -311,6 +311,9 @@ try {
     idempotencyKey: 'evt-001',
     nextAction: '查看产品页和联系页'
   });
+  assert.strictEqual(gate.replaySelection({ idempotencyKey: 'evt-001', actorUserId: 7 }).event_id, first.event_id);
+  assert.strictEqual(gate.replaySelection({ idempotencyKey: 'evt-unseen', actorUserId: 7 }), null);
+  assert.throws(() => gate.replaySelection({ idempotencyKey: 'evt-001', actorUserId: 8 }), /not authorized/);
   assert.strictEqual(first.work_item_id, second.work_item_id);
   assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_work_items').get().n, 1);
   assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_selection_events').get().n, 1);

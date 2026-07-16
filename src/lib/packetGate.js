@@ -303,6 +303,14 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     };
   }
 
+  function replaySelection({ idempotencyKey, actorUserId } = {}) {
+    const key = String(idempotencyKey || '').trim();
+    if (!key) throw new Error('idempotency key required');
+    const owner = positiveInteger(actorUserId, 'actor user id');
+    const event = db.prepare('SELECT * FROM matrix_selection_events WHERE idempotency_key = ?').get(key);
+    return event ? idempotentSelection(event, owner) : null;
+  }
+
   const selectCandidateTransaction = db.transaction(input => {
     const candidateId = positiveInteger(input.candidateId, 'candidate id');
     const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
@@ -406,6 +414,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     getCurrentSession,
     updateSession,
     selectCandidate,
+    replaySelection,
     listWorkItems,
     getWorkItem
   };

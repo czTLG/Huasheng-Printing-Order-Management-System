@@ -26,6 +26,13 @@ Base: `e0029a4`
 - `npm run verify:smoke` passed.
 - No deployment, service restart, real credential use, real binding, candidate-content output, or outbound action occurred.
 
+## Review Repair — Durable Replay and Complete Schema
+
+- Selection replay now occurs through an actor/binding-authorized gate lookup before any mutable candidate lookup. If candidate lookup reports missing, the route checks persisted replay once more to cover the lookup/event race; after a successful lookup, the transactional selector still checks the event first.
+- The API regression selects once, changes the candidate to both excluded and suppressed, then proves the same key returns HTTP 200 with the same authoritative work/event while a new key receives 404. Work-item and event counts remain one.
+- Readiness declares complete explicit column contracts: 26 `cache_records`, 7 `cache_evidence`, and 7 `cache_discovery` columns used by strict predicates, ranking, summaries, details, hydration, evidence, and discovery.
+- A table-driven suite creates 40 empty malformed databases, omitting exactly one required column each time. Every case fails readiness before data-dependent mapping can hide the missing column.
+
 ### 蒸馏进度
 
 - 已确认模块：严格推荐分页、空结果、Matrix 就绪门、重启幂等回放、水合字段白名单。

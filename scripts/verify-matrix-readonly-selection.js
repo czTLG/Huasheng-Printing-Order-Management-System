@@ -48,9 +48,9 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '5d8d3053ddd0369cb93c5d87926035ffe34e611fee189e5a643bc72acdfc846e',
   'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
-  'src/lib/cacheIndexView.js': 'a769a0c5b52222df5666d5dadb9c13f4473a689c33bfe296126808d2f471a0af',
-  'src/lib/packetGate.js': 'deae77857f447bcfec5e33b19fc54a966390b93b9f8bbba19ce505748b35a7c3',
-  'src/routes/matrix.js': 'd4298ee29dc34ad92cefb4b70d3ea1397f109b36dba33fc65c9677e18b0863af',
+  'src/lib/cacheIndexView.js': 'd35182db3f3dffcebc52627cb7ac7795807bb802974915fc500450ed153ebb1a',
+  'src/lib/packetGate.js': 'ff6e8176d2cddabcaf6419e19ba3927c831db87f2de5c76a80ed3fbee56a01a6',
+  'src/routes/matrix.js': '81058e3ed7e261f6cf73f64f1c0d93c36a80215caa5dc9486a9c270455276ce9',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
 };
 

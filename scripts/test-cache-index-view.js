@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { createCacheIndexView } = require('../src/lib/cacheIndexView');
+const { createCacheIndexView, REQUIRED_COLUMNS } = require('../src/lib/cacheIndexView');
 const regionByCountry = require('../src/lib/matrixRegions.json');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-index-view-'));
@@ -191,13 +191,22 @@ try {
     if (previousPath === undefined) delete process.env.MATRIX_STREAM_DB_PATH;
     else process.env.MATRIX_STREAM_DB_PATH = previousPath;
   }
-  const malformedPath = path.join(dir, 'malformed.db');
-  const malformedDb = new Database(malformedPath);
-  malformedDb.exec('CREATE TABLE cache_records (id INTEGER PRIMARY KEY)');
-  malformedDb.close();
-  const malformedView = createCacheIndexView({ dbPath: malformedPath });
-  try { assert.throws(() => malformedView.ready(), /schema incomplete/); }
-  finally { malformedView.close(); }
+  assert.deepStrictEqual(Object.fromEntries(Object.entries(REQUIRED_COLUMNS).map(([table, columns]) => [table, columns.length])), { cache_records: 26, cache_evidence: 7, cache_discovery: 7 });
+  let malformedIndex = 0;
+  for (const [missingTable, columns] of Object.entries(REQUIRED_COLUMNS)) {
+    for (const missingColumn of columns) {
+      const malformedPath = path.join(dir, `malformed-${malformedIndex++}.db`);
+      const malformedDb = new Database(malformedPath);
+      for (const [table, tableColumns] of Object.entries(REQUIRED_COLUMNS)) {
+        const included = tableColumns.filter(column => table !== missingTable || column !== missingColumn);
+        malformedDb.exec(`CREATE TABLE ${table} (${included.map(column => `${column} ${column === 'id' ? 'INTEGER PRIMARY KEY' : 'TEXT'}`).join(', ')})`);
+      }
+      malformedDb.close();
+      const malformedView = createCacheIndexView({ dbPath: malformedPath });
+      try { assert.throws(() => malformedView.ready(), /schema incomplete/, `${missingTable}.${missingColumn} must be required`); }
+      finally { malformedView.close(); }
+    }
+  }
 } finally {
   view.close();
   fs.rmSync(dir, { recursive: true, force: true });

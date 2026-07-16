@@ -47,6 +47,12 @@ const STABLE_ORDER = `
   r.id ASC
 `;
 
+const REQUIRED_COLUMNS = Object.freeze({
+  cache_records: ['id', 'company_name', 'country_code', 'city', 'normalized_domain', 'official_url', 'product_categories_json', 'format_signals_json', 'size_signals_json', 'scale_tier', 'public_email', 'public_phone', 'public_whatsapp', 'contact_url', 'priority', 'fit_score', 'demand_fit_score', 'access_score', 'confidence', 'status', 'assessment_cn', 'next_action_cn', 'stage_code', 'audit_state', 'audited_at', 'updated_at'],
+  cache_evidence: ['id', 'record_id', 'source_url', 'source_type', 'page_title', 'observed_at', 'excerpt'],
+  cache_discovery: ['id', 'record_id', 'discovered_via', 'discovery_url', 'official_url', 'source_type', 'verified_at']
+});
+
 function jsonArray(value) {
   try {
     const parsed = JSON.parse(value || '[]');
@@ -269,9 +275,9 @@ function createCacheIndexView({ dbPath } = {}) {
     for (const table of ['cache_records', 'cache_evidence', 'cache_discovery']) {
       if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) throw new Error('candidate database schema incomplete');
     }
-    const recordColumns = new Set(db.prepare('PRAGMA table_info(cache_records)').all().map(row => row.name));
-    for (const column of ['id', 'country_code', 'stage_code', 'status', 'audit_state', 'audited_at', 'updated_at']) {
-      if (!recordColumns.has(column)) throw new Error('candidate database schema incomplete');
+    for (const [table, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
+      const actualColumns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
+      for (const column of requiredColumns) if (!actualColumns.has(column)) throw new Error('candidate database schema incomplete');
     }
     recommendPage(db, { page: 1, page_size: 1 });
     return true;
@@ -287,4 +293,4 @@ function createCacheIndexView({ dbPath } = {}) {
   };
 }
 
-module.exports = { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE };
+module.exports = { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE, REQUIRED_COLUMNS };

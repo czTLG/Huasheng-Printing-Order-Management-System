@@ -260,9 +260,14 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
     try {
       const body = rejectUnknown(req.body, new Set(['candidate_id', 'session_id', 'expected_version', 'idempotency_key', 'next_action']), 'body');
       const candidateId = positiveInteger(body.candidate_id, 'candidate id');
-      if (!view.detail(candidateId)) return res.status(404).json({ error: 'candidate not found' });
       const key = String(body.idempotency_key || '').trim();
-      const replay = key ? db.prepare('SELECT actor_user_id FROM matrix_selection_events WHERE idempotency_key = ?').get(key) : null;
+      const replay = gate.replaySelection({ idempotencyKey: key, actorUserId: req.user.id });
+      if (replay) return res.status(200).json(replay);
+      if (!view.detail(candidateId)) {
+        const racedReplay = gate.replaySelection({ idempotencyKey: key, actorUserId: req.user.id });
+        if (racedReplay) return res.status(200).json(racedReplay);
+        return res.status(404).json({ error: 'candidate not found' });
+      }
       const result = gate.selectCandidate({
         candidateId,
         actorUserId: req.user.id,
@@ -271,7 +276,7 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
         idempotencyKey: key,
         nextAction: body.next_action
       });
-      res.status(replay && replay.actor_user_id === req.user.id ? 200 : 201).json(result);
+      res.status(201).json(result);
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 
