@@ -26,12 +26,26 @@ function sessionResult(row) {
     chat_id: row.chat_id,
     thread_id: row.thread_id,
     filters: parseJson(row.filters_json, {}),
+    snapshot_key: String(row.snapshot_key || ''),
+    candidate_ids: parseJson(row.candidate_ids_json, []),
     page: row.page,
     version: row.version,
     expires_at: row.expires_at,
     created_at: row.created_at,
     updated_at: row.updated_at
   };
+}
+
+function normalizeMapping(snapshotKey, candidateIds) {
+  const snapshot = String(snapshotKey || '').trim();
+  if (!Array.isArray(candidateIds)) throw new Error('candidate ids must be an array');
+  const ids = candidateIds.map(value => positiveInteger(value, 'candidate id'));
+  if (ids.length > 5) throw new Error('candidate ids exceed five');
+  if (new Set(ids).size !== ids.length) throw new Error('candidate ids must be unique');
+  if (!snapshot && ids.length === 0) return { snapshotKey: '', candidateIds: [] };
+  if (!/^[a-f0-9]{64}$/.test(snapshot)) throw new Error('snapshot key invalid');
+  if (!ids.length) throw new Error('candidate ids required for snapshot');
+  return { snapshotKey: snapshot, candidateIds: ids };
 }
 
 function workItemResult(row) {
@@ -157,6 +171,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     if (!chatId) throw new Error('chat id required');
     const threadId = String(input.threadId || '').trim();
     const filters = normalizeFilters(input.filters);
+    const mapping = normalizeMapping(input.snapshotKey, input.candidateIds || []);
     const at = timestamp();
     const expiresAt = String(input.expiresAt || '').trim();
     if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.parse(at)) {
@@ -164,10 +179,10 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     }
     const result = db.prepare(`
       INSERT INTO matrix_sessions (
-        actor_user_id, chat_id, thread_id, filters_json, page, version,
+        actor_user_id, chat_id, thread_id, filters_json, snapshot_key, candidate_ids_json, page, version,
         expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)
-    `).run(actorUserId, chatId, threadId, JSON.stringify(filters), expiresAt, at, at);
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)
+    `).run(actorUserId, chatId, threadId, JSON.stringify(filters), mapping.snapshotKey, JSON.stringify(mapping.candidateIds), expiresAt, at, at);
     return sessionResult(db.prepare('SELECT * FROM matrix_sessions WHERE id = ?').get(result.lastInsertRowid));
   });
 
@@ -184,6 +199,33 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     return session;
   }
 
+  function getSession({ sessionId, actorUserId, chatId, threadId } = {}) {
+    const id = positiveInteger(sessionId, 'session id');
+    const owner = positiveInteger(actorUserId, 'actor user id');
+    activeBindingForUser(owner);
+    const session = db.prepare('SELECT * FROM matrix_sessions WHERE id = ?').get(id);
+    if (!session) throw new Error('session not found');
+    if (session.actor_user_id !== owner) throw new Error('not authorized');
+    if (Date.parse(session.expires_at) <= Date.parse(timestamp())) throw new Error('session expired');
+    if (String(session.chat_id) !== String(chatId || '') || String(session.thread_id || '') !== String(threadId || '')) throw new Error('session context mismatch');
+    return sessionResult(session);
+  }
+
+  function getCurrentSession({ actorUserId, chatId, threadId } = {}) {
+    const owner = positiveInteger(actorUserId, 'actor user id');
+    activeBindingForUser(owner);
+    const chat = String(chatId || '').trim();
+    if (!chat) throw new Error('chat id required');
+    const thread = String(threadId || '').trim();
+    const session = db.prepare(`
+      SELECT * FROM matrix_sessions
+      WHERE actor_user_id = ? AND chat_id = ? AND thread_id = ? AND expires_at > ?
+      ORDER BY updated_at DESC, id DESC LIMIT 1
+    `).get(owner, chat, thread, timestamp());
+    if (!session) throw new Error('session not found');
+    return sessionResult(session);
+  }
+
   const updateSessionTransaction = db.transaction(input => {
     const sessionId = positiveInteger(input.sessionId, 'session id');
     const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
@@ -194,6 +236,8 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     const patch = input.patch && typeof input.patch === 'object' && !Array.isArray(input.patch) ? input.patch : {};
     let page = session.page;
     let filtersJson = session.filters_json;
+    let snapshotKey = String(session.snapshot_key || '');
+    let candidateIdsJson = String(session.candidate_ids_json || '[]');
     let expiresAt = session.expires_at;
     if (Object.prototype.hasOwnProperty.call(patch, 'page')) page = positiveInteger(patch.page, 'page');
     if (Object.prototype.hasOwnProperty.call(patch, 'filters')) {
@@ -203,11 +247,18 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
       expiresAt = String(patch.expiresAt || '').trim();
       if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.parse(at)) throw new Error('session expired');
     }
+    const mappingPatch = Object.prototype.hasOwnProperty.call(patch, 'snapshotKey') || Object.prototype.hasOwnProperty.call(patch, 'candidateIds');
+    if (mappingPatch) {
+      if (!Object.prototype.hasOwnProperty.call(patch, 'snapshotKey') || !Object.prototype.hasOwnProperty.call(patch, 'candidateIds')) throw new Error('snapshot and candidate ids must be updated together');
+      const mapping = normalizeMapping(patch.snapshotKey, patch.candidateIds);
+      snapshotKey = mapping.snapshotKey;
+      candidateIdsJson = JSON.stringify(mapping.candidateIds);
+    }
     const result = db.prepare(`
       UPDATE matrix_sessions
-      SET filters_json = ?, page = ?, expires_at = ?, version = version + 1, updated_at = ?
+      SET filters_json = ?, snapshot_key = ?, candidate_ids_json = ?, page = ?, expires_at = ?, version = version + 1, updated_at = ?
       WHERE id = ? AND actor_user_id = ? AND version = ?
-    `).run(filtersJson, page, expiresAt, at, sessionId, actorUserId, expectedVersion);
+    `).run(filtersJson, snapshotKey, candidateIdsJson, page, expiresAt, at, sessionId, actorUserId, expectedVersion);
     if (result.changes !== 1) throw new Error('stale version');
     return sessionResult(db.prepare('SELECT * FROM matrix_sessions WHERE id = ?').get(sessionId));
   });
@@ -246,7 +297,9 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
 
     activeBindingForUser(actorUserId);
     const at = timestamp();
-    checkedSession({ sessionId, actorUserId, expectedVersion, at });
+    const session = checkedSession({ sessionId, actorUserId, expectedVersion, at });
+    const mappedCandidateIds = parseJson(session.candidate_ids_json, []);
+    if (!mappedCandidateIds.includes(candidateId)) throw new Error('candidate not in session mapping');
 
     let item = db.prepare('SELECT * FROM matrix_work_items WHERE candidate_id = ?').get(candidateId);
     let before = {};
@@ -328,6 +381,8 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     bindActor,
     resolveActor,
     createSession,
+    getSession,
+    getCurrentSession,
     updateSession,
     selectCandidate,
     listWorkItems,

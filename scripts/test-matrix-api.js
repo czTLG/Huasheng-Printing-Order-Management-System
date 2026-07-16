@@ -265,11 +265,19 @@ async function stopServer() {
 
     const createdSession = await request('/api/matrix/sessions', {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
-      body: { chat_id: 'chat-1', thread_id: 'thread-1', filters: { region: 'americas', page_size: 10 }, expires_at: '2099-01-01T00:00:00.000Z' }
+      body: { chat_id: 'chat-1', thread_id: 'thread-1', filters: { region: 'americas', page_size: 10 }, snapshot_key: recommendations.body.snapshot_key, candidate_ids: [1], expires_at: '2099-01-01T00:00:00.000Z' }
     });
     assert.strictEqual(createdSession.status, 201);
     assert.strictEqual(createdSession.body.page, 1);
     assert.deepStrictEqual(createdSession.body.filters, { region: 'americas', page_size: 10 });
+    assert.deepStrictEqual(createdSession.body.candidate_ids, [1]);
+
+    const restored = await request(`/api/matrix/sessions/${createdSession.body.id}?chat_id=chat-1&thread_id=thread-1`, { serviceToken: bridgeToken, openId: 'ou-service' });
+    assert.strictEqual(restored.status, 200);
+    assert.deepStrictEqual(restored.body.candidates.map(row => row.id), [1]);
+    assert.ok(!JSON.stringify(restored.body).includes('team@alpha.test'));
+    assert.strictEqual((await request('/api/matrix/candidates/1', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);
+    assert.strictEqual((await request(`/api/matrix/candidates/1?session_id=${createdSession.body.id}&chat_id=chat-1&thread_id=thread-1`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 200);
 
     const patchedSession = await request(`/api/matrix/sessions/${createdSession.body.id}`, {
       method: 'PATCH', serviceToken: bridgeToken, openId: 'ou-service',
@@ -312,7 +320,7 @@ async function stopServer() {
     const inspect = new Database(appDbPath, { readonly: true });
     try {
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM matrix_selection_events WHERE idempotency_key = 'api-event-001'").get().n, 1);
-      assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 1);
+      assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
     } finally {
       inspect.close();
     }

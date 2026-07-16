@@ -54,7 +54,11 @@ function main() {
     db.prepare(`
       INSERT INTO audit_logs (role, user_name, action, resource_type, resource_id, detail, created_at)
       VALUES (?, ?, 'matrix_bind_actor', 'matrix_actor_binding', '', ?, ?)
-    `).run(operator.role, operator.username, JSON.stringify({ targetUserId: target.id, replaced: Boolean(existing && existing.user_id !== target.id) }), at);
+    `).run(operator.role, operator.username, JSON.stringify({
+      replaced: Boolean(existing && (existing.user_id !== target.id || existing.status !== 'active')),
+      old: existing ? { userId: existing.user_id, status: existing.status } : null,
+      new: { userId: target.id, status: 'active' }
+    }), at);
   });
   bind.immediate();
   process.stdout.write('Actor binding updated.\n');

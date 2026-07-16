@@ -16,6 +16,11 @@ let clock = '2026-07-17T00:00:00.000Z';
 try {
   initDb();
   initDb();
+  assert.strictEqual(db.pragma('foreign_keys', { simple: true }), 1);
+  assert.throws(
+    () => db.prepare(`INSERT INTO matrix_actor_bindings (feishu_open_id, user_id, status, bound_by, bound_at) VALUES ('ou-orphan', 9999, 'active', 9998, ?)` ).run(clock),
+    /foreign key/i
+  );
 
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(row => row.name));
   ['matrix_actor_bindings', 'matrix_sessions', 'matrix_work_items', 'matrix_selection_events'].forEach(name => {
@@ -37,9 +42,11 @@ try {
     ) VALUES (7, 'legacy-chat', '', '{"region":"europe","page":9}', 2, 1, ?, ?, ?)
   `).run('2026-07-18T00:00:00.000Z', clock, clock).lastInsertRowid);
   initDb();
-  const migratedLegacyRow = db.prepare('SELECT filters_json, page FROM matrix_sessions WHERE id = ?').get(legacySessionId);
+  const migratedLegacyRow = db.prepare('SELECT filters_json, page, snapshot_key, candidate_ids_json FROM matrix_sessions WHERE id = ?').get(legacySessionId);
   assert.strictEqual(migratedLegacyRow.page, 2);
   assert.deepStrictEqual(JSON.parse(migratedLegacyRow.filters_json), { region: 'europe' });
+  assert.strictEqual(migratedLegacyRow.snapshot_key, '');
+  assert.deepStrictEqual(JSON.parse(migratedLegacyRow.candidate_ids_json), []);
 
   const gate = createPacketGate({ db, now: () => clock });
   assert.strictEqual(gate.send, undefined);
@@ -149,6 +156,8 @@ try {
       region: 'europe', country: 'US', category: 'coffee',
       priority: 'P1', status: 'valid', page_size: 20
     },
+    snapshotKey: 'a'.repeat(64),
+    candidateIds: [101, 102, 103, 104, 105],
     expiresAt: '2026-07-18T00:00:00.000Z'
   });
   assert.strictEqual(session.version, 1);
@@ -156,6 +165,23 @@ try {
     region: 'europe', country: 'US', category: 'coffee',
     priority: 'P1', status: 'valid', page_size: 20
   });
+  assert.strictEqual(session.snapshot_key, 'a'.repeat(64));
+  assert.deepStrictEqual(session.candidate_ids, [101, 102, 103, 104, 105]);
+  assert.deepStrictEqual(gate.getSession({ sessionId: session.id, actorUserId: 7, chatId: 'chat-1', threadId: 'thread-1' }).candidate_ids, [101, 102, 103, 104, 105]);
+  assert.strictEqual(gate.getCurrentSession({ actorUserId: 7, chatId: 'chat-1', threadId: 'thread-1' }).id, session.id);
+  assert.throws(() => gate.getSession({ sessionId: session.id, actorUserId: 8, chatId: 'chat-1', threadId: 'thread-1' }), /not authorized/);
+  assert.throws(() => gate.getSession({ sessionId: session.id, actorUserId: 7, chatId: 'other-chat', threadId: 'thread-1' }), /context/);
+  for (const invalid of [
+    { snapshotKey: 'short', candidateIds: [1] },
+    { snapshotKey: 'b'.repeat(64), candidateIds: [1, 1] },
+    { snapshotKey: 'b'.repeat(64), candidateIds: [{ id: 1 }] },
+    { snapshotKey: 'b'.repeat(64), candidateIds: [1, 2, 3, 4, 5, 6] }
+  ]) {
+    assert.throws(() => gate.createSession({
+      actorUserId: 7, feishuOpenId: 'ou-7', chatId: 'invalid-mapping', filters: {},
+      expiresAt: '2026-07-18T00:00:00.000Z', ...invalid
+    }), /snapshot|candidate/i);
+  }
 
   const updated = gate.updateSession({
     sessionId: session.id,
@@ -217,8 +243,16 @@ try {
     feishuOpenId: 'ou-7',
     chatId: 'chat-selection',
     filters: { region: 'americas' },
+    snapshotKey: 'c'.repeat(64),
+    candidateIds: [42, 43, 44],
     expiresAt: '2026-07-18T00:00:00.000Z'
   });
+
+  assert.throws(
+    () => gate.selectCandidate({ candidateId: 99, actorUserId: 7, sessionId: selectionSession.id, expectedVersion: 1, idempotencyKey: 'evt-outside-map', nextAction: '不应成功' }),
+    /candidate.*session mapping/i
+  );
+  assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(selectionSession.id).version, 1);
 
   assert.throws(
     () => gate.selectCandidate({ candidateId: 42, actorUserId: 7, sessionId: selectionSession.id, expectedVersion: 1, idempotencyKey: '', nextAction: '查看产品页' }),
@@ -275,6 +309,8 @@ try {
     feishuOpenId: 'ou-8',
     chatId: 'chat-actor-8',
     filters: {},
+    snapshotKey: 'd'.repeat(64),
+    candidateIds: [42],
     expiresAt: '2026-07-18T00:00:00.000Z'
   });
   assert.throws(

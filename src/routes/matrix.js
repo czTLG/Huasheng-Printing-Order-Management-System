@@ -136,8 +136,12 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
 
   router.get('/candidates/:id', (req, res) => {
     try {
-      rejectUnknown(req.query, new Set(), 'query');
+      rejectUnknown(req.query, new Set(['session_id', 'chat_id', 'thread_id']), 'query');
       const id = positiveInteger(req.params.id, 'candidate id');
+      if (req.authMode === 'matrix_bridge') {
+        const session = gate.getSession({ sessionId: req.query.session_id, actorUserId: req.user.id, chatId: req.query.chat_id, threadId: req.query.thread_id });
+        if (!session.candidate_ids.includes(id)) throw new Error('candidate not in session mapping');
+      }
       const detail = view.detail(id, { revealContacts: true });
       if (!detail) return res.status(404).json({ error: 'candidate not found' });
       audit({
@@ -177,7 +181,7 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
 
   router.post('/sessions', (req, res) => {
     try {
-      const body = rejectUnknown(req.body, new Set(['chat_id', 'thread_id', 'filters', 'expires_at']), 'body');
+      const body = rejectUnknown(req.body, new Set(['chat_id', 'thread_id', 'filters', 'snapshot_key', 'candidate_ids', 'expires_at']), 'body');
       const binding = bindingForRequest(req);
       const session = gate.createSession({
         actorUserId: req.user.id,
@@ -185,18 +189,44 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
         chatId: body.chat_id,
         threadId: body.thread_id,
         filters: body.filters,
+        snapshotKey: body.snapshot_key,
+        candidateIds: body.candidate_ids,
         expiresAt: body.expires_at
       });
       res.status(201).json(session);
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 
+  function hydratedSession(session) {
+    const candidates = session.candidate_ids.map(id => view.detail(id)).filter(Boolean).map(row => {
+      const { contacts, discovery, evidence, supporting, ...summary } = row;
+      return summary;
+    });
+    return { ...session, candidates };
+  }
+
+  router.get('/sessions/current', (req, res) => {
+    try {
+      rejectUnknown(req.query, new Set(['chat_id', 'thread_id']), 'query');
+      res.json(hydratedSession(gate.getCurrentSession({ actorUserId: req.user.id, chatId: req.query.chat_id, threadId: req.query.thread_id })));
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.get('/sessions/:id', (req, res) => {
+    try {
+      rejectUnknown(req.query, new Set(['chat_id', 'thread_id']), 'query');
+      res.json(hydratedSession(gate.getSession({ sessionId: req.params.id, actorUserId: req.user.id, chatId: req.query.chat_id, threadId: req.query.thread_id })));
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
   router.patch('/sessions/:id', (req, res) => {
     try {
-      const body = rejectUnknown(req.body, new Set(['expected_version', 'page', 'filters', 'expires_at']), 'body');
+      const body = rejectUnknown(req.body, new Set(['expected_version', 'page', 'filters', 'snapshot_key', 'candidate_ids', 'expires_at']), 'body');
       const patch = {};
       if (Object.prototype.hasOwnProperty.call(body, 'page')) patch.page = body.page;
       if (Object.prototype.hasOwnProperty.call(body, 'filters')) patch.filters = body.filters;
+      if (Object.prototype.hasOwnProperty.call(body, 'snapshot_key')) patch.snapshotKey = body.snapshot_key;
+      if (Object.prototype.hasOwnProperty.call(body, 'candidate_ids')) patch.candidateIds = body.candidate_ids;
       if (Object.prototype.hasOwnProperty.call(body, 'expires_at')) patch.expiresAt = body.expires_at;
       const session = gate.updateSession({
         sessionId: positiveInteger(req.params.id, 'session id'),

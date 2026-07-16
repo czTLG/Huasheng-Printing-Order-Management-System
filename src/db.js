@@ -9,6 +9,7 @@ const dbPath = process.env.DB_PATH
   : path.join(__dirname, '..', 'data', 'app.db');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
+db.pragma('foreign_keys = ON');
 
 function initDb() {
   db.exec(`
@@ -818,6 +819,8 @@ function initDb() {
       chat_id TEXT NOT NULL,
       thread_id TEXT NOT NULL DEFAULT '',
       filters_json TEXT NOT NULL,
+      snapshot_key TEXT NOT NULL DEFAULT '',
+      candidate_ids_json TEXT NOT NULL DEFAULT '[]',
       page INTEGER NOT NULL DEFAULT 1 CHECK(page >= 1),
       version INTEGER NOT NULL DEFAULT 1,
       expires_at TEXT NOT NULL,
@@ -870,6 +873,10 @@ function initDb() {
       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
     END;
   `);
+
+  const sessionColumns = new Set(db.prepare('PRAGMA table_info(matrix_sessions)').all().map(column => column.name));
+  if (!sessionColumns.has('snapshot_key')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN snapshot_key TEXT NOT NULL DEFAULT ''");
+  if (!sessionColumns.has('candidate_ids_json')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN candidate_ids_json TEXT NOT NULL DEFAULT '[]'");
 
   db.prepare(`
     UPDATE matrix_sessions
