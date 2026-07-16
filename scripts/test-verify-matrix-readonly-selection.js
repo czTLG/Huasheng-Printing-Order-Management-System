@@ -46,7 +46,7 @@ try {
   assert.strictEqual(fixtureInput.source, 'explicit-fixture');
   const fixtureMetrics = verifier.inspectCandidates(fixtureInput.dbPath);
   assert.strictEqual(fixtureMetrics.candidateIntegrity, 'ok');
-  assert.strictEqual(fixtureMetrics.recommendationEligibleCount, 2);
+  assert.strictEqual(fixtureMetrics.recommendationEligibleCount, 1);
   assert.strictEqual(fixtureMetrics.recommendationMissingOfficialEvidence, 0);
   assert.strictEqual(fixtureMetrics.recommendationMissingDiscovery, 0);
   assert.strictEqual(fixtureMetrics.recommendationMissingContact, 0);

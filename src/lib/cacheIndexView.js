@@ -23,6 +23,8 @@ const CURRENT_REVIEW_WHERE = `
 
 const RECOMMENDATION_WHERE = `
   ${BASE_WHERE}
+  AND r.status = 'valid'
+  AND r.stage_code IN ('observed', 'recommendation_ready')
   AND ${CURRENT_REVIEW_WHERE}
   AND EXISTS (
     SELECT 1 FROM cache_evidence recommendation_evidence
@@ -214,7 +216,18 @@ function paginated(db, filters = {}, baseWhere = BASE_WHERE, maximumPageSize = 5
 }
 
 function list(db, filters = {}) { return paginated(db, filters, BASE_WHERE, 50); }
-function recommendPage(db, filters = {}) { return paginated(db, filters, RECOMMENDATION_WHERE, 5); }
+function recommendPage(db, filters = {}) {
+  const page = Math.max(1, Number.parseInt(filters.page, 10) || 1);
+  const pageSize = Math.min(5, Math.max(1, Number.parseInt(filters.pageSize ?? filters.page_size, 10) || 5));
+  const { where, params } = filterSql(filters, RECOMMENDATION_WHERE);
+  const membership = db.prepare(`SELECT r.id, r.updated_at FROM cache_records r WHERE ${where} ORDER BY ${STABLE_ORDER}`).all(...params);
+  const rawRows = db.prepare(`SELECT r.* FROM cache_records r WHERE ${where} ORDER BY ${STABLE_ORDER} LIMIT ? OFFSET ?`).all(...params, pageSize, (page - 1) * pageSize);
+  const snapshotKey = crypto.createHash('sha256').update(JSON.stringify({
+    filters: { region: filters.region || '', country: filters.country || '', category: filters.category || '', priority: filters.priority || '', status: filters.status || '' },
+    membership: membership.map(row => [row.id, row.updated_at])
+  })).digest('hex');
+  return { rows: rawRows.map(row => summary(row)), page, page_size: pageSize, total: membership.length, total_pages: membership.length ? Math.ceil(membership.length / pageSize) : 0, snapshot_key: snapshotKey };
+}
 
 function detail(db, id, { revealContacts = false } = {}) {
   const row = db.prepare(`

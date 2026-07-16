@@ -83,7 +83,9 @@ try {
     record({ id: 12, company_name: 'Review Queue', country_code: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["coffee"]', priority: 'P3', fit: 60, demand_fit: 60, access: 20, status: 'needs_review' }),
     record({ id: 13, company_name: 'No Contact', country_code: 'JP', domain: 'no-contact.test', url: 'https://no-contact.test/', categories: '["cosmetics"]', email: '', phone: '', whatsapp: '', contact_url: '', priority: 'P2' }),
     record({ id: 14, company_name: 'Stale Audit', country_code: 'JP', domain: 'stale-audit.test', url: 'https://stale-audit.test/', categories: '["cosmetics"]', priority: 'P2', audited_at: '2026-07-15T00:00:00Z', updated_at: '2026-07-16T00:00:00Z' }),
-    record({ id: 15, company_name: 'Missing Audit Time', country_code: 'JP', domain: 'missing-audit-time.test', url: 'https://missing-audit-time.test/', categories: '["cosmetics"]', priority: 'P2', audited_at: null })
+    record({ id: 15, company_name: 'Missing Audit Time', country_code: 'JP', domain: 'missing-audit-time.test', url: 'https://missing-audit-time.test/', categories: '["cosmetics"]', priority: 'P2', audited_at: null }),
+    record({ id: 16, company_name: 'Ready Stage', country_code: 'DE', domain: 'ready.test', url: 'https://ready.test/', categories: '["stage-test"]', stage_code: 'recommendation_ready', priority: 'P1' }),
+    ...['unknown', 'pending', 'terminal', 'bounced', 'opted_out', 'delivered', 'draft_pending', 'selected'].map((stage_code, index) => record({ id: 17 + index, company_name: `Rejected ${stage_code}`, country_code: 'DE', domain: `rejected-${index}.test`, url: `https://rejected-${index}.test/`, categories: '["stage-test"]', stage_code, priority: 'P3' }))
   ].forEach(row => insertRecord.run(row));
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-16T00:00:00Z', 'Coffee products', 'e1');
   db.prepare('INSERT INTO cache_evidence VALUES (2,1,?,?,?,?,?,?)').run('https://association.test/members', 'official_association_directory', 'Member directory', '2026-07-15T00:00:00Z', 'Association listing', 'e2');
@@ -92,8 +94,8 @@ try {
   let discoveryId = 10;
   const addOfficial = id => db.prepare('INSERT INTO cache_evidence VALUES (?,?,?,?,?,?,?,?)').run(evidenceId++, id, `https://record-${id}.test/products`, 'official_website', 'Products', '2026-07-16T00:00:00Z', 'Public products', `e-${id}`);
   const addDiscovery = id => db.prepare('INSERT INTO cache_discovery VALUES (?,?,?,?,?,?,?,?,?)').run(discoveryId++, id, `record-${id}.test`, 'official_directory', `https://directory.test/${id}`, `https://record-${id}.test/`, 'official_directory', '2026-07-16T00:00:00Z', `d-${id}`);
-  for (const id of [5, 7, 12, 13, 14, 15]) addOfficial(id);
-  for (const id of [5, 6, 12, 13, 14, 15]) addDiscovery(id);
+  for (const id of [5, 7, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]) addOfficial(id);
+  for (const id of [5, 6, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]) addDiscovery(id);
 } finally {
   db.close();
 }
@@ -154,22 +156,29 @@ try {
   assert.strictEqual(view.detail(10), null);
   assert.strictEqual(view.detail(11), null);
   assert.strictEqual(view.detail(12).status, 'needs_review');
-  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [] }).map(row => row.id), [1, 12]);
-  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [1] }).map(row => row.id), [12]);
-  assert.deepStrictEqual(view.recommend({ limit: 2.9 }).map(row => row.id), [1, 12]);
+  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [] }).map(row => row.id), [1, 16]);
+  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [1] }).map(row => row.id), [16]);
+  assert.deepStrictEqual(view.recommend({ limit: 2.9 }).map(row => row.id), [1, 16]);
   assert.deepStrictEqual(view.recommend({ limit: -3 }), []);
   assert.deepStrictEqual(view.recommend({ limit: 'invalid' }), []);
   assert.deepStrictEqual(view.recommend({ limit: Infinity }), []);
   assert.strictEqual(view.recommend().length, 2);
-  assert.ok(view.recommend().every(row => row.stage_code === 'observed'));
+  assert.ok(view.recommend().every(row => ['observed', 'recommendation_ready'].includes(row.stage_code)));
   assert.strictEqual(view.ready(), true);
   const strictPage1 = view.recommendPage({ page: 1, page_size: 1 });
   const strictPage2 = view.recommendPage({ page: 2, page_size: 1 });
   assert.deepStrictEqual(strictPage1.rows.map(row => row.id), [1]);
-  assert.deepStrictEqual(strictPage2.rows.map(row => row.id), [12]);
+  assert.deepStrictEqual(strictPage2.rows.map(row => row.id), [16]);
   assert.strictEqual(strictPage1.total, 2);
   assert.strictEqual(strictPage1.total_pages, 2);
-  assert.notStrictEqual(strictPage1.snapshot_key, strictPage2.snapshot_key);
+  assert.strictEqual(strictPage1.snapshot_key, strictPage2.snapshot_key);
+  assert.strictEqual(strictPage1.snapshot_key, view.recommendPage({ page: 1, page_size: 2 }).snapshot_key);
+  const mutationDb = new Database(dbPath);
+  mutationDb.prepare("UPDATE cache_records SET updated_at = audited_at WHERE id = 16").run();
+  mutationDb.prepare("UPDATE cache_records SET updated_at = '2026-07-15T00:00:00Z', audited_at = '2026-07-15T00:00:00Z' WHERE id = 16").run();
+  mutationDb.close();
+  const driftedPage2 = view.recommendPage({ page: 2, page_size: 1 });
+  assert.notStrictEqual(driftedPage2.snapshot_key, strictPage1.snapshot_key);
   assert.deepStrictEqual(view.recommendPage({ category: 'missing', page: 1, page_size: 5 }).rows, []);
 
   const allowedRegions = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);

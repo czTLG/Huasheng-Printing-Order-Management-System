@@ -518,6 +518,41 @@ async function testInteractiveZeroRecommendations() {
   registered.dispose();
 }
 
+async function testRecommendationSnapshotTransitions() {
+  const rows = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, company_name: `Snapshot ${index + 1}`, country_code: 'US', region: 'americas', official_domain: `snapshot-${index + 1}.test`, official_url: `https://snapshot-${index + 1}.test/`, categories: ['coffee'], format_signals: [], size_signals: [], scale_tier: 'medium', priority: 'P1', fit_score: 80, demand_fit_score: 80, access_score: 70, confidence: 0.9, status: 'valid', stage_code: 'observed', audit_state: 'audited', assessment_cn: '公开证据', next_action_cn: '核实公开入口', updated_at: '2026-07-17T00:00:00Z' }));
+  async function scenario({ drift = false, filterChange = false }) {
+    const handlers = new Map(); const sent = []; const patches = []; const snapshot = 'a'.repeat(64);
+    const client = {
+      today: async (_openId, filters) => {
+        if (filters.region) return { rows: rows.slice(0, 5), snapshot_key: 'c'.repeat(64), page: 1, page_size: 5 };
+        if (filters.page === 2) return { rows: rows.slice(5, 10), snapshot_key: drift ? 'b'.repeat(64) : snapshot, page: 2, page_size: 5 };
+        return { rows: rows.slice(0, 5), snapshot_key: snapshot, page: 1, page_size: 5 };
+      },
+      createSession: async (_openId, input) => {
+        if (input.session_id) patches.push(input);
+        return { id: 101, chat_id: 'chat-snapshot', thread_id: '', filters: input.filters || { page_size: 5 }, snapshot_key: input.snapshot_key, candidate_ids: input.candidate_ids, page: input.page || 1, version: input.session_id ? input.expected_version + 1 : 1, expires_at: input.expires_at || '2026-07-17T00:30:00Z' };
+      }
+    };
+    const registered = extension.register({ channel: {}, dispatcher: { on: (n, h) => handlers.set(n, h) }, card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_c, _id, card) => sent.push(card) });
+    await registered.onMessage({ msg: { content: '开发客户', chatId: 'chat-snapshot', threadId: '', senderId: 'ou-snapshot' } });
+    const evt = { operator: { openId: 'ou-snapshot' }, chatId: 'chat-snapshot', threadId: '', messageId: 'evt-snapshot' };
+    if (filterChange) await handlers.get('mx.region')({ evt, value: { a: 'mx.region', s: 101, v: 1, r: 'americas' } });
+    else await handlers.get('mx.page')({ evt, value: { a: 'mx.page', s: 101, v: 1 } });
+    registered.dispose();
+    return { sent, patches };
+  }
+  const stable = await scenario({});
+  assert.strictEqual(stable.patches.length, 1);
+  assert.deepStrictEqual(stable.patches[0].candidate_ids, [6, 7, 8, 9, 10]);
+  assert.ok(!stable.patches[0].candidate_ids.some(id => [1, 2, 3, 4, 5].includes(id)));
+  const drifted = await scenario({ drift: true });
+  assert.strictEqual(drifted.patches.length, 0);
+  assert.ok(visibleText(drifted.sent.at(-1)).includes('开发客户'));
+  const filtered = await scenario({ filterChange: true });
+  assert.strictEqual(filtered.patches.length, 1);
+  assert.strictEqual(filtered.patches[0].snapshot_key, 'c'.repeat(64));
+}
+
 (async () => {
   await testNarrowClient();
   await testReadOnlyWatcher();
@@ -528,6 +563,7 @@ async function testInteractiveZeroRecommendations() {
   await testConcurrentCallbacksFreezeDisplayedVersion();
   await testSelectionReplayAfterRestart();
   await testInteractiveZeroRecommendations();
+  await testRecommendationSnapshotTransitions();
   testSanitizedCompose();
   process.env.MATRIX_DELIVERY_ENABLED = '1';
   assert.throws(() => extension.register({}), /MATRIX_DELIVERY_ENABLED/);

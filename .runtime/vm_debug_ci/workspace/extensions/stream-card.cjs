@@ -389,7 +389,16 @@ function register(context) {
     const page = Number(state.session.page || 1) + 1;
     const result = await client.today(openId, { ...state.filters, page, page_size: 5 });
     const candidates = (result.rows || []).slice(0, 5);
-    const snapshotKey = candidates.length ? (result.snapshot_key || state.snapshotKey) : '';
+    const snapshotKey = result.snapshot_key || '';
+    if (snapshotKey !== state.snapshotKey) {
+      const error = new Error('recommendation snapshot changed');
+      error.matrixSessionInvalid = true;
+      throw error;
+    }
+    if (!candidates.length) {
+      await sendForEvent(evt, infoCard(cardHelpers, '当前条件下没有更多合格候选。'));
+      return;
+    }
     await refreshSession(openId, state, evt.chatId, evt.threadId, expectedVersion, { page, candidates, snapshotKey });
     state.candidates = candidates;
     state.snapshotKey = snapshotKey;

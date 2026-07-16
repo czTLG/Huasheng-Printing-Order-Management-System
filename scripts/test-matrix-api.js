@@ -236,6 +236,7 @@ async function stopServer() {
     assert.strictEqual(recommendationPage2.body.page, 2);
     assert.deepStrictEqual(recommendationPage2.body.rows, []);
     assert.match(recommendationPage2.body.snapshot_key, /^[a-f0-9]{64}$/);
+    assert.strictEqual(recommendationPage2.body.snapshot_key, recommendations.body.snapshot_key);
     const weakRecommendation = await request('/api/matrix/recommendations/today?category=snacks&page=1&page_size=5', { token: crmAdminToken });
     assert.deepStrictEqual(weakRecommendation.body.rows, []);
 
