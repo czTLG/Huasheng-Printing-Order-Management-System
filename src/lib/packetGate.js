@@ -19,6 +19,12 @@ function parseJson(value, fallback) {
   }
 }
 
+function activeUntil(expiresAt, at) {
+  const expiryMillis = Date.parse(String(expiresAt || ''));
+  const currentMillis = Date.parse(String(at || ''));
+  return Number.isFinite(expiryMillis) && Number.isFinite(currentMillis) && expiryMillis > currentMillis;
+}
+
 function sessionResult(row) {
   return {
     id: row.id,
@@ -194,7 +200,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     const session = db.prepare('SELECT * FROM matrix_sessions WHERE id = ?').get(sessionId);
     if (!session) throw new Error('session not found');
     if (session.actor_user_id !== actorUserId) throw new Error('not authorized');
-    if (Date.parse(session.expires_at) <= Date.parse(at)) throw new Error('session expired');
+    if (!activeUntil(session.expires_at, at)) throw new Error('session expired');
     if (session.version !== expectedVersion) throw new Error('stale version');
     return session;
   }
@@ -206,7 +212,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     const session = db.prepare('SELECT * FROM matrix_sessions WHERE id = ?').get(id);
     if (!session) throw new Error('session not found');
     if (session.actor_user_id !== owner) throw new Error('not authorized');
-    if (Date.parse(session.expires_at) <= Date.parse(timestamp())) throw new Error('session expired');
+    if (!activeUntil(session.expires_at, timestamp())) throw new Error('session expired');
     if (String(session.chat_id) !== String(chatId || '') || String(session.thread_id || '') !== String(threadId || '')) throw new Error('session context mismatch');
     return sessionResult(session);
   }

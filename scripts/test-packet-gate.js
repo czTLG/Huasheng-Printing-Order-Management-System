@@ -173,12 +173,14 @@ try {
   clock = '2026-07-16T23:00:00.000Z';
   const offsetExpired = gate.createSession({ actorUserId: 7, feishuOpenId: 'ou-7', chatId: 'offset-expired', filters: {}, snapshotKey: 'e'.repeat(64), candidateIds: [201], expiresAt: '2026-07-17T08:00:00+08:00' });
   const offsetFuture = gate.createSession({ actorUserId: 7, feishuOpenId: 'ou-7', chatId: 'offset-future', filters: {}, snapshotKey: 'f'.repeat(64), candidateIds: [202], expiresAt: '2026-07-17T10:00:00+08:00' });
-  db.prepare(`INSERT INTO matrix_sessions (actor_user_id, chat_id, thread_id, filters_json, snapshot_key, candidate_ids_json, page, version, expires_at, created_at, updated_at) VALUES (7, 'offset-invalid', '', '{}', ?, '[203]', 1, 1, 'not-a-time', ?, ?)`)
-    .run('1'.repeat(64), clock, clock);
+  const invalidExpiryId = Number(db.prepare(`INSERT INTO matrix_sessions (actor_user_id, chat_id, thread_id, filters_json, snapshot_key, candidate_ids_json, page, version, expires_at, created_at, updated_at) VALUES (7, 'offset-invalid', '', '{}', ?, '[203]', 1, 1, 'not-a-time', ?, ?)`)
+    .run('1'.repeat(64), clock, clock).lastInsertRowid);
   clock = '2026-07-17T00:30:00.000Z';
   assert.throws(() => gate.getSession({ sessionId: offsetExpired.id, actorUserId: 7, chatId: 'offset-expired', threadId: '' }), /expired/);
   assert.throws(() => gate.getCurrentSession({ actorUserId: 7, chatId: 'offset-expired', threadId: '' }), /not found/);
+  assert.strictEqual(gate.getSession({ sessionId: offsetFuture.id, actorUserId: 7, chatId: 'offset-future', threadId: '' }).id, offsetFuture.id);
   assert.strictEqual(gate.getCurrentSession({ actorUserId: 7, chatId: 'offset-future', threadId: '' }).id, offsetFuture.id);
+  assert.throws(() => gate.getSession({ sessionId: invalidExpiryId, actorUserId: 7, chatId: 'offset-invalid', threadId: '' }), /expired/);
   assert.throws(() => gate.getCurrentSession({ actorUserId: 7, chatId: 'offset-invalid', threadId: '' }), /not found/);
   clock = '2026-07-17T00:00:00.000Z';
   assert.throws(() => gate.getSession({ sessionId: session.id, actorUserId: 8, chatId: 'chat-1', threadId: 'thread-1' }), /not authorized/);

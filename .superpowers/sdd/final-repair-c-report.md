@@ -30,6 +30,7 @@ Base: `64b74dc` (Repair C phase checkpoint: `ae7bb8a`)
 - Rehydration no longer compacts missing rows. Every persisted ID must resolve in the same position and return the same numeric ID; a missing, excluded, or suppressed row fails the complete session with HTTP 409. Letter and callback paths convert that conflict into the restart card.
 - Every callback freezes its displayed version before the first await. Filter/page PATCH receives that immutable version rather than reading shared mutable session state. A Promise-barrier regression releases two v1 reads independently and observes PATCH versions `[1, 1]`; one commit advances the server to v2 and the other receives the stale conflict and renders restart state.
 - Current-session expiry now uses `julianday` with an explicit non-null check. Tests prove an offset timestamp already expired in UTC is rejected, an offset timestamp still in the future is accepted, and an invalid stored timestamp fails closed.
+- By-ID, update, selection, and detail authorization now share a strict `activeUntil` rule: both parsed timestamps must be finite and expiry must be later than the current instant. Invalid/NaN expiry therefore fails closed exactly like current-session lookup; API tests cover both session rehydration and candidate-detail authorization against an invalid stored timestamp.
 - The hydration API covers both a missing ID and an existing but excluded ID. It never shifts B into A or returns a partial candidate array.
 
 ### 蒸馏进度

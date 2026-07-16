@@ -49,7 +49,7 @@ const RUNTIME_MANIFEST = {
   'src/db.js': '48e99c09d72ce248790b31f300ba22613b54d4956dde39ae1c722763f6724c3c',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
   'src/lib/cacheIndexView.js': 'f00e1177c587f19330b09aa2dfa43c133230af8dc1fdff6d269cf35d6aae5ee3',
-  'src/lib/packetGate.js': '0f127fc1b24e86d689b4508015abffb4c6bca1ddbada327c697fc589f199720e',
+  'src/lib/packetGate.js': 'a952eed38d570a441c23f4124f83e29f7147778c8d2fa0e5bba7d2da1238c829',
   'src/routes/matrix.js': 'b71e09ef13946a323131f049180d0991c2b69e13276a446105aaf89df9e510b8',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
 };

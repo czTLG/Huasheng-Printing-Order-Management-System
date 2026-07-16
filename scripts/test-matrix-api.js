@@ -279,6 +279,14 @@ async function stopServer() {
     assert.strictEqual((await request('/api/matrix/candidates/1', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);
     assert.strictEqual((await request(`/api/matrix/candidates/1?session_id=${createdSession.body.id}&chat_id=chat-1&thread_id=thread-1`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 200);
 
+    const invalidExpiryDb = new Database(appDbPath);
+    let invalidExpirySessionId;
+    try {
+      invalidExpirySessionId = Number(invalidExpiryDb.prepare(`INSERT INTO matrix_sessions (actor_user_id, chat_id, thread_id, filters_json, snapshot_key, candidate_ids_json, page, version, expires_at, created_at, updated_at) VALUES (103, 'chat-invalid-expiry', '', '{}', ?, '[1]', 1, 1, 'not-a-time', '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z')`).run('c'.repeat(64)).lastInsertRowid);
+    } finally { invalidExpiryDb.close(); }
+    assert.strictEqual((await request(`/api/matrix/sessions/${invalidExpirySessionId}?chat_id=chat-invalid-expiry&thread_id=`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);
+    assert.strictEqual((await request(`/api/matrix/candidates/1?session_id=${invalidExpirySessionId}&chat_id=chat-invalid-expiry&thread_id=`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);
+
     for (const [chatId, candidateIds] of [['chat-missing', [1, 999]], ['chat-suppressed', [1, 3]]]) {
       const incomplete = await request('/api/matrix/sessions', {
         method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
