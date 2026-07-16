@@ -4,22 +4,14 @@ const express = require('express');
 const { db, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
 const { listCandidates } = require('../lib/signalCache');
-const { APPROVED_COUNTRIES, EXCLUDED_COUNTRIES } = require('../lib/schemaRank');
+const { APPROVED_COUNTRIES, EXCLUDED_COUNTRIES, PUBLIC_REASON_CODES } = require('../lib/schemaRank');
 
 const router = express.Router();
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
 const CLASSIFICATIONS = new Set(['valid', 'needs_review', 'noise', 'test']);
 const PRIORITIES = new Set(['A', 'B', 'C']);
 const COUNTRIES = new Set([...APPROVED_COUNTRIES, ...EXCLUDED_COUNTRIES]);
-const PUBLIC_REASON_CODES = new Set([
-  'fixture_marker', 'security_notice', 'excluded_country', 'unapproved_country',
-  'missing_identity', 'ambiguous_contact', 'unknown_whatsapp_sender',
-  'malformed_source_time', 'conflicting_domains', 'approved_country',
-  'official_domain', 'product_evidence', 'valid_source_time',
-  'confirmed_international_whatsapp', 'business_evidence',
-  'duplicated_message_segments', 'malformed_json_payload',
-  'uncertain_direction', 'missing_business_evidence', 'classification_error'
-]);
+const PUBLIC_REASON_CODE_SET = new Set(PUBLIC_REASON_CODES);
 
 router.use(allowRoles(...CRM_ROLES));
 
@@ -37,7 +29,7 @@ function publicReasonCodes(value) {
   if (!value) return [];
   try {
     const parsed = JSON.parse(String(value));
-    return Array.isArray(parsed) ? parsed.filter(item => PUBLIC_REASON_CODES.has(item)) : [];
+    return Array.isArray(parsed) ? parsed.filter(item => PUBLIC_REASON_CODE_SET.has(item)) : [];
   } catch (_) {
     return [];
   }

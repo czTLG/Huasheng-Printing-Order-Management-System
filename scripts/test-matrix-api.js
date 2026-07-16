@@ -139,6 +139,14 @@ function seed() {
 }
 
 async function main() {
+  const { PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
+  assert(Array.isArray(PUBLIC_REASON_CODES), 'schemaRank should export the authoritative public reason-code list');
+  [
+    'approved_country', 'official_domain', 'confirmed_international_whatsapp',
+    'business_evidence', 'duplicated_message_segments', 'malformed_json_payload',
+    'uncertain_direction', 'missing_business_evidence', 'classification_error'
+  ].forEach(code => assert(PUBLIC_REASON_CODES.includes(code), `public reason-code list should include ${code}`));
+
   const { firstId } = seed();
   child = spawn(process.execPath, ['src/server.js'], {
     cwd: root,

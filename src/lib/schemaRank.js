@@ -15,6 +15,29 @@ const EXCLUDED_COUNTRIES = Object.freeze([
   'India'
 ]);
 
+const PUBLIC_REASON_CODES = Object.freeze([
+  'fixture_marker',
+  'security_notice',
+  'excluded_country',
+  'unapproved_country',
+  'missing_identity',
+  'ambiguous_contact',
+  'unknown_whatsapp_sender',
+  'malformed_source_time',
+  'conflicting_domains',
+  'approved_country',
+  'official_domain',
+  'product_evidence',
+  'valid_source_time',
+  'confirmed_international_whatsapp',
+  'business_evidence',
+  'duplicated_message_segments',
+  'malformed_json_payload',
+  'uncertain_direction',
+  'missing_business_evidence',
+  'classification_error'
+]);
+
 const approvedCountryKeys = new Set(APPROVED_COUNTRIES.map(normalizeCountry));
 const excludedCountryKeys = new Set(EXCLUDED_COUNTRIES.map(normalizeCountry));
 const AMBIGUOUS_CONTACT_DOMAINS = Object.freeze([
@@ -147,5 +170,6 @@ module.exports = {
   isApprovedCountry,
   APPROVED_COUNTRIES,
   EXCLUDED_COUNTRIES,
+  PUBLIC_REASON_CODES,
   RULESET_VERSION
 };
