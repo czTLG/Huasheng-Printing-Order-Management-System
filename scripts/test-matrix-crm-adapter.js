@@ -266,6 +266,10 @@ try {
   insertEmail.run({ ...emailDefaults, id: 282, message_id: '<india-282@indiabrand.example>', from_email: 'buyer@indiabrand.example', subject: 'Snack pouch inquiry', text_body: 'Please quote snack pouch', cleaned_text: 'Please quote snack pouch', contact_email: 'buyer@indiabrand.example', matched_customer_id: 27, business_relevance: 'high' });
   insertEmail.run({ ...emailDefaults, id: 283, message_id: '<local-283@local.cn>', from_email: 'buyer@local.cn', subject: 'Coffee pouch inquiry', text_body: 'Please quote coffee pouch', cleaned_text: 'Please quote coffee pouch', contact_email: 'buyer@local.cn', matched_customer_id: 28, business_relevance: 'high' });
   insertEmail.run({ ...emailDefaults, id: 284, message_id: '<internal-inbound-284@factory.invalid>', from_email: 'staff@factory.invalid', to_emails: '["sales@factory.invalid"]', subject: 'Internal inbound note', text_body: 'Internal packaging note', cleaned_text: 'Internal packaging note', contact_email: 'staff@factory.invalid', direction: 'inbound' });
+  insertEmail.run({ ...emailDefaults, id: 285, message_id: '<outbound-csv-285@factory.invalid>', from_email: 'sales@factory.invalid', to_emails: 'buyer@outside-one.example', cc_emails: 'Buyer Two <buyer2@outside-one.example>', subject: 'Outbound pouch inquiry', text_body: 'Please quote coffee pouch', cleaned_text: 'Please quote coffee pouch', contact_email: 'buyer@outside-one.example', direction: 'outbound', business_relevance: 'high' });
+  insertEmail.run({ ...emailDefaults, id: 286, message_id: '<inbound-csv-286@outside-two.example>', from_email: 'buyer@outside-two.example', to_emails: 'sales@factory.invalid,support@factory.invalid', subject: 'Inbound pouch inquiry', text_body: 'Please quote snack pouch', cleaned_text: 'Please quote snack pouch', contact_email: 'buyer@outside-two.example', direction: 'inbound', business_relevance: 'high' });
+  insertEmail.run({ ...emailDefaults, id: 287, message_id: '<internal-csv-287@factory.invalid>', from_email: 'staff@factory.invalid', to_emails: 'sales@factory.invalid,support@factory.invalid', cc_emails: 'manager@factory.invalid', subject: 'Internal CSV note', text_body: 'Internal packaging note', cleaned_text: 'Internal packaging note', contact_email: 'staff@factory.invalid', direction: 'outbound' });
+  insertEmail.run({ ...emailDefaults, id: 288, message_id: '<malformed-address-288@factory.invalid>', from_email: 'sales@factory.invalid', to_emails: '"broken', subject: 'Malformed recipient note', text_body: 'Please quote coffee pouch', cleaned_text: 'Please quote coffee pouch', contact_email: 'buyer@outside-three.example', direction: 'outbound', business_relevance: 'high' });
 
   const before = digest();
   const { readEligibleCrmRecords, classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
@@ -339,6 +343,12 @@ try {
   assert.equal(normalized.records.some(record => record.source_ids.customer_ids.includes(28)), false, 'local-only CRM identity must not acquire overseas eligibility');
   assert.equal(bySourceId(report, 'email_message_ids', 284).classification, 'noise');
   assert(bySourceId(report, 'email_message_ids', 284).reason_codes.includes(REASON_CODES.INTERNAL_ONLY));
+  assert.equal(bySourceId(report, 'email_message_ids', 285).classification, 'valid', 'IMAP CSV outbound external recipient must remain eligible');
+  assert.equal(bySourceId(report, 'email_message_ids', 286).classification, 'valid', 'IMAP CSV inbound external sender must remain eligible');
+  assert.equal(bySourceId(report, 'email_message_ids', 287).classification, 'noise', 'IMAP CSV internal participants must be noise regardless of direction');
+  assert(bySourceId(report, 'email_message_ids', 287).reason_codes.includes(REASON_CODES.INTERNAL_ONLY));
+  assert.equal(bySourceId(report, 'email_message_ids', 288).classification, 'needs_review', 'malformed address lists must safely downgrade');
+  assert(bySourceId(report, 'email_message_ids', 288).reason_codes.includes(REASON_CODES.MALFORMED_JSON_PAYLOAD));
 
   const errorReport = classifyCurrentCrm(db, {
     now: '2026-07-16',

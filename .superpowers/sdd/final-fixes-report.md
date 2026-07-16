@@ -99,3 +99,11 @@ Additional syntax checks passed for all modified/new production JavaScript modul
 - RED: one valid evidence reference could mask additional bogus references. GREEN: the nonempty reference array now requires every entry to match the scope-specific positive-ID format.
 
 Final Critical/Important re-review: clean / GO for the R2 scope.
+
+## R3 final-review fixes
+
+- RED: production IMAP comma-separated recipients disappeared from participant checks, so outbound internal-to-external mail was classified as internal noise; production CSV also tripped JSON-malformation handling. GREEN: recipient fields accept both JSON arrays and comma-separated/RFC address syntax, normalize every from/to/cc/bcc address, preserve external participants, and mark malformed lists for safe review instead of internal-noise suppression.
+- RED: an official URL redirect to a child subdomain contacted that child before final exact-domain rejection. GREEN: non-wildcard host authorization is exact at entry and before every redirect/evidence hop; only an explicit `*.` campaign pattern retains subdomain matching. The regression asserts the child host never reaches transport.
+- During repeated deadline regression runs, the outer deadline race exposed a detached DNS continuation when its rejection timer won just before the abort timer. The deadline rejection now aborts the shared controller synchronously before rejecting, and repeated focused runs remained green.
+
+Final Critical/Important re-review: clean / GO for the R3 scope.

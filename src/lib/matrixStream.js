@@ -372,7 +372,7 @@ function hostAllowed(hostname, patterns) {
   return patterns.some(pattern => {
     const value = String(pattern || '').toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
     if (value.startsWith('*.')) return host.endsWith(value.slice(1));
-    return host === value || host.endsWith(`.${value}`);
+    return host === value;
   });
 }
 
@@ -402,9 +402,12 @@ function evidenceMatchesRecord(record) {
   });
 }
 
-function withinDeadline(promise, milliseconds) {
+function withinDeadline(promise, milliseconds, onDeadline) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('run deadline exceeded')), Math.max(1, milliseconds));
+    const timer = setTimeout(() => {
+      if (typeof onDeadline === 'function') onDeadline();
+      reject(new Error('run deadline exceeded'));
+    }, Math.max(1, milliseconds));
     Promise.resolve(promise).then(
       value => { clearTimeout(timer); resolve(value); },
       error => { clearTimeout(timer); reject(error); }
@@ -528,7 +531,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
         ...dependencies, allowedHosts: [record.official_domain], probeBudget,
         maxRedirects: campaign.max_redirects,
         signal: abortController.signal, perProbeDeadlineMs: Math.min(10000, remaining)
-      }), remaining);
+      }), remaining, () => abortController.abort());
     } catch { summary.errors += 1; continue; }
     if (!officialValidation.ok) {
       summary.errors += 1;
@@ -564,7 +567,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
           probeBudget,
           signal: abortController.signal,
           perProbeDeadlineMs: Math.min(10000, deadline)
-        }), deadline);
+        }), deadline, () => abortController.abort());
       } catch { evidenceFailed = true; break; }
       if (!validation.ok) {
         evidenceFailed = true;

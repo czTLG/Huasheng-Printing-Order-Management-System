@@ -524,6 +524,20 @@ async function main() {
   assert.equal(intermediateSummary.errors, 1);
   assert.deepEqual(intermediateCalls, ['https://origin.example/'], 'unapproved redirect hops must be rejected before contact');
 
+  const childHostRun = createRun(db, campaign('redirect-child-boundary', ['Vietnam'], { official_hosts: ['*.example'] }));
+  const childHostCalls = [];
+  const childHostSummary = await importDiscoveryBatch(db, childHostRun.id, [escapedHostRecord], {
+    dnsLookup: publicDnsLookup,
+    transport: async (url, options) => {
+      childHostCalls.push(url);
+      return url === 'https://origin.example/'
+        ? pinnedResponse(302, 'https://child.origin.example/then', options)
+        : pinnedResponse(200, null, options);
+    }
+  });
+  assert.equal(childHostSummary.errors, 1);
+  assert.deepEqual(childHostCalls, ['https://origin.example/'], 'official child subdomain must be rejected before contact');
+
   const pageRun = createRun(db, campaign('page-cap', ['Vietnam'], { max_pages_per_company: 6 }));
   const pageRecord = discoveryRecord('too-many-pages');
   pageRecord.evidence = pageRecord.evidence.map((item, index) => ({ ...item, source_url: `https://brand-too-many-pages.example/page-${index}` }));

@@ -1,5 +1,6 @@
 'use strict';
 
+const addressparser = require('nodemailer/lib/addressparser');
 const { classifyRecord, isApprovedCountry, REASON_CODES, RULESET_VERSION } = require('./schemaRank');
 
 const DOMESTIC_COUNTRIES = new Set([
@@ -106,16 +107,41 @@ function customerHasOverseasEvidence(customer) {
   );
 }
 
-function jsonAddressList(value) {
-  if (Array.isArray(value)) return value.map(text).filter(Boolean);
-  const raw = text(value);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(text).filter(Boolean) : [];
-  } catch {
-    return [];
+function parsedAddressList(value) {
+  const result = { addresses: [], malformed: false };
+  let candidates;
+  if (Array.isArray(value)) candidates = value;
+  else {
+    const raw = text(value);
+    if (!raw) return result;
+    if (raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return { addresses: [], malformed: true };
+        candidates = parsed;
+      } catch {
+        return { addresses: [], malformed: true };
+      }
+    } else candidates = [raw];
   }
+
+  const collect = (entry) => {
+    if (Array.isArray(entry?.group)) {
+      entry.group.forEach(collect);
+      return;
+    }
+    const address = lower(entry?.address);
+    if (!address || !emailDomain(address)) result.malformed = true;
+    else result.addresses.push(address);
+  };
+  for (const candidate of candidates) {
+    const raw = text(candidate);
+    if (!raw) { result.malformed = true; continue; }
+    const parsed = addressparser(raw);
+    if (!parsed.length) result.malformed = true;
+    else parsed.forEach(collect);
+  }
+  return result;
 }
 
 function internalAddressConfig(options = {}) {
@@ -132,12 +158,10 @@ function internalAddressConfig(options = {}) {
 }
 
 function emailHasOnlyInternalParticipants(row, config) {
-  const participants = [
-    text(row.from_email),
-    ...jsonAddressList(row.to_emails),
-    ...jsonAddressList(row.cc_emails),
-    ...jsonAddressList(row.bcc_emails)
-  ].map(lower).filter(Boolean);
+  const parsedLists = [row.from_email, row.to_emails, row.cc_emails, row.bcc_emails]
+    .map(parsedAddressList);
+  if (parsedLists.some(result => result.malformed)) return false;
+  const participants = parsedLists.flatMap(result => result.addresses).map(lower).filter(Boolean);
   return participants.length > 0 && participants.every(address => {
     const domain = emailDomain(address);
     return config.mailboxes.has(address) || (domain && config.domains.has(domain));
@@ -234,15 +258,13 @@ function hasMalformedJson(group) {
       row.raw_headers_json,
       row.detected_signals_json,
       row.parser_hints_json,
-      row.attachments_json,
-      row.to_emails,
-      row.cc_emails,
-      row.bcc_emails
+      row.attachments_json
     ])
   ].map(text).filter(Boolean);
   return values.some((value) => {
     try { JSON.parse(value); return false; } catch { return true; }
-  });
+  }) || group.emailMessages.some(row => [row.from_email, row.to_emails, row.cc_emails, row.bcc_emails]
+    .some(value => parsedAddressList(value).malformed));
 }
 
 function hasFixtureMarker(group) {
