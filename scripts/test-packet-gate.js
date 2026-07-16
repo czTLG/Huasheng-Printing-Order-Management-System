@@ -55,16 +55,65 @@ try {
     /not authorized/
   );
 
+  const sessionCountBeforeUnsafeFilters = db.prepare('SELECT COUNT(*) n FROM matrix_sessions').get().n;
+  assert.throws(
+    () => gate.createSession({
+      actorUserId: 7,
+      feishuOpenId: 'ou-7',
+      chatId: 'chat-unsafe-contact',
+      filters: { region: 'europe', email: 'buyer@example.test' },
+      expiresAt: '2026-07-18T00:00:00.000Z'
+    }),
+    /unknown filter/
+  );
+  assert.throws(
+    () => gate.createSession({
+      actorUserId: 7,
+      feishuOpenId: 'ou-7',
+      chatId: 'chat-unsafe-nested',
+      filters: { category: { company: 'Candidate facts' } },
+      expiresAt: '2026-07-18T00:00:00.000Z'
+    }),
+    /category filter/
+  );
+  assert.throws(
+    () => gate.createSession({
+      actorUserId: 7,
+      feishuOpenId: 'ou-7',
+      chatId: 'chat-unsafe-category',
+      filters: { category: 'buyer@example.test' },
+      expiresAt: '2026-07-18T00:00:00.000Z'
+    }),
+    /category filter/
+  );
+  assert.throws(
+    () => gate.createSession({
+      actorUserId: 7,
+      feishuOpenId: 'ou-7',
+      chatId: 'chat-unsafe-page-size',
+      filters: { page_size: 21 },
+      expiresAt: '2026-07-18T00:00:00.000Z'
+    }),
+    /page_size filter/
+  );
+  assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_sessions').get().n, sessionCountBeforeUnsafeFilters);
+
   const session = gate.createSession({
     actorUserId: 7,
     feishuOpenId: 'ou-7',
     chatId: 'chat-1',
     threadId: 'thread-1',
-    filters: { region: 'europe', category: 'coffee' },
+    filters: {
+      region: 'europe', country: 'US', category: 'coffee',
+      priority: 'P1', status: 'valid', page: 1, page_size: 20
+    },
     expiresAt: '2026-07-18T00:00:00.000Z'
   });
   assert.strictEqual(session.version, 1);
-  assert.deepStrictEqual(session.filters, { region: 'europe', category: 'coffee' });
+  assert.deepStrictEqual(session.filters, {
+    region: 'europe', country: 'US', category: 'coffee',
+    priority: 'P1', status: 'valid', page: 1, page_size: 20
+  });
 
   const updated = gate.updateSession({
     sessionId: session.id,
@@ -75,6 +124,17 @@ try {
   assert.strictEqual(updated.version, 2);
   assert.strictEqual(updated.page, 2);
   assert.deepStrictEqual(updated.filters, { region: 'americas' });
+  assert.throws(
+    () => gate.updateSession({
+      sessionId: session.id,
+      actorUserId: 7,
+      expectedVersion: 2,
+      patch: { filters: { region: 'americas', contact: { phone: '123456' } } }
+    }),
+    /unknown filter/
+  );
+  assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(session.id).version, 2);
+  assert.deepStrictEqual(JSON.parse(db.prepare('SELECT filters_json FROM matrix_sessions WHERE id = ?').get(session.id).filters_json), { region: 'americas' });
   assert.throws(
     () => gate.updateSession({ sessionId: session.id, actorUserId: 7, expectedVersion: 1, patch: { page: 3 } }),
     /stale version/
@@ -124,6 +184,15 @@ try {
   assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_selection_events').get().n, 1);
   assert.deepStrictEqual(db.prepare('SELECT * FROM matrix_selection_events WHERE idempotency_key = ?').get('evt-001'), firstEvent);
   assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(selectionSession.id).version, 2);
+  assert.throws(
+    () => db.prepare("UPDATE matrix_selection_events SET reason = 'tampered' WHERE id = ?").run(firstEvent.id),
+    /append-only/
+  );
+  assert.throws(
+    () => db.prepare('DELETE FROM matrix_selection_events WHERE id = ?').run(firstEvent.id),
+    /append-only/
+  );
+  assert.deepStrictEqual(db.prepare('SELECT * FROM matrix_selection_events WHERE id = ?').get(firstEvent.id), firstEvent);
 
   assert.deepStrictEqual(gate.listWorkItems({ actorUserId: 7 }).map(item => item.candidate_id), [42]);
   assert.deepStrictEqual(gate.listWorkItems({ actorUserId: 8 }), []);
@@ -210,6 +279,31 @@ try {
     () => gate.updateSession({ sessionId: expiredSession.id, actorUserId: 8, expectedVersion: 1, patch: { page: 2 } }),
     /session expired/
   );
+
+  db.prepare("UPDATE users SET status = 'disabled' WHERE id = 8").run();
+  assert.strictEqual(gate.resolveActor({ feishuOpenId: 'ou-8' }), null);
+  assert.throws(() => gate.listWorkItems({ actorUserId: 8 }), /application user inactive/);
+  assert.throws(
+    () => gate.getWorkItem({ workItemId: first.work_item_id, actorUserId: 8 }),
+    /application user inactive/
+  );
+  assert.throws(
+    () => gate.updateSession({ sessionId: actor8Session.id, actorUserId: 8, expectedVersion: 1, patch: { page: 2 } }),
+    /application user inactive/
+  );
+  assert.throws(
+    () => gate.selectCandidate({
+      candidateId: 44,
+      actorUserId: 8,
+      sessionId: actor8Session.id,
+      expectedVersion: 1,
+      idempotencyKey: 'evt-inactive-user',
+      nextAction: '不应成功'
+    }),
+    /application user inactive/
+  );
+  assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(actor8Session.id).version, 1);
+  assert.strictEqual(db.prepare("SELECT COUNT(*) n FROM matrix_selection_events WHERE idempotency_key = 'evt-inactive-user'").get().n, 0);
 
   db.prepare("UPDATE matrix_actor_bindings SET status = 'revoked', revoked_at = ? WHERE feishu_open_id = 'ou-7'").run(clock);
   assert.strictEqual(gate.resolveActor({ feishuOpenId: 'ou-7' }), null);

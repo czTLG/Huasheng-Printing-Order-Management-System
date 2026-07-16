@@ -857,6 +857,18 @@ function initDb() {
 
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
+    BEFORE UPDATE ON matrix_selection_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_delete
+    BEFORE DELETE ON matrix_selection_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+    END;
   `);
 
   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);

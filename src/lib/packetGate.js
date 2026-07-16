@@ -1,5 +1,10 @@
 'use strict';
 
+const FILTER_KEYS = new Set(['region', 'country', 'category', 'priority', 'status', 'page', 'page_size']);
+const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
+const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
+const STATUSES = new Set(['valid', 'needs_review']);
+
 function positiveInteger(value, label) {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 1) throw new Error(`${label} must be a positive integer`);
@@ -44,6 +49,38 @@ function workItemResult(row) {
   };
 }
 
+function normalizeFilters(value) {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
+    throw new Error('filters must be a plain object');
+  }
+  const filters = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (!FILTER_KEYS.has(key)) throw new Error(`unknown filter: ${key}`);
+    if (key === 'page' || key === 'page_size') {
+      const maximum = key === 'page_size' ? 20 : 1000000;
+      if (!Number.isInteger(raw) || raw < 1 || raw > maximum) throw new Error(`${key} filter out of range`);
+      filters[key] = raw;
+      continue;
+    }
+    if (typeof raw !== 'string') throw new Error(`${key} filter must be a string`);
+    const text = raw.trim();
+    if (key === 'region') {
+      if (!REGIONS.has(text)) throw new Error('region filter invalid');
+    } else if (key === 'country') {
+      if (!/^[A-Z]{2}$/.test(text)) throw new Error('country filter invalid');
+    } else if (key === 'category') {
+      if (!/^\p{L}[\p{L}\p{N} &+/_-]{0,63}$/u.test(text)) throw new Error('category filter invalid');
+    } else if (key === 'priority') {
+      if (!PRIORITIES.has(text)) throw new Error('priority filter invalid');
+    } else if (key === 'status') {
+      if (!STATUSES.has(text)) throw new Error('status filter invalid');
+    }
+    filters[key] = text;
+  }
+  return filters;
+}
+
 function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
   if (!db || typeof db.prepare !== 'function' || typeof db.transaction !== 'function') {
     throw new Error('application db required');
@@ -60,6 +97,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
   }
 
   function activeBindingForUser(userId) {
+    if (!userExists(userId)) throw new Error('application user inactive');
     const active = db.prepare(`
       SELECT * FROM matrix_actor_bindings
       WHERE user_id = ? AND status = 'active'
@@ -118,7 +156,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     const chatId = String(input.chatId || '').trim();
     if (!chatId) throw new Error('chat id required');
     const threadId = String(input.threadId || '').trim();
-    const filters = input.filters && typeof input.filters === 'object' && !Array.isArray(input.filters) ? input.filters : {};
+    const filters = normalizeFilters(input.filters);
     const at = timestamp();
     const expiresAt = String(input.expiresAt || '').trim();
     if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.parse(at)) {
@@ -159,8 +197,7 @@ function createPacketGate({ db, now = () => new Date().toISOString() } = {}) {
     let expiresAt = session.expires_at;
     if (Object.prototype.hasOwnProperty.call(patch, 'page')) page = positiveInteger(patch.page, 'page');
     if (Object.prototype.hasOwnProperty.call(patch, 'filters')) {
-      if (!patch.filters || typeof patch.filters !== 'object' || Array.isArray(patch.filters)) throw new Error('filters must be an object');
-      filtersJson = JSON.stringify(patch.filters);
+      filtersJson = JSON.stringify(normalizeFilters(patch.filters));
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'expiresAt')) {
       expiresAt = String(patch.expiresAt || '').trim();
