@@ -171,11 +171,11 @@ function facets(db) {
   };
 }
 
-function list(db, filters = {}) {
+function paginated(db, filters = {}, baseWhere = BASE_WHERE, maximumPageSize = 50) {
   const page = Math.max(1, Number.parseInt(filters.page, 10) || 1);
   const requestedSize = Number.parseInt(filters.pageSize ?? filters.page_size, 10) || 10;
-  const pageSize = Math.min(50, Math.max(1, requestedSize));
-  const { where, params } = filterSql(filters);
+  const pageSize = Math.min(maximumPageSize, Math.max(1, requestedSize));
+  const { where, params } = filterSql(filters, baseWhere);
   const total = db.prepare(`SELECT COUNT(*) AS count FROM cache_records r WHERE ${where}`).get(...params).count;
   const rawRows = db.prepare(`
     SELECT r.* FROM cache_records r
@@ -206,6 +206,9 @@ function list(db, filters = {}) {
     snapshot_key: snapshotKey
   };
 }
+
+function list(db, filters = {}) { return paginated(db, filters, BASE_WHERE, 50); }
+function recommendPage(db, filters = {}) { return paginated(db, filters, RECOMMENDATION_WHERE, 5); }
 
 function detail(db, id, { revealContacts = false } = {}) {
   const row = db.prepare(`
@@ -261,11 +264,25 @@ function createCacheIndexView({ dbPath } = {}) {
   const selectedPath = dbPath || process.env.MATRIX_STREAM_DB_PATH || path.resolve(__dirname, '..', '..', 'data', 'matrix-stream.db');
   const db = new Database(selectedPath, { readonly: true, fileMustExist: true });
   db.pragma('query_only = ON');
+  function ready() {
+    if (db.pragma('query_only', { simple: true }) !== 1) throw new Error('candidate database is not query-only');
+    for (const table of ['cache_records', 'cache_evidence', 'cache_discovery']) {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) throw new Error('candidate database schema incomplete');
+    }
+    const recordColumns = new Set(db.prepare('PRAGMA table_info(cache_records)').all().map(row => row.name));
+    for (const column of ['id', 'country_code', 'stage_code', 'status', 'audit_state', 'audited_at', 'updated_at']) {
+      if (!recordColumns.has(column)) throw new Error('candidate database schema incomplete');
+    }
+    recommendPage(db, { page: 1, page_size: 1 });
+    return true;
+  }
   return {
     facets: () => facets(db),
     list: filters => list(db, filters),
+    recommendPage: filters => recommendPage(db, filters),
     detail: (id, options) => detail(db, id, options),
     recommend: ({ limit = 5, excludeIds = [], filters = {} } = {}) => recommend(db, recommendationLimit(limit), excludeIds, filters),
+    ready,
     close: () => db.close()
   };
 }

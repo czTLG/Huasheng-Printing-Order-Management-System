@@ -12,14 +12,21 @@ function healthUrl(baseUrl) {
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) {
     throw new Error('HTTP MATRIX_API_BASE_URL is required');
   }
-  return new URL('/health', base.origin).href;
+  if (base.pathname.replace(/\/$/, '') !== '/api/matrix') throw new Error('MATRIX_API_BASE_URL path must be /api/matrix');
+  return new URL('/api/matrix/ready', base.origin).href;
 }
 
 async function probeApi(baseUrl, fetchImpl = fetch) {
   const url = healthUrl(baseUrl);
   let response;
   try {
-    response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(3000) });
+    response = await fetchImpl(url, {
+      redirect: 'error', signal: AbortSignal.timeout(3000),
+      headers: {
+        'x-matrix-bridge-token': String(process.env.MATRIX_BRIDGE_TOKEN || ''),
+        'x-feishu-open-id': String(process.env.MATRIX_OWNER_OPEN_ID || '')
+      }
+    });
   } catch (error) {
     throw new Error(`matrix API unreachable: ${error?.message || 'request failed'}`);
   }
@@ -27,7 +34,7 @@ async function probeApi(baseUrl, fetchImpl = fetch) {
   const type = String(response.headers?.get?.('content-type') || '').toLowerCase();
   if (!type.includes('application/json')) throw new Error('matrix API health returned non-JSON response');
   const body = await response.json().catch(() => null);
-  if (!body?.ok) throw new Error('matrix API health response is not ok');
+  if (!body?.ok || body?.service !== 'matrix') throw new Error('matrix API readiness response is not ok');
 }
 
 function processAlive(pid) {

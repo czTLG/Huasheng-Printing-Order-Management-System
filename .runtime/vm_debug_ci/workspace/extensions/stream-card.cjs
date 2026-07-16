@@ -119,6 +119,7 @@ function confirmedSignals(values) {
 
 function renderCandidates(state, cardHelpers) {
   const { card, md, note, hr, actions, button } = cardHelpers;
+  if (!state.candidates.length) return card([md('当前筛选条件下没有达到公开证据标准的候选。'), note('可稍后重试或调整高级筛选。')], { header: { title: '暂无合格候选', template: 'blue' }, summary: '暂无合格候选' });
   const elements = [];
   state.candidates.slice(0, 5).forEach((candidate, index) => {
     const label = LETTERS[index];
@@ -284,14 +285,14 @@ function register(context) {
       chat_id: msg.chatId,
       thread_id: msg.threadId || '',
       filters: { page_size: 5 },
-      snapshot_key: recommendation.snapshot_key || '',
+      snapshot_key: recommendation.rows?.length ? (recommendation.snapshot_key || '') : '',
       candidate_ids: (recommendation.rows || []).slice(0, 5).map(row => row.id),
       expires_at: new Date(clockMillis() + SESSION_TTL_MS).toISOString()
     });
     const state = {
       session,
       candidates: (recommendation.rows || []).slice(0, 5),
-      snapshotKey: recommendation.snapshot_key || '',
+      snapshotKey: recommendation.rows?.length ? (recommendation.snapshot_key || '') : '',
       filters: { page_size: 5 }
     };
     sessions.set(sessionKey(msg.chatId, openId), state);
@@ -347,7 +348,7 @@ function register(context) {
     if (String(state.session.chat_id) !== String(evt.chatId || '') || String(state.session.thread_id || '') !== String(evt.threadId || '')) {
       throw new Error('callback session context mismatch');
     }
-    if (expectedVersion !== Number(state.session.version) && !(allowReplay && selectionEvents.has(String(value?.e || '')))) {
+    if (expectedVersion !== Number(state.session.version) && !allowReplay) {
       throw new Error('callback stale version');
     }
     return { openId, state, expectedVersion };
@@ -374,9 +375,9 @@ function register(context) {
     else if (String(value.r || '').startsWith('country:')) filters.country = String(value.r).slice(8);
     else filters.region = String(value.r || '');
     delete filters.page;
-    const result = await client.listCandidates(openId, { ...filters, page: 1, page_size: 5 });
+    const result = await client.today(openId, { ...filters, page: 1, page_size: 5 });
     const candidates = (result.rows || []).slice(0, 5);
-    const snapshotKey = result.snapshot_key || state.snapshotKey;
+    const snapshotKey = candidates.length ? (result.snapshot_key || state.snapshotKey) : '';
     await refreshSession(openId, state, evt.chatId, evt.threadId, expectedVersion, { filters, page: 1, candidates, snapshotKey });
     state.candidates = candidates;
     state.snapshotKey = snapshotKey;
@@ -386,9 +387,9 @@ function register(context) {
   async function pageAction({ evt, value }) {
     const { openId, state, expectedVersion } = await callbackState(evt, value);
     const page = Number(state.session.page || 1) + 1;
-    const result = await client.listCandidates(openId, { ...state.filters, page, page_size: 5 });
+    const result = await client.today(openId, { ...state.filters, page, page_size: 5 });
     const candidates = (result.rows || []).slice(0, 5);
-    const snapshotKey = result.snapshot_key || state.snapshotKey;
+    const snapshotKey = candidates.length ? (result.snapshot_key || state.snapshotKey) : '';
     await refreshSession(openId, state, evt.chatId, evt.threadId, expectedVersion, { page, candidates, snapshotKey });
     state.candidates = candidates;
     state.snapshotKey = snapshotKey;

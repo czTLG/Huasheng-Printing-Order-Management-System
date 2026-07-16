@@ -101,7 +101,7 @@ function rehydrateSession(openId, input = {}) {
 }
 
 function today(openId, filters = {}) {
-  const query = exactObject(filters, new Set(['region', 'country', 'category', 'priority', 'status', 'page_size']), 'recommendation filters');
+  const query = exactObject(filters, new Set(['region', 'country', 'category', 'priority', 'status', 'page', 'page_size']), 'recommendation filters');
   return call(openId, '/recommendations/today', { query });
 }
 

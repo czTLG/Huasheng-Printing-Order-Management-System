@@ -229,6 +229,15 @@ async function stopServer() {
     assert.deepStrictEqual(recommendations.body.rows.map(row => row.id), [1]);
     assert.strictEqual(recommendations.body.page_size, 5);
     assert.strictEqual(recommendations.body.rows[0].stage_code, 'observed');
+    assert.strictEqual(recommendations.body.total, 1);
+    assert.strictEqual(recommendations.body.total_pages, 1);
+    const recommendationPage2 = await request('/api/matrix/recommendations/today?page=2&page_size=5', { token: crmAdminToken });
+    assert.strictEqual(recommendationPage2.status, 200);
+    assert.strictEqual(recommendationPage2.body.page, 2);
+    assert.deepStrictEqual(recommendationPage2.body.rows, []);
+    assert.match(recommendationPage2.body.snapshot_key, /^[a-f0-9]{64}$/);
+    const weakRecommendation = await request('/api/matrix/recommendations/today?category=snacks&page=1&page_size=5', { token: crmAdminToken });
+    assert.deepStrictEqual(weakRecommendation.body.rows, []);
 
     const detail = await request('/api/matrix/candidates/1', { token: crmAdminToken });
     assert.strictEqual(detail.status, 200);
@@ -242,6 +251,9 @@ async function stopServer() {
     assert.strictEqual((await request('/api/matrix/facets', { serviceToken: bridgeToken, openId: 'ou-none' })).status, 403);
     assert.strictEqual((await request('/api/matrix/facets', { serviceToken: bridgeToken, openId: 'ou-disabled' })).status, 403);
     assert.strictEqual((await request('/api/matrix/facets', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 200);
+    assert.deepStrictEqual((await request('/api/matrix/ready', { serviceToken: bridgeToken, openId: 'ou-service' })), { status: 200, body: { ok: true, service: 'matrix' } });
+    assert.strictEqual((await request('/api/matrix/ready', { token: crmAdminToken })).status, 403);
+    assert.strictEqual((await request('/api/matrix/ready', { serviceToken: bridgeToken, openId: 'ou-none' })).status, 403);
 
     const rejectedSession = await request('/api/matrix/sessions', {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
@@ -276,6 +288,7 @@ async function stopServer() {
     assert.strictEqual(restored.status, 200);
     assert.deepStrictEqual(restored.body.candidates.map(row => row.id), [1]);
     assert.ok(!JSON.stringify(restored.body).includes('team@alpha.test'));
+    for (const forbidden of ['contacts', 'discovery', 'official_evidence', 'supporting_evidence', 'evidence', 'excerpt']) assert.strictEqual(Object.prototype.hasOwnProperty.call(restored.body.candidates[0], forbidden), false);
     assert.strictEqual((await request('/api/matrix/candidates/1', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);
     assert.strictEqual((await request(`/api/matrix/candidates/1?session_id=${createdSession.body.id}&chat_id=chat-1&thread_id=thread-1`, { serviceToken: bridgeToken, openId: 'ou-service' })).status, 200);
 
@@ -367,6 +380,17 @@ async function stopServer() {
     } finally {
       cliDb.close();
     }
+
+    child = spawn(process.execPath, ['src/server.js'], {
+      cwd: path.resolve(__dirname, '..'),
+      env: { ...process.env, PORT: String(port), DB_PATH: appDbPath, MATRIX_STREAM_DB_PATH: path.join(root, 'missing-candidate.db'), MATRIX_BRIDGE_TOKEN: bridgeToken, JWT_SECRET: jwtSecret, DISABLE_CRON: '1', NODE_ENV: 'test' },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    child.stdout.on('data', chunk => { serverOutput += chunk; });
+    child.stderr.on('data', chunk => { serverOutput += chunk; });
+    await waitForServer();
+    assert.strictEqual((await request('/api/matrix/ready', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 503);
+    await stopServer();
 
     assert.ok(!serverOutput.includes(bridgeToken));
     console.log('matrix API tests passed');

@@ -9,7 +9,7 @@ const scriptPath = path.resolve(__dirname, '..', 'scripts', 'matrix-runtime.js')
 const composePath = path.resolve(__dirname, '..', '..', 'compose.yaml');
 const runtime = require(scriptPath);
 
-assert.strictEqual(runtime.healthUrl('http://host.docker.internal:8080/api/matrix'), 'http://host.docker.internal:8080/health');
+assert.strictEqual(runtime.healthUrl('http://host.docker.internal:8080/api/matrix'), 'http://host.docker.internal:8080/api/matrix/ready');
 assert.throws(() => runtime.healthUrl('ftp://host.invalid/api/matrix'), /http/i);
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
@@ -17,7 +17,14 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
   try {
     const statePath = path.join(root, 'runtime.json');
     fs.writeFileSync(statePath, JSON.stringify({ watcherPid: 101, bridgePid: 102 }), { mode: 0o600 });
-    const fetchOk = async () => ({ ok: true, headers: { get: () => 'application/json' }, json: async () => ({ ok: true }) });
+    process.env.MATRIX_BRIDGE_TOKEN = 'runtime-test-token';
+    process.env.MATRIX_OWNER_OPEN_ID = 'ou-runtime-owner';
+    const fetchOk = async (url, options) => {
+      assert.ok(String(url).endsWith('/api/matrix/ready'));
+      assert.strictEqual(options.headers['x-matrix-bridge-token'], 'runtime-test-token');
+      assert.strictEqual(options.headers['x-feishu-open-id'], 'ou-runtime-owner');
+      return { ok: true, headers: { get: () => 'application/json' }, json: async () => ({ ok: true, service: 'matrix' }) };
+    };
     await runtime.assertHealthy({
       baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
       fetchImpl: fetchOk, isAlive: pid => pid === 101 || pid === 102
@@ -31,6 +38,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
       fetchImpl: async () => { throw new Error('connection refused'); },
       isAlive: () => true
     }), /API.*unreachable/i);
+    await assert.rejects(() => runtime.probeApi('http://host.docker.internal:8080/api/matrix', async () => ({ ok: true, headers: { get: () => 'application/json' }, json: async () => ({ ok: true }) })), /readiness/i);
 
     const compose = fs.readFileSync(composePath, 'utf8');
     assert.ok(compose.includes('MATRIX_API_BASE_URL: http://host.docker.internal:${MATRIX_API_HOST_PORT:-8080}/api/matrix'));

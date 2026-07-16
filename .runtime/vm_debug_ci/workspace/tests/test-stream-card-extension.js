@@ -436,7 +436,7 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
   let serverVersion = 1;
   const row = { id: 701, company_name: 'Concurrent Company', country_code: 'US', region: 'americas', official_domain: 'concurrent.test', official_url: 'https://concurrent.test/', categories: ['coffee'], format_signals: [], size_signals: [], scale_tier: 'medium', priority: 'P1', fit_score: 80, demand_fit_score: 80, access_score: 70, confidence: 0.9, status: 'valid', stage_code: 'observed', audit_state: 'audited', assessment_cn: '公开证据', next_action_cn: '核实公开入口', updated_at: '2026-07-17T00:00:00Z' };
   const client = {
-    today: async () => ({ rows: [row], snapshot_key: '7'.repeat(64) }),
+    today: async (_openId, filters) => filters.region ? new Promise(resolve => pendingReads.push(resolve)) : ({ rows: [row], snapshot_key: '7'.repeat(64) }),
     createSession: async (_openId, input) => {
       if (!input.session_id) return { id: 71, chat_id: 'chat-concurrent', thread_id: '', filters: { page_size: 5 }, page: 1, version: 1, expires_at: '2026-07-17T00:30:00Z' };
       patchVersions.push(input.expected_version);
@@ -444,7 +444,7 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
       serverVersion += 1;
       return { id: 71, chat_id: 'chat-concurrent', thread_id: '', filters: input.filters, snapshot_key: input.snapshot_key, candidate_ids: input.candidate_ids, page: input.page, version: serverVersion, expires_at: '2026-07-17T00:30:00Z' };
     },
-    listCandidates: async () => new Promise(resolve => pendingReads.push(resolve))
+    listCandidates: async () => { throw new Error('ordinary list must not feed recommendations'); }
   };
   const registered = extension.register({
     channel: {}, dispatcher: { on: (name, handler) => handlers.set(name, handler) }, card: helpers(), client,
@@ -467,6 +467,57 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
   registered.dispose();
 }
 
+async function testSelectionReplayAfterRestart() {
+  const row = { id: 801, company_name: 'Replay Company', country_code: 'US', region: 'americas', official_domain: 'replay.test', official_url: 'https://replay.test/', categories: ['coffee'], format_signals: [], size_signals: [], scale_tier: 'medium', priority: 'P1', fit_score: 80, demand_fit_score: 80, access_score: 70, confidence: 0.9, status: 'valid', stage_code: 'observed', audit_state: 'audited', assessment_cn: '公开证据', next_action_cn: '核实公开入口', updated_at: '2026-07-17T00:00:00Z' };
+  const persisted = new Map(); let version = 1; let workItems = 0; const sent = [];
+  const client = {
+    today: async () => ({ rows: [row], snapshot_key: '8'.repeat(64) }),
+    createSession: async () => ({ id: 81, chat_id: 'chat-replay', thread_id: '', filters: { page_size: 5 }, snapshot_key: '8'.repeat(64), candidate_ids: [801], page: 1, version, expires_at: '2026-07-17T00:30:00Z' }),
+    rehydrateSession: async () => ({ id: 81, chat_id: 'chat-replay', thread_id: '', filters: { page_size: 5 }, snapshot_key: '8'.repeat(64), candidate_ids: [801], candidates: [row], page: 1, version, expires_at: '2026-07-17T00:30:00Z' }),
+    selectCandidate: async (_openId, input) => {
+      if (persisted.has(input.idempotency_key)) return persisted.get(input.idempotency_key);
+      if (input.expected_version !== version) { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; }
+      version += 1; workItems += 1;
+      const result = { work_item_id: 1, candidate_id: input.candidate_id, session_id: 81, session_version: version, next_action: input.next_action };
+      persisted.set(input.idempotency_key, result); return result;
+    }
+  };
+  const firstHandlers = new Map();
+  const first = extension.register({ channel: {}, dispatcher: { on: (n, h) => firstHandlers.set(n, h) }, card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_c, _id, card) => sent.push(card) });
+  await first.onMessage({ msg: { content: '开发客户', chatId: 'chat-replay', threadId: '', senderId: 'ou-replay' } });
+  const oldSelect = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value;
+  const evt = { operator: { openId: 'ou-replay' }, chatId: 'chat-replay', threadId: '', messageId: 'evt-replay' };
+  await firstHandlers.get('mx.select')({ evt, value: oldSelect });
+  first.dispose();
+  const freshHandlers = new Map();
+  const fresh = extension.register({ channel: {}, dispatcher: { on: (n, h) => freshHandlers.set(n, h) }, card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_c, _id, card) => sent.push(card) });
+  await freshHandlers.get('mx.select')({ evt, value: oldSelect });
+  assert.strictEqual(workItems, 1);
+  assert.ok(visibleText(sent.at(-1)).includes('已加入进行中'));
+  await freshHandlers.get('mx.select')({ evt, value: { ...oldSelect, e: 'unseen-stale-event' } });
+  assert.strictEqual(workItems, 1);
+  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+  fresh.dispose();
+}
+
+async function testInteractiveZeroRecommendations() {
+  const sent = []; let created;
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: () => undefined }, card: helpers(), now: () => Date.parse('2026-07-17T00:00:00Z'),
+    client: {
+      today: async () => ({ rows: [], snapshot_key: 'f'.repeat(64), page: 1, page_size: 5, total: 0, total_pages: 0 }),
+      createSession: async (_openId, input) => { created = input; return { id: 91, chat_id: 'chat-zero', thread_id: '', filters: input.filters, snapshot_key: input.snapshot_key, candidate_ids: input.candidate_ids, page: 1, version: 1, expires_at: input.expires_at }; }
+    },
+    sendManagedCard: async (_c, _id, card) => sent.push(card)
+  });
+  await registered.onMessage({ msg: { content: '开发客户', chatId: 'chat-zero', threadId: '', senderId: 'ou-zero' } });
+  assert.strictEqual(created.snapshot_key, '');
+  assert.deepStrictEqual(created.candidate_ids, []);
+  assert.ok(visibleText(sent[0]).includes('没有达到公开证据标准'));
+  assert.strictEqual(buttons(sent[0]).length, 0);
+  registered.dispose();
+}
+
 (async () => {
   await testNarrowClient();
   await testReadOnlyWatcher();
@@ -475,6 +526,8 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
   await testWholeCardBudget();
   await testExpiredSessionRecovery();
   await testConcurrentCallbacksFreezeDisplayedVersion();
+  await testSelectionReplayAfterRestart();
+  await testInteractiveZeroRecommendations();
   testSanitizedCompose();
   process.env.MATRIX_DELIVERY_ENABLED = '1';
   assert.throws(() => extension.register({}), /MATRIX_DELIVERY_ENABLED/);
@@ -512,7 +565,16 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
   let sessionExpiry = '';
   let failNextList = false;
   const client = {
-    today: async (openId, filters) => { calls.push(['today', openId, filters]); return { rows: candidates, snapshot_key: 'snap-1', page: 1, page_size: 5 }; },
+    today: async (openId, filters) => {
+      calls.push(['today', openId, filters]);
+      if (failNextList) {
+        const failure = failNextList; failNextList = false;
+        const error = failure === 'timeout' ? new Error('request timed out') : new Error('matrix API HTTP 500');
+        if (failure === 'timeout') error.name = 'TimeoutError'; else error.status = 500;
+        throw error;
+      }
+      return { rows: candidates.slice(0, 5), snapshot_key: `snap-${filters.page || 1}`, page: filters.page || 1, page_size: 5 };
+    },
     createSession: async (openId, input) => {
       calls.push(['createSession', openId, input]);
       if (input.expires_at) sessionExpiry = input.expires_at;
@@ -547,17 +609,12 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
         cities: [{ value: '广州', count: 99 }]
       };
     },
-    listCandidates: async (openId, filters) => {
-      calls.push(['listCandidates', openId, filters]);
-      if (failNextList) {
-        const failure = failNextList; failNextList = false;
-        const error = failure === 'timeout' ? new Error('request timed out') : new Error('matrix API HTTP 500');
-        if (failure === 'timeout') error.name = 'TimeoutError'; else error.status = 500;
-        throw error;
-      }
-      return { rows: candidates.slice(0, 5), snapshot_key: `snap-${filters.page || 1}`, page: filters.page || 1, page_size: 5 };
+    listCandidates: async () => { throw new Error('ordinary list must not feed recommendations'); },
+    selectCandidate: async (openId, input) => {
+      calls.push(['selectCandidate', openId, input]);
+      if (input.idempotency_key === 'stale-event') { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; }
+      return { work_item_id: 91, candidate_id: input.candidate_id, session_id: input.session_id, session_version: input.expected_version + 1, next_action: input.next_action };
     },
-    selectCandidate: async (openId, input) => { calls.push(['selectCandidate', openId, input]); return { work_item_id: 91, candidate_id: input.candidate_id, session_id: input.session_id, session_version: input.expected_version + 1, next_action: input.next_action }; },
     workItems: async openId => { calls.push(['workItems', openId]); return { rows: [{ id: 91, candidate_id: 1, stage: 'selected', next_action: '核实公开联系入口' }] }; }
   };
   const registered = extension.register({
@@ -617,7 +674,7 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
   const regionPatch = calls.filter(item => item[0] === 'createSession').at(-1)[2];
   assert.strictEqual(regionPatch.session_id, 11);
   assert.strictEqual(regionPatch.expected_version, regionButton.value.v);
-  assert.strictEqual(calls.filter(item => item[0] === 'listCandidates').at(-1)[2].region, 'americas');
+  assert.strictEqual(calls.filter(item => item[0] === 'today').at(-1)[2].region, 'americas');
 
   const nextFilterButton = buttons(sent.at(-1).card).find(item => item.value?.a === 'mx.filters');
   await handlers.get('mx.filters')({ evt: callbackEvent, value: nextFilterButton.value });
@@ -632,7 +689,8 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
   const categoryPatch = calls.filter(item => item[0] === 'createSession').at(-1)[2];
   assert.strictEqual(categoryPatch.session_id, 11);
   assert.strictEqual(categoryPatch.expected_version, categoryButton.value.v);
-  assert.strictEqual(calls.filter(item => item[0] === 'listCandidates').at(-1)[2].category, 'coffee');
+  assert.strictEqual(calls.filter(item => item[0] === 'today').at(-1)[2].category, 'coffee');
+  assert.strictEqual(calls.some(item => item[0] === 'listCandidates'), false);
 
   const selectButton = buttons(sent.slice().reverse().find(item => buttons(item.card).some(button => button.value?.a === 'mx.select'))?.card).find(item => item.value?.a === 'mx.select');
   assert.ok(selectButton);
@@ -645,7 +703,7 @@ async function testConcurrentCallbacksFreezeDisplayedVersion() {
 
   const selectBeforeStale = calls.filter(item => item[0] === 'selectCandidate').length;
   await handlers.get('mx.select')({ evt: callbackEvent, value: { a: 'mx.select', s: 11, v: 999, c: 1, e: 'stale-event' } });
-  assert.strictEqual(calls.filter(item => item[0] === 'selectCandidate').length, selectBeforeStale);
+  assert.strictEqual(calls.filter(item => item[0] === 'selectCandidate').length, selectBeforeStale + 1);
   assert.ok(visibleText(sent.at(-1).card).includes('开发客户'));
 
   const freshSent = [];

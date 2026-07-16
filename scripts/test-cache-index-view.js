@@ -162,6 +162,15 @@ try {
   assert.deepStrictEqual(view.recommend({ limit: Infinity }), []);
   assert.strictEqual(view.recommend().length, 2);
   assert.ok(view.recommend().every(row => row.stage_code === 'observed'));
+  assert.strictEqual(view.ready(), true);
+  const strictPage1 = view.recommendPage({ page: 1, page_size: 1 });
+  const strictPage2 = view.recommendPage({ page: 2, page_size: 1 });
+  assert.deepStrictEqual(strictPage1.rows.map(row => row.id), [1]);
+  assert.deepStrictEqual(strictPage2.rows.map(row => row.id), [12]);
+  assert.strictEqual(strictPage1.total, 2);
+  assert.strictEqual(strictPage1.total_pages, 2);
+  assert.notStrictEqual(strictPage1.snapshot_key, strictPage2.snapshot_key);
+  assert.deepStrictEqual(view.recommendPage({ category: 'missing', page: 1, page_size: 5 }).rows, []);
 
   const allowedRegions = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
   const requiredIsoCodes = ['AQ', 'AX', 'BL', 'BV', 'CC', 'CX', 'EH', 'FO', 'GG', 'GI', 'GS', 'HM', 'IM', 'IO', 'JE', 'MF', 'SH', 'SJ', 'TF', 'UM'];
@@ -182,6 +191,13 @@ try {
     if (previousPath === undefined) delete process.env.MATRIX_STREAM_DB_PATH;
     else process.env.MATRIX_STREAM_DB_PATH = previousPath;
   }
+  const malformedPath = path.join(dir, 'malformed.db');
+  const malformedDb = new Database(malformedPath);
+  malformedDb.exec('CREATE TABLE cache_records (id INTEGER PRIMARY KEY)');
+  malformedDb.close();
+  const malformedView = createCacheIndexView({ dbPath: malformedPath });
+  try { assert.throws(() => malformedView.ready(), /schema incomplete/); }
+  finally { malformedView.close(); }
 } finally {
   view.close();
   fs.rmSync(dir, { recursive: true, force: true });

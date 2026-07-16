@@ -60,7 +60,7 @@ function normalizedListFilters(query, { recommendation = false } = {}) {
     if (!STATUSES.has(status)) throw new Error('invalid status');
     filters.status = status;
   }
-  filters.page = recommendation ? 1 : (input.page === undefined ? 1 : positiveInteger(input.page, 'page', 1000000));
+  filters.page = input.page === undefined ? 1 : positiveInteger(input.page, 'page', 1000000);
   const requestedSize = input.page_size === undefined ? (recommendation ? 5 : 10) : positiveInteger(input.page_size, 'page_size', 20);
   filters.page_size = recommendation ? Math.min(5, requestedSize) : requestedSize;
   return filters;
@@ -110,7 +110,7 @@ function requireMatrixRole(req, res, next) {
 function errorStatus(error) {
   const message = String(error?.message || 'request failed');
   if (/stale version|session rehydration incomplete/.test(message)) return 409;
-  if (/not authorized|actor binding|required binding|inactive|revoked/.test(message)) return 403;
+  if (/not authorized|actor binding|required binding|service binding|inactive|revoked/.test(message)) return 403;
   if (/not found/.test(message)) return 404;
   return 400;
 }
@@ -121,6 +121,15 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
   const gate = createPacketGate({ db, now: clock });
 
   router.use(requireMatrixRole);
+
+  router.get('/ready', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      rejectUnknown(req.query, new Set(), 'query');
+      view.ready();
+      res.json({ ok: true, service: 'matrix' });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
 
   router.get('/facets', (req, res) => {
     try {
@@ -159,10 +168,7 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
   router.get('/recommendations/today', (req, res) => {
     try {
       const filters = normalizedListFilters(req.query, { recommendation: true });
-      const { page: _page, page_size: pageSize, ...recommendationFilters } = filters;
-      const rows = view.recommend({ limit: pageSize, excludeIds: [], filters: recommendationFilters });
-      const snapshotKey = crypto.createHash('sha256').update(JSON.stringify(rows.map(row => [row.id, row.updated_at]))).digest('hex');
-      res.json({ rows, page: 1, page_size: pageSize, total: rows.length, total_pages: rows.length ? 1 : 0, snapshot_key: snapshotKey });
+      res.json(view.recommendPage(filters));
     }
     catch (error) { res.status(400).json({ error: error.message }); }
   });
@@ -201,8 +207,17 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
     const candidates = session.candidate_ids.map(id => {
       const row = view.detail(id);
       if (!row || Number(row.id) !== Number(id)) throw new Error('session rehydration incomplete');
-      const { contacts, discovery, evidence, supporting, ...summary } = row;
-      return summary;
+      return {
+        id: row.id, company_name: row.company_name, country_code: row.country_code,
+        region: row.region, city: row.city, official_domain: row.official_domain,
+        official_url: row.official_url, categories: row.categories,
+        format_signals: row.format_signals, size_signals: row.size_signals,
+        scale_tier: row.scale_tier, priority: row.priority, fit_score: row.fit_score,
+        demand_fit_score: row.demand_fit_score, access_score: row.access_score,
+        confidence: row.confidence, status: row.status, stage_code: row.stage_code,
+        audit_state: row.audit_state, assessment_cn: row.assessment_cn,
+        next_action_cn: row.next_action_cn, updated_at: row.updated_at
+      };
     });
     if (candidates.length !== session.candidate_ids.length) throw new Error('session rehydration incomplete');
     return { ...session, candidates };
