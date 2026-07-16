@@ -1,6 +1,6 @@
 'use strict';
 
-const FILTER_KEYS = new Set(['region', 'country', 'category', 'priority', 'status', 'page', 'page_size']);
+const FILTER_KEYS = new Set(['region', 'country', 'category', 'priority', 'status', 'page_size']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
 const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
 const STATUSES = new Set(['valid', 'needs_review']);
@@ -57,9 +57,8 @@ function normalizeFilters(value) {
   const filters = {};
   for (const [key, raw] of Object.entries(value)) {
     if (!FILTER_KEYS.has(key)) throw new Error(`unknown filter: ${key}`);
-    if (key === 'page' || key === 'page_size') {
-      const maximum = key === 'page_size' ? 20 : 1000000;
-      if (!Number.isInteger(raw) || raw < 1 || raw > maximum) throw new Error(`${key} filter out of range`);
+    if (key === 'page_size') {
+      if (!Number.isInteger(raw) || raw < 1 || raw > 20) throw new Error('page_size filter out of range');
       filters[key] = raw;
       continue;
     }

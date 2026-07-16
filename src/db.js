@@ -871,6 +871,14 @@ function initDb() {
     END;
   `);
 
+  db.prepare(`
+    UPDATE matrix_sessions
+    SET filters_json = json_remove(filters_json, '$.page')
+    WHERE json_valid(filters_json) = 1
+      AND json_type(filters_json) = 'object'
+      AND json_type(filters_json, '$.page') IS NOT NULL
+  `).run();
+
   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
   if (!cols.includes('priority')) {
     db.exec("ALTER TABLE orders ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");

@@ -30,6 +30,17 @@ try {
   insertUser.run(8, 'actor-eight', clock);
   insertUser.run(9, 'binding-admin', clock);
 
+  const legacySessionId = Number(db.prepare(`
+    INSERT INTO matrix_sessions (
+      actor_user_id, chat_id, thread_id, filters_json, page, version,
+      expires_at, created_at, updated_at
+    ) VALUES (7, 'legacy-chat', '', '{"region":"europe","page":9}', 2, 1, ?, ?, ?)
+  `).run('2026-07-18T00:00:00.000Z', clock, clock).lastInsertRowid);
+  initDb();
+  const migratedLegacyRow = db.prepare('SELECT filters_json, page FROM matrix_sessions WHERE id = ?').get(legacySessionId);
+  assert.strictEqual(migratedLegacyRow.page, 2);
+  assert.deepStrictEqual(JSON.parse(migratedLegacyRow.filters_json), { region: 'europe' });
+
   const gate = createPacketGate({ db, now: () => clock });
   assert.strictEqual(gate.send, undefined);
   assert.strictEqual(gate.sendEmail, undefined);
@@ -39,6 +50,15 @@ try {
   assert.strictEqual(binding7.user_id, 7);
   assert.strictEqual(binding8.user_id, 8);
   assert.strictEqual(gate.resolveActor({ feishuOpenId: 'ou-7' }).user_id, 7);
+  const migratedLegacySession = gate.updateSession({
+    sessionId: legacySessionId,
+    actorUserId: 7,
+    expectedVersion: 1,
+    patch: {}
+  });
+  assert.strictEqual(migratedLegacySession.page, 2);
+  assert.deepStrictEqual(migratedLegacySession.filters, { region: 'europe' });
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(migratedLegacySession.filters, 'page'), false);
   assert.throws(
     () => gate.bindActor({ feishuOpenId: 'ou-7', userId: 8, boundByUserId: 9 }),
     /already bound/
@@ -96,6 +116,16 @@ try {
     }),
     /page_size filter/
   );
+  assert.throws(
+    () => gate.createSession({
+      actorUserId: 7,
+      feishuOpenId: 'ou-7',
+      chatId: 'chat-duplicate-page',
+      filters: { region: 'europe', page: 5 },
+      expiresAt: '2026-07-18T00:00:00.000Z'
+    }),
+    /unknown filter: page/
+  );
   assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_sessions').get().n, sessionCountBeforeUnsafeFilters);
 
   const session = gate.createSession({
@@ -105,14 +135,14 @@ try {
     threadId: 'thread-1',
     filters: {
       region: 'europe', country: 'US', category: 'coffee',
-      priority: 'P1', status: 'valid', page: 1, page_size: 20
+      priority: 'P1', status: 'valid', page_size: 20
     },
     expiresAt: '2026-07-18T00:00:00.000Z'
   });
   assert.strictEqual(session.version, 1);
   assert.deepStrictEqual(session.filters, {
     region: 'europe', country: 'US', category: 'coffee',
-    priority: 'P1', status: 'valid', page: 1, page_size: 20
+    priority: 'P1', status: 'valid', page_size: 20
   });
 
   const updated = gate.updateSession({
@@ -124,6 +154,17 @@ try {
   assert.strictEqual(updated.version, 2);
   assert.strictEqual(updated.page, 2);
   assert.deepStrictEqual(updated.filters, { region: 'americas' });
+  assert.throws(
+    () => gate.updateSession({
+      sessionId: session.id,
+      actorUserId: 7,
+      expectedVersion: 2,
+      patch: { page: 4, filters: { region: 'americas', page: 5 } }
+    }),
+    /unknown filter: page/
+  );
+  assert.strictEqual(db.prepare('SELECT version FROM matrix_sessions WHERE id = ?').get(session.id).version, 2);
+  assert.strictEqual(db.prepare('SELECT page FROM matrix_sessions WHERE id = ?').get(session.id).page, 2);
   assert.throws(
     () => gate.updateSession({
       sessionId: session.id,
