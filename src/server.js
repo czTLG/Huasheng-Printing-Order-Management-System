@@ -25,8 +25,21 @@ const futuresRouter = require('./routes/futures');
 const statsRouter = require('./routes/stats');
 const crmRouter = require('./routes/crm');
 const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant');
+const { createMatrixBridgeAuth, createMatrixRouter } = require('./routes/matrix');
 
 initDb();
+
+const matrixBridgeAuth = createMatrixBridgeAuth({ db });
+let matrixRouter = null;
+function dispatchMatrix(req, res, next) {
+  try {
+    if (!matrixRouter) matrixRouter = createMatrixRouter({ db, audit });
+    return matrixRouter(req, res, next);
+  } catch (error) {
+    console.warn('[matrix] unavailable:', error?.message || error);
+    return res.status(503).json({ error: 'matrix data unavailable' });
+  }
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -87,6 +100,10 @@ app.use(express.static(require('path').join(__dirname, '..', 'public'), {
 app.get(['/crm', '/crm/*'], (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'new', 'index.html'));
 });
+app.use('/api/matrix', matrixBridgeAuth, (req, res, next) => {
+  if (req.authMode === 'matrix_bridge') return dispatchMatrix(req, res, next);
+  next();
+});
 app.use(fakeAuth);
 app.use('/api/auth', authRouter);
 
@@ -104,6 +121,7 @@ app.use('/api/futures', futuresRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/foreign-costing-assistant', foreignCostingAssistantRouter);
 app.use('/api/crm', crmRouter);
+app.use('/api/matrix', dispatchMatrix);
 
 if (process.env.DISABLE_CRON !== '1') {
   // 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）
