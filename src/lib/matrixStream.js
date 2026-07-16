@@ -13,7 +13,7 @@ const MAX_BATCH_RECORDS = 120;
 const MAX_COUNTRY_RECORDS = 20;
 const MAX_REDIRECTS = 5;
 const ALLOWED_CONTACT_FIELDS = new Set([
-  'email', 'phone', 'whatsapp', 'linkedin_url', 'contact_page_url'
+  'email', 'phone', 'whatsapp', 'contact_page_url'
 ]);
 const ALLOWED_EVIDENCE_FIELDS = new Set([
   'source_type', 'field', 'value', 'source_url', 'page_title', 'retrieved_at',
@@ -121,7 +121,7 @@ function lookupAddresses(result) {
   }).filter(entry => entry && (entry.family === 4 || entry.family === 6));
 }
 
-async function resolvePublicUrl(input, dnsLookup) {
+async function resolvePublicUrl(input, dnsLookup, signal) {
   let parsed;
   try {
     parsed = new URL(input);
@@ -152,10 +152,11 @@ async function resolvePublicUrl(input, dnsLookup) {
   let addresses;
   if (!literalFamily) {
     try {
-      addresses = lookupAddresses(await dnsLookup(hostname, { all: true, verbatim: true }));
+      addresses = lookupAddresses(await dnsLookup(hostname, { all: true, verbatim: true, signal }));
     } catch {
       return { validation: rejected('dns_lookup_failed'), addresses: [] };
     }
+    if (signal?.aborted) return { validation: rejected('run_deadline_exceeded'), addresses: [] };
     if (!addresses.length) return { validation: rejected('dns_lookup_failed'), addresses: [] };
     if (addresses.some(entry => isBlockedAddress(entry.address))) {
       return { validation: rejected('blocked_address'), addresses: [] };
@@ -210,10 +211,13 @@ function normalizeDiscoveryRecord(input = {}) {
       }
     }
   }
-  const businessEmail = typeof input.business_email === 'string'
+  const suppliedBusinessEmail = typeof input.business_email === 'string'
     ? input.business_email.trim().toLowerCase()
     : '';
-  if (businessEmail && !publicContacts.email) publicContacts.email = businessEmail;
+  const suppliedContactEmail = typeof publicContacts.email === 'string' ? publicContacts.email.trim().toLowerCase() : '';
+  const emailConflict = Boolean(suppliedBusinessEmail && suppliedContactEmail && suppliedBusinessEmail !== suppliedContactEmail);
+  const businessEmail = suppliedContactEmail || suppliedBusinessEmail;
+  if (businessEmail) publicContacts.email = businessEmail;
 
   const evidence = Array.isArray(input.evidence) ? input.evidence.map(item => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return {};
@@ -231,6 +235,7 @@ function normalizeDiscoveryRecord(input = {}) {
     official_url: officialUrl,
     official_domain: officialDomain(officialUrl),
     business_email: businessEmail,
+    email_conflict: emailConflict,
     public_contacts: publicContacts,
     product_evidence: Array.isArray(input.product_evidence)
       ? input.product_evidence.map(trimText).filter(value => typeof value === 'string' && value)
@@ -296,6 +301,10 @@ function pinnedRequest(url, options = {}) {
       });
     });
     const wallTimer = setTimeout(() => request.destroy(new Error('public URL probe deadline exceeded')), options.deadline_ms || 10000);
+    if (options.signal) {
+      if (options.signal.aborted) request.destroy(new Error('public URL probe aborted'));
+      else options.signal.addEventListener('abort', () => request.destroy(new Error('public URL probe aborted')), { once: true });
+    }
     request.setTimeout(options.timeout || 10000, () => {
       request.destroy(new Error('public URL probe timed out'));
     });
@@ -306,11 +315,14 @@ function pinnedRequest(url, options = {}) {
 
 async function validateRedirectChain(input, options) {
   let current = input;
-  for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+  const maxRedirects = Number.isSafeInteger(options.maxRedirects) ? options.maxRedirects : MAX_REDIRECTS;
+  for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
+    if (options.signal?.aborted) return rejected('run_deadline_exceeded');
     if (options.allowedHosts && !hostAllowed(officialDomain(current), options.allowedHosts)) {
       return rejected('host_not_allowed');
     }
-    const resolved = await resolvePublicUrl(current, options.dnsLookup);
+    const resolved = await resolvePublicUrl(current, options.dnsLookup, options.signal);
+    if (options.signal?.aborted) return rejected('run_deadline_exceeded');
     const { validation } = resolved;
     if (!validation.ok) return validation;
     const parsed = new URL(validation.normalized_url);
@@ -318,6 +330,7 @@ async function validateRedirectChain(input, options) {
     const target = resolved.addresses[0];
 
     let response;
+    if (!options.probeBudget.consume()) return rejected('probe_budget_exceeded');
     try {
       response = await options.transport(validation.normalized_url, {
         method: 'HEAD',
@@ -327,7 +340,8 @@ async function validateRedirectChain(input, options) {
         headers: { Host: parsed.host },
         servername: net.isIP(tlsHostname) ? undefined : tlsHostname,
         rejectUnauthorized: true,
-        deadline_ms: options.perProbeDeadlineMs || 10000
+        deadline_ms: options.perProbeDeadlineMs || 10000,
+        signal: options.signal
       });
     } catch {
       return rejected('transport_failed');
@@ -343,7 +357,7 @@ async function validateRedirectChain(input, options) {
       ? response.headers.get('location')
       : null;
     if (!location) return rejected('redirect_without_location');
-    if (redirects === MAX_REDIRECTS) return rejected('too_many_redirects');
+    if (redirects === maxRedirects) return rejected('too_many_redirects');
     try {
       current = new URL(location, validation.normalized_url).toString();
     } catch {
@@ -433,7 +447,16 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
   const maxPages = campaign.max_pages_per_company;
   const maxProbes = campaign.max_probes;
   const startedAt = Date.now();
-  let probes = 0;
+  const probeBudget = {
+    used: 0,
+    consume() {
+      if (this.used >= maxProbes) return false;
+      this.used += 1;
+      return true;
+    }
+  };
+  const abortController = new AbortController();
+  const deadlineTimer = setTimeout(() => abortController.abort(), campaign.run_deadline_ms);
   const existingDomains = new Set(db.prepare('SELECT normalized_domain FROM matrix_entities').all().map(row => row.normalized_domain));
   const batchDomains = new Set();
   const dependencies = {
@@ -459,7 +482,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
 
     const countryCount = (countryCounts.get(countryKey) || 0) + 1;
     countryCounts.set(countryKey, countryCount);
-    if (!countryKey || countryCount > MAX_COUNTRY_RECORDS) {
+    if (!countryKey || countryCount > Math.min(MAX_COUNTRY_RECORDS, campaign.max_companies_per_country)) {
       summary.errors += 1;
       continue;
     }
@@ -468,6 +491,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
       summary.errors += 1;
       continue;
     }
+    if (record.email_conflict) { summary.errors += 1; continue; }
     if (campaign.existing_domain_suppression
       && (existingDomains.has(record.official_domain) || batchDomains.has(record.official_domain))) {
       summary.excluded += 1;
@@ -491,7 +515,7 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
     });
     if (!evidenceAuthorized) { summary.errors += 1; continue; }
     const evidenceUrls = [...new Set(record.evidence.map(item => item.source_url))];
-    if (evidenceUrls.length > maxPages || probes + 1 + evidenceUrls.length > maxProbes) {
+    if (1 + evidenceUrls.length > maxPages) {
       summary.errors += 1;
       continue;
     }
@@ -501,10 +525,11 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
     let officialValidation;
     try {
       officialValidation = await withinDeadline(validateRedirectChain(record.official_url, {
-        ...dependencies, allowedHosts: officialHosts, perProbeDeadlineMs: Math.min(10000, remaining)
+        ...dependencies, allowedHosts: [record.official_domain], probeBudget,
+        maxRedirects: campaign.max_redirects,
+        signal: abortController.signal, perProbeDeadlineMs: Math.min(10000, remaining)
       }), remaining);
     } catch { summary.errors += 1; continue; }
-    probes += 1;
     if (!officialValidation.ok) {
       summary.errors += 1;
       continue;
@@ -535,10 +560,12 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
         validation = await withinDeadline(validateRedirectChain(sourceUrl, {
           ...dependencies,
           allowedHosts: [record.official_domain, ...thirdPartyHosts],
+          maxRedirects: campaign.max_redirects,
+          probeBudget,
+          signal: abortController.signal,
           perProbeDeadlineMs: Math.min(10000, deadline)
         }), deadline);
       } catch { evidenceFailed = true; break; }
-      probes += 1;
       if (!validation.ok) {
         evidenceFailed = true;
         break;
@@ -594,8 +621,9 @@ async function importDiscoveryBatch(db, runId, records, options = {}) {
     }
   }
 
+  clearTimeout(deadlineTimer);
   db.prepare('UPDATE matrix_runs SET counters_json = ?, updated_at = ? WHERE id = ?')
-    .run(JSON.stringify({ ...summary, probes }), new Date().toISOString(), runId);
+    .run(JSON.stringify({ ...summary, probes: probeBudget.used }), new Date().toISOString(), runId);
 
   return summary;
 }

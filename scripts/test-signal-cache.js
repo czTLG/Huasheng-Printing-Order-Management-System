@@ -27,6 +27,7 @@ const campaign = (overrides = {}) => ({
   languages: ['en'],
   max_companies_per_country: 20,
   max_pages_per_company: 4,
+  max_redirects: 5,
   max_probes: 80,
   run_deadline_ms: 60000,
   allowed_source_types: ['official_website'],
@@ -94,6 +95,9 @@ try {
   expectRejected('contact body alias', () => upsertEntity(db, {
     official_domain: 'body.example',
     public_contacts: { body: 'complete page body' }
+  }));
+  expectRejected('unsupported social contact', () => upsertEntity(db, {
+    official_domain: 'social.example', public_contacts: { linkedin_url: 'https://linkedin.example/company/social' }
   }));
   expectRejected('executable contact value', () => upsertEntity(db, {
     official_domain: 'script.example',

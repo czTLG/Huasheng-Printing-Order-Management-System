@@ -45,6 +45,8 @@ const REASON_CODES = Object.freeze({
   REFUSAL: 'refusal',
   INVALID_ADDRESS: 'invalid_address',
   DELIVERY_FAILURE: 'delivery_failure',
+  MISSING_OVERSEAS_ELIGIBILITY: 'missing_overseas_eligibility',
+  OVERSEAS_ELIGIBILITY: 'overseas_eligibility',
   CLASSIFICATION_ERROR: 'classification_error'
 });
 const PUBLIC_REASON_CODES = Object.freeze(Object.values(REASON_CODES));
@@ -127,6 +129,7 @@ function result(classification, priority, reasonCodes, confidence) {
 }
 
 function classifyRecord(record = {}, context = {}) {
+  const existingCrm = context.scope === 'existing_crm';
   const countryKey = normalizeCountry(record.country);
   const officialDomain = normalizeDomain(record.official_domain);
   const contactDomain = emailDomain(record.business_email);
@@ -137,7 +140,7 @@ function classifyRecord(record = {}, context = {}) {
 
   const noiseReasons = [];
   if (record.source_kind === REASON_CODES.SECURITY_NOTICE) noiseReasons.push(REASON_CODES.SECURITY_NOTICE);
-  if (excludedCountryKeys.has(countryKey)) noiseReasons.push(REASON_CODES.EXCLUDED_COUNTRY);
+  if (!existingCrm && excludedCountryKeys.has(countryKey)) noiseReasons.push(REASON_CODES.EXCLUDED_COUNTRY);
   if (record.internal_only) noiseReasons.push(REASON_CODES.INTERNAL_ONLY);
   if (record.unsubscribe) noiseReasons.push(REASON_CODES.UNSUBSCRIBE);
   if (record.refusal) noiseReasons.push(REASON_CODES.REFUSAL);
@@ -148,7 +151,8 @@ function classifyRecord(record = {}, context = {}) {
   }
 
   const reviewReasons = [];
-  if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push(REASON_CODES.UNAPPROVED_COUNTRY);
+  if (!existingCrm && (!countryKey || !approvedCountryKeys.has(countryKey))) reviewReasons.push(REASON_CODES.UNAPPROVED_COUNTRY);
+  if (existingCrm && record.overseas_eligible !== true) reviewReasons.push(REASON_CODES.MISSING_OVERSEAS_ELIGIBILITY);
   const confirmedWhatsapp = record.confirmed_international_whatsapp === true
     && hasIdentityValue(record.sender_phone);
   const usableEmail = Boolean(contactDomain && !isAmbiguousContactDomain(contactDomain));
@@ -178,7 +182,12 @@ function classifyRecord(record = {}, context = {}) {
   if (!productEvidence && !companyEvidence && !inquiryEvidence && !quoteEvidence && !substantive) {
     reviewReasons.push(REASON_CODES.MISSING_BUSINESS_EVIDENCE);
   }
-  if (!Array.isArray(record.evidence_refs) || !record.evidence_refs.some(hasIdentityValue)) {
+  const evidencePattern = existingCrm
+    ? /^(?:customer|crm-message|email-message):[1-9]\d*$/
+    : /^evidence:[1-9]\d*$/;
+  if (!Array.isArray(record.evidence_refs)
+    || record.evidence_refs.length === 0
+    || !record.evidence_refs.every(ref => typeof ref === 'string' && evidencePattern.test(ref))) {
     reviewReasons.push(REASON_CODES.MISSING_EVIDENCE_REFERENCES);
   }
 
@@ -186,7 +195,7 @@ function classifyRecord(record = {}, context = {}) {
     return result('needs_review', null, [...new Set(reviewReasons)], 0.5);
   }
 
-  const validReasons = [REASON_CODES.APPROVED_COUNTRY];
+  const validReasons = [existingCrm ? REASON_CODES.OVERSEAS_ELIGIBILITY : REASON_CODES.APPROVED_COUNTRY];
   if (usableEmail) validReasons.push(REASON_CODES.OFFICIAL_DOMAIN);
   if (confirmedWhatsapp) validReasons.push(REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP);
   if (productEvidence) validReasons.push(REASON_CODES.PRODUCT_EVIDENCE);

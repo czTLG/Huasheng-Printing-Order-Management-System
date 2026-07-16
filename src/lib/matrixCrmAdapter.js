@@ -106,6 +106,53 @@ function customerHasOverseasEvidence(customer) {
   );
 }
 
+function jsonAddressList(value) {
+  if (Array.isArray(value)) return value.map(text).filter(Boolean);
+  const raw = text(value);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(text).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function internalAddressConfig(options = {}) {
+  const mailboxes = new Set([
+    ...(Array.isArray(options.internalMailboxes) ? options.internalMailboxes : []),
+    process.env.SMTP_USER,
+    process.env.SMTP_FROM
+  ].map(lower).filter(Boolean));
+  const domains = new Set([
+    ...(Array.isArray(options.internalDomains) ? options.internalDomains : []),
+    process.env.MATRIX_INTERNAL_DOMAINS
+  ].flatMap(value => text(value).split(',')).map(value => lower(value).replace(/^@/, '')).filter(Boolean));
+  return { mailboxes, domains };
+}
+
+function emailHasOnlyInternalParticipants(row, config) {
+  const participants = [
+    text(row.from_email),
+    ...jsonAddressList(row.to_emails),
+    ...jsonAddressList(row.cc_emails),
+    ...jsonAddressList(row.bcc_emails)
+  ].map(lower).filter(Boolean);
+  return participants.length > 0 && participants.every(address => {
+    const domain = emailDomain(address);
+    return config.mailboxes.has(address) || (domain && config.domains.has(domain));
+  });
+}
+
+function groupHasOverseasEvidence(group) {
+  return customerHasOverseasEvidence(group.customer)
+    || group.crmMessages.some(row => internationalPhone(crmExternalContact(row)))
+    || group.emailMessages.some(row => {
+      const domain = emailDomain(row.contact_email || row.from_email);
+      return Boolean(domain && !domain.endsWith('.cn'));
+    });
+}
+
 function repeatedSegments(value) {
   const segments = text(value)
     .split(/\r?\n+/)
@@ -255,7 +302,7 @@ function groupContent(group) {
   ].map(text).filter(Boolean).join(' ');
 }
 
-function normalizeGroup(group) {
+function normalizeGroup(group, options = {}) {
   const customer = group.customer || {};
   const latestEmail = group.emailMessages.at(-1);
   const latestCrm = group.crmMessages.at(-1);
@@ -289,9 +336,11 @@ function normalizeGroup(group) {
     ...sourceIds.crm_message_ids.map((id) => `crm-message:${id}`),
     ...sourceIds.email_message_ids.map((id) => `email-message:${id}`)
   ];
-  const internalOnly = group.crmMessages.length > 0
-    && group.emailMessages.length === 0
-    && group.crmMessages.every((row) => lower(row.direction) === 'internal');
+  const allMessages = [...group.crmMessages, ...group.emailMessages];
+  const internalConfig = internalAddressConfig(options);
+  const internalOnly = allMessages.length > 0
+    && allMessages.every((row) => lower(row.direction) === 'internal'
+      || (group.emailMessages.includes(row) && emailHasOnlyInternalParticipants(row, internalConfig)));
 
   return {
     identity_id: internalIdentity,
@@ -316,6 +365,7 @@ function normalizeGroup(group) {
       return lower(row.source_type) === 'whatsapp' && !['inbound', 'outbound'].includes(direction);
     }),
     confirmed_international_whatsapp: internationalPhone(whatsapp),
+    overseas_eligible: groupHasOverseasEvidence(group),
     internal_only: internalOnly,
     unsubscribe: UNSUBSCRIBE_SIGNAL.test(content),
     refusal: REFUSAL_SIGNAL.test(content),
@@ -326,7 +376,7 @@ function normalizeGroup(group) {
   };
 }
 
-function readEligibleCrmRecords(db) {
+function readEligibleCrmRecords(db, options = {}) {
   const customers = rows(db, 'customers');
   const crmMessages = rows(db, 'crm_messages');
   const emailMessages = rows(db, 'email_messages');
@@ -389,13 +439,13 @@ function readEligibleCrmRecords(db) {
   }
 
   return {
-    records: [...groups.values()].map(normalizeGroup),
+    records: [...groups.values()].map(group => normalizeGroup(group, options)),
     excluded_domestic_ids: excludedDomesticIds
   };
 }
 
 function classifyNormalizedRecord(record, context, classifier = classifyRecord) {
-  const base = classifier(record, context);
+  const base = classifier(record, { ...context, scope: 'existing_crm' });
   let result = base;
 
   const safetyReasons = [];
@@ -414,7 +464,7 @@ function classifyNormalizedRecord(record, context, classifier = classifyRecord) 
 }
 
 function classifyCurrentCrm(db, options = {}) {
-  const normalized = readEligibleCrmRecords(db);
+  const normalized = readEligibleCrmRecords(db, options);
   const counts = {
     input: normalized.records.length,
     excluded_domestic: normalized.excluded_domestic_ids.length,

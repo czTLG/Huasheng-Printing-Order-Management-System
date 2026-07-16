@@ -86,7 +86,7 @@ function seed() {
 
   const campaign = (name, countries, hosts, actor = 'api-test') => ({
     name, countries, categories: ['dry_food'], languages: ['en'],
-    max_companies_per_country: 20, max_pages_per_company: 4, max_probes: 80,
+    max_companies_per_country: 20, max_pages_per_company: 4, max_redirects: 5, max_probes: 80,
     run_deadline_ms: 60000, allowed_source_types: ['official_website'],
     official_hosts: hosts, third_party_sources: [], exclusion_terms: ['India'],
     existing_domain_suppression: true, actor
@@ -103,7 +103,6 @@ function seed() {
       email: 'buyer@alpha.example',
       phone: '+84 912 345 678',
       whatsapp: '+84 998 765 432',
-      linkedin_url: 'https://linkedin.example/private-contact',
       contact_page_url: 'https://alpha.example/private-contact'
     }
   });

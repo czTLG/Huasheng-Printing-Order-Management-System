@@ -52,6 +52,7 @@ node scripts/matrix-classify-current.js --output ./matrix-current-summary.json
     "languages": ["en"],
     "max_companies_per_country": 20,
     "max_pages_per_company": 4,
+    "max_redirects": 5,
     "max_probes": 80,
     "run_deadline_ms": 60000,
     "allowed_source_types": ["official_website"],
@@ -69,7 +70,6 @@ node scripts/matrix-classify-current.js --output ./matrix-current-summary.json
       "email": "sales@example.com",
       "phone": "+84 000 000 000",
       "whatsapp": "+84 000 000 000",
-      "linkedin_url": "https://www.linkedin.com/company/example",
       "contact_page_url": "https://example.com/contact"
     },
     "product_evidence": ["coffee"],
@@ -142,30 +142,13 @@ ORDER BY s.country, s.entity_id;
 
 ## 回滚
 
-优先在临时数据库执行整次演练。持久数据库中的 evidence、snapshot、classification 均有 run 归属；应用层 `deleteRun(db, runId)` 在单事务内删除关联行和孤立 identity，不触碰正式 CRM 表。
+优先在临时数据库执行整次演练。持久数据库回滚只能使用受认证入口；它内部唯一调用 `deleteRun()` 的完整语义，恢复历史 canonical entity、删除孤立 identity，并记录 actor、受影响行数和审计事件：
 
-先备份数据库并确认 `:run_id`，然后在单个事务中仅删除该 run 明确拥有的 Matrix 行：
-
-```sql
-BEGIN IMMEDIATE;
-
-SELECT COUNT(*) AS classifications_to_delete
-FROM matrix_classifications
-WHERE run_id = :run_id;
-
-DELETE FROM matrix_classifications
-WHERE run_id = :run_id;
-
-DELETE FROM matrix_evidence WHERE run_id = :run_id;
-DELETE FROM matrix_entity_snapshots WHERE run_id = :run_id;
-
-DELETE FROM matrix_runs
-WHERE id = :run_id;
-
-COMMIT;
+```bash
+MATRIX_LOCAL_OPERATOR_TOKEN=... JWT_SECRET=... npm run matrix:rollback -- --run-id 123
 ```
 
-不要删除或更新任何非 `matrix_*` 表。只可删除不再被任何 snapshot 引用的孤立 identity；不得按时间或 domain 猜测归属。
+禁止手工执行 DELETE SQL 或临时拼接回滚脚本；它们无法等价恢复 canonical identity。回滚前先备份数据库并核对 run ID，回滚后核对标准输出与 `matrix_run_rolled_back` audit event。入口不删除或更新任何正式 CRM 表。
 
 ## 秘密隔离与交付状态
 

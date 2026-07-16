@@ -79,7 +79,7 @@ const whatsappOnly = classifyRecord({
   confirmed_international_whatsapp: true,
   sender_phone: '+66812345678',
   product_evidence: ['snack pouch'],
-  evidence_refs: ['crm-message:91']
+  evidence_refs: ['evidence:91']
 }, { now: '2026-07-16' });
 assert.equal(whatsappOnly.classification, 'valid');
 assert.equal(whatsappOnly.priority, 'B');
@@ -89,6 +89,22 @@ const noReferences = classifyRecord(validRecord({ evidence_refs: [] }), { now: '
 assert.equal(noReferences.classification, 'needs_review');
 assert.equal(noReferences.priority, null);
 assert(noReferences.reason_codes.includes(REASON_CODES.MISSING_EVIDENCE_REFERENCES));
+const fakeReference = classifyRecord(validRecord({ evidence_refs: ['not-a-reference'] }), { now: '2026-07-16' });
+assert.equal(fakeReference.classification, 'needs_review');
+assert(fakeReference.reason_codes.includes(REASON_CODES.MISSING_EVIDENCE_REFERENCES));
+const mixedReference = classifyRecord(validRecord({ evidence_refs: ['evidence:1', 'not-a-reference'] }), { now: '2026-07-16' });
+assert.equal(mixedReference.classification, 'needs_review');
+assert(mixedReference.reason_codes.includes(REASON_CODES.MISSING_EVIDENCE_REFERENCES));
+
+const unprovenExisting = classifyRecord({
+  country: '',
+  official_domain: 'local.cn',
+  business_email: 'buyer@local.cn',
+  product_evidence: ['coffee pouch'],
+  evidence_refs: ['customer:1']
+}, { now: '2026-07-16', scope: 'existing_crm' });
+assert.equal(unprovenExisting.classification, 'needs_review');
+assert(unprovenExisting.reason_codes.includes(REASON_CODES.MISSING_OVERSEAS_ELIGIBILITY));
 
 for (const nonValid of [
   classifyRecord({ fixture_marker: 'token-verification' }),

@@ -148,6 +148,9 @@ try {
   insertCustomer.run({ ...customerDefaults, id: 23, name: 'Overseas With Agent Phone', company_name: 'Vietnam Agent Brand', country: 'Vietnam', email: 'buyer@agentbrand.example', phone: '+8613800000000', website: 'agentbrand.example', main_product: 'coffee pouch' });
   insertCustomer.run({ ...customerDefaults, id: 24, name: 'WhatsApp Only', company_name: 'Thai Snack Brand', country: 'Thailand', whatsapp: '+66888888888', main_product: 'snack pouch' });
   insertCustomer.run({ ...customerDefaults, id: 25, name: 'Mixed Fixture Text', company_name: 'Malaysia Real Brand', country: 'Malaysia', email: 'buyer@mixedbrand.example', website: 'mixedbrand.example', main_product: 'refill pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 26, name: 'US Existing', company_name: 'US Existing Brand', country: 'United States', email: 'buyer@usbrand.example', website: 'usbrand.example', main_product: 'coffee pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 27, name: 'India Existing', company_name: 'India Existing Brand', country: 'India', email: 'buyer@indiabrand.example', website: 'indiabrand.example', main_product: 'snack pouch' });
+  insertCustomer.run({ ...customerDefaults, id: 28, name: 'Unproven Local', company_name: 'Unproven Local Brand', country: '', email: 'buyer@local.cn', website: 'local.cn', main_product: 'coffee pouch' });
 
   const insertCrm = db.prepare(`
     INSERT INTO crm_messages (
@@ -258,11 +261,17 @@ try {
   insertEmail.run({ ...emailDefaults, id: 271, message_id: '<refusal-271@outside.example>', from_email: 'buyer2@outside.example', subject: 'No interest', text_body: 'Do not contact us again', cleaned_text: 'Do not contact us again', contact_email: 'buyer2@outside.example' });
   insertEmail.run({ ...emailDefaults, id: 272, message_id: '<bounce-272@mailer.example>', from_email: 'mailer-daemon@mailer.example', subject: 'Undeliverable', text_body: 'Invalid recipient address', cleaned_text: 'Invalid recipient address', contact_email: 'mailer-daemon@mailer.example' });
   insertEmail.run({ ...emailDefaults, id: 273, message_id: '<system-273@vietcoffee.example>', from_email: 'no-reply@vietcoffee.example', subject: 'Security alert', text_body: 'Automated account verification notice', cleaned_text: 'Automated account verification notice', contact_email: 'no-reply@vietcoffee.example', matched_customer_id: 5, noise_level: 'high' });
+  insertEmail.run({ ...emailDefaults, id: 280, message_id: '<internal-280@factory.invalid>', from_email: 'staff@factory.invalid', subject: 'Internal note', text_body: 'Internal packaging note', cleaned_text: 'Internal packaging note', contact_email: 'staff@factory.invalid', direction: 'internal' });
+  insertEmail.run({ ...emailDefaults, id: 281, message_id: '<us-281@usbrand.example>', from_email: 'buyer@usbrand.example', subject: 'Coffee pouch inquiry', text_body: 'Please quote coffee pouch', cleaned_text: 'Please quote coffee pouch', contact_email: 'buyer@usbrand.example', matched_customer_id: 26, business_relevance: 'high' });
+  insertEmail.run({ ...emailDefaults, id: 282, message_id: '<india-282@indiabrand.example>', from_email: 'buyer@indiabrand.example', subject: 'Snack pouch inquiry', text_body: 'Please quote snack pouch', cleaned_text: 'Please quote snack pouch', contact_email: 'buyer@indiabrand.example', matched_customer_id: 27, business_relevance: 'high' });
+  insertEmail.run({ ...emailDefaults, id: 283, message_id: '<local-283@local.cn>', from_email: 'buyer@local.cn', subject: 'Coffee pouch inquiry', text_body: 'Please quote coffee pouch', cleaned_text: 'Please quote coffee pouch', contact_email: 'buyer@local.cn', matched_customer_id: 28, business_relevance: 'high' });
+  insertEmail.run({ ...emailDefaults, id: 284, message_id: '<internal-inbound-284@factory.invalid>', from_email: 'staff@factory.invalid', to_emails: '["sales@factory.invalid"]', subject: 'Internal inbound note', text_body: 'Internal packaging note', cleaned_text: 'Internal packaging note', contact_email: 'staff@factory.invalid', direction: 'inbound' });
 
   const before = digest();
   const { readEligibleCrmRecords, classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
-  const normalized = readEligibleCrmRecords(db);
-  const report = classifyCurrentCrm(db, { now: '2026-07-16' });
+  const internalConfig = { internalMailboxes: ['sales@factory.invalid'], internalDomains: ['factory.invalid'] };
+  const normalized = readEligibleCrmRecords(db, internalConfig);
+  const report = classifyCurrentCrm(db, { now: '2026-07-16', ...internalConfig });
   const after = digest();
 
   assert.equal(before, after, 'classification must not change the database bytes');
@@ -270,7 +279,8 @@ try {
   assert.equal(normalized.excluded_domestic_ids.includes(7), true);
   assert.equal(normalized.excluded_domestic_ids.includes(11), true);
   assert.equal(normalized.excluded_domestic_ids.includes(14), true);
-  assert.equal(report.counts.excluded_domestic, 4);
+  assert.equal(normalized.excluded_domestic_ids.includes(28), true);
+  assert.equal(report.counts.excluded_domestic, 5);
   assert.equal(bySourceId(report, 'crm_message_ids', 20).classification, 'test');
   assert.equal(bySourceId(report, 'email_message_ids', 30).classification, 'noise');
   assert.equal(bySourceId(report, 'crm_message_ids', 40).classification, 'needs_review');
@@ -320,6 +330,15 @@ try {
   assert(bySourceId(report, 'email_message_ids', 272).reason_codes.includes(REASON_CODES.INVALID_ADDRESS));
   assert.equal(bySourceId(report, 'email_message_ids', 273).classification, 'noise');
   assert.equal(bySourceId(report, 'email_message_ids', 50).classification, 'valid', 'isolated system mail must not poison substantive customer mail');
+  assert.equal(bySourceId(report, 'email_message_ids', 280).classification, 'noise');
+  assert(bySourceId(report, 'email_message_ids', 280).reason_codes.includes(REASON_CODES.INTERNAL_ONLY));
+  assert.equal(bySourceId(report, 'email_message_ids', 281).classification, 'valid');
+  assert(!bySourceId(report, 'email_message_ids', 281).reason_codes.includes(REASON_CODES.UNAPPROVED_COUNTRY));
+  assert.equal(bySourceId(report, 'email_message_ids', 282).classification, 'valid');
+  assert(!bySourceId(report, 'email_message_ids', 282).reason_codes.includes(REASON_CODES.EXCLUDED_COUNTRY));
+  assert.equal(normalized.records.some(record => record.source_ids.customer_ids.includes(28)), false, 'local-only CRM identity must not acquire overseas eligibility');
+  assert.equal(bySourceId(report, 'email_message_ids', 284).classification, 'noise');
+  assert(bySourceId(report, 'email_message_ids', 284).reason_codes.includes(REASON_CODES.INTERNAL_ONLY));
 
   const errorReport = classifyCurrentCrm(db, {
     now: '2026-07-16',

@@ -70,8 +70,32 @@ Additional syntax checks passed for all modified/new production JavaScript modul
 - Legacy pre-v1.1 Matrix rows remain intentionally read-only and are not synthesized into unverifiable snapshots/evidence links. New runs use the strict v1.1 contract.
 - A real public-evidence run still requires an explicitly approved campaign input, authenticated local actor, and terms-reviewed third-party sources. No real data run was performed during these fixes.
 
+## Final re-review fixes (`428065d..working tree`)
+
+### RED → GREEN
+
+- **Campaign low-water budgets (R2-I1)**
+  - RED: a campaign with `max_companies_per_country: 1` accepted two records; a one-page campaign requested official plus evidence pages; a two-probe campaign completed four redirect requests while persisting two probes.
+  - GREEN: the configured company limit is enforced beneath the global ceiling; page count includes the official page; a shared run budget is consumed before every DNS/HTTP hop; redirect count is a required campaign field; actual consumed hops are persisted. A run-level `AbortController` is propagated into redirect processing and the pinned transport, preventing new hops after deadline.
+- **Existing CRM scope (R2-I2)**
+  - RED: `direction=internal` email classified `needs_review`; United States and India existing customers inherited public-discovery country exclusions.
+  - GREEN: classifier context explicitly separates `existing_crm` from `public_discovery`. Existing overseas CRM identity is not limited to the discovery six-country campaign, while public import remains strict. Internal-only email and CRM groups deterministically return `noise/internal_only`.
+- **Exact contact/evidence contract (R2-I3)**
+  - RED: `not-a-reference` satisfied classifier references; conflicting business/public emails could classify with one value and persist evidence for another; LinkedIn could persist without a representable fact.
+  - GREEN: references require positive numeric IDs with scope-specific prefixes; discovery uses one canonical email and rejects conflicts before network; unsupported social contact is removed from Phase 1. Every retained contact/product/company field is checked against a same-field/same-value evidence row, and classification links the exact run-owned evidence IDs.
+- **Authenticated full rollback (R2-I4)**
+  - RED: the repository had no rollback module/CLI and the runbook published incomplete DELETE SQL.
+  - GREEN: `matrix:rollback -- --run-id <id>` authenticates an active authorized database user, calls the sole `deleteRun()` semantics, restores historical canonical entity facts, removes orphan identities, and writes `matrix_run_rolled_back` with actor and affected counts. Integration verifies denied unauthenticated access, restoration/deletion, audit, and unchanged formal CRM tables. The runbook no longer publishes manual DELETE steps.
+
 ## 蒸馏进度
 
 - 已确认模块：分类身份/业务证据合同、六国活动边界、字段级证据、精确 evidence IDs、run snapshot/回滚、候选安全 SQL、CRM 完整分类、受控 runner、统一验证、无外发/无正式 CRM 写。
 - 未解决模块：真实第三方目录逐域 terms 审批与首批真实样本人工抽检尚未执行；它们是运行输入/审批，不是代码默认值。
 - 下一最高优先知识缺口：为首个获批第三方来源记录 host、source type、terms URL、审批时间，然后只在隔离临时数据库执行六国极小样本演练并人工核对全部 valid/A（若有）。
+### Internal re-review counterexamples
+
+- RED: a DNS lookup completing after the run deadline could still consume a probe and start transport. GREEN: the cancellation signal is passed to DNS and rechecked immediately after resolution, before budget consumption or HTTP.
+- RED: existing records without a positive overseas fact could bypass discovery-country rules, and inbound/outbound email rows with only configured internal participants were not noise. GREEN: existing-scope classification requires explicit overseas eligibility, while normalized email participants are checked against configured internal mailboxes/domains independently of the direction label.
+- RED: one valid evidence reference could mask additional bogus references. GREEN: the nonempty reference array now requires every entry to match the scope-specific positive-ID format.
+
+Final Critical/Important re-review: clean / GO for the R2 scope.

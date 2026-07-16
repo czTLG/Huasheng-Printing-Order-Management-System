@@ -5,7 +5,8 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
+const jwt = require('jsonwebtoken');
 
 const root = path.resolve(__dirname, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-phase1-'));
@@ -57,7 +58,7 @@ function record(country, index) {
 function campaign(name, countries) {
   return {
     name, countries, categories: ['dry_food'], languages: ['en'],
-    max_companies_per_country: 20, max_pages_per_company: 4, max_probes: 240,
+    max_companies_per_country: 20, max_pages_per_company: 4, max_redirects: 5, max_probes: 240,
     run_deadline_ms: 120000, allowed_source_types: ['official_website'],
     official_hosts: ['*.example'], third_party_sources: [], exclusion_terms: ['India'],
     existing_domain_suppression: true, actor: 'phase1-verifier'
@@ -194,6 +195,29 @@ async function assertControlledRunner() {
     .all('matrix_run', String(result.run_id)).map(row => row.action);
   assert.deepEqual(actions, ['matrix_run_started', 'matrix_discovery_recorded', 'matrix_evidence_recorded', 'matrix_classification_recorded', 'matrix_run_completed']);
   assert.deepEqual(formalSnapshot(), before, 'controlled runner must not write formal CRM tables');
+  const rollbackUser = db.prepare(`
+    INSERT INTO users (username, password, role, status, created_at, approved_at)
+    VALUES ('matrix_rollback_verifier', 'unused', 'foreign_trade_crm_admin', 'active', ?, ?)
+  `).run('2026-07-16T00:00:00Z', '2026-07-16T00:00:00Z');
+  const rollbackSecret = 'matrix-rollback-verification-secret';
+  const rollbackToken = jwt.sign({ sub: String(rollbackUser.lastInsertRowid) }, rollbackSecret);
+  const deniedRollback = spawnSync(process.execPath, ['scripts/matrix-rollback.js', '--run-id', String(result.run_id)], {
+    cwd: root, env: { ...process.env, DB_PATH: dbPath, JWT_SECRET: rollbackSecret, MATRIX_LOCAL_OPERATOR_TOKEN: '' }, encoding: 'utf8'
+  });
+  assert.notEqual(deniedRollback.status, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) count FROM matrix_runs WHERE id = ?').get(result.run_id).count, 1);
+  const rollbackProcess = spawnSync(process.execPath, ['scripts/matrix-rollback.js', '--run-id', String(result.run_id)], {
+    cwd: root,
+    env: { ...process.env, DB_PATH: dbPath, JWT_SECRET: rollbackSecret, MATRIX_LOCAL_OPERATOR_TOKEN: rollbackToken },
+    encoding: 'utf8'
+  });
+  assert.equal(rollbackProcess.status, 0, rollbackProcess.stderr);
+  const rollback = JSON.parse(rollbackProcess.stdout);
+  assert.equal(rollback.deleted, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) count FROM matrix_runs WHERE id = ?').get(result.run_id).count, 0);
+  const rollbackAudit = db.prepare("SELECT action, user_name FROM audit_logs WHERE action = 'matrix_run_rolled_back' AND resource_id = ? ORDER BY id DESC LIMIT 1").get(String(result.run_id));
+  assert.deepEqual(rollbackAudit, { action: 'matrix_run_rolled_back', user_name: 'matrix_rollback_verifier' });
+  assert.deepEqual(formalSnapshot(), before, 'rollback must not write formal CRM tables');
 }
 
 function assertCurrentCrmReadOnly() {
@@ -211,7 +235,9 @@ function assertDeliveryUnavailable() {
     'src/lib/matrixStream.js',
     'src/lib/matrixCrmAdapter.js',
     'src/lib/matrixRunner.js',
+    'src/lib/matrixRollback.js',
     'scripts/matrix-run.js',
+    'scripts/matrix-rollback.js',
     'src/routes/matrix.js'
   ];
   const prohibitedImports = /require\(['"](?:nodemailer|imapflow)['"]\)|\b(?:sendMail|sendMessage|deliverCandidate)\s*\(/;
@@ -224,7 +250,8 @@ function assertDeliveryUnavailable() {
     '../src/lib/signalCache',
     '../src/lib/matrixStream',
     '../src/lib/matrixCrmAdapter',
-    '../src/lib/matrixRunner'
+    '../src/lib/matrixRunner',
+    '../src/lib/matrixRollback'
   ]) {
     const exportedNames = Object.keys(require(modulePath));
     assert(
@@ -253,6 +280,8 @@ function assertRunbookAccuracy() {
     /matrix_runs\.counters_json/.test(runbook) && /resume_cursor/.test(runbook),
     'runbook must document persisted runner counters and resume cursor'
   );
+  assert(runbook.includes('npm run matrix:rollback -- --run-id 123'), 'runbook must use the authenticated rollback entrypoint');
+  assert(!/DELETE FROM matrix_/i.test(runbook), 'runbook must not publish an incomplete manual rollback');
 }
 
 function availablePort() {

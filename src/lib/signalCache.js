@@ -8,6 +8,7 @@ const {
 const RUN_FIELDS = new Set([
   'name', 'countries', 'categories', 'languages', 'max_companies_per_country',
   'max_pages_per_company', 'max_probes', 'run_deadline_ms', 'allowed_source_types',
+  'max_redirects',
   'official_hosts', 'third_party_sources', 'exclusion_terms',
   'existing_domain_suppression', 'status', 'counters', 'actor'
 ]);
@@ -15,7 +16,7 @@ const ENTITY_FIELDS = new Set([
   'official_domain', 'display_name', 'country', 'public_contacts', 'status'
 ]);
 const CONTACT_FIELDS = new Set([
-  'email', 'phone', 'whatsapp', 'linkedin_url', 'contact_page_url'
+  'email', 'phone', 'whatsapp', 'contact_page_url'
 ]);
 const EVIDENCE_FIELDS = new Set([
   'source_type', 'field', 'value', 'source_url', 'page_title', 'retrieved_at',
@@ -128,7 +129,7 @@ function validateCampaign(campaign) {
   if (campaign.official_hosts.some(value => !/^(?:\*\.)?(?:\[[0-9a-f:]+\]|[a-z0-9.-]+)$/i.test(value))) {
     throw new Error('campaign official host is invalid');
   }
-  for (const [key, ceiling] of [['max_companies_per_country', 20], ['max_pages_per_company', 20], ['max_probes', 240], ['run_deadline_ms', 3600000]]) {
+  for (const [key, ceiling] of [['max_companies_per_country', 20], ['max_pages_per_company', 20], ['max_probes', 240], ['max_redirects', 5], ['run_deadline_ms', 3600000]]) {
     if (!Number.isSafeInteger(campaign[key]) || campaign[key] < 1 || campaign[key] > ceiling) {
       throw new Error(`campaign ${key} is required and out of bounds`);
     }

@@ -27,6 +27,7 @@ const campaign = (name, countries, overrides = {}) => ({
   languages: ['en'],
   max_companies_per_country: 20,
   max_pages_per_company: 6,
+  max_redirects: 5,
   max_probes: 120,
   run_deadline_ms: 60000,
   allowed_source_types: ['official_website', 'public_directory'],
@@ -189,6 +190,11 @@ async function main() {
   assert.equal(normalized.official_domain, 'brand.example');
   assert.equal(normalized.business_email, 'sales@brand.example');
   assert.equal(normalized.evidence[0].field, 'product');
+  const socialDropped = normalizeDiscoveryRecord({
+    country: 'Vietnam', official_url: 'https://brand.example', business_email: 'sales@brand.example',
+    public_contacts: { linkedin_url: 'https://linkedin.example/company/brand' }
+  });
+  assert.equal(Object.hasOwn(socialDropped.public_contacts, 'linkedin_url'), false);
 
   const run = createRun(db, campaign('matrix-stream-test', ['Vietnam']));
   const transportCalls = [];
@@ -479,6 +485,17 @@ async function main() {
   assert.equal(sourceTypeSummary.errors, 1);
   assert.equal(transportCalls.length, sourceCallsBefore, 'source-type authorization must happen before network access');
 
+  const emailConflictRun = createRun(db, campaign('email-conflict', ['Vietnam']));
+  const emailConflictCalls = [];
+  const emailConflictSummary = await importDiscoveryBatch(db, emailConflictRun.id, [
+    discoveryRecord('email-conflict', { public_contacts: { email: 'other@different.example' } })
+  ], {
+    dnsLookup: publicDnsLookup,
+    transport: async (url, options) => { emailConflictCalls.push(url); return pinnedResponse(200, null, options); }
+  });
+  assert.equal(emailConflictSummary.errors, 1);
+  assert.equal(emailConflictCalls.length, 0, 'conflicting identity emails must fail before network');
+
   const escapedHostRun = createRun(db, campaign('redirect-host-boundary', ['Vietnam'], { official_hosts: ['origin.example'] }));
   const escapedHostRecord = discoveryRecord('escaped-host', {
     official_url: 'https://origin.example/', business_email: 'sales@origin.example',
@@ -524,6 +541,24 @@ async function main() {
   assert.equal(deadlineSummary.errors, 1);
   assert(Date.now() - deadlineStarted < 1000, 'wall-clock deadline must stop a continuously pending transport');
 
+  const dnsDeadlineRun = createRun(db, campaign('dns-deadline-cap', ['Vietnam'], { run_deadline_ms: 10 }));
+  const dnsDeadlineCalls = [];
+  const dnsSignals = [];
+  const dnsDeadlineSummary = await importDiscoveryBatch(db, dnsDeadlineRun.id, [discoveryRecord('slow-dns')], {
+    dnsLookup: (hostname, options) => new Promise((resolve) => {
+      dnsSignals.push(options.signal);
+      setTimeout(() => resolve([{ address: '93.184.216.34', family: 4 }]), 40);
+    }),
+    transport: async (url, options) => {
+      dnsDeadlineCalls.push(url);
+      return pinnedResponse(200, null, options);
+    }
+  });
+  assert.equal(dnsDeadlineSummary.errors, 1);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(dnsDeadlineCalls.length, 0, 'late DNS completion must not start detached transport');
+  assert(dnsSignals.every(signal => signal && signal.aborted), 'DNS lookup must receive the run cancellation signal');
+
   const sensitiveRun = createRun(db, campaign('sensitive-url', ['Vietnam']));
   const sensitiveRecord = discoveryRecord('sensitive-url');
   sensitiveRecord.evidence = sensitiveRecord.evidence.map(item => ({
@@ -547,6 +582,55 @@ async function main() {
   assert.equal(capSummary.input, 21);
   assert.equal(capSummary.valid, 20);
   assert.equal(capSummary.errors, 1);
+
+  const lowCompanyRun = createRun(db, campaign('low-company-cap', ['Vietnam'], { max_companies_per_country: 1 }));
+  const lowCompanyCalls = [];
+  const lowCompanySummary = await importDiscoveryBatch(db, lowCompanyRun.id, [
+    discoveryRecord('low-company-1'), discoveryRecord('low-company-2')
+  ], {
+    dnsLookup: publicDnsLookup,
+    transport: async (url, options) => { lowCompanyCalls.push(url); return pinnedResponse(200, null, options); }
+  });
+  assert.equal(lowCompanySummary.valid, 1);
+  assert.equal(lowCompanySummary.errors, 1);
+  assert.equal(lowCompanyCalls.length, 2);
+
+  const onePageRun = createRun(db, campaign('one-page-cap', ['Vietnam'], { max_pages_per_company: 1 }));
+  const onePageCalls = [];
+  const onePageSummary = await importDiscoveryBatch(db, onePageRun.id, [discoveryRecord('one-page')], {
+    dnsLookup: publicDnsLookup,
+    transport: async (url, options) => { onePageCalls.push(url); return pinnedResponse(200, null, options); }
+  });
+  assert.equal(onePageSummary.errors, 1);
+  assert.equal(onePageCalls.length, 0, 'official plus evidence page must exceed a one-page campaign before network');
+
+  const hopBudgetRun = createRun(db, campaign('hop-budget', ['Vietnam'], { max_probes: 2 }));
+  const hopCalls = [];
+  const hopSummary = await importDiscoveryBatch(db, hopBudgetRun.id, [discoveryRecord('hop-budget')], {
+    dnsLookup: publicDnsLookup,
+    transport: async (url, options) => {
+      hopCalls.push(url);
+      if (url === 'https://brand-hop-budget.example/') return pinnedResponse(302, '/home', options);
+      return pinnedResponse(200, null, options);
+    }
+  });
+  assert.equal(hopSummary.errors, 1);
+  assert.equal(hopCalls.length, 2, 'each actual redirect hop must consume the shared probe budget');
+  assert.equal(JSON.parse(db.prepare('SELECT counters_json FROM matrix_runs WHERE id = ?').get(hopBudgetRun.id).counters_json).probes, 2);
+
+  const redirectBudgetRun = createRun(db, campaign('redirect-budget', ['Vietnam'], { max_redirects: 1 }));
+  const redirectBudgetCalls = [];
+  const redirectBudgetSummary = await importDiscoveryBatch(db, redirectBudgetRun.id, [discoveryRecord('redirect-budget')], {
+    dnsLookup: publicDnsLookup,
+    transport: async (url, options) => {
+      redirectBudgetCalls.push(url);
+      if (url.endsWith('/')) return pinnedResponse(302, '/one', options);
+      if (url.endsWith('/one')) return pinnedResponse(302, '/two', options);
+      return pinnedResponse(200, null, options);
+    }
+  });
+  assert.equal(redirectBudgetSummary.errors, 1);
+  assert.deepEqual(redirectBudgetCalls, ['https://brand-redirect-budget.example/', 'https://brand-redirect-budget.example/one']);
 
   const oversizedRun = createRun(db, campaign('oversized', ['Thailand']));
   const entitiesBeforeOversized = db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n;
