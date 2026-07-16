@@ -10,6 +10,7 @@
     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
     "test:private-baseline": "node scripts/test-private-baseline.js",
     "test:matrix-rank": "node scripts/test-schema-rank.js",
+    "test:signal-cache": "node scripts/test-signal-cache.js",
     "runtime:audit": "node scripts/runtime-audit.js",
     "runtime:backup": "node scripts/runtime-backup.js",
     "runtime:verify": "node scripts/runtime-verify.js",

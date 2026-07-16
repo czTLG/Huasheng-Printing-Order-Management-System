@@ -799,6 +799,67 @@ function initDb() {
       created_at TEXT NOT NULL,
       UNIQUE(trade_date, code)
     );
+
+    CREATE TABLE IF NOT EXISTS matrix_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_json TEXT NOT NULL,
+      ruleset_version TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      counters_json TEXT NOT NULL DEFAULT '{}',
+      actor TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_entities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      normalized_domain TEXT NOT NULL,
+      display_name TEXT,
+      country TEXT,
+      public_contacts_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_evidence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_id INTEGER NOT NULL,
+      field TEXT NOT NULL,
+      value TEXT,
+      source_url TEXT NOT NULL,
+      page_title TEXT,
+      retrieved_at TEXT NOT NULL,
+      content_fingerprint TEXT NOT NULL,
+      confidence TEXT,
+      extraction_method TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_classifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_id INTEGER NOT NULL,
+      run_id INTEGER NOT NULL,
+      classification TEXT NOT NULL,
+      priority TEXT,
+      reason_json TEXT NOT NULL DEFAULT '[]',
+      confidence REAL,
+      human_override_classification TEXT,
+      human_override_reason TEXT,
+      human_override_actor TEXT,
+      human_override_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id),
+      FOREIGN KEY(run_id) REFERENCES matrix_runs(id)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_entities_domain
+      ON matrix_entities(normalized_domain);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_evidence_identity
+      ON matrix_evidence(entity_id, field, source_url, content_fingerprint);
   `);
 
   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
