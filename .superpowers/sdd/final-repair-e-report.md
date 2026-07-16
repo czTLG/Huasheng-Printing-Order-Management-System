@@ -22,6 +22,12 @@ Base: `4083b5a`
 - `npm run verify:smoke` passed.
 - No deployment, service restart, real credential use, real binding, candidate-content output, or outbound action occurred.
 
+## Review Repair — Atomic Read Snapshot
+
+- Complete membership and paged rows now execute inside one better-sqlite3 deferred read transaction, preserving one SQLite snapshot while remaining compatible with query-only connections.
+- A WAL regression commits a new top-ranked valid record from a second connection exactly after membership is read. The in-flight call returns the old membership and old rows consistently; the next independent call sees the new member and a new key.
+- An injected failure between the two reads proves the transaction rolls back and the view closes cleanly.
+
 ### 蒸馏进度
 
 - 已确认模块：valid-only推荐、正向阶段白名单、全成员跨页快照、漂移关闭与筛选新快照。

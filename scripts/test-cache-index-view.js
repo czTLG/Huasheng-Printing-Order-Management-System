@@ -43,6 +43,7 @@ function record(overrides) {
 
 const db = new Database(dbPath);
 try {
+  db.pragma('journal_mode = WAL');
   db.exec(`
     CREATE TABLE cache_records (
       id INTEGER PRIMARY KEY, company_name TEXT, country_code TEXT, city TEXT,
@@ -179,6 +180,33 @@ try {
   mutationDb.close();
   const driftedPage2 = view.recommendPage({ page: 2, page_size: 1 });
   assert.notStrictEqual(driftedPage2.snapshot_key, strictPage1.snapshot_key);
+
+  let insertedBetweenReads = false;
+  const atomicView = createCacheIndexView({
+    dbPath,
+    afterRecommendationMembership: () => {
+      if (insertedBetweenReads) return;
+      insertedBetweenReads = true;
+      const writer = new Database(dbPath);
+      try {
+        writer.prepare(`INSERT INTO cache_records (id, company_name, country_code, city, normalized_domain, official_url, product_categories_json, format_signals_json, size_signals_json, scale_tier, public_email, public_phone, public_whatsapp, contact_url, priority, fit_score, demand_fit_score, access_score, confidence, status, assessment_cn, next_action_cn, stage_code, audit_state, audit_note, audited_at, updated_at) VALUES (25, 'Atomic Insert', 'US', '', 'atomic.test', 'https://atomic.test/', '["coffee"]', '[]', '[]', 'medium', 'team@atomic.test', '', '', 'https://atomic.test/contact', 'P0', 100, 100, 100, 0.99, 'valid', '公开证据', '核实入口', 'observed', 'audited', NULL, '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z')`).run();
+        writer.prepare("INSERT INTO cache_evidence (id, record_id, source_url, source_type, page_title, observed_at, excerpt, fingerprint) VALUES (99,25,'https://atomic.test/products','official_website','Products','2026-07-17T00:00:00Z','Products','atomic-e')").run();
+        writer.prepare("INSERT INTO cache_discovery (id, record_id, normalized_domain, discovered_via, discovery_url, official_url, source_type, verified_at, fingerprint) VALUES (99,25,'atomic.test','official_directory','https://directory.test/atomic','https://atomic.test/','official_directory','2026-07-17T00:00:00Z','atomic-d')").run();
+      } finally { writer.close(); }
+    }
+  });
+  try {
+    const atomicOld = atomicView.recommendPage({ page: 1, page_size: 5 });
+    assert.strictEqual(atomicOld.total, 2);
+    assert.deepStrictEqual(atomicOld.rows.map(row => row.id), [1, 16]);
+    const atomicNew = atomicView.recommendPage({ page: 1, page_size: 5 });
+    assert.strictEqual(atomicNew.total, 3);
+    assert.deepStrictEqual(atomicNew.rows.map(row => row.id), [25, 1, 16]);
+    assert.notStrictEqual(atomicOld.snapshot_key, atomicNew.snapshot_key);
+  } finally { atomicView.close(); }
+  const throwingView = createCacheIndexView({ dbPath, afterRecommendationMembership: () => { throw new Error('injected membership failure'); } });
+  try { assert.throws(() => throwingView.recommendPage({ page: 1, page_size: 5 }), /injected membership failure/); }
+  finally { throwingView.close(); }
   assert.deepStrictEqual(view.recommendPage({ category: 'missing', page: 1, page_size: 5 }).rows, []);
 
   const allowedRegions = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);

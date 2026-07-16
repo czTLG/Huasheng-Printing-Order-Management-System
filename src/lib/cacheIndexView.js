@@ -216,17 +216,21 @@ function paginated(db, filters = {}, baseWhere = BASE_WHERE, maximumPageSize = 5
 }
 
 function list(db, filters = {}) { return paginated(db, filters, BASE_WHERE, 50); }
-function recommendPage(db, filters = {}) {
+function recommendPage(db, filters = {}, afterMembership) {
   const page = Math.max(1, Number.parseInt(filters.page, 10) || 1);
   const pageSize = Math.min(5, Math.max(1, Number.parseInt(filters.pageSize ?? filters.page_size, 10) || 5));
   const { where, params } = filterSql(filters, RECOMMENDATION_WHERE);
-  const membership = db.prepare(`SELECT r.id, r.updated_at FROM cache_records r WHERE ${where} ORDER BY ${STABLE_ORDER}`).all(...params);
-  const rawRows = db.prepare(`SELECT r.* FROM cache_records r WHERE ${where} ORDER BY ${STABLE_ORDER} LIMIT ? OFFSET ?`).all(...params, pageSize, (page - 1) * pageSize);
-  const snapshotKey = crypto.createHash('sha256').update(JSON.stringify({
-    filters: { region: filters.region || '', country: filters.country || '', category: filters.category || '', priority: filters.priority || '', status: filters.status || '' },
-    membership: membership.map(row => [row.id, row.updated_at])
-  })).digest('hex');
-  return { rows: rawRows.map(row => summary(row)), page, page_size: pageSize, total: membership.length, total_pages: membership.length ? Math.ceil(membership.length / pageSize) : 0, snapshot_key: snapshotKey };
+  const readSnapshot = db.transaction(() => {
+    const membership = db.prepare(`SELECT r.id, r.updated_at FROM cache_records r WHERE ${where} ORDER BY ${STABLE_ORDER}`).all(...params);
+    if (afterMembership) afterMembership();
+    const rawRows = db.prepare(`SELECT r.* FROM cache_records r WHERE ${where} ORDER BY ${STABLE_ORDER} LIMIT ? OFFSET ?`).all(...params, pageSize, (page - 1) * pageSize);
+    const snapshotKey = crypto.createHash('sha256').update(JSON.stringify({
+      filters: { region: filters.region || '', country: filters.country || '', category: filters.category || '', priority: filters.priority || '', status: filters.status || '' },
+      membership: membership.map(row => [row.id, row.updated_at])
+    })).digest('hex');
+    return { rows: rawRows.map(row => summary(row)), page, page_size: pageSize, total: membership.length, total_pages: membership.length ? Math.ceil(membership.length / pageSize) : 0, snapshot_key: snapshotKey };
+  });
+  return readSnapshot.deferred();
 }
 
 function detail(db, id, { revealContacts = false } = {}) {
@@ -279,7 +283,7 @@ function recommendationLimit(value) {
   return Math.min(5, Math.max(0, Math.trunc(numeric)));
 }
 
-function createCacheIndexView({ dbPath } = {}) {
+function createCacheIndexView({ dbPath, afterRecommendationMembership } = {}) {
   const selectedPath = dbPath || process.env.MATRIX_STREAM_DB_PATH || path.resolve(__dirname, '..', '..', 'data', 'matrix-stream.db');
   const db = new Database(selectedPath, { readonly: true, fileMustExist: true });
   db.pragma('query_only = ON');
@@ -298,7 +302,7 @@ function createCacheIndexView({ dbPath } = {}) {
   return {
     facets: () => facets(db),
     list: filters => list(db, filters),
-    recommendPage: filters => recommendPage(db, filters),
+    recommendPage: filters => recommendPage(db, filters, afterRecommendationMembership),
     detail: (id, options) => detail(db, id, options),
     recommend: ({ limit = 5, excludeIds = [], filters = {} } = {}) => recommend(db, recommendationLimit(limit), excludeIds, filters),
     ready,

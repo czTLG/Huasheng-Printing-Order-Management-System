@@ -48,7 +48,7 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '5d8d3053ddd0369cb93c5d87926035ffe34e611fee189e5a643bc72acdfc846e',
   'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
-  'src/lib/cacheIndexView.js': '99f9b56718b9cbe6a96924ece9a896a717b7497fb823cc89f2b616c20faaa95e',
+  'src/lib/cacheIndexView.js': '4ebe8786a9ee7e4c8134a3510b474367da0b6d3f6754c61980c4865d0b33ad28',
   'src/lib/packetGate.js': 'ff6e8176d2cddabcaf6419e19ba3927c831db87f2de5c76a80ed3fbee56a01a6',
   'src/routes/matrix.js': '81058e3ed7e261f6cf73f64f1c0d93c36a80215caa5dc9486a9c270455276ce9',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
