@@ -245,9 +245,9 @@ The five review-rejected reserve IDs were the only rows changed. Three genuinely
 
 | Candidate | Replacement | Why it passes |
 | --- | --- | --- |
-| `cand_003` | `freshplaza.com` | The official current page offers press-release publication free of charge by editorial email; the outlet has an active packaging remit for fresh produce and published releases retain direct source websites. |
+| `cand_003` | `freshplaza.com` | The official current page offers press-release publication free of charge by editorial email; another existing article is evidence only of the outlet's public source website-link pattern, not a packaging-coverage example. Submission is limited to genuine, timely fresh-produce packaging news. |
 | `cand_004` | `perishablenews.com` | The official public form offers free editorial placement only for qualified food-industry news; current packaging releases carry direct company/source links. |
-| `cand_005` | `petfoodindustry.com` | The official route says pet-food releases are considered free of charge, not every release is accepted, accepted copy is edited, and URLs may be supplied; current packaging news exposes linked supplier identity. |
+| `cand_005` | `petfoodindustry.com` | The official route says pet-food releases are considered free of charge, not every release is accepted, accepted copy is edited, and written URLs may be supplied. External-URL capability is supported by that guide and other existing articles; the 2026 ProAmpac example provides only a site-internal supplier-profile link. |
 
 Two additional real publications remain blocked rather than being promoted on silence:
 
@@ -258,4 +258,4 @@ The reliable editorial count is therefore **11**, not 13: the eight review-accep
 
 No contact, account creation, login, CAPTCHA interaction, or submission was performed.
 
-All 13 screened rows have all six mandatory fields set to `yes`; no blocked or disqualified row is counted. The registry remains at the maximum allowed 40 rows, candidate IDs and roots are unique, and no contact, login, submission, or external write was performed.
+All 11 screened rows have all six mandatory fields set to `yes`; the remaining rows are 21 blocked and 8 disqualified. The registry remains at the maximum allowed 40 rows, candidate IDs and roots are unique, and no contact, login, submission, or external write was performed.
