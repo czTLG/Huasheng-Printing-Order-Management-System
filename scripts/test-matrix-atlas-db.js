@@ -68,11 +68,20 @@ try {
   process.env.DB_PATH = mainPath;
   assert.throws(() => openMatrixAtlas({ dbPath: symlinkPath, readonly: true }), /DB_PATH/);
   assert.throws(() => openMatrixAtlas({ dbPath: hardlinkPath, readonly: true }), /DB_PATH/);
+  const danglingMainPath = path.join(root, 'dangling-main.db');
+  const danglingAliasPath = path.join(root, 'dangling-alias.db');
+  fs.symlinkSync(danglingMainPath, danglingAliasPath);
+  process.env.DB_PATH = danglingMainPath;
+  assert.throws(() => {
+    const escapedStore = openMatrixAtlas({ dbPath: danglingAliasPath });
+    escapedStore.close();
+  }, /DB_PATH/);
   if (previousMainPath === undefined) delete process.env.DB_PATH;
   else process.env.DB_PATH = previousMainPath;
 
   const store = openMatrixAtlas({ dbPath });
   store.init();
+  assert.strictEqual(store.db.pragma('user_version', { simple: true }), 1);
 
   for (const name of tableNames) {
     assert(store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name), `${name} missing`);
@@ -111,6 +120,70 @@ try {
   assert.strictEqual(store.db.pragma('integrity_check', { simple: true }), 'ok');
   store.close();
 
+  const secureCreatePath = path.join(root, 'secure-create.db');
+  const originalChmodSync = fs.chmodSync;
+  let modeBeforeFirstChmod;
+  fs.chmodSync = (file, mode) => {
+    if (path.resolve(file) === secureCreatePath && modeBeforeFirstChmod === undefined) {
+      modeBeforeFirstChmod = fs.statSync(file).mode & 0o777;
+    }
+    return originalChmodSync(file, mode);
+  };
+  try {
+    const secureCreateStore = openMatrixAtlas({ dbPath: secureCreatePath });
+    secureCreateStore.init();
+    secureCreateStore.close();
+  } finally {
+    fs.chmodSync = originalChmodSync;
+  }
+  assert.strictEqual(modeBeforeFirstChmod, 0o600, 'database must be created as 0600 before chmod');
+
+  const malformedPath = path.join(root, 'malformed.db');
+  const malformedDb = new Database(malformedPath);
+  malformedDb.exec('CREATE TABLE atlas_sources (id INTEGER PRIMARY KEY)');
+  malformedDb.pragma('user_version = 1');
+  malformedDb.close();
+  fs.chmodSync(malformedPath, 0o600);
+  const malformedStore = openMatrixAtlas({ dbPath: malformedPath });
+  assert.throws(() => malformedStore.init(), /schema/i);
+  malformedStore.close();
+  assert.throws(() => {
+    const malformedReadonlyStore = openMatrixAtlas({ dbPath: malformedPath, readonly: true });
+    malformedReadonlyStore.close();
+  }, /schema/i);
+
+  const versionMismatchPath = path.join(root, 'version-mismatch.db');
+  const versionMismatchDb = new Database(versionMismatchPath);
+  versionMismatchDb.pragma('user_version = 2');
+  versionMismatchDb.close();
+  fs.chmodSync(versionMismatchPath, 0o600);
+  const versionMismatchStore = openMatrixAtlas({ dbPath: versionMismatchPath });
+  assert.throws(() => versionMismatchStore.init(), /schema version/i);
+  versionMismatchStore.close();
+  assert.throws(() => {
+    const versionMismatchReadonlyStore = openMatrixAtlas({ dbPath: versionMismatchPath, readonly: true });
+    versionMismatchReadonlyStore.close();
+  }, /schema version/i);
+
+  const extraObjectsPath = path.join(root, 'extra-objects.db');
+  const extraObjectsStore = openMatrixAtlas({ dbPath: extraObjectsPath });
+  extraObjectsStore.init();
+  extraObjectsStore.close();
+  const extraObjectsDb = new Database(extraObjectsPath);
+  extraObjectsDb.exec(`
+    CREATE INDEX extra_index ON atlas_sources(code);
+    CREATE TRIGGER evil_trigger
+    AFTER INSERT ON atlas_events
+    BEGIN
+      SELECT RAISE(ABORT, 'unexpected trigger');
+    END;
+  `);
+  extraObjectsDb.close();
+  fs.chmodSync(extraObjectsPath, 0o600);
+  const incompatibleObjectsStore = openMatrixAtlas({ dbPath: extraObjectsPath });
+  assert.throws(() => incompatibleObjectsStore.init(), /schema/i);
+  incompatibleObjectsStore.close();
+
   const readonlyStore = openMatrixAtlas({ dbPath, readonly: true });
   assert.throws(() => readonlyStore.init(), /readonly/i);
   assert.throws(() => readonlyStore.db.prepare("INSERT INTO atlas_events (action, entity_type, idempotency_key, created_at) VALUES ('x', 'x', 'x', 'x')").run(), /readonly/i);
@@ -127,6 +200,15 @@ try {
   assert.throws(() => corruptStore.db.prepare('SELECT countries_json AS payload FROM atlas_sources').get(), /invalid JSON.*countries_json/i);
   assert.throws(() => corruptStore.db.prepare('SELECT countries_json FROM atlas_sources').pluck().get(), /invalid JSON.*countries_json/i);
   assert.throws(() => corruptStore.db.prepare('SELECT countries_json AS payload FROM atlas_sources').expand().get(), /invalid JSON.*countries_json/i);
+  assert.throws(() => corruptStore.db.prepare('SELECT 1').database.prepare('SELECT countries_json FROM atlas_sources').get(), /invalid JSON.*countries_json/i);
+  assert.throws(() => corruptStore.db.unsafeMode(false).prepare('SELECT countries_json FROM atlas_sources').get(), /invalid JSON.*countries_json/i);
+  const transactionDatabase = corruptStore.db.transaction(() => {}).database;
+  assert.strictEqual(transactionDatabase, corruptStore.db);
+  assert.throws(() => transactionDatabase.prepare('SELECT countries_json FROM atlas_sources').get(), /invalid JSON.*countries_json/i);
+  const leakedSymbol = Reflect.ownKeys(corruptStore.db).find((key) => (
+    typeof key === 'symbol' && corruptStore.db[key]?.prepare
+  ));
+  assert.strictEqual(leakedSymbol, undefined, 'database proxy must not expose a raw handle through symbol keys');
   corruptStore.close();
 
   fs.chmodSync(dbPath, 0o640);

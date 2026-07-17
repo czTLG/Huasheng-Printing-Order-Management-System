@@ -213,6 +213,51 @@ BEGIN
 END;
 `;
 
+const SCHEMA_VERSION = 1;
+let expectedSchemaManifest;
+
+function readSchemaManifest(database) {
+  return database.prepare(`
+    SELECT type, name, tbl_name, sql
+    FROM sqlite_master
+    WHERE sql IS NOT NULL
+      AND type IN ('table', 'index', 'trigger')
+      AND (name LIKE 'atlas_%' OR tbl_name LIKE 'atlas_%')
+    ORDER BY type, name
+  `).all().map((object) => ({
+    ...object,
+    sql: object.sql.replace(/\s+/g, ' ').trim()
+  }));
+}
+
+function getExpectedSchemaManifest() {
+  if (expectedSchemaManifest) return expectedSchemaManifest;
+  const reference = new Database(':memory:');
+  try {
+    reference.exec(SCHEMA);
+    expectedSchemaManifest = readSchemaManifest(reference);
+    return expectedSchemaManifest;
+  } finally {
+    reference.close();
+  }
+}
+
+function validateSchema(database) {
+  const actual = readSchemaManifest(database);
+  const expected = getExpectedSchemaManifest();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error('incompatible Matrix Atlas schema objects, columns, foreign keys, indexes, triggers, or constraints');
+  }
+}
+
+function validateVersionedSchema(database) {
+  const schemaVersion = database.pragma('user_version', { simple: true });
+  if (schemaVersion !== SCHEMA_VERSION) {
+    throw new Error(`unsupported Matrix Atlas schema version ${schemaVersion}; expected ${SCHEMA_VERSION}`);
+  }
+  validateSchema(database);
+}
+
 function validateJsonValue(value, column) {
   try {
     JSON.parse(value);
@@ -260,26 +305,28 @@ function validateHydratedRow(row, statement) {
   return row;
 }
 
-function protectStatement(statement) {
+function protectStatement(statement, protectedDatabase) {
   let proxy;
-  proxy = new Proxy(statement, {
-    get(target, property) {
+  proxy = new Proxy({}, {
+    get(_target, property) {
+      if (property === 'database') return protectedDatabase;
       if (property === 'get') {
-        return (...args) => validateHydratedRow(target.get(...args), target);
+        return (...args) => validateHydratedRow(statement.get(...args), statement);
       }
       if (property === 'all') {
-        return (...args) => target.all(...args).map((row) => validateHydratedRow(row, target));
+        return (...args) => statement.all(...args).map((row) => validateHydratedRow(row, statement));
       }
       if (property === 'iterate') {
         return function* iterate(...args) {
-          for (const row of target.iterate(...args)) yield validateHydratedRow(row, target);
+          for (const row of statement.iterate(...args)) yield validateHydratedRow(row, statement);
         };
       }
-      const value = Reflect.get(target, property, target);
+      const value = Reflect.get(statement, property, statement);
       if (typeof value !== 'function') return value;
       return (...args) => {
-        const result = value.apply(target, args);
-        return result === target ? proxy : result;
+        const result = value.apply(statement, args);
+        if (result === statement.database) return protectedDatabase;
+        return result === statement ? proxy : result;
       };
     }
   });
@@ -287,13 +334,49 @@ function protectStatement(statement) {
 }
 
 function protectDatabase(database) {
-  return new Proxy(database, {
-    get(target, property) {
-      if (property === 'prepare') return (sql) => protectStatement(target.prepare(sql));
-      const value = Reflect.get(target, property, target);
-      return typeof value === 'function' ? value.bind(target) : value;
+  let proxy;
+  const protectedFunctions = new WeakMap();
+
+  function protectResult(result) {
+    if (result === database) return proxy;
+    if (typeof result === 'function' && result.database === database) {
+      return protectFunction(result);
+    }
+    return result;
+  }
+
+  function protectFunction(fn) {
+    if (protectedFunctions.has(fn)) return protectedFunctions.get(fn);
+    let protectedFunction;
+    const callable = (...args) => protectResult(fn(...args));
+    protectedFunction = new Proxy(callable, {
+      get(_target, property) {
+        if (property === 'database') return proxy;
+        const value = Reflect.get(fn, property, fn);
+        if (value === database) return proxy;
+        return protectResult(value);
+      },
+      apply(_target, thisArgument, args) {
+        return protectResult(Reflect.apply(fn, thisArgument, args));
+      }
+    });
+    protectedFunctions.set(fn, protectedFunction);
+    return protectedFunction;
+  }
+
+  proxy = new Proxy({}, {
+    get(_target, property) {
+      if (typeof property === 'symbol') return undefined;
+      if (property === 'prepare') return (sql) => protectStatement(database.prepare(sql), proxy);
+      const value = Reflect.get(database, property, database);
+      if (typeof value !== 'function') return value;
+      return (...args) => {
+        const result = value.apply(database, args);
+        return protectResult(result);
+      };
     }
   });
+  return proxy;
 }
 
 function selectedDatabasePath(dbPath) {
@@ -303,6 +386,10 @@ function selectedDatabasePath(dbPath) {
   }
 
   const selectedPath = path.resolve(String(configuredPath));
+  const selectedEntry = fs.lstatSync(selectedPath, { throwIfNoEntry: false });
+  if (selectedEntry?.isSymbolicLink()) {
+    throw new Error('Matrix Atlas database path must not be a symlink or alias of DB_PATH');
+  }
   const mainPath = path.resolve(process.env.DB_PATH || './data/app.db');
   const selectedCanonicalPath = fs.existsSync(selectedPath)
     ? fs.realpathSync(selectedPath)
@@ -325,19 +412,45 @@ function assertProtectedExistingFile(dbPath) {
   if (mode !== 0o600) throw new Error('Matrix Atlas database file must have mode 0600');
 }
 
+function assertNoUnversionedAtlasObjects(database) {
+  const existing = database.prepare(`
+    SELECT name
+    FROM sqlite_master
+    WHERE name LIKE 'atlas_%'
+      AND type IN ('table', 'index', 'trigger')
+    ORDER BY name
+  `).all();
+  if (existing.length) {
+    throw new Error(`incompatible unversioned Matrix Atlas schema: ${existing.map(({ name }) => name).join(', ')}`);
+  }
+}
+
 function openMatrixAtlas({ dbPath, readonly = false } = {}) {
-  const selectedPath = selectedDatabasePath(dbPath);
+  let selectedPath = selectedDatabasePath(dbPath);
   assertProtectedExistingFile(selectedPath);
 
   const existed = fs.existsSync(selectedPath);
+  if (!existed && !readonly) {
+    const descriptor = fs.openSync(
+      selectedPath,
+      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW,
+      0o600
+    );
+    fs.closeSync(descriptor);
+    selectedPath = selectedDatabasePath(dbPath);
+    assertProtectedExistingFile(selectedPath);
+  }
   const database = new Database(selectedPath, {
     readonly,
-    fileMustExist: readonly
+    fileMustExist: true
   });
 
   try {
+    selectedPath = selectedDatabasePath(dbPath);
+    assertProtectedExistingFile(selectedPath);
     if (!existed) fs.chmodSync(selectedPath, 0o600);
     database.pragma('foreign_keys = ON');
+    if (readonly) validateVersionedSchema(database);
   } catch (error) {
     database.close();
     throw error;
@@ -348,7 +461,17 @@ function openMatrixAtlas({ dbPath, readonly = false } = {}) {
     db,
     init() {
       if (readonly) throw new Error('cannot initialize a readonly Matrix Atlas store');
-      database.exec(SCHEMA);
+      const schemaVersion = database.pragma('user_version', { simple: true });
+      if (schemaVersion === 0) {
+        assertNoUnversionedAtlasObjects(database);
+        database.transaction(() => {
+          database.exec(SCHEMA);
+          database.pragma(`user_version = ${SCHEMA_VERSION}`);
+        })();
+      } else if (schemaVersion !== SCHEMA_VERSION) {
+        throw new Error(`unsupported Matrix Atlas schema version ${schemaVersion}; expected ${SCHEMA_VERSION}`);
+      }
+      validateVersionedSchema(database);
       fs.chmodSync(selectedPath, 0o600);
     },
     close() {
