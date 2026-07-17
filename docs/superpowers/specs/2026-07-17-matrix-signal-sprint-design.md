@@ -7,7 +7,7 @@
 
 ## 1. Objective
 
-Run a one-week, zero-budget authority-building sprint for `gdhspack.com`. Complete at least 15 individually reviewed, relevant submissions with evidence and seek 3–7 links that become publicly available during the sprint. The longer-term outcome remains 10–15 valid referring root domains, but third-party review and publication timing are outside the project's control.
+Run a one-week, zero-budget authority-building sprint for `gdhspack.com`. Complete 8 individually reviewed, relevant submissions with evidence, retain 3 strictly qualified reserve targets, and seek 3–7 links that become publicly available during the sprint. The longer-term outcome remains 10–15 valid referring root domains, but third-party review and publication timing are outside the project's control. The 8-submission and 3-reserve scope was approved by the user after strict screening found that the original 15-submission target could not be met without lowering the evidence gate.
 
 The sprint excludes paid placements, private blog networks, expired-domain redirects, automated link creation, bulk outreach, hidden links, and arrangements whose primary condition is reciprocal linking.
 
@@ -29,8 +29,8 @@ Before any submission, conflicting company names, Shantou addresses, or inconsis
 By 2026-07-24, the sprint will produce:
 
 1. A baseline of currently discoverable referring domains and target-site linkable assets.
-2. A reviewed pool of 30–40 candidate sites.
-3. At least 15 qualified submissions across the approved source mix.
+2. A reviewed pool of 30–40 candidate sites, including at least 11 strictly qualified targets.
+3. 8 qualified submissions and 3 qualified reserve targets across the approved source mix.
 4. Submission evidence and status for every attempted target.
 5. Verification records for every link that becomes public.
 6. A pending queue with the next follow-up date for third-party reviews that outlast the sprint.
@@ -140,7 +140,7 @@ A live referring domain counts toward the result only when:
 
 `nofollow`, `sponsored`, and `ugc` links may provide legitimate discovery or brand value and remain in the report, but they are labeled separately. Google Search Console is supporting evidence only because its Links report is a sampled view and may lag publication.
 
-One-week sprint acceptance requires at least 15 qualified submissions with evidence. The 3–7 live-link range is an execution target, not a guaranteed acceptance gate, because publication is controlled by third parties.
+One-week sprint acceptance requires 8 qualified submissions with evidence and 3 strictly qualified reserve targets. The 3–7 live-link range is an execution target, not a guaranteed acceptance gate, because publication is controlled by third parties.
 
 ## 11. Failure and Safety Handling
 

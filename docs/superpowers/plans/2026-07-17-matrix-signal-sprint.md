@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Complete a one-week, zero-budget authority-building sprint for `https://gdhspack.com` with at least 15 individually reviewed submissions, complete evidence, and a target of 3–7 live referring domains by 2026-07-24.
+**Goal:** Complete a one-week, zero-budget authority-building sprint for `https://gdhspack.com` with 8 individually reviewed submissions, 3 strictly qualified reserve targets, complete evidence, and a target of 3–7 live referring domains by 2026-07-24.
 
 **Architecture:** Use a file-based registry with separate identity, asset, candidate, message, evidence, and report artifacts under a neutral `docs/matrix-signal/` codename. Every candidate passes a documented quality gate before drafting, every outbound message passes a user-review gate before submission, and every claimed result passes a live-link verification gate.
 
@@ -22,6 +22,7 @@
 - Store no passwords, session tokens, CAPTCHA data, or private personal data.
 - A source root domain is counted at most once.
 - `nofollow`, `sponsored`, and `ugc` links are reported separately and never misrepresented as followed links.
+- The user-approved screened-pool threshold is 8 submitted targets plus 3 qualified reserve targets; do not lower the evidence gate to restore the superseded 15-submission target.
 
 ---
 
@@ -202,15 +203,7 @@ Do not promote a candidate based on domain rating alone. Record the official pub
 
 - [ ] **Step 4: Enforce source-mix and reserve requirements**
 
-The screened pool must contain at least:
-
-- 8 directory/profile candidates
-- 8 editorial contribution candidates
-- 8 resource/broken-citation candidates
-- 4 mention/relationship candidates
-- 5 additional screened reserve candidates across any approved class
-
-If a lane cannot meet its minimum without lowering quality, document the shortfall and increase another editorially valid lane; do not add low-quality rows to satisfy a number.
+The screened pool must contain at least 11 strictly qualified candidates: 8 intended submissions and 3 reserve targets. Preserve the source-class counts in the registry and document every directory, resource, or relationship shortfall. The user approved an editorial-led pool after strict review showed that the other lanes could not meet their original minimums without lowering quality. Do not add low-quality rows to satisfy a number.
 
 - [ ] **Step 5: Validate registry shape and uniqueness**
 
@@ -277,7 +270,7 @@ git add docs/matrix-signal/messages.md docs/matrix-signal/registry.csv docs/matr
 git commit -m "docs: submit first matrix signal cohort"
 ```
 
-### Task 5: Complete ten additional qualified submissions
+### Task 5: Complete three additional qualified submissions
 
 **Files:**
 - Modify: `docs/matrix-signal/messages.md`
@@ -286,38 +279,31 @@ git commit -m "docs: submit first matrix signal cohort"
 
 **Interfaces:**
 - Consumes: Screened reserve candidates and the approved drafting/submission workflow from Task 4.
-- Produces: At least 15 total qualified submitted rows, or an explicit operational block record for any user-controlled login/CAPTCHA gate.
+- Produces: At least 8 total qualified submitted rows plus 3 screened reserve rows, or an explicit operational block record for any user-controlled login/CAPTCHA gate.
 
-- [ ] **Step 1: Select two review cohorts of five**
+- [ ] **Step 1: Select one review cohort of three**
 
-Choose candidates that move the portfolio toward the design mix. Do not reduce the quality gate to hit the submission target.
+Choose three candidates that move the portfolio toward the design mix while leaving three strictly qualified reserve candidates. Do not reduce the quality gate to hit the submission target.
 
 - [ ] **Step 2: Draft the second cohort**
 
-Add five complete target-specific drafts using the exact record structure from Task 4. Map every pitch to an approved target asset and a concrete reader need.
+Add three complete target-specific drafts using the exact record structure from Task 4. Map every pitch to an approved target asset and a concrete reader need.
 
 - [ ] **Step 3: Obtain user approval and submit the second cohort**
 
 Present exact messages, record explicit decisions, submit individually, pause on login/CAPTCHA, and update registry/evidence after each attempt.
 
-- [ ] **Step 4: Draft the third cohort**
-
-Add five complete target-specific drafts. Prefer editorial, resource, or mention-reclamation candidates if directory/profile submissions dominate the first ten.
-
-- [ ] **Step 5: Obtain user approval and submit the third cohort**
-
-Repeat the same exact review, submission, pause, and evidence requirements. One customized first contact per target; do not bulk-send.
-
-- [ ] **Step 6: Verify submission count and commit**
+- [ ] **Step 4: Verify submission and reserve counts**
 
 Run:
 
 ```bash
 awk -F, 'NR>1 && $17=="submitted" {n++} END {print n+0}' docs/matrix-signal/registry.csv
+awk -F, 'NR>1 && $17=="screened" {n++} END {print n+0}' docs/matrix-signal/registry.csv
 rg -c "^## draft_" docs/matrix-signal/messages.md
 ```
 
-Expected: submitted count is at least `15`, and draft count is at least `15`. If user-controlled gates prevent 15 completed submissions, the report must show each exact blocked row and no success claim may be made.
+Expected: the first count is at least `8`, the second count is at least `3`, and the draft count is at least `8`. If user-controlled gates prevent 8 completed submissions, the report must show each exact blocked row and no success claim may be made.
 
 ```bash
 git add docs/matrix-signal/messages.md docs/matrix-signal/registry.csv docs/matrix-signal/evidence
