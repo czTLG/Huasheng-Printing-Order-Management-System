@@ -1,0 +1,42 @@
+[
+  {
+    "code": "source-mt",
+    "publisher": "Malaysia External Trade Development Corporation",
+    "landing_url": "https://www.matrade.gov.my/en/source-from-malaysia/directories/malaysia-products-directory",
+    "source_class": "P0",
+    "countries": ["MY"],
+    "allowed_origins": ["https://www.matrade.gov.my"],
+    "allowed_paths": ["/en/source-from-malaysia/directories/"],
+    "disallowed_paths": ["/login", "/account", "/administrator"],
+    "auth_mode": "none",
+    "min_interval_ms": 5000,
+    "concurrency": 1,
+    "daily_budget": 150,
+    "cache_ttl_seconds": 86400,
+    "robots_reviewed_at": "2026-07-18T00:00:00Z",
+    "policy_expires_at": "2026-10-18T00:00:00Z",
+    "parser_version": "1",
+    "license_note": "Public official directory; use is subject to publisher terms and robots policy.",
+    "status": "active"
+  },
+  {
+    "code": "source-tx",
+    "publisher": "Department of International Trade Promotion",
+    "landing_url": "https://www.thaitradefair.com/",
+    "source_class": "P0",
+    "countries": ["TH"],
+    "allowed_origins": ["https://www.thaitradefair.com"],
+    "allowed_paths": ["/fair-content/"],
+    "disallowed_paths": ["/login", "/account"],
+    "auth_mode": "none",
+    "min_interval_ms": 5000,
+    "concurrency": 1,
+    "daily_budget": 150,
+    "cache_ttl_seconds": 86400,
+    "robots_reviewed_at": "2026-07-18T00:00:00Z",
+    "policy_expires_at": "2026-10-18T00:00:00Z",
+    "parser_version": "1",
+    "license_note": "Public official directory; use is subject to publisher terms and robots policy.",
+    "status": "active"
+  }
+]
