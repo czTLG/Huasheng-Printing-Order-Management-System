@@ -138,16 +138,70 @@ function testWatcherWholeCardBudget() {
     assessment_cn: `理由${index + 1}${long}`,
     categories: [`品类${index + 1}${long}`, long],
     size_signals: [`250g ${long}`, `own factory ${long}`],
-    next_action_cn: `下一步${index + 1}${long}`
+    next_action_cn: `下一步${index + 1}${long}`,
+    supplier_signal: index === 0 ? { confidence: 'confirmed', supplier_name: '公开供应方' } : null,
+    strategy_signal: { differentiation_angle: `切入策略${index + 1}${long}` }
   }));
-  const text = visibleText(watcher.reminderCard(rows));
+  const card = watcher.reminderCard(rows);
+  const text = visibleText(card);
   assert.ok([...text].length <= 1500, `watcher reminder uses ${[...text].length} code points`);
   for (let index = 0; index < 5; index += 1) {
     assert.ok(text.includes(`${String.fromCharCode(65 + index)}｜定时公司${index + 1}`));
   }
-  for (const required of ['推荐理由：', '品类：', '阶段：已观察', '已确认规格：', '已确认公开信号：', '待核实：', '下一步：']) {
+  for (const required of ['推荐理由：', '品类：', '阶段：已观察', '已确认规格：', '已确认公开信号：', '供应商：已确认', '供应商：未知', '切入策略：', '待核实：', '下一步：', '也可 @智能桓 回复 A-E']) {
     assert.ok(text.includes(required), `watcher reminder missing ${required}`);
   }
+  const quick = buttons(card).filter(item => item.behaviors?.[0]?.value?.a === 'mx.quick');
+  assert.deepStrictEqual(quick.map(item => item.behaviors[0].value.i), [0, 1, 2, 3, 4]);
+  assert.deepStrictEqual(quick.map(item => item.text.content), ['查看 A', '查看 B', '查看 C', '查看 D', '查看 E']);
+}
+
+async function testFreshQuickChoiceRecovery() {
+  const rows = Array.from({ length: 5 }, (_, index) => ({
+    id: 900 + index, company_name: `Quick ${index + 1}`, country_code: 'VN', priority: 'P1',
+    categories: ['fruit'], format_signals: ['roll film'], size_signals: [], status: 'valid',
+    stage_code: 'observed', assessment_cn: '公开产品证据', next_action_cn: '确认结构', contacts: {}
+  }));
+  for (const input of ['A', 'a', '开发客户 A']) {
+    const calls = [];
+    const sent = [];
+    const registered = extension.register({
+      channel: {}, dispatcher: { on: () => undefined }, card: helpers(),
+      now: () => Date.parse('2026-07-17T00:00:00Z'),
+      sendManagedCard: async (_channel, _chat, card) => sent.push(card),
+      client: {
+        rehydrateSession: async () => { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; },
+        today: async openId => { calls.push(['today', openId]); return { rows, snapshot_key: 'q'.repeat(64) }; },
+        createSession: async (openId, value) => { calls.push(['createSession', openId, value]); return { id: 901, chat_id: value.chat_id, thread_id: value.thread_id, filters: value.filters, page: 1, version: 1, expires_at: value.expires_at }; },
+        candidateDetail: async (openId, id) => { calls.push(['candidateDetail', openId, id]); return { ...rows[id - 900], discovery: {}, official_evidence: [] }; },
+        selectCandidate: async () => { calls.push(['selectCandidate']); throw new Error('quick choice must not select'); }
+      }
+    });
+    assert.strictEqual(await registered.onMessage({ msg: { content: input, chatId: 'chat-quick', threadId: 'thread-quick', senderId: 'ou-quick' } }), true);
+    assert.deepStrictEqual(calls.map(item => item[0]), ['today', 'createSession', 'candidateDetail']);
+    assert.ok(visibleText(sent.at(-1)).includes('Quick 1'));
+    registered.dispose();
+  }
+
+  const handlers = new Map();
+  const created = [];
+  const details = [];
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: (name, handler) => handlers.set(name, handler) }, card: helpers(),
+    now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async () => undefined,
+    client: {
+      rehydrateSession: async () => { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; },
+      today: async () => ({ rows, snapshot_key: 'q'.repeat(64) }),
+      createSession: async (openId, value) => { created.push([openId, value.chat_id, value.thread_id]); return { id: created.length, chat_id: value.chat_id, thread_id: value.thread_id, filters: value.filters, page: 1, version: 1, expires_at: value.expires_at }; },
+      candidateDetail: async (openId, id) => { details.push([openId, id]); return { ...rows[id - 900], discovery: {}, official_evidence: [] }; }
+    }
+  });
+  const base = { chatId: 'chat-shared', threadId: 'thread-shared', messageId: 'evt' };
+  await handlers.get('mx.quick')({ evt: { ...base, operator: { openId: 'ou-one' } }, value: { a: 'mx.quick', i: 1 } });
+  await handlers.get('mx.quick')({ evt: { ...base, operator: { openId: 'ou-two' } }, value: { a: 'mx.quick', i: 1 } });
+  assert.deepStrictEqual(created, [['ou-one', 'chat-shared', 'thread-shared'], ['ou-two', 'chat-shared', 'thread-shared']]);
+  assert.deepStrictEqual(details, [['ou-one', 901], ['ou-two', 901]]);
+  registered.dispose();
 }
 
 async function testReminderPollingAndRetry() {
@@ -393,9 +447,9 @@ async function testExpiredSessionRecovery() {
   await registered.onMessage({ msg: message });
   now += 30 * 60 * 1000 + 1;
   assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
-  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+  assert.ok(visibleText(sent.at(-1)).includes('Expiry Company'));
   assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
-  assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+  assert.ok(visibleText(sent.at(-1)).includes('Expiry Company'));
 
   await registered.onMessage({ msg: message });
   const locallyExpiredButton = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.detail');
@@ -475,6 +529,7 @@ async function testSelectionReplayAfterRestart() {
     today: async () => ({ rows: [row], snapshot_key: '8'.repeat(64) }),
     createSession: async () => ({ id: 81, chat_id: 'chat-replay', thread_id: '', filters: { page_size: 5 }, snapshot_key: '8'.repeat(64), candidate_ids: [801], page: 1, version, expires_at: '2026-07-17T00:30:00Z' }),
     rehydrateSession: async () => ({ id: 81, chat_id: 'chat-replay', thread_id: '', filters: { page_size: 5 }, snapshot_key: '8'.repeat(64), candidate_ids: [801], candidates: [row], page: 1, version, expires_at: '2026-07-17T00:30:00Z' }),
+    candidateDetail: async () => ({ ...row, discovery: {}, official_evidence: [], contacts: {} }),
     selectCandidate: async (_openId, input) => {
       if (persisted.has(input.idempotency_key)) return persisted.get(input.idempotency_key);
       if (input.expected_version !== version) { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; }
@@ -486,8 +541,10 @@ async function testSelectionReplayAfterRestart() {
   const firstHandlers = new Map();
   const first = extension.register({ channel: {}, dispatcher: { on: (n, h) => firstHandlers.set(n, h) }, card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_c, _id, card) => sent.push(card) });
   await first.onMessage({ msg: { content: '开发客户', chatId: 'chat-replay', threadId: '', senderId: 'ou-replay' } });
-  const oldSelect = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value;
+  const detailValue = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.detail').value;
   const evt = { operator: { openId: 'ou-replay' }, chatId: 'chat-replay', threadId: '', messageId: 'evt-replay' };
+  await firstHandlers.get('mx.detail')({ evt, value: detailValue });
+  const oldSelect = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value;
   await firstHandlers.get('mx.select')({ evt, value: oldSelect });
   first.dispose();
   const freshHandlers = new Map();
@@ -558,6 +615,7 @@ async function testRecommendationSnapshotTransitions() {
   await testNarrowClient();
   await testReadOnlyWatcher();
   testWatcherWholeCardBudget();
+  await testFreshQuickChoiceRecovery();
   await testReminderPollingAndRetry();
   await testWholeCardBudget();
   await testExpiredSessionRecovery();
@@ -634,6 +692,16 @@ async function testRecommendationSnapshotTransitions() {
         official_url: 'https://company.test/',
         discovery: { discovered_via: 'official_association_directory', discovery_url: 'https://association.test/member' },
         official_evidence: [{ source_url: 'https://company.test/products', page_title: 'Products' }],
+        supplier_signal: id === 1 ? {
+          supplier_name: 'Verified Supplier', supplier_country_code: 'CN', supplied_category: 'laminated roll film',
+          confidence: 'confirmed', source_url: 'https://trade.test/public-record', source_type: 'public_trade_record',
+          observed_at: '2026-07-17T00:00:00Z', excerpt: 'Named public relationship'
+        } : null,
+        strategy_signal: id === 1 ? {
+          entry_product: 'laminated roll film', differentiation_angle: 'stable repeat print control',
+          first_contact_goal: 'confirm structure and annual volume', questions: ['Current structure?', 'Annual volume?'],
+          risks: ['Relationship may have changed'], source_url: 'https://trade.test/public-record', observed_at: '2026-07-17T00:00:00Z'
+        } : null,
         contacts: { email: 'public@company.test', phone: '', whatsapp: '', contact_page: 'https://company.test/contact' }
       };
     },
@@ -686,11 +754,11 @@ async function testRecommendationSnapshotTransitions() {
   assert.strictEqual(await registered.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
   assert.ok(calls.some(item => item[0] === 'candidateDetail' && item[2] === 1));
   const detailText = visibleText(sent.at(-1).card);
-  for (const expected of ['official_association_directory', 'https://association.test/member', 'https://company.test/', 'https://company.test/products', '已确认', '待核实']) assert.ok(detailText.includes(expected));
+  for (const expected of ['official_association_directory', 'https://association.test/member', 'https://company.test/', 'https://company.test/products', '为什么推荐', '产品结构', '供应链线索', '开发策略', 'Verified Supplier', '已确认', 'stable repeat print control', 'https://trade.test/public-record']) assert.ok(detailText.includes(expected));
   assert.ok(detailText.includes('阶段：已观察'));
-  assert.ok(detailText.includes('规格 250g'));
-  assert.ok(detailText.includes('公开信号 own factory'));
-  assert.ok(!detailText.includes('规格 own factory'));
+  assert.ok(detailText.includes('规格：250g'));
+  assert.ok(detailText.includes('公开信号：own factory'));
+  assert.ok(!detailText.includes('规格：own factory'));
   assert.ok(!detailText.includes('待核实：规格 250g'));
   assert.ok(!detailText.includes('public@company.test'));
 
@@ -775,12 +843,12 @@ async function testRecommendationSnapshotTransitions() {
     now: () => Date.parse('2026-07-17T00:00:00.000Z'), sendManagedCard: async (_channel, _chat, card) => incompleteSent.push(card)
   });
   await incomplete.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' } });
-  assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
+  assert.ok(visibleText(incompleteSent.at(-1)).includes('Company 1'));
   await incompleteHandlers.get('mx.detail')({ evt: callbackEvent, value: { a: 'mx.detail', s: 999, v: 1, c: 1 } });
   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
   incomplete.dispose();
   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
-  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.region', 'mx.select', 'mx.today', 'mx.work']);
+  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.quick', 'mx.region', 'mx.select', 'mx.today', 'mx.work']);
 
   console.log('stream card extension tests passed');
 })().catch(error => {
