@@ -121,7 +121,7 @@ function seedCandidateDb() {
       '公开信息确认','核实公开联系入口','observed','audited',NULL,@updated,@updated,'SECRET-COST-FORMULA'
     )
   `);
-  insert.run({ id: 1, company: 'Alpha Coffee', country: 'US', domain: 'alpha.test', url: 'https://alpha.test/', categories: '["coffee"]', email: 'team@alpha.test', phone: '+1 202 555 0123', whatsapp: '+1 202 555 0456', contact: 'https://alpha.test/contact', priority: 'P0', score: 95, status: 'valid', updated: '2026-07-17T00:00:00Z' });
+  insert.run({ id: 1, company: 'Alpha Coffee', country: 'VN', domain: 'alpha.test', url: 'https://alpha.test/', categories: '["coffee"]', email: 'team@alpha.test', phone: '+1 202 555 0123', whatsapp: '+1 202 555 0456', contact: 'https://alpha.test/contact', priority: 'P0', score: 95, status: 'valid', updated: '2026-07-17T00:00:00Z' });
   insert.run({ id: 2, company: 'Beta Tea', country: 'GB', domain: 'beta.test', url: 'https://beta.test/', categories: '["tea"]', email: 'sales@beta.test', phone: '', whatsapp: '', contact: 'https://beta.test/contact', priority: 'P1', score: 88, status: 'valid', updated: '2026-07-16T00:00:00Z' });
   insert.run({ id: 3, company: 'India Blocked', country: 'IN', domain: 'blocked.test', url: 'https://blocked.test/', categories: '["coffee"]', email: '', phone: '', whatsapp: '', contact: '', priority: 'P0', score: 99, status: 'valid', updated: '2026-07-17T00:00:00Z' });
   insert.run({ id: 4, company: 'Review Snacks', country: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["snacks"]', email: '', phone: '', whatsapp: '', contact: 'https://review.test/contact', priority: 'P2', score: 70, status: 'needs_review', updated: '2026-07-15T00:00:00Z' });
@@ -201,7 +201,7 @@ async function stopServer() {
     assert.strictEqual((await request('/api/matrix/candidates?country=CN', { token: rootToken })).status, 400);
     assert.strictEqual((await request('/api/matrix/candidates?country=IN', { token: rootToken })).status, 400);
 
-    const list = await request('/api/matrix/candidates?region=americas&category=coffee&page=1&page_size=100', { token: rootToken });
+    const list = await request('/api/matrix/candidates?region=asia&category=coffee&page=1&page_size=100', { token: rootToken });
     assert.strictEqual(list.status, 200);
     assert.match(list.body.snapshot_key, /^[a-f0-9]{64}$/);
     assert.strictEqual(list.body.page_size, 20);
@@ -258,7 +258,7 @@ async function stopServer() {
 
     const rejectedSession = await request('/api/matrix/sessions', {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
-      body: { chat_id: 'chat-1', filters: { region: 'americas', page: 9 }, expires_at: '2099-01-01T00:00:00.000Z' }
+      body: { chat_id: 'chat-1', filters: { region: 'asia', page: 9 }, expires_at: '2099-01-01T00:00:00.000Z' }
     });
     assert.strictEqual(rejectedSession.status, 400);
 
@@ -272,17 +272,17 @@ async function stopServer() {
 
     const missingChat = await request('/api/matrix/sessions', {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
-      body: { filters: { region: 'americas' }, expires_at: '2099-01-01T00:00:00.000Z' }
+      body: { filters: { region: 'asia' }, expires_at: '2099-01-01T00:00:00.000Z' }
     });
     assert.strictEqual(missingChat.status, 400);
 
     const createdSession = await request('/api/matrix/sessions', {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
-      body: { chat_id: 'chat-1', thread_id: 'thread-1', filters: { region: 'americas', page_size: 10 }, snapshot_key: recommendations.body.snapshot_key, candidate_ids: [1], expires_at: '2099-01-01T00:00:00.000Z' }
+      body: { chat_id: 'chat-1', thread_id: 'thread-1', filters: { region: 'asia', page_size: 10 }, snapshot_key: recommendations.body.snapshot_key, candidate_ids: [1], expires_at: '2099-01-01T00:00:00.000Z' }
     });
     assert.strictEqual(createdSession.status, 201);
     assert.strictEqual(createdSession.body.page, 1);
-    assert.deepStrictEqual(createdSession.body.filters, { region: 'americas', page_size: 10 });
+    assert.deepStrictEqual(createdSession.body.filters, { region: 'asia', page_size: 10 });
     assert.deepStrictEqual(createdSession.body.candidate_ids, [1]);
 
     const restored = await request(`/api/matrix/sessions/${createdSession.body.id}?chat_id=chat-1&thread_id=thread-1`, { serviceToken: bridgeToken, openId: 'ou-service' });
@@ -313,7 +313,7 @@ async function stopServer() {
 
     const patchedSession = await request(`/api/matrix/sessions/${createdSession.body.id}`, {
       method: 'PATCH', serviceToken: bridgeToken, openId: 'ou-service',
-      body: { expected_version: 1, page: 2, filters: { region: 'americas', page_size: 10 } }
+      body: { expected_version: 1, page: 2, filters: { region: 'asia', page_size: 10 } }
     });
     assert.strictEqual(patchedSession.status, 200);
     assert.strictEqual(patchedSession.body.version, 2);
@@ -347,7 +347,7 @@ async function stopServer() {
     for (const [name, mutate] of driftCases) {
       const mutableCandidateDb = new Database(candidateDbPath);
       try {
-        mutableCandidateDb.prepare("UPDATE cache_records SET country_code='US', status='valid', stage_code='observed', audited_at='2026-07-17T00:00:00Z', updated_at='2026-07-17T00:00:00Z', public_email='team@alpha.test', public_phone='+1 202 555 0123', public_whatsapp='+1 202 555 0456', contact_url='https://alpha.test/contact' WHERE id=1").run();
+        mutableCandidateDb.prepare("UPDATE cache_records SET country_code='VN', status='valid', stage_code='observed', audited_at='2026-07-17T00:00:00Z', updated_at='2026-07-17T00:00:00Z', public_email='team@alpha.test', public_phone='+1 202 555 0123', public_whatsapp='+1 202 555 0456', contact_url='https://alpha.test/contact' WHERE id=1").run();
         mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','Coffee','e1')").run();
         mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_discovery VALUES (1,1,'alpha.test','official_association_directory','https://association.test/members/alpha','https://alpha.test/','official_association_directory','2026-07-17T00:00:00Z','d1')").run();
         mutate(mutableCandidateDb);
