@@ -15,6 +15,10 @@
 - Approving a draft never sends it; a separate final-preview action is required.
 - Any content or recipient change supersedes the earlier approval.
 - Repeated or concurrent confirmation produces at most one delivery attempt.
+- Initial outreach is capped at five accepted messages per Asia/Shanghai day and one initial contact per normalized company domain in 90 days.
+- Draft quality must score at least 80/100 with no hard failure; every component is explainable and evidence-linked.
+- SPF, DKIM, DMARC, TLS, SMTP, and country/channel policy readiness fail closed.
+- An accepted initial message creates a reply-check task for 10:00 Asia/Shanghai on the third following weekday; replies, bounces, refusals, unsubscribes, and manual stops close it.
 - Ambiguous delivery is never automatically retried.
 - The Feishu runtime keeps `MATRIX_DELIVERY_ENABLED=0` and never receives SMTP credentials.
 - Neutral codenames are used for internal folders, services, workflows, and UI feature names; source provenance and audit records remain accurate.
@@ -28,6 +32,9 @@
 - `shared/permissions-model.json`, `src/lib/permissions.js`, `frontend-next/src/components/Admin.tsx`: explicit `matrixSend` capability management.
 - `src/services/matrixStreamReview.js`: version creation, revision, approval, recipient validation, state transitions.
 - `src/services/matrixStreamText.js`: validated bilingual generation, free-form revision, inbound translation, and safe fallback results.
+- `src/services/matrixStreamGate.js`: deterministic draft quality, company identity, cooling, daily quota, suppression, and country-policy gate.
+- `src/services/matrixStreamReadiness.js`: cached sender-domain DNS/TLS/SMTP readiness without sending a message.
+- `src/services/matrixStreamFollowup.js`: third-weekday task creation and terminal-event closure.
 - `src/services/matrixStreamDelivery.js`: restricted transport, stable message identifiers, result classification, idempotency.
 - `src/services/matrixStreamCorrelation.js`: reply, bounce, suppression correlation.
 - `src/routes/matrix.js`: narrow bound-operator APIs.
@@ -38,6 +45,8 @@
 - `scripts/test-matrix-stream-review.js`: service/database tests.
 - `scripts/test-matrix-stream-delivery.js`: fake-transport delivery tests.
 - `scripts/test-matrix-stream-correlation.js`: inbound matching tests.
+- `scripts/matrix-policy.js`: audited super-admin country/channel policy management.
+- `scripts/test-matrix-policy.js`: role, expiry, source, and audit regression tests.
 - `scripts/test-matrix-api.js`: bound API, permission, stale version, and concurrency tests.
 - `.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js`: Feishu flow and mobile budget tests.
 
@@ -107,6 +116,8 @@ CREATE TABLE IF NOT EXISTS matrix_stream_versions (
   strategy_summary TEXT NOT NULL DEFAULT '',
   source_snapshot_json TEXT NOT NULL DEFAULT '{}',
   content_hash TEXT NOT NULL,
+  quality_score INTEGER NOT NULL DEFAULT 0,
+  quality_json TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL CHECK(status IN ('draft','approved','superseded')),
   created_by INTEGER NOT NULL,
   approved_by INTEGER,
@@ -150,6 +161,31 @@ CREATE TABLE IF NOT EXISTS matrix_stream_events (
   after_json TEXT NOT NULL DEFAULT '{}',
   diagnostic TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS matrix_stream_sender_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender_domain TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  spf_ok INTEGER NOT NULL,
+  dkim_ok INTEGER NOT NULL,
+  dmarc_ok INTEGER NOT NULL,
+  tls_ok INTEGER NOT NULL,
+  smtp_ok INTEGER NOT NULL,
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(sender_domain, checked_at)
+);
+CREATE TABLE IF NOT EXISTS matrix_stream_country_policies (
+  country_code TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('approved','paused','blocked')),
+  sender_identity_required INTEGER NOT NULL DEFAULT 1,
+  opt_out_required INTEGER NOT NULL DEFAULT 1,
+  reviewed_by INTEGER NOT NULL,
+  reviewed_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  source_urls_json TEXT NOT NULL,
+  PRIMARY KEY(country_code, channel)
 );
 ```
 
@@ -291,6 +327,129 @@ Commit: `feat: add matrix stream review versions`
 
 ---
 
+### Task 2A: Explainable Quality, Identity, Readiness, and Follow-up Gates
+
+**Files:**
+- Create: `src/services/matrixStreamGate.js`
+- Create: `src/services/matrixStreamReadiness.js`
+- Create: `src/services/matrixStreamFollowup.js`
+- Create: `scripts/test-matrix-stream-gates.js`
+- Create: `scripts/matrix-policy.js`
+- Create: `scripts/test-matrix-policy.js`
+- Modify: `src/services/matrixStreamReview.js`
+
+**Interfaces:**
+- Produces `scoreDraft(input): { score, passed, components, hardFailures }`.
+- Produces `evaluateInitialContact(db, input): { allowed, route, reasons, matchedCustomerIds }`.
+- Produces `createMatrixStreamReadiness({ resolveTxt, verifyTransport, clock }).check(input)`.
+- Produces `thirdWeekdayAtTen(sentAt): string`, `scheduleReplyCheck(db, input)`, and `closeReplyCheck(db, input)`.
+- Produces an operator tool with only `list` and `set` commands; `set` requires an existing `super_admin` actor and writes `audit_logs`.
+
+- [ ] **Step 1: Write the RED quality and hard-failure tests**
+
+Create `scripts/test-matrix-stream-gates.js` with a complete evidence fixture:
+
+```js
+const assert = require('node:assert');
+const { scoreDraft } = require('../src/services/matrixStreamGate');
+const base = {
+  subject: '250g and 500g coffee pouch options for Alpha Coffee',
+  bodyEn: 'Dear Alpha Coffee team,\nWe reviewed your 250g and 500g roasted coffee range. We would like to discuss high-barrier valve pouches with stable repeat printing. Could you share your current structure and annual volume?\nBest regards',
+  bodyCn: '您好，我们查看了贵司250g和500g烘焙咖啡产品，希望沟通高阻隔带阀袋及稳定套色。请问当前材料结构和年用量？',
+  recipient: { email: 'sales@alpha.test', sourceUrl: 'https://alpha.test/contact', verifiedAt: '2026-07-17T00:00:00Z' },
+  evidence: { company: 'Alpha Coffee', categories: ['coffee'], products: ['250g roasted coffee', '500g roasted coffee'], entryProduct: 'high-barrier valve pouch', supportedClaims: ['stable repeat printing'], evidenceIds: [11, 12] },
+  now: '2026-07-18T00:00:00Z'
+};
+const good = scoreDraft(base);
+assert.strictEqual(good.score, 100);
+assert.strictEqual(good.passed, true);
+const unsafe = scoreDraft({ ...base, subject: 'Guaranteed lowest price', bodyEn: 'FDA approved. Final price is USD 0.05 with guaranteed lead time.' });
+assert.strictEqual(unsafe.passed, false);
+assert.deepStrictEqual(unsafe.hardFailures.sort(), ['unsupported_certification', 'unsupported_lead_time', 'unsupported_price']);
+```
+
+- [ ] **Step 2: Run quality test and verify RED**
+
+Run: `node scripts/test-matrix-stream-gates.js`
+Expected: FAIL with module-not-found for `matrixStreamGate`.
+
+- [ ] **Step 3: Implement deterministic 100-point scoring**
+
+Use exact component maxima:
+
+```js
+const MAXIMUMS = {
+  product_match: 20, company_specific: 15, entry_value: 15, questions: 15,
+  subject: 10, bilingual_consistency: 10, readability: 10, recipient_provenance: 5
+};
+```
+
+Each component returns `{ points, maximum, reasons, evidence_ids }`. Set `passed = score >= 80 && hardFailures.length === 0`. Detect unsupported price, certification, supplier, performance, delivery, and lead-time claims by comparing normalized claims to `evidence.supportedClaims`; AI output never changes points directly.
+
+- [ ] **Step 4: Write RED identity, cooling, and quota tests**
+
+Seed CRM customers, messages, orders, and accepted jobs, then assert:
+
+```js
+const { evaluateInitialContact } = require('../src/services/matrixStreamGate');
+assert.strictEqual(evaluateInitialContact(db, { email: 'sales@alpha.test', domain: 'alpha.test', companyName: 'Alpha Coffee', now: '2026-07-18T00:00:00Z' }).route, 'existing_relationship');
+assert.strictEqual(evaluateInitialContact(db, { email: 'new@cooling.test', domain: 'cooling.test', companyName: 'Cooling Ltd', now: '2026-07-18T00:00:00Z' }).reasons[0], 'domain_cooling_90_days');
+assert.strictEqual(evaluateInitialContact(db, { email: 'sixth@fresh.test', domain: 'fresh.test', companyName: 'Fresh Ltd', now: '2026-07-18T14:00:00+08:00' }).reasons[0], 'daily_accepted_limit_5');
+```
+
+Exact normalized email/domain matches route automatically. Similar name with a different domain returns `possible_duplicate_review` and never merges.
+
+- [ ] **Step 5: Implement fail-closed identity evaluation**
+
+Query customers, inquiries, orders, CRM messages, suppression events, accepted jobs, and candidate aliases in one read transaction. Use Asia/Shanghai day boundaries and a 90-day domain window. Return `initial_contact`, `existing_relationship`, `possible_duplicate_review`, or `blocked`; never delete or merge rows.
+
+- [ ] **Step 6: Write and implement sender-readiness tests**
+
+Inject TXT and transport verifiers:
+
+```js
+const readiness = createMatrixStreamReadiness({
+  clock: () => new Date('2026-07-18T00:00:00Z'),
+  resolveTxt: async name => ({
+    'sender.test': ['v=spf1 include:mail.test -all'],
+    'selector._domainkey.sender.test': ['v=DKIM1; p=abc'],
+    '_dmarc.sender.test': ['v=DMARC1; p=none']
+  })[name] || [],
+  verifyTransport: async () => true
+});
+assert.strictEqual((await readiness.check({ domain: 'sender.test', selector: 'selector' })).ok, true);
+```
+
+Cache for 24 hours in `matrix_stream_sender_checks`. Missing SPF, DKIM, DMARC, TLS, SMTP verification, selector, or unexpired approved country/channel policy returns named hard failures. The check never calls `sendMail`.
+
+Create `scripts/test-matrix-policy.js` first. Assert a worker and a missing actor are rejected; a super admin can set one exact ISO country plus channel to `approved`, `paused`, or `blocked` only when the review time, expiry, and at least one authoritative source URL are supplied; expired policy fails closed; every change writes a redacted `audit_logs` row. Implement `scripts/matrix-policy.js list` and `set` with positional-free named flags, no bulk wildcard, and no default approval. It must not contain transport code.
+
+- [ ] **Step 7: Write and implement third-weekday task tests**
+
+```js
+const { thirdWeekdayAtTen } = require('../src/services/matrixStreamFollowup');
+assert.strictEqual(thirdWeekdayAtTen('2026-07-17T14:00:00+08:00'), '2026-07-22T10:00:00+08:00');
+```
+
+`scheduleReplyCheck` writes `next_followup_at`, purpose, channel, priority, work-item id, and originating job id exactly once after accepted delivery. `closeReplyCheck` records terminal reason and clears active due state for reply, bounce, refusal, unsubscribe, or manual stop. It never sends.
+
+- [ ] **Step 8: Persist quality during version creation and run GREEN**
+
+Call `scoreDraft` inside create/revise transactions and store `quality_score` plus canonical `quality_json`. Approval is allowed below 80 for internal review, but final preview reports blocked and send confirmation rejects it.
+
+Run:
+
+```bash
+node scripts/test-matrix-stream-gates.js
+node scripts/test-matrix-policy.js
+node scripts/test-matrix-stream-review.js
+```
+
+Expected: PASS.
+Commit: `feat: add matrix stream safety gates`
+
+---
+
 ### Task 3: Narrow Matrix Review APIs
 
 **Files:**
@@ -371,6 +530,7 @@ Commit: `feat: expose matrix stream review api`
 **Interfaces:**
 - Produces `createMatrixStreamDelivery({ db, transport, clock, fromAddress, messageIdDomain })`.
 - Produces method `confirm({ actorUserId, bindingId, workItemId, versionId, expectedWorkVersion, expectedContentHash, chatId, cardEventId, idempotencyKey })`.
+- Consumes current `matrixStreamGate` and `matrixStreamReadiness` results; accepted delivery calls `matrixStreamFollowup.scheduleReplyCheck`.
 - Route: `POST /api/matrix/work-items/:id/versions/:versionId/send` accepts identifiers only.
 
 - [ ] **Step 1: Write fake-transport RED tests**
@@ -403,7 +563,7 @@ Expected: FAIL with module-not-found.
 
 - [ ] **Step 3: Implement fail-closed delivery transaction**
 
-Before transport, reload the actor permissions, work item, approved version, suppression state, current version, content hash, and recipient provenance. Insert a unique pending job with a stable message id derived from job id and content hash, then mark `sending`. Call transport with only:
+Before transport, reload the actor permissions, work item, approved version, suppression state, current version, content hash, recipient provenance, quality result, company identity/cooling/quota result, sender readiness, and country/channel policy. Insert a unique pending job with a stable message id derived from job id and content hash, then mark `sending`. Call transport with only:
 
 ```js
 await transport.sendMail({
@@ -416,7 +576,7 @@ await transport.sendMail({
 });
 ```
 
-Classify explicit rejection as `failed`; classify timeout/disconnect after `sending` as `ambiguous`; accepted recipient as `accepted`. Redact credentials and raw server strings from diagnostics. Never retry internally.
+Classify explicit rejection as `failed`; classify timeout/disconnect after `sending` as `ambiguous`; accepted recipient as `accepted`. On accepted only, schedule the third-weekday reply-check task in the same durable result transaction. Redact credentials and raw server strings from diagnostics. Never retry internally.
 
 - [ ] **Step 4: Add definite failure, ambiguity, permission, and concurrency tests**
 
@@ -483,7 +643,7 @@ Expected: FAIL with module-not-found.
 
 Match exact `in_reply_to`/`references_header` to `matrix_stream_jobs.message_id` first. Fallback only when normalized contact pair and normalized subject identify exactly one accepted job inside 120 days. More than one result inserts a `needs_review` event and changes no work item. Deduplicate by inbound `message_id`.
 
-For a unique reply, update `stream_state='replied'`, append an event, request validated translation/suggested-reply fields from `matrixStreamText`, and atomically write a notification spool record containing IDs plus a safe preview—not credentials or private internal formulas. Provider failure stores `translation_status='pending'` and exposes a manual retry; it does not insert guessed translation.
+For a unique reply, update `stream_state='replied'`, close the active reply-check task with reason `reply`, append an event, request validated translation/suggested-reply fields from `matrixStreamText`, and atomically write a notification spool record containing IDs plus a safe preview—not credentials or private internal formulas. Provider failure stores `translation_status='pending'` and exposes a manual retry; it does not insert guessed translation. Bounce, refusal, unsubscribe, and manual stop close the task with their exact terminal reason.
 
 - [ ] **Step 4: Hook correlation after durable IMAP import**
 
@@ -537,7 +697,7 @@ await handlers.get('mx.confirm')({ evt, value: confirmValue });
 assert.ok(visibleText(sent.at(-1)).includes('邮件服务器已接受'));
 ```
 
-Assert selection itself never calls `confirmSend`, approval never calls `confirmSend`, repeated confirmation uses one idempotency key, and the review/final cards stay within 1,500 Unicode code points.
+Assert selection itself never calls `confirmSend`, approval never calls `confirmSend`, repeated confirmation uses one idempotency key, and the review/final cards stay within 1,500 Unicode code points. Add a blocked-preview fixture that displays quality score, component reasons, duplicate/cooling/quota result, sender readiness, and country-policy failures and does not render `确认发送`.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -607,7 +767,7 @@ Expected: FAIL because `delivery` is not an approved capability kind.
 
 - [ ] **Step 3: Extend the reviewed surface**
 
-Add `src/services/matrixStreamReview.js`, `src/services/matrixStreamText.js`, `src/services/matrixStreamDelivery.js`, and `src/services/matrixStreamCorrelation.js` to `RUNTIME_SURFACE_ROOTS` and `RUNTIME_MANIFEST`. Add a digest-bound `delivery` branch to `approvedCapabilitySource`; preserve rejection for transport code in the bot extension/client/watcher.
+Add `src/services/matrixStreamReview.js`, `src/services/matrixStreamText.js`, `src/services/matrixStreamGate.js`, `src/services/matrixStreamReadiness.js`, `src/services/matrixStreamFollowup.js`, `src/services/matrixStreamDelivery.js`, and `src/services/matrixStreamCorrelation.js` to `RUNTIME_SURFACE_ROOTS` and `RUNTIME_MANIFEST`. Add a digest-bound `delivery` branch to `approvedCapabilitySource`; preserve rejection for transport code in the bot extension/client/watcher.
 
 Document these environment names without values in `.env.example`:
 
@@ -616,6 +776,9 @@ MATRIX_STREAM_SEND_ENABLED=0
 MATRIX_RECIPIENT_MAX_AGE_DAYS=180
 MATRIX_MESSAGE_ID_DOMAIN=
 MATRIX_TEXT_PROVIDER=mock
+MATRIX_DKIM_SELECTOR=
+MATRIX_DAILY_ACCEPTED_LIMIT=5
+MATRIX_DOMAIN_COOLING_DAYS=90
 SMTP_HOST=
 SMTP_PORT=465
 SMTP_SECURE=true
@@ -632,6 +795,8 @@ Run:
 
 ```bash
 node scripts/test-matrix-stream-review.js
+node scripts/test-matrix-stream-gates.js
+node scripts/test-matrix-policy.js
 node scripts/test-matrix-stream-delivery.js
 node scripts/test-matrix-stream-correlation.js
 node scripts/test-matrix-api.js
