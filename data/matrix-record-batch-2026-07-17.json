@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "company_name": "THD Agricultural Processing Joint Stock Company",
+      "country_code": "VN",
+      "normalized_domain": "vietnamthd.vn",
+      "official_url": "https://www.vietnamthd.vn/",
+      "categories": ["fruit jelly", "processed fruit"],
+      "formats": ["laminated roll film"],
+      "size_signals": [],
+      "scale_tier": "medium",
+      "contact_url": "",
+      "priority": "P0",
+      "fit_score": 86,
+      "confidence": 0.82,
+      "assessment_cn": "公开贸易记录显示其采购用于 SUNTA PLUS 果冻产品的复合卷膜，企业官网本次访问返回 403，产品与联系信息仍需人工复核。",
+      "next_action_cn": "复核官网产品与组织联系入口，并确认当前膜结构、卷宽、版长和年用量。",
+      "discovery": {
+        "discovered_via": "benchmark_relationship_review",
+        "discovery_url": "https://www.trademo.com/companies/thd-agricultural-processing-joint-stock-company/33328049",
+        "source_type": "public_trade_record",
+        "verified_at": "2026-07-17T00:00:00.000Z"
+      },
+      "evidence": {
+        "source_url": "https://www.trademo.com/companies/thd-agricultural-processing-joint-stock-company/33328049",
+        "source_type": "public_trade_record",
+        "page_title": "THD Agricultural Processing Joint Stock Company",
+        "observed_at": "2026-07-17T00:00:00.000Z",
+        "excerpt": "Public trade record names THD as buyer, Guangdong Shunshun as supplier, and laminated film for SUNTA PLUS fruit jelly."
+      }
+    },
+    {
+      "company_name": "Sao Mai Agro Processing Joint Stock Company",
+      "country_code": "VN",
+      "normalized_domain": "saomai-agrovietnam.com",
+      "official_url": "https://saomai-agrovietnam.com/",
+      "categories": ["fruit puree", "frozen fruit", "fruit ingredients"],
+      "formats": [],
+      "size_signals": [],
+      "scale_tier": "medium",
+      "contact_url": "https://saomai-agrovietnam.com/#contact-us",
+      "priority": "P1",
+      "fit_score": 78,
+      "confidence": 0.78,
+      "assessment_cn": "官网展示水果泥、冷冻水果及多种热带水果原料，但未公开当前包装供应商、具体包装形式或采购量。",
+      "next_action_cn": "确认哪些产品使用软包装、灌装条件、保质期、年用量和组织采购角色。",
+      "discovery": {
+        "discovered_via": "benchmark_similarity_review",
+        "discovery_url": "https://saomai-agrovietnam.com/",
+        "source_type": "official_website",
+        "verified_at": "2026-07-17T00:00:00.000Z"
+      },
+      "evidence": {
+        "source_url": "https://saomai-agrovietnam.com/",
+        "source_type": "official_website",
+        "page_title": "Sao Mai",
+        "observed_at": "2026-07-17T00:00:00.000Z",
+        "excerpt": "Official site presents fruit puree, frozen fruit and tropical fruit ingredients for beverage and prepared-food processing."
+      }
+    },
+    {
+      "company_name": "Tien Thinh Group Joint Stock Company",
+      "country_code": "VN",
+      "normalized_domain": "tienthinh.vn",
+      "official_url": "https://tienthinh.vn/en",
+      "categories": ["fruit puree", "juice concentrate", "soft dried fruit"],
+      "formats": [],
+      "size_signals": ["soft dried mango 200g", "soft dried mango 300g"],
+      "scale_tier": "medium",
+      "contact_url": "https://tienthinh.vn/en/contact",
+      "priority": "P1",
+      "fit_score": 82,
+      "confidence": 0.84,
+      "assessment_cn": "官网展示果泥、浓缩果汁和软干果，并公开 200g、300g 等零售规格；当前包装结构、供应商和采购量未公开。",
+      "next_action_cn": "确认液体、果泥和软干果中哪一品类存在稳定软包装需求，以及结构、工艺和年用量。",
+      "discovery": {
+        "discovered_via": "benchmark_similarity_review",
+        "discovery_url": "https://tienthinh.vn/en",
+        "source_type": "official_website",
+        "verified_at": "2026-07-17T00:00:00.000Z"
+      },
+      "evidence": {
+        "source_url": "https://tienthinh.vn/en",
+        "source_type": "official_website",
+        "page_title": "TIEN THINH GROUP JOINT STOCK COMPANY",
+        "observed_at": "2026-07-17T00:00:00.000Z",
+        "excerpt": "Official site states production and supply of fruit puree, juice concentrates and soft dried fruits, including 200g and 300g products."
+      }
+    }
+  ]
+}

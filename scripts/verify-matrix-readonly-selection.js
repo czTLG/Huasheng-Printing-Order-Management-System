@@ -14,6 +14,7 @@ const ROOT = path.resolve(__dirname, '..');
 const ELIGIBLE = RECOMMENDATION_WHERE;
 const FOCUSED_TESTS = [
   'scripts/test-cache-index-view.js',
+  'scripts/test-matrix-record-import.js',
   'scripts/test-matrix-signal-import.js',
   'scripts/test-packet-gate.js',
   'scripts/test-matrix-api.js',
