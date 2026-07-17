@@ -13,11 +13,16 @@
     "concurrency": 1,
     "daily_budget": 150,
     "cache_ttl_seconds": 86400,
+    "robots_url": "https://www.matrade.gov.my/robots.txt",
+    "robots_sha256": "f1a6b5e3f6e69a71c53516c4bce70e2414429d23dab6814239500999eb80907e",
+    "policy_url": "https://malaysiaservices.matrade.gov.my/terms-and-conditions",
+    "policy_sha256": "120898cc34fa43f8e5ad96d189ba2ad2c44b63553fbbd666fa0fb2b4df6bef85",
     "robots_reviewed_at": "2026-07-18T00:00:00Z",
+    "observed_at": "2026-07-18T00:00:00Z",
     "policy_expires_at": "2026-10-18T00:00:00Z",
     "parser_version": "1",
-    "license_note": "Public official directory; use is subject to publisher terms and robots policy.",
-    "status": "active"
+    "license_note": "Public official directory evidence recorded; paused pending explicit human approval.",
+    "status": "paused"
   },
   {
     "code": "source-tx",
@@ -33,10 +38,15 @@
     "concurrency": 1,
     "daily_budget": 150,
     "cache_ttl_seconds": 86400,
+    "robots_url": "https://www.thaitradefair.com/robots.txt",
+    "robots_sha256": "842b34303164ead41bccb7c05d1707422e98d108753b397b6dcc19683eb02101",
+    "policy_url": "https://www.thaitradefair.com/fair-content/73/TAPA%202025/TAPA%2B2025/2183/Exhibition%2BManual/",
+    "policy_sha256": "f29743c01f39f60f610feba9de8d7171e8fec78a990b17906bd4d01092c427ab",
     "robots_reviewed_at": "2026-07-18T00:00:00Z",
+    "observed_at": "2026-07-18T00:00:00Z",
     "policy_expires_at": "2026-10-18T00:00:00Z",
     "parser_version": "1",
-    "license_note": "Public official directory; use is subject to publisher terms and robots policy.",
-    "status": "active"
+    "license_note": "Public official directory evidence recorded; paused pending explicit human approval.",
+    "status": "paused"
   }
 ]
