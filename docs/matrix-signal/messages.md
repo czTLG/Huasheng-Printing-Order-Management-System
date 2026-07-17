@@ -1,6 +1,6 @@
 # Matrix Signal Drafts
 
-These records are prepared for user review only. No message has been sent and no external form has been submitted.
+These records preserve exact outbound copy and approval state. The five first-cohort inquiries were sent on 2026-07-17, and the three second-cohort inquiries were sent on 2026-07-18 after separate approval, as recorded in `registry.csv`.
 
 ## draft_cand_011
 
@@ -36,6 +36,126 @@ The piece would be nonpromotional, would not mention product offerings, and woul
 Before any manuscript submission, we would pause for user approval of an individual author's name, title and qualifications-based biography. Subject to that approval and rights clearance, we could prepare a completed draft and supporting diagrams after the topic is accepted. We also understand that contributors must sign Packaging Digest's contributor agreement. AI-assisted drafting was used to prepare this inquiry; any article submitted would be substantially written, reviewed, fact-checked and verified by the approved individual author, with the extent of AI use disclosed as your policy requires.
 
 Would this topic fit your Best Practices coverage?
+
+Huasheng Packaging Editorial Team
+
+## draft_cand_019
+
+- Candidate ID: cand_019
+- Root domain: vendingmarketwatch.com
+- Official contact URL: https://www.vendingmarketwatch.com/home/article/53073291/automatic-merchandiser-and-vendingmarketwatchcom-article-submission-guidelines
+- Target URL: https://gdhspack.com/blog/how-to-choose-food-packaging-materials
+- Proposed anchor context: publisher_selected
+- Approval: approved 2026-07-18; user authorized sending this draft unchanged
+- Delivery route: `lbecker@endeavorb2b.com`, published in the official 2026 Automatic Merchandiser/VendingMarketWatch media kit under the contribution contact. Official route source: https://security.endeavorb2b.com/wp-content/uploads/AUTOM-Media-Kit.pdf
+- User takeover requirements: No address decoding is needed; the destination is printed in the official public media kit. This proposal does not include the individual author biography required for a completed submission; a later article needs a user-approved author name, title, qualifications, photo, contact details, rights-cleared images, writer agreement, human verification, and the publication's current AI disclosure.
+
+### Exact outbound content
+
+Subject: Preliminary topic inquiry: Five packaging checks before adding fresh foods to an unattended retail program
+
+VendingMarketWatch Editorial Team,
+
+We are making a preliminary topic inquiry about a possible original contributed article titled “Five Packaging Checks Before Adding Fresh Foods to an Unattended Retail Program.” This message is a proposal only, not a completed article submission, and the team signature below is not the proposed final byline.
+
+Your current article-submission guidelines invite practical, nonpromotional guidance for vending, micro-market and other unattended-retail operators. They specifically include fresh-food programs, changing consumer expectations, packaging considerations and waste reduction among suitable topics. The proposed article would connect those concerns through an operator-focused prelaunch checklist.
+
+The article would explain five checks:
+
+1. Match the package structure to the actual food, expected shelf life, storage temperature and distribution conditions rather than selecting a material by appearance alone.
+2. Validate seal integrity and closure performance with the filled product, including handling and drop conditions expected during restocking and consumer use.
+3. Choose a format and opening method that works in the machine or micro-market fixture and remains convenient for the intended eating occasion.
+4. Confirm that date coding, ingredients, allergens, reheating instructions and disposal guidance remain readable on the final printed pack.
+5. Run a limited operational trial and record damage, leakage, staling, waste and customer feedback before a wider rollout.
+
+The piece would be brand- and product-neutral. It would not make unsupported shelf-life, recycling or waste-reduction claims, and it would distinguish general starting points from specifications that must be validated for the actual food and operating environment.
+
+Our existing material-selection guide is background for the proposed framework: https://gdhspack.com/blog/how-to-choose-food-packaging-materials. We leave any source citation, company link or biography treatment entirely to your editorial judgment.
+
+Before a manuscript is submitted, we would pause for approval of an individual author's name, title, qualifications-based biography and photo. Subject to that approval, rights clearance and a writer agreement, the author would substantially write, fact-check and verify the article. AI assistance was used to prepare this preliminary inquiry; any later article would comply with your current AI-use limit and disclosure requirements.
+
+Would this practical packaging-check topic fit your coverage of fresh-food and micro-market operations?
+
+Huasheng Packaging Editorial Team
+
+## draft_cand_020
+
+- Candidate ID: cand_020
+- Root domain: supplychainconnect.com
+- Official contact URL: https://www.supplychainconnect.com/contribute
+- Target URL: https://gdhspack.com/blog/how-to-choose-food-packaging-materials
+- Proposed anchor context: publisher_selected
+- Approval: approved 2026-07-18; user authorized sending this draft unchanged
+- Delivery route: `SupplyChainConnect@endeavorb2b.com`, supplied twice by the user after opening the protected official route. The current official Contribute page remains the route source.
+- User takeover requirements: Open the official Contribute page in a user-controlled browser, click the contributed-content email control, and provide or use the destination it reveals. Do not bypass Cloudflare protection. A later manuscript requires a user-approved individual author and human verification of every technical claim and source.
+
+### Exact outbound content
+
+Subject: Preliminary topic inquiry: A seven-input handoff for custom flexible packaging
+
+Supply Chain Connect Editorial Team,
+
+We are making a preliminary topic inquiry about a possible original contributed article titled “A Seven-Input Handoff for Custom Flexible Packaging.” This is a topic proposal, not a manuscript, and the team signature below identifies the inquiry only rather than the proposed final byline.
+
+Your current contributor guidelines seek timely, educational content that helps supply-chain and purchasing professionals solve practical problems, and they ask contributors to focus on what, how and why rather than product marketing. The proposed article would show buyers how to reduce avoidable ambiguity before requesting or approving a custom flexible-package specification.
+
+The handoff would organize seven inputs that purchasing, product, quality and operations teams should align:
+
+1. Product behavior, including oil, acidity, aroma, moisture sensitivity and particles.
+2. Required shelf life and the conditions under which it must be achieved.
+3. Filling, sealing and any temperature-processing conditions.
+4. Package dimensions, format, closure and equipment-interface constraints.
+5. Functional material requirements without treating a familiar laminate name as a complete specification.
+6. Artwork, coding, barcode and regulatory-copy ownership and approval.
+7. Trial quantities, acceptance checks, change control and the evidence required before scale-up.
+
+The article would explain how missing inputs create rework and decision risk without claiming unsupported savings or defect reductions. It would remain vendor-neutral and would give readers a one-page handoff structure they could adapt to their own supplier-qualification and preproduction processes.
+
+Our background source is https://gdhspack.com/blog/how-to-choose-food-packaging-materials. It would be reorganized for a purchasing and supply-chain audience, supplemented with independently verified primary sources where needed, and written as original content rather than copied from the existing page. We leave any citation or company-reference treatment entirely to your editors.
+
+Before any full submission, we would pause for user approval of an individual author's name, role and qualifications-based biography. Subject to that approval, the manuscript would be substantially written and independently verified by that author and would follow your current editorial requirements.
+
+Would this packaging-specification handoff be useful to Supply Chain Connect readers?
+
+Huasheng Packaging Editorial Team
+
+## draft_cand_036
+
+- Candidate ID: cand_036
+- Root domain: foodindustryexecutive.com
+- Official contact URL: https://foodindustryexecutive.com/submit-an-article/
+- Target URL: https://gdhspack.com/blog/how-to-choose-food-packaging-materials
+- Proposed anchor context: publisher_selected
+- Approval: approved 2026-07-18; user authorized sending this draft unchanged
+- Delivery route: `press@foodindustryexecutive.com`, supplied twice by the user after opening the protected official route. The current official Submit an Article page remains the route source.
+- User takeover requirements: Open the official submission page in a user-controlled browser, click the editorial-team contact control, and provide or use the destination it reveals. Do not bypass Cloudflare protection. The publication requires a later article to be original, predominantly human-authored, vendor-neutral and independently verified; an individual author must be approved before submission.
+
+### Exact outbound content
+
+Subject: Preliminary topic inquiry: Barrier is a requirement, not a material name
+
+Food Industry Executive Editorial Team,
+
+We are making a preliminary topic inquiry about a possible original article titled “Barrier Is a Requirement, Not a Material Name: A Better Packaging Brief for Food Teams.” This message asks only whether the topic fits; it is not a complete article submission, and the team signature below is not the proposed final byline.
+
+Your current submission page selectively accepts vendor-neutral articles from industry experts and identifies sustainability, transparency and the future of food processing and manufacturing as areas of interest. The proposed article would address a recurring specification problem: teams sometimes begin with a familiar material name before they have defined the product and process conditions the package must support.
+
+The article would give food manufacturing teams a six-step brief:
+
+1. Record the food's oil, acidity, aroma, moisture sensitivity, particle behavior and other relevant characteristics.
+2. Define the required shelf life together with storage, distribution and use conditions.
+3. Identify the oxygen, moisture, aroma and light protection actually needed, avoiding universal barrier claims.
+4. Document fill temperature, sealing method, any post-fill processing and equipment constraints.
+5. Translate those requirements into candidate structures, then evaluate machinability, seal performance, product compatibility and applicable recovery considerations.
+6. Confirm the decision through actual-product trials and controlled approval before commercial production.
+
+The article would not prescribe one laminate for every application or make unsupported environmental claims. Its value would be a practical briefing sequence that helps product development, quality, operations and purchasing teams discuss evidence before they lock a specification.
+
+Our existing material-selection guide is background for this proposal: https://gdhspack.com/blog/how-to-choose-food-packaging-materials. A submitted article would be newly written for your readers and would not reproduce that page. We leave any company link, citation or biography treatment to your publication team under the current submission policy.
+
+Before preparing a manuscript, we would pause for approval of an individual author's name, title, experience and biography. Subject to that approval and rights clearance, the article would be primarily written, fact-checked and verified by that author. AI assistance was used to prepare this preliminary inquiry; any later submission would follow your current human-authorship and AI-integrity requirements.
+
+Would this requirements-first packaging topic be suitable for Food Industry Executive?
 
 Huasheng Packaging Editorial Team
 

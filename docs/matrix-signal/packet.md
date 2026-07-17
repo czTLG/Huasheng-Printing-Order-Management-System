@@ -84,7 +84,7 @@ This packet records user-controlled copy/send steps for the five approved prelim
 
 ## Operational status
 
-- Approval recorded: all five exact drafts.
-- Submission completed: none.
-- Block reason: the current environment has no outbound email connector or interactive form tool. User-controlled sending is required.
+- Approval recorded: all eight exact drafts are approved.
+- Submission completed: all eight approved inquiries have been sent from `sales@gdhspack.com`. The first five (`cand_011`, `cand_012`, `cand_013`, `cand_035`, and `cand_037`) were sent on 2026-07-17. The second cohort (`cand_019`, `cand_020`, and `cand_036`) was sent on 2026-07-18 to destinations supplied by the user or published in the official public source. The recipient SMTP servers accepted all eight addresses without rejection. Sanitized evidence references are recorded in `registry.csv`, the second-cohort evidence notes are stored under `docs/matrix-signal/evidence/`, and full SMTP identifiers remain only in the ignored permission-restricted local ledger.
+- Remaining block: none at the preliminary-inquiry delivery stage. Editorial acceptance, publication, and backlink placement remain unconfirmed for all submitted inquiries and must not be inferred from SMTP acceptance.
 - Prohibited substitutes not used: no `curl` POST, local/server sendmail, login bypass, CAPTCHA bypass or fabricated submission evidence.
