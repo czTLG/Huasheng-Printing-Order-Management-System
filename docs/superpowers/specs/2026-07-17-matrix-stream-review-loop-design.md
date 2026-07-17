@@ -17,6 +17,10 @@ The system must never send because a candidate was merely selected or a draft wa
 - Website contact forms are not submitted automatically.
 - Personal addresses are not guessed, inferred, or constructed.
 - Each external message requires two human actions: approve the exact draft version, then confirm its final send preview.
+- A deterministic quality score of at least 80/100 and all hard gates must pass before final send confirmation is offered.
+- Initial outreach is limited to five accepted messages per Asia/Shanghai calendar day and one initial contact per normalized company domain in 90 days.
+- Sending requires a current reviewed country/channel policy record; the system does not assume one legal rule applies worldwide.
+- Existing inquiries, orders, valid replies, bounces, refusals, and suppressions are checked across CRM and candidate records before delivery.
 - A received reply may generate a new bilingual response draft, but it uses the same two-confirmation process and is never sent automatically.
 - The Feishu runtime does not receive or store SMTP credentials. Sending is performed by a restricted service in the main application.
 - The current `MATRIX_DELIVERY_ENABLED=0` boundary remains in force for the Feishu runtime.
@@ -123,10 +127,35 @@ The recipient is eligible only when all of these are true:
 - it has a verification timestamp within the configured freshness window;
 - the candidate and recipient are not bounced, opted out, refused, or suppressed;
 - no unresolved delivery attempt exists for the same approved version.
+- the same normalized company email or domain has not been used for initial outreach inside the 90-day cooling window;
+- the company has no existing inquiry, order, valid reply, refusal, bounce, or suppression that requires routing away from initial outreach;
+- fewer than five messages have been accepted during the current Asia/Shanghai calendar day;
+- the current draft quality result is at least 80 and has no hard-fail finding;
+- cached sender-domain SPF, DKIM, DMARC, TLS, and SMTP readiness checks are healthy.
+- a current reviewed country/channel policy permits the proposed corporate-address message and required sender identity/opt-out text is present.
 
 Viewing and revising drafts uses existing CRM access. Approval and send confirmation require an active Matrix binding and the appropriate CRM role. Sending additionally requires an explicit outbound-send permission; role membership alone is insufficient. The approving and sending operators are recorded separately even when they are the same person.
 
 The delivery endpoint accepts no host, port, credentials, arbitrary callback URL, file path, attachment, or unpersisted recipient/body field.
+
+Company identity uses exact normalized company email and official domain for automatic matching. Similar company names with different domains create a review-only possible-duplicate relation; they are never destructively merged. Confirmed aliases link records while preserving every original candidate, source, and event.
+
+## 6.1 Explainable Draft Quality
+
+The quality score totals 100 points:
+
+- 20: public product evidence matches the target category;
+- 15: the body references company-specific public product information;
+- 15: the entry product and proposed value are concrete;
+- 15: one to three questions relate to the observed product range;
+- 10: the subject is specific and non-generic;
+- 10: English and Chinese key facts are consistent;
+- 10: English length, paragraph structure, and readability pass deterministic limits;
+- 5: recipient provenance is complete and fresh.
+
+Hard failures override the score: guessed or mismatched contact, missing provenance, unsupported certification, price, supplier, performance, lead-time or delivery claim, stale version, existing relationship, cooling-window conflict, daily limit, suppression, or unhealthy sender readiness.
+
+Every score component stores a machine-readable reason and source identifier. AI may suggest text or flag concerns but cannot award evidence points or override a hard failure.
 
 ## 7. Main-Application Services
 
@@ -155,6 +184,8 @@ A uniquely matched reply advances the work item to `replied`, stores the relatio
 
 A uniquely matched delivery-status notification advances to `bounced`. A clear unsubscribe, refusal, or manual stop advances to `suppressed`. Both states block future sends before SMTP is called.
 
+An accepted initial message creates one reply-check task due at 10:00 Asia/Shanghai on the third weekday after the send date. Counting begins on the next weekday and skips Saturday and Sunday; it does not claim country-specific public-holiday awareness. Friday acceptance is therefore due Wednesday at 10:00. A matched reply, bounce, refusal, unsubscribe, or manual stop closes the task. The task only reminds an operator and never sends a follow-up automatically.
+
 ## 9. Error and Concurrency Behavior
 
 - Concurrent approval uses expected versions; one succeeds and stale actions fail closed.
@@ -182,6 +213,7 @@ A uniquely matched delivery-status notification advances to `bounced`. A clear u
 - stale card and stale work-item rejection;
 - repeated and concurrent send clicks produce at most one delivery job;
 - caller cannot supply SMTP configuration or substitute recipient/body content.
+- exact email/domain duplicates, 90-day cooling, existing relationship, daily five-message limit, quality threshold, and sender readiness fail closed.
 
 ### 10.3 Delivery tests
 
@@ -194,6 +226,7 @@ A local fake SMTP server verifies accepted, definite failure, disconnect-before-
 - ambiguous fallback isolation;
 - bounce and suppression blocking;
 - one Feishu notification per correlated reply.
+- third-weekday task creation and automatic closure on reply, bounce, refusal, unsubscribe, or manual stop.
 
 ### 10.5 Feishu and production tests
 
