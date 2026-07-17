@@ -9,7 +9,9 @@ These records are prepared for user review only. No message has been sent and no
 - Official contact URL: https://eu-assets.contentstack.com/v3/assets/blta023acee29658dfc/blt0549c8fdec7bd166/659467bbbb3a23040a38cf26/2024-Packaging-Digest-guidelines-for-editorial-submissions.pdf
 - Target URL: https://gdhspack.com/blog/stand-up-pouch-vs-flat-bottom-pouch
 - Proposed anchor context: publisher_selected
-- Approval: pending
+- Approval: approved
+- Delivery route: Public editorial email listed in the current accessible official PDF: rick.lingle@informa.com for Food or Beverage ideas/submissions.
+- User takeover requirements: Open a user-controlled email account, address the message to the official email above, paste the approved subject and exact outbound content unchanged, verify the sender identity, and send manually. No account login or CAPTCHA is indicated by the email route. A later manuscript requires an approved individual author, contributor agreement, AI-use disclosure, human verification, and rights-cleared non-AI-generated images under the current policy.
 
 ### Exact outbound content
 
@@ -44,7 +46,9 @@ Huasheng Packaging Editorial Team
 - Official contact URL: https://www.packagingstrategies.com/submissions-guidelines
 - Target URL: https://gdhspack.com/blog/spout-pouch-packaging-guide
 - Proposed anchor context: publisher_selected
-- Approval: pending
+- Approval: approved
+- Delivery route: Public editorial email on the official Contact Us page: addingtonb@bnpmedia.com (Chief Editor). The submissions page directs editorial ideas and questions to staff email.
+- User takeover requirements: Open a user-controlled email account, address the message to the official email above, paste the approved subject and exact outbound content unchanged, verify the sender identity, and send manually. The public email route itself shows no account-login or CAPTCHA requirement. Do not attach or submit a complete web-exclusive article until the user approves an individual author name, title, biography, and any rights-cleared material.
 
 ### Exact outbound content
 
@@ -80,7 +84,9 @@ Huasheng Packaging Editorial Team
 - Official contact URL: https://www.foodengineeringmag.com/contactus
 - Target URL: https://gdhspack.com/blog/spout-pouch-packaging-guide
 - Proposed anchor context: publisher_selected
-- Approval: pending
+- Approval: approved
+- Delivery route: Official FOOD ENGINEERING Contact Us page, Editorial section, using its public "Contact Alyse" control for the Editor-in-Chief. The readable official page does not expose a direct byline-inquiry email; FEeditors@bnpmedia.com is explicitly limited to new-product press releases and is not the route for this inquiry.
+- User takeover requirements: Open the official Contact Us page in a user-controlled browser, select the Editorial "Contact Alyse" control, and use the official destination it reveals to paste the approved subject and exact outbound content unchanged. Stop if login or CAPTCHA appears; none is stated on the readable page. Before any manuscript, the user must approve the individual author, title/current role, required biography, sources, and rights-cleared illustrations.
 
 ### Exact outbound content
 
@@ -115,7 +121,9 @@ Huasheng Packaging Editorial Team
 - Official contact URL: https://www.industryweek.com/industryweek-contributors-guidelines
 - Target URL: https://gdhspack.com/blog/how-to-prepare-artwork-for-custom-printed-pouches
 - Proposed anchor context: publisher_selected
-- Approval: pending
+- Approval: approved
+- Delivery route: Public contributor-email link in the current IndustryWeek Contributors' Guidelines. The address is Cloudflare-protected on the official page and is therefore not transcribed or guessed here.
+- User takeover requirements: Open the official guidelines in a user-controlled browser, click the email link in the sentence beginning "Send to IndustryWeek c/o," and confirm that a mail composer opens to the official destination. Paste the approved subject and exact outbound content unchanged, then send manually. No account login or CAPTCHA is stated for this email route. A later article requires a user-approved individual author, contributor agreement, source verification, rights clearance, and compliance with the current AI limit and disclosure policy.
 
 ### Exact outbound content
 
@@ -152,7 +160,9 @@ Huasheng Packaging Editorial Team
 - Official contact URL: https://www.qualitydigest.com/content/editorial-submission-guidelines
 - Target URL: https://gdhspack.com/blog/how-to-prepare-artwork-for-custom-printed-pouches
 - Proposed anchor context: publisher_selected
-- Approval: pending
+- Approval: approved
+- Delivery route: Public editorial email in the current Quality Digest Editorial Submission Guidelines: features@qualitydigest.com.
+- User takeover requirements: Send from a user-controlled company-domain email account, address the message to the official email above, and paste the approved subject and exact outbound content unchanged. No account login or CAPTCHA is indicated by the email route. The current inquiry is an outline only; a later full article requires a user-approved individual author, quality-related qualifications biography, photo/headshot, human verification, and rights-cleared supporting material.
 
 ### Exact outbound content
 
