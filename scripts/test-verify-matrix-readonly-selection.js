@@ -51,6 +51,10 @@ try {
   assert.strictEqual(fixtureMetrics.recommendationMissingDiscovery, 0);
   assert.strictEqual(fixtureMetrics.recommendationMissingContact, 0);
   assert.strictEqual(fixtureMetrics.recommendationStaleReview, 0);
+  assert.strictEqual(fixtureMetrics.recommendationOutsideNearby, 0);
+  assert.strictEqual(fixtureMetrics.supplierSignalCount, 1);
+  assert.strictEqual(fixtureMetrics.supplierSignalProvenanceGaps, 0);
+  assert.deepStrictEqual(verifier.recommendations(fixtureInput.dbPath).map(row => row.country_code), ['VN']);
   const broaderDb = new Database(fixtureInput.dbPath);
   broaderDb.prepare('DELETE FROM cache_evidence WHERE record_id = 2').run();
   broaderDb.close();

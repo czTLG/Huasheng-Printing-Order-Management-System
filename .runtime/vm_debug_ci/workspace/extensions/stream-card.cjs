@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 
-const ACTIONS = ['mx.today', 'mx.pick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category'];
+const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
@@ -94,8 +94,13 @@ function eventId(session, candidate) {
   return crypto.createHash('sha256').update(`${session.id}:${session.version}:${candidate.id}:select`).digest('hex').slice(0, 24);
 }
 
-function sessionKey(chatId, openId) {
-  return `${String(chatId || '')}\u0000${String(openId || '')}`;
+function sessionKey(chatId, openId, threadId = '') {
+  return `${String(chatId || '')}\u0000${String(threadId || '')}\u0000${String(openId || '')}`;
+}
+
+function parseQuickChoice(value) {
+  const text = String(value || '').trim().toUpperCase().replace(/^开发客户\s*/, '');
+  return /^[A-E]$/.test(text) ? LETTERS.indexOf(text) : null;
 }
 
 function statusLabel(value) {
@@ -136,8 +141,7 @@ function renderCandidates(state, cardHelpers) {
       `下一步：${clip(candidate.next_action_cn, 28)}`
     ].join('\n')));
     elements.push(actions([
-      button('查看详情', { a: 'mx.detail', s: state.session.id, v: state.session.version, c: candidate.id }, 'default'),
-      button('选择', { a: 'mx.select', s: state.session.id, v: state.session.version, c: candidate.id, e: eventId(state.session, candidate) }, 'primary')
+      button(`查看 ${label}`, { a: 'mx.detail', s: state.session.id, v: state.session.version, c: candidate.id }, 'default')
     ]));
     if (index < Math.min(4, state.candidates.length - 1)) elements.push(hr());
   });
@@ -146,7 +150,7 @@ function renderCandidates(state, cardHelpers) {
     button('高级筛选', { a: 'mx.filters', s: state.session.id, v: state.session.version }, 'default'),
     button('查看进行中', { a: 'mx.work', s: state.session.id, v: state.session.version }, 'default')
   ]));
-  elements.push(note('回复 A、B、C、D 或 E 可查看对应详情。'));
+  elements.push(note('也可 @智能桓 回复 A-E 查看详情；确认后才会加入进行中。'));
   return card(elements, { header: { title: '今日候选', template: 'blue' }, summary: '今日候选' });
 }
 
@@ -162,22 +166,30 @@ function renderDetail(detail, state, cardHelpers, chatId) {
     ? Object.entries(detail.contacts || {}).filter(([, value]) => Boolean(value)).map(([key, value]) => `${key}：${clip(value, 80)}`).join('\n') || '待核实'
     : `已发现类型：${contactTypes}；请在CRM详情中查看`;
   const evidenceLines = evidence.length ? evidence.map(item => `• ${clip(item.page_title || '证据', 30)}：${clip(item.source_url, 110)}`).join('\n') : '• 待核实';
+  const supplier = detail.supplier_signal;
+  const supplierState = ({ confirmed: '已确认', public_lead: '公开线索' })[supplier?.confidence] || '未知';
+  const supplierLine = supplier
+    ? `${supplierState}｜${clip(supplier.supplier_name, 48)}｜${clip(supplier.supplied_category, 52)}\n来源：${clip(supplier.source_url, 110)}`
+    : '未知｜尚无可靠公开关系证据';
+  const strategy = detail.strategy_signal;
+  const strategyLine = strategy
+    ? `切入产品：${clip(strategy.entry_product, 60)}\n差异点：${clip(strategy.differentiation_angle, 70)}\n首轮目标：${clip(strategy.first_contact_goal, 70)}\n待确认：${clip((strategy.questions || []).join('；'), 90)}\n风险：${clip((strategy.risks || []).join('；'), 90)}`
+    : `切入产品：${clip(formats, 60)}\n首轮目标：${clip(detail.next_action_cn, 70)}\n待确认：规格、用量和现有方案`;
   const elements = [md([
     `**${clip(detail.company_name, 60)}｜${clip(detail.country_code, 8)}｜${clip(detail.priority, 4)}**`,
-    `发现渠道：${clip(discovery.discovered_via, 60)}`,
-    `发现来源：${clip(discovery.discovery_url, 120)}`,
-    `官网：${clip(detail.official_url, 120)}`,
-    `证据：\n${evidenceLines}`,
     `阶段：${stageLabel(detail.stage_code)}`,
-    `已确认：品类 ${clip((detail.categories || []).join('、'), 70)}；形式 ${clip(formats, 70)}${signals.specifications.length ? `；规格 ${clip(signals.specifications.join('、'), 70)}` : ''}${signals.observations.length ? `；公开信号 ${clip(signals.observations.join('、'), 70)}` : ''}`,
-    `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
+    `\n**为什么推荐**\n${clip(detail.assessment_cn, 110)}\n规模信号：${clip(detail.scale_tier, 30)}`,
+    `\n**产品结构**\n品类：${clip((detail.categories || []).join('、'), 70)}\n形式：${clip(formats, 70)}${signals.specifications.length ? `\n规格：${clip(signals.specifications.join('、'), 70)}` : ''}${signals.observations.length ? `\n公开信号：${clip(signals.observations.join('、'), 70)}` : ''}`,
+    `\n**供应链线索**\n${supplierLine}`,
+    `\n**开发策略**\n${strategyLine}`,
+    `\n**公开来源**\n发现渠道：${clip(discovery.discovered_via, 60)}\n发现来源：${clip(discovery.discovery_url, 110)}\n官网：${clip(detail.official_url, 110)}\n证据：\n${evidenceLines}`,
     `联系方式：${contactLine}`,
-    `下一步：${clip(detail.next_action_cn, 80)}`
+    `建议下一步：${clip(detail.next_action_cn, 80)}`
   ].join('\n'))];
   const crmBase = String(process.env.MATRIX_CRM_DETAIL_BASE_URL || '').replace(/\/$/, '');
   elements.push(actions([
     button('返回列表', { a: 'mx.back', s: state.session.id, v: state.session.version }, 'default'),
-    button('选择', { a: 'mx.select', s: state.session.id, v: state.session.version, c: detail.id, e: eventId(state.session, detail) }, 'primary'),
+    button('确认选择', { a: 'mx.select', s: state.session.id, v: state.session.version, c: detail.id, e: eventId(state.session, detail) }, 'primary'),
     ...(crmBase ? [linkButton('CRM详情', `${crmBase}/${encodeURIComponent(detail.id)}`)] : [])
   ]));
   elements.push(note('公开信息可能变化，未确认项不会自动转为事实。'));
@@ -277,7 +289,7 @@ function register(context) {
     }
   }
 
-  async function start(msg) {
+  async function freshState(msg) {
     const openId = String(msg.senderId || '').trim();
     if (!openId) throw new Error('operator openId required');
     const recommendation = await client.today(openId, { page_size: 5 });
@@ -295,7 +307,12 @@ function register(context) {
       snapshotKey: recommendation.rows?.length ? (recommendation.snapshot_key || '') : '',
       filters: { page_size: 5 }
     };
-    sessions.set(sessionKey(msg.chatId, openId), state);
+    sessions.set(sessionKey(msg.chatId, openId, msg.threadId), state);
+    return state;
+  }
+
+  async function start(msg) {
+    const state = await freshState(msg);
     await sendManagedCard(channel, msg.chatId, renderCandidates(state, cardHelpers), msg.messageId, Boolean(msg.threadId));
   }
 
@@ -324,8 +341,42 @@ function register(context) {
     }));
     if (String(session.chat_id) !== String(chatId || '') || String(session.thread_id || '') !== String(threadId || '')) throw new Error('callback session context mismatch');
     const state = { session, candidates: (session.candidates || []).slice(0, 5), snapshotKey: session.snapshot_key || '', filters: session.filters || {} };
-    sessions.set(sessionKey(chatId, openId), state);
+    sessions.set(sessionKey(chatId, openId, threadId), state);
     return state;
+  }
+
+  async function stateForQuick(msg) {
+    const openId = String(msg.senderId || '').trim();
+    if (!openId) throw new Error('operator openId required');
+    const key = sessionKey(msg.chatId, openId, msg.threadId);
+    let state = sessions.get(key);
+    if (state && stateExpired(state)) {
+      sessions.delete(key);
+      state = null;
+    }
+    if (!state) {
+      try { state = await restoreState(openId, msg.chatId, msg.threadId, null); }
+      catch (_) { state = null; }
+    }
+    if (state && stateExpired(state)) {
+      sessions.delete(key);
+      state = null;
+    }
+    return state || freshState(msg);
+  }
+
+  async function openQuick(msg, index) {
+    const openId = String(msg.senderId || '').trim();
+    const state = await stateForQuick(msg);
+    const candidate = state.candidates[index];
+    if (!candidate) {
+      await sendManagedCard(channel, msg.chatId, renderCandidates(state, cardHelpers), msg.messageId, Boolean(msg.threadId));
+      return;
+    }
+    const detail = await sessionBound(() => client.candidateDetail(openId, candidate.id, {
+      session_id: state.session.id, chat_id: msg.chatId, thread_id: msg.threadId || ''
+    }));
+    await sendManagedCard(channel, msg.chatId, renderDetail(detail, state, cardHelpers, msg.chatId), msg.messageId, Boolean(msg.threadId));
   }
 
   async function sendForEvent(evt, card) {
@@ -336,7 +387,7 @@ function register(context) {
     const openId = String(evt?.operator?.openId || '').trim();
     if (!openId) throw new Error('operator openId required');
     const expectedVersion = Number(value?.v);
-    const key = sessionKey(evt.chatId, openId);
+    const key = sessionKey(evt.chatId, openId, evt.threadId);
     let state = sessions.get(key);
     if (!state) state = await restoreState(openId, evt.chatId, evt.threadId, value?.s);
     if (!state || stateExpired(state) || Number(value?.s) !== Number(state.session.id)) {
@@ -444,9 +495,19 @@ function register(context) {
     await start({ senderId: openId, chatId: evt.chatId, threadId: evt.threadId || '', messageId: evt.messageId });
   }
 
+  async function quickAction({ evt, value }) {
+    const index = Number(value?.i);
+    if (!Number.isInteger(index) || index < 0 || index >= LETTERS.length) throw new Error('invalid quick choice');
+    await openQuick({
+      senderId: evt?.operator?.openId, chatId: evt?.chatId,
+      threadId: evt?.threadId || '', messageId: evt?.messageId
+    }, index);
+  }
+
   const actionHandlers = {
     'mx.today': todayAction,
     'mx.pick': detailAction,
+    'mx.quick': quickAction,
     'mx.page': pageAction,
     'mx.detail': detailAction,
     'mx.back': backAction,
@@ -462,7 +523,7 @@ function register(context) {
         await actionHandlers[action](payload);
       } catch (error) {
         if (invalidSessionError(error)) {
-          sessions.delete(sessionKey(payload.evt?.chatId, payload.evt?.operator?.openId));
+          sessions.delete(sessionKey(payload.evt?.chatId, payload.evt?.operator?.openId, payload.evt?.threadId));
           await sendForEvent(payload.evt, restartCard(cardHelpers));
         } else {
           await sendForEvent(payload.evt, infoCard(cardHelpers, '操作未完成，请稍后重试。'));
@@ -483,30 +544,13 @@ function register(context) {
         await start(msg);
         return true;
       }
-      if (/^[A-E]$/.test(text)) {
-        const openId = String(msg?.senderId || '').trim();
-        const key = sessionKey(msg?.chatId, openId);
-        let state = sessions.get(key);
-        if (!state) {
-          try { state = await restoreState(openId, msg.chatId, msg.threadId, null); }
-          catch (_) { state = null; }
-        }
-        if (!state || stateExpired(state)) {
-          sessions.delete(key);
-          await sendManagedCard(channel, msg.chatId, restartCard(cardHelpers), msg.messageId, Boolean(msg.threadId));
-          return true;
-        }
-        const candidate = state.candidates[LETTERS.indexOf(text)];
-        if (!candidate) {
-          await sendManagedCard(channel, msg.chatId, restartCard(cardHelpers), msg.messageId, Boolean(msg.threadId));
-          return true;
-        }
+      const quickIndex = parseQuickChoice(text);
+      if (quickIndex !== null) {
         try {
-          const detail = await sessionBound(() => client.candidateDetail(openId, candidate.id, { session_id: state.session.id, chat_id: msg.chatId, thread_id: msg.threadId || '' }));
-          await sendManagedCard(channel, msg.chatId, renderDetail(detail, state, cardHelpers, msg.chatId), msg.messageId, Boolean(msg.threadId));
+          await openQuick(msg, quickIndex);
         } catch (error) {
           if (!invalidSessionError(error)) throw error;
-          sessions.delete(key);
+          sessions.delete(sessionKey(msg?.chatId, msg?.senderId, msg?.threadId));
           await sendManagedCard(channel, msg.chatId, restartCard(cardHelpers), msg.messageId, Boolean(msg.threadId));
         }
         return true;
@@ -516,4 +560,4 @@ function register(context) {
   };
 }
 
-module.exports = { register, deliverQueuedReminder };
+module.exports = { register, deliverQueuedReminder, parseQuickChoice };

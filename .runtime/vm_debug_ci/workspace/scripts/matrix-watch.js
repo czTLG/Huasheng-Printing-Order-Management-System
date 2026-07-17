@@ -103,6 +103,10 @@ function confirmedSignals(values) {
   };
 }
 
+function supplierLabel(signal) {
+  return ({ confirmed: '已确认', public_lead: '公开线索' })[signal?.confidence] || '未知';
+}
+
 function renderReminderContent(selected, budgets) {
   return selected.map((row, index) => {
     const signals = confirmedSignals(row.size_signals);
@@ -111,6 +115,8 @@ function renderReminderContent(selected, budgets) {
       `推荐理由：${clip(row.assessment_cn, budgets.reason)}`,
       `品类：${clip((row.categories || []).join('、'), budgets.categories)}`,
       `阶段：${stageLabel(row.stage_code)}`,
+      `供应商：${supplierLabel(row.supplier_signal)}`,
+      `切入策略：${clip(row.strategy_signal?.differentiation_angle || row.next_action_cn, budgets.strategy)}`,
       ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), budgets.specifications)}`] : []),
       ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), budgets.observations)}`] : []),
       `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
@@ -121,13 +127,13 @@ function renderReminderContent(selected, budgets) {
 
 function boundedReminderContent(selected) {
   if (!selected.length) return '今日没有达到证据标准的候选';
-  const maximumContentPoints = 1450;
-  const budgets = { company: 42, reason: 90, categories: 60, specifications: 40, observations: 40, nextAction: 70 };
-  const minimums = { company: 16, reason: 18, categories: 8, specifications: 8, observations: 8, nextAction: 18 };
+  const maximumContentPoints = 1000;
+  const budgets = { company: 36, reason: 64, categories: 42, strategy: 52, specifications: 30, observations: 30, nextAction: 45 };
+  const minimums = { company: 14, reason: 16, categories: 8, strategy: 16, specifications: 8, observations: 8, nextAction: 16 };
   let content = renderReminderContent(selected, budgets);
   while ([...content].length > maximumContentPoints) {
     let changed = false;
-    for (const key of ['observations', 'specifications', 'categories', 'reason', 'nextAction', 'company']) {
+    for (const key of ['observations', 'specifications', 'categories', 'reason', 'strategy', 'nextAction', 'company']) {
       if (budgets[key] > minimums[key]) {
         budgets[key] -= 1;
         changed = true;
@@ -139,14 +145,37 @@ function boundedReminderContent(selected) {
   return content;
 }
 
+function quickButton(index) {
+  const letter = String.fromCharCode(65 + index);
+  return {
+    tag: 'button', text: { tag: 'plain_text', content: `查看 ${letter}` }, type: 'default',
+    behaviors: [{ type: 'callback', value: { a: 'mx.quick', i: index } }]
+  };
+}
+
+function quickActions(indexes) {
+  return {
+    tag: 'column_set', flex_mode: 'flow', horizontal_spacing: 'small',
+    columns: indexes.map(index => ({ tag: 'column', width: 'auto', elements: [quickButton(index)] }))
+  };
+}
+
 function reminderCard(rows) {
   const selected = (rows || []).slice(0, 5);
   const content = boundedReminderContent(selected);
+  const quickRows = [[0, 1, 2], [3, 4]]
+    .map(indexes => indexes.filter(index => index < selected.length))
+    .filter(indexes => indexes.length)
+    .map(quickActions);
   return {
     schema: '2.0',
     config: { update_multi: true },
-    header: { template: selected.length ? 'blue' : 'grey', title: { tag: 'plain_text', content: '每日候选提醒' } },
-    body: { elements: [{ tag: 'markdown', content }] }
+    header: { template: selected.length ? 'blue' : 'grey', title: { tag: 'plain_text', content: '今日优先候选' } },
+    body: { elements: [
+      { tag: 'markdown', content },
+      ...quickRows,
+      ...(selected.length ? [{ tag: 'markdown', content: '也可 @智能桓 回复 A-E' }] : [])
+    ] }
   };
 }
 

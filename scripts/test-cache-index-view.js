@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { createCacheIndexView, REQUIRED_COLUMNS } = require('../src/lib/cacheIndexView');
+const { createCacheIndexView, NEARBY_COUNTRY_CODES, REQUIRED_COLUMNS } = require('../src/lib/cacheIndexView');
 const regionByCountry = require('../src/lib/matrixRegions.json');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-index-view-'));
@@ -63,6 +63,18 @@ try {
       discovered_via TEXT, discovery_url TEXT, official_url TEXT, source_type TEXT,
       verified_at TEXT, fingerprint TEXT
     );
+    CREATE TABLE cache_relationships (
+      id INTEGER PRIMARY KEY, record_id INTEGER NOT NULL, supplier_name TEXT NOT NULL,
+      supplier_country_code TEXT, supplied_category TEXT, confidence TEXT NOT NULL,
+      source_url TEXT NOT NULL, source_type TEXT NOT NULL, observed_at TEXT NOT NULL,
+      excerpt TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE
+    );
+    CREATE TABLE cache_strategy_signals (
+      id INTEGER PRIMARY KEY, record_id INTEGER NOT NULL, entry_product TEXT NOT NULL,
+      differentiation_angle TEXT NOT NULL, first_contact_goal TEXT NOT NULL,
+      questions_json TEXT NOT NULL, risks_json TEXT NOT NULL, source_url TEXT NOT NULL,
+      observed_at TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE
+    );
   `);
   const insertRecord = db.prepare(`INSERT INTO cache_records VALUES (
     @id,@company_name,@country_code,'',@domain,@url,@categories,@formats,@sizes,'medium',
@@ -85,7 +97,7 @@ try {
     record({ id: 13, company_name: 'No Contact', country_code: 'JP', domain: 'no-contact.test', url: 'https://no-contact.test/', categories: '["cosmetics"]', email: '', phone: '', whatsapp: '', contact_url: '', priority: 'P2' }),
     record({ id: 14, company_name: 'Stale Audit', country_code: 'JP', domain: 'stale-audit.test', url: 'https://stale-audit.test/', categories: '["cosmetics"]', priority: 'P2', audited_at: '2026-07-15T00:00:00Z', updated_at: '2026-07-16T00:00:00Z' }),
     record({ id: 15, company_name: 'Missing Audit Time', country_code: 'JP', domain: 'missing-audit-time.test', url: 'https://missing-audit-time.test/', categories: '["cosmetics"]', priority: 'P2', audited_at: null }),
-    record({ id: 16, company_name: 'Ready Stage', country_code: 'DE', domain: 'ready.test', url: 'https://ready.test/', categories: '["stage-test"]', stage_code: 'recommendation_ready', priority: 'P1' }),
+    record({ id: 16, company_name: 'Ready Stage', country_code: 'VN', domain: 'ready.test', url: 'https://ready.test/', categories: '["stage-test"]', stage_code: 'recommendation_ready', priority: 'P1' }),
     ...['unknown', 'pending', 'terminal', 'bounced', 'opted_out', 'delivered', 'draft_pending', 'selected'].map((stage_code, index) => record({ id: 17 + index, company_name: `Rejected ${stage_code}`, country_code: 'DE', domain: `rejected-${index}.test`, url: `https://rejected-${index}.test/`, categories: '["stage-test"]', stage_code, priority: 'P3' }))
   ].forEach(row => insertRecord.run(row));
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-16T00:00:00Z', 'Coffee products', 'e1');
@@ -97,6 +109,17 @@ try {
   const addDiscovery = id => db.prepare('INSERT INTO cache_discovery VALUES (?,?,?,?,?,?,?,?,?)').run(discoveryId++, id, `record-${id}.test`, 'official_directory', `https://directory.test/${id}`, `https://record-${id}.test/`, 'official_directory', '2026-07-16T00:00:00Z', `d-${id}`);
   for (const id of [5, 7, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]) addOfficial(id);
   for (const id of [5, 6, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]) addDiscovery(id);
+  db.prepare('INSERT INTO cache_relationships VALUES (1,16,?,?,?,?,?,?,?,?,?)').run(
+    'Benchmark Supplier', 'CN', 'fruit jelly laminated film', 'confirmed',
+    'https://trade.test/record', 'public_trade_record', '2026-07-17T00:00:00Z',
+    'Named buyer and supplier', 'relationship-16'
+  );
+  db.prepare('INSERT INTO cache_strategy_signals VALUES (1,16,?,?,?,?,?,?,?,?)').run(
+    'fruit jelly laminated roll film', 'stable nearby supply and structure review',
+    'confirm current structure and annual consumption', '["年用量","现有结构"]',
+    '["公开关系未必代表当前独家供应"]', 'https://trade.test/record',
+    '2026-07-17T00:00:00Z', 'strategy-16'
+  );
 } finally {
   db.close();
 }
@@ -147,6 +170,16 @@ try {
   assert.strictEqual(detail.stage_code, 'observed');
   assert.notStrictEqual(detail.official_evidence[0].source_url, detail.discovery.discovery_url);
 
+  const signaledDetail = view.detail(16);
+  assert.deepStrictEqual(signaledDetail.supplier_signal, {
+    supplier_name: 'Benchmark Supplier', supplier_country_code: 'CN',
+    supplied_category: 'fruit jelly laminated film', confidence: 'confirmed',
+    source_url: 'https://trade.test/record', source_type: 'public_trade_record',
+    observed_at: '2026-07-17T00:00:00Z', excerpt: 'Named buyer and supplier'
+  });
+  assert.deepStrictEqual(signaledDetail.strategy_signal.questions, ['年用量', '现有结构']);
+  assert.deepStrictEqual(signaledDetail.strategy_signal.risks, ['公开关系未必代表当前独家供应']);
+
   const revealed = view.detail(1, { revealContacts: true });
   assert.strictEqual(revealed.contacts.email, 'team@alpha.test');
   assert.strictEqual(revealed.contacts.phone, '+1 202 555 0123');
@@ -157,21 +190,29 @@ try {
   assert.strictEqual(view.detail(10), null);
   assert.strictEqual(view.detail(11), null);
   assert.strictEqual(view.detail(12).status, 'needs_review');
-  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [] }).map(row => row.id), [1, 16]);
-  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [1] }).map(row => row.id), [16]);
-  assert.deepStrictEqual(view.recommend({ limit: 2.9 }).map(row => row.id), [1, 16]);
+  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [] }).map(row => row.id), [16]);
+  assert.deepStrictEqual(view.recommend({ limit: 99, excludeIds: [16] }).map(row => row.id), []);
+  assert.deepStrictEqual(view.recommend({ limit: 2.9 }).map(row => row.id), [16]);
   assert.deepStrictEqual(view.recommend({ limit: -3 }), []);
   assert.deepStrictEqual(view.recommend({ limit: 'invalid' }), []);
   assert.deepStrictEqual(view.recommend({ limit: Infinity }), []);
-  assert.strictEqual(view.recommend().length, 2);
+  assert.strictEqual(view.recommend().length, 1);
   assert.ok(view.recommend().every(row => ['observed', 'recommendation_ready'].includes(row.stage_code)));
+  assert.ok(view.recommend().every(row => NEARBY_COUNTRY_CODES.has(row.country_code)));
+  assert.deepStrictEqual(view.recommend()[0].supplier_signal, {
+    supplier_name: 'Benchmark Supplier', supplier_country_code: 'CN',
+    supplied_category: 'fruit jelly laminated film', confidence: 'confirmed',
+    source_url: 'https://trade.test/record', source_type: 'public_trade_record',
+    observed_at: '2026-07-17T00:00:00Z', excerpt: 'Named buyer and supplier'
+  });
+  assert.deepStrictEqual(view.recommend()[0].strategy_signal.questions, ['年用量', '现有结构']);
   assert.strictEqual(view.ready(), true);
   const strictPage1 = view.recommendPage({ page: 1, page_size: 1 });
   const strictPage2 = view.recommendPage({ page: 2, page_size: 1 });
-  assert.deepStrictEqual(strictPage1.rows.map(row => row.id), [1]);
-  assert.deepStrictEqual(strictPage2.rows.map(row => row.id), [16]);
-  assert.strictEqual(strictPage1.total, 2);
-  assert.strictEqual(strictPage1.total_pages, 2);
+  assert.deepStrictEqual(strictPage1.rows.map(row => row.id), [16]);
+  assert.deepStrictEqual(strictPage2.rows.map(row => row.id), []);
+  assert.strictEqual(strictPage1.total, 1);
+  assert.strictEqual(strictPage1.total_pages, 1);
   assert.strictEqual(strictPage1.snapshot_key, strictPage2.snapshot_key);
   assert.strictEqual(strictPage1.snapshot_key, view.recommendPage({ page: 1, page_size: 2 }).snapshot_key);
   const mutationDb = new Database(dbPath);
@@ -189,7 +230,7 @@ try {
       insertedBetweenReads = true;
       const writer = new Database(dbPath);
       try {
-        writer.prepare(`INSERT INTO cache_records (id, company_name, country_code, city, normalized_domain, official_url, product_categories_json, format_signals_json, size_signals_json, scale_tier, public_email, public_phone, public_whatsapp, contact_url, priority, fit_score, demand_fit_score, access_score, confidence, status, assessment_cn, next_action_cn, stage_code, audit_state, audit_note, audited_at, updated_at) VALUES (25, 'Atomic Insert', 'US', '', 'atomic.test', 'https://atomic.test/', '["coffee"]', '[]', '[]', 'medium', 'team@atomic.test', '', '', 'https://atomic.test/contact', 'P0', 100, 100, 100, 0.99, 'valid', '公开证据', '核实入口', 'observed', 'audited', NULL, '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z')`).run();
+        writer.prepare(`INSERT INTO cache_records (id, company_name, country_code, city, normalized_domain, official_url, product_categories_json, format_signals_json, size_signals_json, scale_tier, public_email, public_phone, public_whatsapp, contact_url, priority, fit_score, demand_fit_score, access_score, confidence, status, assessment_cn, next_action_cn, stage_code, audit_state, audit_note, audited_at, updated_at) VALUES (25, 'Atomic Insert', 'VN', '', 'atomic.test', 'https://atomic.test/', '["coffee"]', '[]', '[]', 'medium', 'team@atomic.test', '', '', 'https://atomic.test/contact', 'P0', 100, 100, 100, 0.99, 'valid', '公开证据', '核实入口', 'observed', 'audited', NULL, '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z')`).run();
         writer.prepare("INSERT INTO cache_evidence (id, record_id, source_url, source_type, page_title, observed_at, excerpt, fingerprint) VALUES (99,25,'https://atomic.test/products','official_website','Products','2026-07-17T00:00:00Z','Products','atomic-e')").run();
         writer.prepare("INSERT INTO cache_discovery (id, record_id, normalized_domain, discovered_via, discovery_url, official_url, source_type, verified_at, fingerprint) VALUES (99,25,'atomic.test','official_directory','https://directory.test/atomic','https://atomic.test/','official_directory','2026-07-17T00:00:00Z','atomic-d')").run();
       } finally { writer.close(); }
@@ -197,11 +238,11 @@ try {
   });
   try {
     const atomicOld = atomicView.recommendPage({ page: 1, page_size: 5 });
-    assert.strictEqual(atomicOld.total, 2);
-    assert.deepStrictEqual(atomicOld.rows.map(row => row.id), [1, 16]);
+    assert.strictEqual(atomicOld.total, 1);
+    assert.deepStrictEqual(atomicOld.rows.map(row => row.id), [16]);
     const atomicNew = atomicView.recommendPage({ page: 1, page_size: 5 });
-    assert.strictEqual(atomicNew.total, 3);
-    assert.deepStrictEqual(atomicNew.rows.map(row => row.id), [25, 1, 16]);
+    assert.strictEqual(atomicNew.total, 2);
+    assert.deepStrictEqual(atomicNew.rows.map(row => row.id), [25, 16]);
     assert.notStrictEqual(atomicOld.snapshot_key, atomicNew.snapshot_key);
   } finally { atomicView.close(); }
   const throwingView = createCacheIndexView({ dbPath, afterRecommendationMembership: () => { throw new Error('injected membership failure'); } });
@@ -222,7 +263,7 @@ try {
   process.env.MATRIX_STREAM_DB_PATH = path.join(dir, 'missing.db');
   try {
     const explicitView = createCacheIndexView({ dbPath });
-    assert.strictEqual(explicitView.facets().countries.length, 8);
+    assert.strictEqual(explicitView.facets().countries.length, 9);
     explicitView.close();
   } finally {
     if (previousPath === undefined) delete process.env.MATRIX_STREAM_DB_PATH;

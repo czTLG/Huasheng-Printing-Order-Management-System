@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "normalized_domain": "vietnamthd.vn",
+      "relationship": {
+        "supplier_name": "Guangdong Shunshun Packaging Co., Ltd.",
+        "supplier_country_code": "CN",
+        "supplied_category": "fruit jelly laminated film",
+        "confidence": "confirmed",
+        "source_url": "https://www.trademo.com/companies/thd-agricultural-processing-joint-stock-company/33328049",
+        "source_type": "public_trade_record",
+        "observed_at": "2026-07-17T00:00:00.000Z",
+        "excerpt": "Public trade record names THD as buyer, Guangdong Shunshun as supplier, and laminated film for SUNTA PLUS fruit jelly."
+      },
+      "strategy": {
+        "entry_product": "fruit jelly laminated roll film",
+        "differentiation_angle": "nearby supply, laminate structure review, and stable repeat-production control",
+        "first_contact_goal": "confirm current laminate structure, roll dimensions, and annual consumption",
+        "questions": [
+          "What laminate structure and total thickness are currently used?",
+          "What are the roll width, repeat length, core size, and annual consumption?"
+        ],
+        "risks": [
+          "The public trade relationship may not represent the current or exclusive supply arrangement."
+        ],
+        "source_url": "https://www.trademo.com/companies/thd-agricultural-processing-joint-stock-company/33328049",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    },
+    {
+      "normalized_domain": "saomai-agrovietnam.com",
+      "strategy": {
+        "entry_product": "fruit ingredient and processed-fruit flexible formats",
+        "differentiation_angle": "format review for tropical-fruit processing and export handling",
+        "first_contact_goal": "identify packed product lines, filling conditions, and export format demand",
+        "questions": [
+          "Which processed-fruit products are packed in flexible formats?",
+          "What filling temperature, shelf-life, and export transport requirements apply?"
+        ],
+        "risks": [
+          "The public product page does not establish the current supplier or exact flexible format."
+        ],
+        "source_url": "https://saomai-agrovietnam.com/",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    },
+    {
+      "normalized_domain": "tienthinh.vn",
+      "strategy": {
+        "entry_product": "fruit puree, juice, and dried-product flexible formats",
+        "differentiation_angle": "separate structure recommendations by liquid, puree, and dried-product barrier needs",
+        "first_contact_goal": "confirm which product family has recurring flexible-format demand and its annual volume",
+        "questions": [
+          "Which product family currently uses pouches or roll film?",
+          "What are the pack size, process conditions, shelf-life, and annual volume?"
+        ],
+        "risks": [
+          "The official site indicates product breadth but not the current supplier, structure, or purchase volume."
+        ],
+        "source_url": "https://tienthinh.vn/en",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    }
+  ]
+}

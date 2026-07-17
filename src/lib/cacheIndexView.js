@@ -5,6 +5,12 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const regionByCountry = require('./matrixRegions.json');
 
+const NEARBY_COUNTRY_CODES = Object.freeze(new Set([
+  'JP', 'KR', 'VN', 'TH', 'MY', 'ID', 'PH', 'MN',
+  'RU', 'KZ', 'UZ', 'KG', 'PK', 'BD', 'NP', 'LK'
+]));
+const NEARBY_SQL = `r.country_code IN (${[...NEARBY_COUNTRY_CODES].map(code => `'${code}'`).join(',')})`;
+
 const BASE_WHERE = `
   r.country_code NOT IN ('CN','IN')
   AND r.stage_code <> 'suppressed'
@@ -23,6 +29,7 @@ const CURRENT_REVIEW_WHERE = `
 
 const RECOMMENDATION_WHERE = `
   ${BASE_WHERE}
+  AND ${NEARBY_SQL}
   AND r.status = 'valid'
   AND r.stage_code IN ('observed', 'recommendation_ready')
   AND ${CURRENT_REVIEW_WHERE}
@@ -119,6 +126,49 @@ function summary(row, revealContacts = false) {
     updated_at: row.updated_at,
     contacts: contacts(row, revealContacts)
   };
+}
+
+function tableExists(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+function signalsForRecord(db, id) {
+  let supplierSignal = null;
+  let strategySignal = null;
+  if (tableExists(db, 'cache_relationships')) {
+    supplierSignal = db.prepare(`
+      SELECT supplier_name, supplier_country_code, supplied_category, confidence,
+             source_url, source_type, observed_at, excerpt
+      FROM cache_relationships
+      WHERE record_id = ? AND confidence IN ('confirmed', 'public_lead')
+      ORDER BY observed_at DESC, id DESC LIMIT 1
+    `).get(id) || null;
+  }
+  if (tableExists(db, 'cache_strategy_signals')) {
+    const row = db.prepare(`
+      SELECT entry_product, differentiation_angle, first_contact_goal,
+             questions_json, risks_json, source_url, observed_at
+      FROM cache_strategy_signals
+      WHERE record_id = ?
+      ORDER BY observed_at DESC, id DESC LIMIT 1
+    `).get(id);
+    if (row) {
+      strategySignal = {
+        entry_product: row.entry_product,
+        differentiation_angle: row.differentiation_angle,
+        first_contact_goal: row.first_contact_goal,
+        questions: jsonArray(row.questions_json),
+        risks: jsonArray(row.risks_json),
+        source_url: row.source_url,
+        observed_at: row.observed_at
+      };
+    }
+  }
+  return { supplier_signal: supplierSignal, strategy_signal: strategySignal };
+}
+
+function enrichRecommendation(db, row) {
+  return { ...summary(row), ...signalsForRecord(db, row.id) };
 }
 
 function filterSql(filters = {}, baseWhere = BASE_WHERE) {
@@ -228,7 +278,7 @@ function recommendPage(db, filters = {}, afterMembership) {
       filters: { region: filters.region || '', country: filters.country || '', category: filters.category || '', priority: filters.priority || '', status: filters.status || '' },
       membership: membership.map(row => [row.id, row.updated_at])
     })).digest('hex');
-    return { rows: rawRows.map(row => summary(row)), page, page_size: pageSize, total: membership.length, total_pages: membership.length ? Math.ceil(membership.length / pageSize) : 0, snapshot_key: snapshotKey };
+    return { rows: rawRows.map(row => enrichRecommendation(db, row)), page, page_size: pageSize, total: membership.length, total_pages: membership.length ? Math.ceil(membership.length / pageSize) : 0, snapshot_key: snapshotKey };
   });
   return readSnapshot.deferred();
 }
@@ -257,6 +307,7 @@ function detail(db, id, { revealContacts = false } = {}) {
   `).get(id) || null;
   return {
     ...summary(row, revealContacts),
+    ...signalsForRecord(db, id),
     discovery,
     official_evidence: officialEvidence,
     supporting_evidence: supportingEvidence,
@@ -274,12 +325,12 @@ function recommend(db, limit, excludeIds, filters = {}) {
     WHERE ${where} ${exclusion}
     ORDER BY ${STABLE_ORDER}
     LIMIT ?
-  `).all(...params, ...ids, limit).map(row => summary(row));
+  `).all(...params, ...ids, limit).map(row => enrichRecommendation(db, row));
 }
 
 function recommendationById(db, id) {
   const row = db.prepare(`SELECT r.* FROM cache_records r WHERE r.id = ? AND ${RECOMMENDATION_WHERE}`).get(id);
-  return row ? summary(row) : null;
+  return row ? enrichRecommendation(db, row) : null;
 }
 
 function recommendationLimit(value) {
@@ -316,4 +367,4 @@ function createCacheIndexView({ dbPath, afterRecommendationMembership } = {}) {
   };
 }
 
-module.exports = { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE, REQUIRED_COLUMNS };
+module.exports = { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE, NEARBY_COUNTRY_CODES, REQUIRED_COLUMNS };

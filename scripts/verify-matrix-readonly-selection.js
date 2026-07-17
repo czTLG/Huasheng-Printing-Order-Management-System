@@ -8,12 +8,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const Database = require('better-sqlite3');
-const { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE } = require('../src/lib/cacheIndexView');
+const { createCacheIndexView, BASE_WHERE, CURRENT_REVIEW_WHERE, RECOMMENDATION_WHERE, NEARBY_COUNTRY_CODES } = require('../src/lib/cacheIndexView');
 
 const ROOT = path.resolve(__dirname, '..');
 const ELIGIBLE = RECOMMENDATION_WHERE;
 const FOCUSED_TESTS = [
   'scripts/test-cache-index-view.js',
+  'scripts/test-matrix-signal-import.js',
   'scripts/test-packet-gate.js',
   'scripts/test-matrix-api.js',
   '.runtime/vm_debug_ci/workspace/tests/test-bridge-patch.js',
@@ -42,13 +43,13 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
   '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '277efe5306668eba520bf428958de1ba616a4e0967c116b9a2eed56c8b882087',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '9ce2cb84f43dcb86b146bfc709fbb7592c268604e0a0f174457a8877d97dc5a0',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': 'a262e666c86f1f3d496a6683fbd09d111d587dbfb2aa18c7878f07f45c9abaa9',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '78237d21ad8b3108a43b8f845d87304e66ded2eb12aa8d9c9b1154eb8c124082',
   'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
   'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
-  'src/lib/cacheIndexView.js': '0805f295d96ef179c776dc07af6b61e8773b145edbf989d98be450ab74e33148',
+  'src/lib/cacheIndexView.js': '5c5b80179791338abff72dfebca842175b7ab189999576824a3b74c7a572bb3f',
   'src/lib/packetGate.js': '2fea59af911c177dc4f35b3b29b5984d07e1181128545ec64063fdf4ffba6d6a',
   'src/routes/matrix.js': '60e80e0c8bee787d22ff0ff7ff2fd6429941079171d440c1b0eb3abb4d9f48d2',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
@@ -73,7 +74,7 @@ function repositoryContract() {
     '/api/matrix', 'matrix-bind-actor.js', '开发客户', '1,500',
     '来源分离', '不存在外发适配器', 'MATRIX_DELIVERY_ENABLED=0',
     'MATRIX_VERIFY_FIXTURE=1', 'fail closed',
-    '桌面端', '移动端', '等待明确部署授权'
+    '桌面端', '移动端', 'mx.quick', 'vm_debug_ci_pre_'
   ]) assert.ok(catalog.includes(marker), `catalog missing ${marker}`);
 }
 
@@ -99,6 +100,18 @@ function createCandidateFixture(root) {
       discovered_via TEXT, discovery_url TEXT, official_url TEXT, source_type TEXT,
       verified_at TEXT, fingerprint TEXT
     );
+    CREATE TABLE cache_relationships (
+      id INTEGER PRIMARY KEY, record_id INTEGER NOT NULL, supplier_name TEXT NOT NULL,
+      supplier_country_code TEXT, supplied_category TEXT, confidence TEXT NOT NULL,
+      source_url TEXT NOT NULL, source_type TEXT NOT NULL, observed_at TEXT NOT NULL,
+      excerpt TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE
+    );
+    CREATE TABLE cache_strategy_signals (
+      id INTEGER PRIMARY KEY, record_id INTEGER NOT NULL, entry_product TEXT NOT NULL,
+      differentiation_angle TEXT NOT NULL, first_contact_goal TEXT NOT NULL,
+      questions_json TEXT NOT NULL, risks_json TEXT NOT NULL, source_url TEXT NOT NULL,
+      observed_at TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE
+    );
   `);
   const insert = db.prepare(`
     INSERT INTO cache_records VALUES (
@@ -109,13 +122,19 @@ function createCandidateFixture(root) {
   `);
   const rows = [
     { id: 1, company: 'Fixture Coffee', country: 'US', domain: 'fixture-coffee.test', url: 'https://fixture-coffee.test/', categories: '["coffee"]', formats: '["pouch"]', sizes: '[]', contact: 'https://fixture-coffee.test/contact', priority: 'P0', score: 90, status: 'valid', assessment: '官网确认咖啡品类。' },
-    { id: 2, company: 'Fixture Tea', country: 'GB', domain: 'fixture-tea.test', url: 'https://fixture-tea.test/', categories: '["tea"]', formats: '["sachet"]', sizes: '[]', contact: 'https://fixture-tea.test/contact', priority: 'P1', score: 80, status: 'needs_review', assessment: '官网确认茶品类，联系人待核实。' }
+    { id: 2, company: 'Fixture Tea', country: 'GB', domain: 'fixture-tea.test', url: 'https://fixture-tea.test/', categories: '["tea"]', formats: '["sachet"]', sizes: '[]', contact: 'https://fixture-tea.test/contact', priority: 'P1', score: 80, status: 'needs_review', assessment: '官网确认茶品类，联系人待核实。' },
+    { id: 3, company: 'Fixture Fruit', country: 'VN', domain: 'fixture-fruit.test', url: 'https://fixture-fruit.test/', categories: '["fruit"]', formats: '["roll film"]', sizes: '[]', contact: 'https://fixture-fruit.test/contact', priority: 'P0', score: 92, status: 'valid', assessment: '官网确认水果加工品类。' }
   ];
   for (const row of rows) {
     insert.run(row);
     db.prepare('INSERT INTO cache_evidence VALUES (?,?,?,?,?,?,?,?)').run(row.id, row.id, `${row.url}products`, 'official_website', 'Products', '2026-07-17T00:00:00.000Z', row.assessment, `e-${row.id}`);
     db.prepare('INSERT INTO cache_discovery VALUES (?,?,?,?,?,?,?,?,?)').run(row.id, row.id, row.domain, 'official_directory', `https://directory.test/${row.id}`, row.url, 'official_directory', '2026-07-17T00:00:00.000Z', `d-${row.id}`);
   }
+  db.prepare('INSERT INTO cache_relationships VALUES (1,3,?,?,?,?,?,?,?,?,?)').run(
+    'Fixture Supplier', 'CN', 'laminated roll film', 'confirmed',
+    'https://trade.example.com/public-record', 'public_trade_record',
+    '2026-07-17T00:00:00.000Z', 'Public record names both organizations.', 'fixture-relationship'
+  );
   db.close();
   fs.chmodSync(dbPath, 0o600);
   return dbPath;
@@ -185,11 +204,28 @@ function inspectCandidates(dbPath) {
     const recommendationStaleReview = db.prepare(`
       SELECT COUNT(*) AS count FROM cache_records r WHERE ${ELIGIBLE} AND NOT (${CURRENT_REVIEW_WHERE})
     `).get().count;
+    const nearbySql = [...NEARBY_COUNTRY_CODES].map(() => '?').join(',');
+    const recommendationOutsideNearby = db.prepare(`
+      SELECT COUNT(*) AS count FROM cache_records r WHERE ${ELIGIBLE}
+      AND r.country_code NOT IN (${nearbySql})
+    `).get(...NEARBY_COUNTRY_CODES).count;
+    const supplierSignalCount = db.prepare('SELECT COUNT(*) AS count FROM cache_relationships').get().count;
+    const supplierSignalProvenanceGaps = db.prepare(`
+      SELECT COUNT(*) AS count FROM cache_relationships
+      WHERE confidence NOT IN ('confirmed','public_lead')
+         OR trim(COALESCE(supplier_name, '')) = ''
+         OR trim(COALESCE(source_url, '')) = ''
+         OR source_url NOT LIKE 'https://%'
+         OR trim(COALESCE(source_type, '')) = ''
+         OR julianday(observed_at) IS NULL
+         OR trim(COALESCE(excerpt, '')) = ''
+    `).get().count;
     return {
       candidateIntegrity, candidateMode, candidateCount,
       recommendationEligibleCount: candidateCount,
       recommendationMissingOfficialEvidence, recommendationMissingDiscovery,
       recommendationMissingContact, recommendationStaleReview,
+      recommendationOutsideNearby, supplierSignalCount, supplierSignalProvenanceGaps,
       duplicateDomains, excludedCountries, missingEvidence, missingDiscovery
     };
   } finally {
@@ -404,7 +440,10 @@ function main() {
     assert.strictEqual(metrics.recommendationMissingDiscovery, 0);
     assert.strictEqual(metrics.recommendationMissingContact, 0);
     assert.strictEqual(metrics.recommendationStaleReview, 0);
+    assert.strictEqual(metrics.recommendationOutsideNearby, 0);
+    assert.strictEqual(metrics.supplierSignalProvenanceGaps, 0);
     assert.ok(selected.length <= 5);
+    assert.ok(selected.every(row => NEARBY_COUNTRY_CODES.has(row.country_code)));
     assert.strictEqual(delivery, '0');
     assert.strictEqual(adapters.length, 0);
     assert.strictEqual(idempotentEvents, 1);
@@ -423,6 +462,9 @@ function main() {
       recommendation_missing_discovery: metrics.recommendationMissingDiscovery,
       recommendation_missing_contact: metrics.recommendationMissingContact,
       recommendation_stale_review: metrics.recommendationStaleReview,
+      recommendation_outside_nearby: metrics.recommendationOutsideNearby,
+      supplier_signal_count: metrics.supplierSignalCount,
+      supplier_signal_provenance_gaps: metrics.supplierSignalProvenanceGaps,
       recommendations: selected.length,
       idempotent_selection_events: idempotentEvents,
       delivery_enabled: false,
