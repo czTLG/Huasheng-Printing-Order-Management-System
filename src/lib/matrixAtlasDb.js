@@ -379,6 +379,27 @@ function protectDatabase(database) {
   return proxy;
 }
 
+function resolveTerminalSymlinkChain(candidatePath) {
+  let resolvedPath = path.resolve(candidatePath);
+  const visited = new Set();
+  for (let depth = 0; depth < 40; depth += 1) {
+    const entry = fs.lstatSync(resolvedPath, { throwIfNoEntry: false });
+    if (!entry?.isSymbolicLink()) return resolvedPath;
+    if (visited.has(resolvedPath)) throw new Error('DB_PATH symlink chain is cyclic');
+    visited.add(resolvedPath);
+    const target = fs.readlinkSync(resolvedPath);
+    resolvedPath = path.resolve(path.dirname(resolvedPath), target);
+  }
+  throw new Error('DB_PATH symlink chain is too deep');
+}
+
+function canonicalPotentialPath(candidatePath) {
+  const resolvedPath = resolveTerminalSymlinkChain(candidatePath);
+  return fs.existsSync(resolvedPath)
+    ? fs.realpathSync(resolvedPath)
+    : path.join(fs.realpathSync(path.dirname(resolvedPath)), path.basename(resolvedPath));
+}
+
 function selectedDatabasePath(dbPath) {
   const configuredPath = dbPath || process.env.MATRIX_STREAM_DB_PATH;
   if (!configuredPath || !String(configuredPath).trim()) {
@@ -391,12 +412,8 @@ function selectedDatabasePath(dbPath) {
     throw new Error('Matrix Atlas database path must not be a symlink or alias of DB_PATH');
   }
   const mainPath = path.resolve(process.env.DB_PATH || './data/app.db');
-  const selectedCanonicalPath = fs.existsSync(selectedPath)
-    ? fs.realpathSync(selectedPath)
-    : path.join(fs.realpathSync(path.dirname(selectedPath)), path.basename(selectedPath));
-  const mainCanonicalPath = fs.existsSync(mainPath)
-    ? fs.realpathSync(mainPath)
-    : path.join(fs.realpathSync(path.dirname(mainPath)), path.basename(mainPath));
+  const selectedCanonicalPath = canonicalPotentialPath(selectedPath);
+  const mainCanonicalPath = canonicalPotentialPath(mainPath);
   const sameExistingFile = fs.existsSync(selectedPath) && fs.existsSync(mainPath)
     && fs.statSync(selectedPath).dev === fs.statSync(mainPath).dev
     && fs.statSync(selectedPath).ino === fs.statSync(mainPath).ino;

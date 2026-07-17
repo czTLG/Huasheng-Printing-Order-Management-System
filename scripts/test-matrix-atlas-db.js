@@ -76,6 +76,15 @@ try {
     const escapedStore = openMatrixAtlas({ dbPath: danglingAliasPath });
     escapedStore.close();
   }, /DB_PATH/);
+  const reverseCandidatePath = path.join(root, 'reverse-target.db');
+  const reverseMainLinkPath = path.join(root, 'reverse-main-link.db');
+  fs.symlinkSync(reverseCandidatePath, reverseMainLinkPath);
+  process.env.DB_PATH = reverseMainLinkPath;
+  assert.throws(() => {
+    const reverseEscapedStore = openMatrixAtlas({ dbPath: reverseCandidatePath });
+    reverseEscapedStore.close();
+  }, /DB_PATH/);
+  assert.strictEqual(fs.existsSync(reverseCandidatePath), false, 'rejected DB_PATH alias must not create its target');
   if (previousMainPath === undefined) delete process.env.DB_PATH;
   else process.env.DB_PATH = previousMainPath;
 
