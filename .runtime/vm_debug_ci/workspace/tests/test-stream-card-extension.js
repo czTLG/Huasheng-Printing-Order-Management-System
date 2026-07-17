@@ -547,6 +547,9 @@ async function testSelectionReplayAfterRestart() {
   await firstHandlers.get('mx.detail')({ evt, value: detailValue });
   const oldSelect = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value;
   await firstHandlers.get('mx.select')({ evt, value: oldSelect });
+  for (const expected of ['已加入进行中', '英文草稿', '中文翻译', '尚未发送', '请确认']) {
+    assert.ok(visibleText(sent.at(-1)).includes(expected), `selection follow-up missing ${expected}`);
+  }
   first.dispose();
   const freshHandlers = new Map();
   const fresh = extension.register({ channel: {}, dispatcher: { on: (n, h) => freshHandlers.set(n, h) }, card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_c, _id, card) => sent.push(card) });
@@ -809,6 +812,11 @@ async function testRecommendationSnapshotTransitions() {
   assert.strictEqual(selectionCalls.length, 2);
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectionCalls[1][2].idempotency_key);
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectButton.value.e);
+  const selectedText = visibleText(sent.at(-1).card);
+  for (const expected of ['已加入进行中', '英文草稿', '中文翻译', '尚未发送', 'Verified Supplier', 'stable repeat print control', '请确认']) {
+    assert.ok(selectedText.includes(expected), `selection follow-up missing ${expected}`);
+  }
+  assert.ok([...selectedText].length <= 1500, `selection draft card uses ${[...selectedText].length} code points`);
 
   const selectBeforeStale = calls.filter(item => item[0] === 'selectCandidate').length;
   await handlers.get('mx.select')({ evt: callbackEvent, value: { a: 'mx.select', s: 11, v: 999, c: 1, e: 'stale-event' } });

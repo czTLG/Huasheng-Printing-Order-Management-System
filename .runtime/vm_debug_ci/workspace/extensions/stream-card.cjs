@@ -211,6 +211,57 @@ function infoCard(cardHelpers, message) {
   return cardHelpers.card([cardHelpers.note(clip(message, 180))], { summary: '操作提示' });
 }
 
+function renderSelectedDraft(detail, result, state, cardHelpers) {
+  const { card, md, note, actions, button } = cardHelpers;
+  const strategy = detail.strategy_signal || {};
+  const categories = Array.isArray(detail.categories) && detail.categories.length
+    ? detail.categories.join(', ')
+    : 'your current product range';
+  const entryProduct = String(strategy.entry_product || (detail.format_signals || []).join(', ') || categories).trim();
+  const goal = String(strategy.first_contact_goal || result.next_action || detail.next_action_cn || 'confirm the current requirements and purchasing plan').trim();
+  const questions = Array.isArray(strategy.questions) && strategy.questions.length
+    ? strategy.questions.slice(0, 3).map(value => clip(value, 65))
+    : ['What product structure and size are you currently using?', 'What is the expected order volume or annual demand?'];
+  const supplier = detail.supplier_signal;
+  const supplierLine = supplier && ['confirmed', 'public_lead'].includes(supplier.confidence)
+    ? `${supplier.confidence === 'confirmed' ? '已确认' : '公开线索'}｜${clip(supplier.supplier_name, 45)}｜${clip(supplier.supplied_category, 55)}`
+    : '未知｜暂无可靠公开关系证据';
+  const englishQuestions = questions.map(value => `- ${value}`).join('\n');
+  const chineseQuestions = questions.map(value => `- ${value}`).join('\n');
+  const english = [
+    `Subject: ${clip(entryProduct, 65)} for ${clip(detail.company_name, 45)}`,
+    `Dear ${clip(detail.company_name, 45)} team,`,
+    `We reviewed your publicly available product range, including ${clip(categories, 85)}. Based on this information, we would like to discuss ${clip(entryProduct, 85)} and explore whether a stable, repeatable solution could fit your current plan.`,
+    `To prepare a relevant proposal, could you please help confirm:`,
+    englishQuestions,
+    `Our first objective is to ${clip(goal, 90)}. If appropriate, we can then prepare a focused recommendation for your review.`,
+    'Best regards'
+  ].join('\n');
+  const chinese = [
+    `主题：与${clip(detail.company_name, 35)}沟通${clip(entryProduct, 55)}`,
+    `您好，${clip(detail.company_name, 35)}团队：`,
+    `我们查看了贵司公开展示的产品，包括${clip(categories, 70)}。基于这些信息，希望沟通${clip(entryProduct, 70)}，了解稳定、可重复的方案是否匹配贵司当前计划。`,
+    '为了准备更有针对性的建议，想请您确认：',
+    chineseQuestions,
+    `首轮沟通目标：${clip(goal, 80)}。如果合适，我们再整理一份聚焦的建议供您审阅。`,
+    '此致'
+  ].join('\n');
+  const strategyLine = strategy.differentiation_angle
+    ? clip(withoutQualification(strategy.differentiation_angle), 95)
+    : '先核实实际需求，再给出针对性方案';
+  return card([
+    md(`**已完成：已加入进行中｜候选 #${result.candidate_id}**\n**尚未发送：** 邮件、WhatsApp 和网站联系均未执行。`),
+    md(`**英文草稿**\n${english}`),
+    md(`**中文翻译**\n${chinese}`),
+    md(`**策略依据**\n差异点：${strategyLine}\n供应链线索：${supplierLine}`),
+    actions([
+      button('返回列表', { a: 'mx.back', s: state.session.id, v: state.session.version }, 'default'),
+      button('查看进行中', { a: 'mx.work', s: state.session.id, v: state.session.version }, 'default')
+    ]),
+    note('请确认草稿是否采用，或直接说明需要修改的内容。本步只生成审阅稿，不会自动外发。')
+  ], { header: { title: '已生成待审阅草稿', template: 'blue' }, summary: '已生成待审阅草稿' });
+}
+
 function renderFilters(facets, state, cardHelpers) {
   const { card, md, note, hr, actions, button } = cardHelpers;
   const regions = (facets.regions || []).filter(item => ['africa', 'americas', 'asia', 'europe', 'oceania'].includes(item.value));
@@ -487,7 +538,10 @@ function register(context) {
     }
     const result = await client.selectCandidate(openId, input);
     if (Number(result.session_version) > Number(state.session.version)) state.session.version = result.session_version;
-    await sendForEvent(evt, infoCard(cardHelpers, `已加入进行中｜候选 #${result.candidate_id}｜下一步：${result.next_action || input.next_action}`));
+    const detail = await sessionBound(() => client.candidateDetail(openId, result.candidate_id, {
+      session_id: state.session.id, chat_id: evt.chatId, thread_id: evt.threadId || ''
+    }));
+    await sendForEvent(evt, renderSelectedDraft(detail, result, state, cardHelpers));
   }
 
   async function workAction({ evt, value }) {

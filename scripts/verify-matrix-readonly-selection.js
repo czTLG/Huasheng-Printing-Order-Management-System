@@ -44,7 +44,7 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
   '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '0e0db22e9f5b53f4a5000d1728a249256f99358f560d522548ce89d49cf7973d',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '7b96a2d0c442c2ea401c267d84781ab6ebcb8cacdb6c4132ece7e69365f79a23',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '8d4983a0ecc2a3a08aa395af62c55534226b60102e81f4b87ea15b97a70184f4',
