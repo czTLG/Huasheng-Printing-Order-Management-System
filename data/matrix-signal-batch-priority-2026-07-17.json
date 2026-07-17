@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "normalized_domain": "mitmongkol.com",
+      "strategy": {
+        "entry_product": "shampoo, body-wash and home-care refill pouches",
+        "differentiation_angle": "leak-resistant refill structures, spout compatibility and stable repeat printing for multiple private-label lines",
+        "first_contact_goal": "confirm which liquid lines use refill pouches and the annual sourcing plan",
+        "questions": ["Which product lines currently use refill or spouted pouches?", "What are the fill volume, formula compatibility, closure and annual volume?"],
+        "risks": ["The public site does not identify the current pouch supplier or current flexible-format share."],
+        "source_url": "https://www.mitmongkol.com/about-us/profile.html",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    },
+    {
+      "normalized_domain": "jdfthailand.com",
+      "strategy": {
+        "entry_product": "seasoning powder bags, sauce pouches and coconut-chip stand-up pouches",
+        "differentiation_angle": "separate moisture, aroma, oil and liquid-seal structures by product family instead of one generic proposal",
+        "first_contact_goal": "identify one recurring export pack with stable annual volume for a structure review",
+        "questions": ["Which seasoning, sauce or snack line has the largest recurring flexible-pack volume?", "What are the pack size, filling process, shelf-life and annual volume?"],
+        "risks": ["Exact structures, packing lines and incumbent suppliers are not stated on the public product pages."],
+        "source_url": "https://www.jdfthailand.com/en/product/",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    },
+    {
+      "normalized_domain": "ordatradeastana.kz",
+      "strategy": {
+        "entry_product": "250g tea pouches and tea-bag outer roll film",
+        "differentiation_angle": "aroma and moisture protection matched to the existing packing machine and regional distribution cycle",
+        "first_contact_goal": "confirm the 250g pouch and tea-bag overwrap specifications and annual consumption",
+        "questions": ["What are the current laminate, dimensions and zipper or seal format for the 250g pack?", "Which machine, roll width, repeat length and annual volume apply to tea-bag overwrap?"],
+        "risks": ["The current supplier and laminate structure are not established by the public site."],
+        "source_url": "https://ordatradeastana.kz/",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    },
+    {
+      "normalized_domain": "netcovn.com.vn",
+      "strategy": {
+        "entry_product": "liquid-detergent refill pouches, spouted pouches and detergent-powder bags",
+        "differentiation_angle": "formula compatibility and leak control for liquids, plus powder sealing and moisture control for dry detergent",
+        "first_contact_goal": "select one liquid and one powder line for a packaging structure and filling-process review",
+        "questions": ["Which liquid products use refill pouches and what are the fill volume, formula and closure?", "What are the powder pack size, sealing conditions and annual bag volume?"],
+        "risks": ["The public contact page confirms manufacturing sites but not current flexible-pack specifications or suppliers."],
+        "source_url": "https://netcovn.com.vn/contact/?lang=en",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    },
+    {
+      "normalized_domain": "teacenter.kz",
+      "strategy": {
+        "entry_product": "high-barrier loose-leaf tea pouches and automated tea overwrap roll film",
+        "differentiation_angle": "aroma retention, moisture barrier and machine-compatible roll control for full-cycle tea production",
+        "first_contact_goal": "confirm the highest-volume pouch or overwrap line and obtain its machine and laminate specification",
+        "questions": ["Which loose-leaf or tea-bag format has the largest annual flexible-pack consumption?", "What are the laminate, roll width, repeat length, machine speed and annual volume?"],
+        "risks": ["Public production information does not name the incumbent supplier or exact laminate."],
+        "source_url": "https://teacenter.kz/%D0%BF%D1%80%D0%BE%D0%B8%D0%B7%D0%B2%D0%BE%D0%B4%D1%81%D1%82%D0%B2%D0%BE-2/",
+        "observed_at": "2026-07-17T00:00:00.000Z"
+      }
+    }
+  ]
+}

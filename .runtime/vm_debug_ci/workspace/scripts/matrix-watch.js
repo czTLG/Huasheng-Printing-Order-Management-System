@@ -8,6 +8,7 @@ const STATE_PATH = '/workspace/store/matrix-watch-state.json';
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
+const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
 
 function shanghaiParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -93,7 +94,7 @@ function stageLabel(value) {
 }
 
 function confirmedSignals(values) {
-  const signals = Array.isArray(values) ? values.map(value => String(value || '').trim()).filter(Boolean) : [];
+  const signals = Array.isArray(values) ? values.map(value => String(value || '').trim()).filter(value => value && !QUALIFICATION_PATTERN.test(value)) : [];
   const isSpecification = value => /\d+(?:[.,]\d+)?\s*(?:μm|um|microns?|mm|cm|kg|mg|g|ml|cl|l|oz|lbs?|inches?|inch)\b/i.test(value)
     || /\d+(?:[.,]\d+)?\s*["”]/.test(value)
     || /\d+(?:[.,]\d+)?\s*[x×*]\s*\d+(?:[.,]\d+)?/i.test(value);
@@ -101,6 +102,12 @@ function confirmedSignals(values) {
     specifications: signals.filter(isSpecification),
     observations: signals.filter(value => !isSpecification(value))
   };
+}
+
+function withoutQualification(value) {
+  const segments = String(value || '').split(/[，,；;。]/).map(item => item.trim()).filter(Boolean);
+  const visible = segments.filter(item => !QUALIFICATION_PATTERN.test(item));
+  return visible.join('，') || '产品与规模依据见公开来源';
 }
 
 function supplierLabel(signal) {
@@ -112,7 +119,7 @@ function renderReminderContent(selected, budgets) {
     const signals = confirmedSignals(row.size_signals);
     return [
       `${String.fromCharCode(65 + index)}｜${clip(row.company_name, budgets.company)}｜${clip(row.country_code, 8)}｜${clip(row.priority, 4)}`,
-      `推荐理由：${clip(row.assessment_cn, budgets.reason)}`,
+      `推荐理由：${clip(withoutQualification(row.assessment_cn), budgets.reason)}`,
       `品类：${clip((row.categories || []).join('、'), budgets.categories)}`,
       `阶段：${stageLabel(row.stage_code)}`,
       `供应商：${supplierLabel(row.supplier_signal)}`,

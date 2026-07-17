@@ -135,9 +135,9 @@ function testWatcherWholeCardBudget() {
     country_code: 'US',
     priority: 'P0',
     stage_code: index === 4 ? 'recommendation_ready' : 'observed',
-    assessment_cn: `理由${index + 1}${long}`,
+    assessment_cn: index === 0 ? `ISO22000认证明确，产品匹配${long}` : `理由${index + 1}${long}`,
     categories: [`品类${index + 1}${long}`, long],
-    size_signals: [`250g ${long}`, `own factory ${long}`],
+    size_signals: [`250g ${long}`, `own factory ${long}`, 'ISO22000/GMP/BRC认证'],
     next_action_cn: `下一步${index + 1}${long}`,
     supplier_signal: index === 0 ? { confidence: 'confirmed', supplier_name: '公开供应方' } : null,
     strategy_signal: { differentiation_angle: `切入策略${index + 1}${long}` }
@@ -154,6 +154,7 @@ function testWatcherWholeCardBudget() {
   const quick = buttons(card).filter(item => item.behaviors?.[0]?.value?.a === 'mx.quick');
   assert.deepStrictEqual(quick.map(item => item.behaviors[0].value.i), [0, 1, 2, 3, 4]);
   assert.deepStrictEqual(quick.map(item => item.text.content), ['查看 A', '查看 B', '查看 C', '查看 D', '查看 E']);
+  assert.ok(!/ISO22000|GMP|BRC|认证/.test(text), 'scheduled card must hide qualification commentary');
 }
 
 async function testFreshQuickChoiceRecovery() {
@@ -640,10 +641,10 @@ async function testRecommendationSnapshotTransitions() {
     official_url: `https://company-${index + 1}.test/`,
     priority: `P${Math.min(index, 3)}`,
     categories: ['coffee'],
-    assessment_cn: `公开证据理由 ${index + 1}`,
+    assessment_cn: index === 0 ? 'ISO22000认证明确，公开产品证据理由 1' : `公开证据理由 ${index + 1}`,
     next_action_cn: '核实公开联系入口',
     format_signals: ['stand-up pouch'],
-    size_signals: index === 0 ? ['250g', 'own factory'] : [],
+    size_signals: index === 0 ? ['250g', 'own factory', 'ISO22000/GMP/BRC认证'] : [],
     scale_tier: 'medium',
     fit_score: 80,
     demand_fit_score: 80,
@@ -743,6 +744,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(text.length < 1500);
   assert.ok(!text.includes('|'));
   assert.ok(!text.includes('SENTINEL-INTERNAL'));
+  assert.ok(!/ISO22000|GMP|BRC|认证/.test(text));
   assert.ok(text.includes('数据状态：有效'));
   assert.ok(text.includes('数据状态：待核实'));
   assert.ok(text.includes('阶段：已观察'));
@@ -761,6 +763,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(!detailText.includes('规格：own factory'));
   assert.ok(!detailText.includes('待核实：规格 250g'));
   assert.ok(!detailText.includes('public@company.test'));
+  assert.ok(!/ISO22000|GMP|BRC|认证/.test(detailText));
 
   const callbackEvent = { operator: { openId: 'ou-1' }, chatId: 'chat-1', threadId: 'thread-1', messageId: 'callback-1' };
   const detailButtons = buttons(sent.at(-1).card);

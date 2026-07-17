@@ -9,6 +9,7 @@ const SESSION_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
+const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
 
 function readOptionalJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -112,7 +113,7 @@ function stageLabel(value) {
 }
 
 function confirmedSignals(values) {
-  const signals = Array.isArray(values) ? values.map(value => String(value || '').trim()).filter(Boolean) : [];
+  const signals = Array.isArray(values) ? values.map(value => String(value || '').trim()).filter(value => value && !QUALIFICATION_PATTERN.test(value)) : [];
   const isSpecification = value => /\d+(?:[.,]\d+)?\s*(?:μm|um|microns?|mm|cm|kg|mg|g|ml|cl|l|oz|lbs?|inches?|inch)\b/i.test(value)
     || /\d+(?:[.,]\d+)?\s*["”]/.test(value)
     || /\d+(?:[.,]\d+)?\s*[x×*]\s*\d+(?:[.,]\d+)?/i.test(value);
@@ -120,6 +121,12 @@ function confirmedSignals(values) {
     specifications: signals.filter(isSpecification),
     observations: signals.filter(value => !isSpecification(value))
   };
+}
+
+function withoutQualification(value) {
+  const segments = String(value || '').split(/[，,；;。]/).map(item => item.trim()).filter(Boolean);
+  const visible = segments.filter(item => !QUALIFICATION_PATTERN.test(item));
+  return visible.join('，') || '产品与规模依据见公开来源';
 }
 
 function renderCandidates(state, cardHelpers) {
@@ -132,7 +139,7 @@ function renderCandidates(state, cardHelpers) {
     const signals = confirmedSignals(candidate.size_signals);
     elements.push(md([
       `**${label}｜${clip(candidate.company_name, 26)}｜${clip(candidate.country_code, 4)}｜${clip(candidate.priority, 3)}**`,
-      `推荐理由：${clip(candidate.assessment_cn, 28)}`,
+      `推荐理由：${clip(withoutQualification(candidate.assessment_cn), 28)}`,
       `品类：${clip(categories, 16)}`,
       `数据状态：${statusLabel(candidate.status)}｜阶段：${stageLabel(candidate.stage_code)}`,
       ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), 12)}`] : []),
@@ -178,7 +185,7 @@ function renderDetail(detail, state, cardHelpers, chatId) {
   const elements = [md([
     `**${clip(detail.company_name, 60)}｜${clip(detail.country_code, 8)}｜${clip(detail.priority, 4)}**`,
     `阶段：${stageLabel(detail.stage_code)}`,
-    `\n**为什么推荐**\n${clip(detail.assessment_cn, 110)}\n规模信号：${clip(detail.scale_tier, 30)}`,
+    `\n**为什么推荐**\n${clip(withoutQualification(detail.assessment_cn), 110)}\n规模信号：${clip(detail.scale_tier, 30)}`,
     `\n**产品结构**\n品类：${clip((detail.categories || []).join('、'), 70)}\n形式：${clip(formats, 70)}${signals.specifications.length ? `\n规格：${clip(signals.specifications.join('、'), 70)}` : ''}${signals.observations.length ? `\n公开信号：${clip(signals.observations.join('、'), 70)}` : ''}`,
     `\n**供应链线索**\n${supplierLine}`,
     `\n**开发策略**\n${strategyLine}`,
