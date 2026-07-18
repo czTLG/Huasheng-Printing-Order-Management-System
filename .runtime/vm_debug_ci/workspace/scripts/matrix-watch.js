@@ -8,6 +8,8 @@ const STATE_PATH = '/workspace/store/matrix-watch-state.json';
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
+const REPLY_SPOOL_PATH = '/workspace/store/matrix-reply-pending.json';
+const REPLY_INFLIGHT_PATH = '/workspace/store/matrix-reply-inflight.json';
 const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
 
 function shanghaiParts(now = new Date()) {
@@ -224,6 +226,39 @@ function replyNotificationCard(notification) {
   };
 }
 
+async function claimAndQueueReply({
+  client, ownerOpenId, chatId,
+  spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH
+}) {
+  if (!client || typeof client.claimNotification !== 'function' || !ownerOpenId || !chatId) throw new Error('reply watcher binding required');
+  if (readJson(spoolPath) || readJson(inflightPath)) return { status: 'busy' };
+  const response = await client.claimNotification(ownerOpenId);
+  const notification = response?.notification;
+  if (!notification) return { status: 'empty' };
+  const record = {
+    version: 1,
+    id: positiveId(notification.id, 'notification id'),
+    notification_key: String(notification.notification_key || ''),
+    claim_token: String(notification.claim_token || ''),
+    chat_id: String(chatId),
+    card: replyNotificationCard(notification)
+  };
+  if (!/^[0-9a-f-]{36}$/i.test(record.notification_key) || !/^[0-9a-f-]{36}$/i.test(record.claim_token)) throw new Error('valid reply notification claim required');
+  const temporary = `${spoolPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, spoolPath);
+  } catch (error) {
+    try {
+      await client.nackNotification(ownerOpenId, record.id, { claim_token: record.claim_token, outcome: 'failed' });
+    } catch (_) {}
+    throw error;
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  }
+  return { status: 'queued', id: record.id };
+}
+
 async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatId, send, hour = 9, minute = 0 }) {
   if (!client || typeof client.today !== 'function') throw new Error('read-only matrix client required');
   if (!ownerOpenId || !chatId || typeof send !== 'function') throw new Error('watcher binding and sender required');
@@ -250,6 +285,7 @@ async function main() {
   let state = loadState();
   while (true) {
     try {
+      await claimAndQueueReply({ client, ownerOpenId, chatId });
       const next = await runDue({
         now: new Date(), state, client, ownerOpenId, chatId, hour, minute,
         send: (card, _chat, date) => queueReminder(card, chatId, { date })
@@ -271,4 +307,4 @@ if (require.main === module) main().catch(error => {
   process.exit(1);
 });
 
-module.exports = { runDue, reminderCard, replyNotificationCard, shanghaiParts, queueReminder, deliveryId };
+module.exports = { runDue, reminderCard, replyNotificationCard, claimAndQueueReply, shanghaiParts, queueReminder, deliveryId };

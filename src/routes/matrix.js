@@ -639,6 +639,7 @@ function createMatrixRouter({
       }
       const result = correlationService.startReplyDraft(db, {
         actorUserId: identity.actorUserId,
+        bindingId: identity.bindingId,
         notificationId: positiveInteger(req.params.id, 'notification id'),
         clock
       });
@@ -660,6 +661,7 @@ function createMatrixRouter({
       }
       const result = await correlationService.retryInboundTranslation(db, {
         actorUserId: identity.actorUserId,
+        bindingId: identity.bindingId,
         notificationId: positiveInteger(req.params.id, 'notification id'),
         clock
       });
@@ -669,6 +671,44 @@ function createMatrixRouter({
         translation_status: result.translation_status,
         retry_available: result.translation_status === 'pending'
       });
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/notifications/claim', (req, res) => {
+    try {
+      rejectUnknown(req.body, new Set(), 'body');
+      const identity = reviewIdentity(req);
+      if (!correlationService || typeof correlationService.claimNotification !== 'function') throw new Error('notification claim service unavailable');
+      const notification = correlationService.claimNotification(db, {
+        actorUserId: identity.actorUserId, bindingId: identity.bindingId, clock
+      });
+      res.json({ notification });
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/notifications/:id/ack', (req, res) => {
+    try {
+      const body = rejectUnknown(req.body, new Set(['claim_token', 'receipt_id']), 'body');
+      const identity = reviewIdentity(req);
+      if (!correlationService || typeof correlationService.ackNotification !== 'function') throw new Error('notification acknowledgement service unavailable');
+      res.json(correlationService.ackNotification(db, {
+        actorUserId: identity.actorUserId, bindingId: identity.bindingId,
+        notificationId: positiveInteger(req.params.id, 'notification id'),
+        claimToken: body.claim_token, receiptId: body.receipt_id, clock
+      }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/notifications/:id/nack', (req, res) => {
+    try {
+      const body = rejectUnknown(req.body, new Set(['claim_token', 'outcome']), 'body');
+      const identity = reviewIdentity(req);
+      if (!correlationService || typeof correlationService.nackNotification !== 'function') throw new Error('notification rejection service unavailable');
+      res.json(correlationService.nackNotification(db, {
+        actorUserId: identity.actorUserId, bindingId: identity.bindingId,
+        notificationId: positiveInteger(req.params.id, 'notification id'),
+        claimToken: body.claim_token, outcome: body.outcome, clock
+      }));
     } catch (error) { sendReviewError(res, error); }
   });
 

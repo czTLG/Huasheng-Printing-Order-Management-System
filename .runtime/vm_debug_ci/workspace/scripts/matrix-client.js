@@ -123,4 +123,22 @@ function retryTranslation(openId, notificationId) {
   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/retry-translation`, { method: 'POST', body: {} });
 }
 
-module.exports = { facets, createSession, rehydrateSession, listCandidates, candidateDetail, today, selectCandidate, workItems, startReplyDraft, retryTranslation };
+function claimNotification(openId) {
+  return call(openId, '/notifications/claim', { method: 'POST', body: {} });
+}
+
+function ackNotification(openId, notificationId, input) {
+  const body = exactObject(input, new Set(['claim_token', 'receipt_id']), 'notification acknowledgement');
+  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/ack`, { method: 'POST', body });
+}
+
+function nackNotification(openId, notificationId, input) {
+  const body = exactObject(input, new Set(['claim_token', 'outcome']), 'notification rejection');
+  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/nack`, { method: 'POST', body });
+}
+
+module.exports = {
+  facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
+  selectCandidate, workItems, startReplyDraft, retryTranslation,
+  claimNotification, ackNotification, nackNotification
+};
