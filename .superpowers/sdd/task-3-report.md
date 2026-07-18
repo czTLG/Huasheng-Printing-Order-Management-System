@@ -50,6 +50,13 @@ DONE_WITH_CONCERNS
    - RED: a provider exception containing a token, internal path, SQL, and SQLite diagnostic was returned verbatim as HTTP 400.
    - GREEN: review endpoints return fixed `{ error: { code, message } }` objects. Provider unavailable/failure use stable 503 codes, unexpected storage/service failures use a generic 500, and known validation/authorization/stale/not-found/idempotency classes have stable 4xx codes.
    - Server diagnostics log only the redacted error class. API tests prove provider text, credentials, filesystem paths, SQL, and SQLite diagnostics do not enter responses.
+5. Durable concurrent replay claim
+   - RED: two overlapping identical revisions both invoked the provider; the results were `[201,409]` with two provider calls and only the first transition committed.
+   - GREEN: added `matrix_stream_api_claims`, a durable globally keyed claim containing the canonical actor/work/action/fingerprint scope, an opaque owner token, and a bounded lease. Claim identity fields are immutable; only owner/lease timestamps can change for compare-and-swap takeover.
+   - Every create, revise, and approve request now acquires the same claim protocol before work. Exact contenders poll the committed immutable request ledger and return its authoritative response; mismatched contenders fail immediately with stable 409 and never invoke the provider.
+   - The committing immediate transaction rechecks either an already-recorded result or the exact unexpired owner token, then performs fresh authorization, the review transition, ledger insertion, and conditional owner cleanup atomically.
+   - A crashed owner leaves a recoverable lease. Active claims produce a bounded stable 503 after the configured wait, while an expired claim can be taken over only through owner/expiry compare-and-swap. A request that loses ownership during provider work receives a stable 409 and cannot commit or delete the replacement owner's claim.
+   - Blocking tests now prove concurrent exact statuses `[200,201]`, one provider invocation, the same version result, and one ledger/event transition, plus active mismatch isolation, wait timeout, immutable claim scope, expired-owner recovery, and final-transaction lease-loss rejection.
 
 ## Verification
 
@@ -73,6 +80,6 @@ DONE_WITH_CONCERNS
 
 ## 蒸馏进度
 
-- 已确认模块：窄化版本创建/修改/批准/预览 API、服务端 recipient/evidence 推导、不可变 API request ledger、原子 transition/replay、提交事务内 fresh 授权、稳定脱敏错误、stale/hash 与零写回归、确定性质量门禁。
+- 已确认模块：窄化版本创建/修改/批准/预览 API、服务端 recipient/evidence 推导、不可变 API request ledger、持久化 claim/lease/CAS 并发 replay、崩溃接管与 lease-loss 隔离、原子 transition/replay、提交事务内 fresh 授权、稳定脱敏错误、stale/hash 与零写回归、确定性质量门禁。
 - 未解决模块：生产 provider 的真实自由修改验收、更多可审计品类/规格模板、最终确认与交付；均不在 Task 3 范围内。
 - 下一优先知识缺口：为更多候选品类建立有官方证据支撑的双语确定性模板与规格映射，未确认前继续 fail closed。
