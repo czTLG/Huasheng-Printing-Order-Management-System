@@ -15,6 +15,7 @@ const STAGES = new Set(['selected', 'draft_pending', 'review_pending', 'suppress
 const LIST_FIELDS = new Set(['region', 'country', 'category', 'priority', 'status', 'page', 'page_size']);
 const VERSION_FIELDS = new Set(['expected_work_version', 'base_version_id', 'revision_instruction', 'idempotency_key']);
 const APPROVAL_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']);
+const SEND_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'chat_id', 'card_event_id', 'idempotency_key']);
 
 function plainObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -164,6 +165,29 @@ function sendReviewError(res, error) {
   return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
 }
 
+function deliveryErrorDescriptor(error) {
+  const message = String(error?.message || '');
+  if (/delivery service unavailable/.test(message)) {
+    return { status: 503, code: 'delivery_unavailable', message: 'Delivery confirmation is unavailable.' };
+  }
+  if (/active actor binding|administrator role|matrixSend capability|not authorized/.test(message)) {
+    return { status: 403, code: 'delivery_forbidden', message: 'Delivery confirmation is not authorized.' };
+  }
+  if (/stale work version|idempotency conflict|blocks resend|not current|result conflict/.test(message)) {
+    return { status: 409, code: 'delivery_conflict', message: 'Delivery confirmation conflicts with current state.' };
+  }
+  if (/required|invalid|unknown|mismatch|blocked|suppressed|approved|provenance|quality|readiness|policy/.test(message)) {
+    return { status: 400, code: 'invalid_delivery_confirmation', message: 'Invalid delivery confirmation.' };
+  }
+  return { status: 500, code: 'delivery_internal_error', message: 'Delivery confirmation could not be completed.' };
+}
+
+function sendDeliveryError(res, error) {
+  const descriptor = deliveryErrorDescriptor(error);
+  if (descriptor.status >= 500) console.warn(`[matrix-delivery] ${descriptor.code}`);
+  return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
+}
+
 function createMatrixRouter({
   db,
   audit,
@@ -177,7 +201,6 @@ function createMatrixRouter({
   const router = express.Router();
   const view = createCacheIndexView({ dbPath: candidateDbPath });
   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
-  void deliveryService;
 
   router.use(requireMatrixRole);
 
@@ -466,6 +489,7 @@ function createMatrixRouter({
       organization_domain: organizationDomain,
       recipient_email: email,
       source_url: sourceUrl,
+      country_code: String(detail.country_code || '').trim().toUpperCase(),
       company,
       categories: detail.categories || [],
       products,
@@ -781,6 +805,39 @@ function createMatrixRouter({
       if (!preview || preview.version.work_item_id !== item.id) throw new Error('version not found');
       res.json({ ...preview, work_item_version: item.version });
     } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/work-items/:id/versions/:versionId/send', async (req, res) => {
+    try {
+      const body = rejectUnknown(req.body, SEND_FIELDS, 'body');
+      if (!deliveryService || typeof deliveryService.confirm !== 'function') throw new Error('delivery service unavailable');
+      const identity = reviewIdentity(req);
+      const requiredToken = (value, label, maximum = 256) => {
+        const token = String(value || '').trim();
+        if (!token || token.length > maximum || /[\r\n\0]/.test(token)) throw new Error(`${label} required`);
+        return token;
+      };
+      const result = await deliveryService.confirm({
+        actorUserId: identity.actorUserId,
+        bindingId: identity.bindingId,
+        workItemId: positiveInteger(req.params.id, 'work item id'),
+        versionId: positiveInteger(req.params.versionId, 'version id'),
+        expectedWorkVersion: positiveInteger(body.expected_work_version, 'expected work version'),
+        expectedContentHash: requiredToken(body.expected_content_hash, 'expected content hash', 64),
+        chatId: requiredToken(body.chat_id, 'chat id'),
+        cardEventId: requiredToken(body.card_event_id, 'card event id'),
+        idempotencyKey: requiredToken(body.idempotency_key, 'idempotency key', 200)
+      });
+      const state = String(result?.state || '');
+      if (!new Set(['accepted', 'failed', 'ambiguous']).has(state)) throw new Error('invalid delivery result');
+      res.json({
+        state,
+        error_class: String(result?.error_class || ''),
+        work_item_version: positiveInteger(result?.work_item_version, 'delivery work item version')
+      });
+    } catch (error) {
+      sendDeliveryError(res, error);
+    }
   });
 
   return router;

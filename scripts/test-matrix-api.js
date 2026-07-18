@@ -511,6 +511,7 @@ function reviewState(workItemId) {
     assert.strictEqual(createdVersion.body.work_item_version, 2);
     assert.ok(createdVersion.body.quality_score >= 80);
     assert.strictEqual(JSON.parse(createdVersion.body.quality_json).passed, true);
+    assert.strictEqual(JSON.parse(createdVersion.body.source_snapshot_json).country_code, 'VN');
     mutateCandidate(db => {
       db.prepare("UPDATE cache_records SET public_email='', contact_url='' WHERE id=1").run();
       db.prepare('DELETE FROM cache_evidence WHERE record_id=1').run();
@@ -615,6 +616,13 @@ function reviewState(workItemId) {
       }
     };
     const claimOptions = { leaseMs: 5000, waitMs: 1000, pollMs: 10 };
+    const deliveryCalls = [];
+    const injectedDeliveryService = {
+      async confirm(input) {
+        deliveryCalls.push(input);
+        return { state: 'accepted', error_class: '', work_item_version: 4, message_id: '<must-not-leave-api@sender.test>' };
+      }
+    };
     const injectedApp = express();
     injectedApp.use(express.json());
     injectedApp.use('/api/matrix', createMatrixBridgeAuth({ db: injectedDb, bridgeToken }));
@@ -623,6 +631,7 @@ function reviewState(workItemId) {
       audit: () => undefined,
       candidateDbPath,
       reviewService: injectedReviewService,
+      deliveryService: injectedDeliveryService,
       textService: injectedTextService,
       claimOptions
     }));
@@ -631,6 +640,42 @@ function reviewState(workItemId) {
       server.once('error', reject);
     });
     try {
+      const sendRoute = `${versionRoute}/${createdVersion.body.id}/send`;
+      const sendBody = {
+        expected_work_version: 3,
+        expected_content_hash: createdVersion.body.content_hash,
+        chat_id: 'chat-send-api',
+        card_event_id: 'card-send-api',
+        idempotency_key: 'send-api-1'
+      };
+      const sent = await request(sendRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: sendBody
+      });
+      assert.deepStrictEqual(sent, {
+        status: 200,
+        body: { state: 'accepted', error_class: '', work_item_version: 4 }
+      });
+      assert.strictEqual(deliveryCalls.length, 1);
+      assert.deepStrictEqual(deliveryCalls[0], {
+        actorUserId: 103,
+        bindingId: 1,
+        workItemId,
+        versionId: createdVersion.body.id,
+        expectedWorkVersion: 3,
+        expectedContentHash: createdVersion.body.content_hash,
+        chatId: 'chat-send-api',
+        cardEventId: 'card-send-api',
+        idempotencyKey: 'send-api-1'
+      });
+      for (const field of ['recipient', 'subject', 'body', 'smtp_host', 'callback_url', 'attachment', 'retry']) {
+        const rejected = await request(sendRoute, {
+          port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+          body: { ...sendBody, idempotency_key: `send-api-reject-${field}`, [field]: true }
+        });
+        assert.strictEqual(rejected.status, 400, `${field}: ${JSON.stringify(rejected.body)}`);
+      }
+      assert.strictEqual(deliveryCalls.length, 1, 'unknown send fields must be rejected before delivery service');
+
       const reviseBody = {
         expected_work_version: 3,
         base_version_id: createdVersion.body.id,
