@@ -31,7 +31,8 @@
     "multer": "^2.2.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.10.1",
-    "pdfkit": "^0.17.2"
+    "pdfkit": "^0.17.2",
+    "tldts": "7.4.9"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1"

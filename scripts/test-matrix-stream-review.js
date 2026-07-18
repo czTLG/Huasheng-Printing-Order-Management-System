@@ -195,6 +195,35 @@ try {
     sourceUrl: 'https://alpha.invalidtld/contact',
     key: 'unknown-tld-create'
   })), /registrable|evidence|binding/i);
+  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899991,
+    domain: 'workers.dev',
+    email: 'sales@tenant-a.workers.dev',
+    sourceUrl: 'https://tenant-b.workers.dev/contact',
+    key: 'private-workers-create'
+  })), /registrable|evidence|binding/i);
+  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899990,
+    domain: 'onrender.com',
+    email: 'sales@tenant-a.onrender.com',
+    sourceUrl: 'https://tenant-b.onrender.com/contact',
+    key: 'private-onrender-create'
+  })), /registrable|evidence|binding/i);
+  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899989,
+    domain: 'foo.ck',
+    email: 'sales@tenant-a.foo.ck',
+    sourceUrl: 'https://tenant-b.foo.ck/contact',
+    key: 'wildcard-ck-create'
+  })), /registrable|evidence|binding/i);
+  const validPslExceptionDomain = review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899988,
+    domain: 'www.ck',
+    email: 'sales@mail.www.ck',
+    sourceUrl: 'https://official.www.ck/contact',
+    key: 'exception-www-ck-create'
+  }));
+  assert.strictEqual(validPslExceptionDomain.recipient_email, 'sales@mail.www.ck');
   const validMultiLevelDomain = review.createInitialVersion(db, createDomainFixture({
     candidateId: 899993,
     domain: 'alpha.co.uk',
@@ -292,7 +321,11 @@ try {
       `${qualificationClaim} must require evidence`
     );
   }
-  for (const unsupportedClaim of ['单价为99。', '单价为九十九元。', '材料符合食品级要求。', '产品已通过认证。']) {
+  for (const unsupportedClaim of [
+    '单价为99。', '单价为九十九元。', '售价为99。', '售价为九十九。', '售价大约为99。',
+    '材料符合食品级要求。', '产品已通过认证。', '产品符合RoHS合规规范。',
+    '产品满足REACH要求。', '产品合规。'
+  ]) {
     await assert.rejects(
       () => createMatrixStreamText({
         callJson: async () => ({
@@ -312,6 +345,29 @@ try {
     /unsupported price/i,
     '199美元 must not support 99美元'
   );
+  await assert.rejects(
+    () => createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Short proposal', body_en: 'This product is RoHS compliant.', body_cn: '您好。'
+      })
+    }).revise({ current: v1, instruction: '增加合规声明' }),
+    /unsupported qualification/i
+  );
+  await assert.rejects(
+    () => createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Short proposal', body_en: 'This product is RoHS compliant.', body_cn: '您好。'
+      })
+    }).revise({ current: v1, instruction: '增加合规声明', sourceSnapshot: { supportedClaims: ['RoHSX compliant'] } }),
+    /unsupported qualification/i,
+    'RoHSX must not support RoHS'
+  );
+  const exactPriceEvidence = await createMatrixStreamText({
+    callJson: async () => ({
+      subject: 'Supported price', body_en: 'The supported price is USD 99.', body_cn: '证据价格为99美元。'
+    })
+  }).revise({ current: v1, instruction: '使用已有价格', sourceSnapshot: { supportedClaims: ['USD 99', '99美元'] } });
+  assert.match(exactPriceEvidence.body_en, /99/);
   const reasonableNumbers = await createMatrixStreamText({
     callJson: async () => ({
       subject: 'Dimension follow-up',
