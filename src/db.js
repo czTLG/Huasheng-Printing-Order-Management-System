@@ -966,6 +966,22 @@ function initDb() {
       PRIMARY KEY(country_code, channel)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_stream_reply_checks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL,
+      originating_job_id INTEGER NOT NULL UNIQUE,
+      purpose TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      due_at TEXT,
+      state TEXT NOT NULL CHECK(state IN ('active','closed')),
+      terminal_reason TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      closed_at TEXT,
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(originating_job_id) REFERENCES matrix_stream_jobs(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
@@ -973,6 +989,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_reply_checks_due ON matrix_stream_reply_checks(state, due_at);
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
     BEFORE UPDATE ON matrix_selection_events

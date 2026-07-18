@@ -56,7 +56,7 @@ try {
     console.log = originalConsoleLog;
   }
 
-  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events', 'matrix_stream_recipient_evidence']) {
+  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events', 'matrix_stream_recipient_evidence', 'matrix_stream_reply_checks']) {
     assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
   }
 
@@ -73,6 +73,7 @@ try {
   assert.deepStrictEqual(indexColumns('idx_matrix_stream_versions_work_revision'), ['work_item_id', 'revision']);
   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_state_updated'), ['state', 'updated_at']);
   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_message_id'), ['message_id']);
+  assert.deepStrictEqual(indexColumns('idx_matrix_stream_reply_checks_due'), ['state', 'due_at']);
 
   const now = '2026-07-18T00:00:00.000Z';
   const userId = Number(db.prepare(`
@@ -250,6 +251,9 @@ try {
     idempotencyKey: 'version-create-1'
   });
   assert.strictEqual(v1.revision, 1);
+  assert.notStrictEqual(v1.quality_json, '{}');
+  assert.strictEqual(v1.quality_score, JSON.parse(v1.quality_json).score);
+  assert.ok(v1.quality_score < 80);
   const { createMatrixStreamText } = require('../src/services/matrixStreamText');
   const textService = createMatrixStreamText({
     callJson: async () => ({
@@ -565,6 +569,10 @@ try {
     idempotencyKey: 'approve-1'
   });
   assert.strictEqual(approved.status, 'approved');
+  const blockedPreview = review.finalPreview(db, { actorUserId: userId, versionId: v1.id });
+  assert.strictEqual(blockedPreview.allowed, false);
+  assert.ok(blockedPreview.reasons.includes('quality_score_below_80'));
+  assert.throws(() => review.confirmFinalGate(db, { actorUserId: userId, versionId: v1.id }), /quality/i);
   const v2 = review.reviseVersion(db, {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -576,6 +584,8 @@ try {
     idempotencyKey: 'revise-1'
   });
   assert.strictEqual(v2.revision, 2);
+  assert.notStrictEqual(v2.quality_json, '{}');
+  assert.strictEqual(v2.quality_score, JSON.parse(v2.quality_json).score);
   assert.strictEqual(review.getVersion(db, { actorUserId: userId, versionId: v1.id }).status, 'superseded');
   const approveReplayInput = {
     actorUserId: userId,
