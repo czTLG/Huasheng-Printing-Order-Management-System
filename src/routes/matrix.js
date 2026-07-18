@@ -330,6 +330,9 @@ function deliveryErrorDescriptor(error) {
   if (/delivery service unavailable/.test(message)) {
     return { status: 503, code: 'delivery_unavailable', message: 'Delivery confirmation is unavailable.' };
   }
+  if (/delivery in progress timeout/.test(message)) {
+    return { status: 503, code: 'delivery_in_progress', message: 'Delivery confirmation is still in progress.' };
+  }
   if (/active actor binding|administrator role|matrixSend capability|not authorized/.test(message)) {
     return { status: 403, code: 'delivery_forbidden', message: 'Delivery confirmation is not authorized.' };
   }

@@ -79,6 +79,12 @@ function validHostname(value, label) {
   return hostname;
 }
 
+function validSelector(value) {
+  const selector = String(value || '').trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?$/.test(selector)) throw new Error('valid DKIM selector required');
+  return selector;
+}
+
 function jsonObject(value, label) {
   try {
     const parsed = JSON.parse(String(value || ''));
@@ -102,6 +108,15 @@ function httpsSources(value) {
 
 function requestFingerprint(input) {
   return crypto.createHash('sha256').update(review.canonicalJson(input)).digest('hex');
+}
+
+function shanghaiDay(timestamp) {
+  return new Date(timestamp + 8 * 3600000).toISOString().slice(0, 10);
+}
+
+function internalEventKey(kind, jobId, fingerprint, ownerToken) {
+  const digest = crypto.createHash('sha256').update(`${kind}:${jobId}:${fingerprint}:${ownerToken}`).digest('hex');
+  return `mx.delivery.${kind}.${jobId}.${digest}`;
 }
 
 function resultFor(db, job) {
@@ -218,11 +233,14 @@ function freshDeliveryGate(db, input, context) {
   });
   if (!identity.allowed || identity.route !== 'initial_contact') throw new Error(`initial contact gate blocked: ${identity.reasons.join(',')}`);
 
-  const senderCheck = db.prepare(`
+  const senderChecks = db.prepare(`
     SELECT * FROM matrix_stream_sender_checks
     WHERE sender_domain = ? AND checked_at <= ? AND expires_at > ?
-    ORDER BY checked_at DESC LIMIT 1
-  `).get(context.messageIdDomain, context.iso, context.iso);
+    ORDER BY checked_at DESC
+  `).all(context.messageIdDomain, context.iso, context.iso);
+  const senderCheck = senderChecks.find(check => {
+    try { return jsonObject(check.detail_json, 'sender readiness detail').selector === context.dkimSelector; } catch (_) { return false; }
+  });
   if (!senderCheck || !senderCheck.spf_ok || !senderCheck.dkim_ok || !senderCheck.dmarc_ok
       || !senderCheck.tls_ok || !senderCheck.smtp_ok) throw new Error('sender readiness blocked');
   const countryCode = String(versionSnapshot.country_code || '').trim().toUpperCase();
@@ -240,17 +258,73 @@ function freshDeliveryGate(db, input, context) {
   return { row, version };
 }
 
-function createMatrixStreamDelivery({ db, transport, clock = () => new Date(), fromAddress, messageIdDomain } = {}) {
+function createMatrixStreamDelivery({
+  db, transport, clock = () => new Date(), fromAddress, messageIdDomain, dkimSelector,
+  leaseMs = 30000, waitMs = 20000, pollMs = 25
+} = {}) {
   if (!db || typeof db.prepare !== 'function' || !transport || typeof transport.sendMail !== 'function' || typeof clock !== 'function') {
     throw new Error('delivery dependencies required');
   }
   const from = plainAddress(fromAddress, 'from address');
   const domain = validHostname(messageIdDomain, 'message id domain');
+  const selector = validSelector(dkimSelector);
   if (from.split('@')[1] !== domain) throw new Error('sender and message id domain mismatch');
+  const bounded = (value, fallback, minimum, maximum) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, Math.trunc(number))) : fallback;
+  };
+  const timing = {
+    leaseMs: bounded(leaseMs, 30000, 100, 300000),
+    waitMs: bounded(waitMs, 20000, 25, 60000),
+    pollMs: bounded(pollMs, 25, 5, 1000)
+  };
   const inFlight = new Map();
 
+  function reserveCapacity(recipientDomain, context) {
+    const rows = db.prepare(`
+      SELECT j.state, j.reservation_day, j.updated_at, j.recipient_domain, v.recipient_email
+      FROM matrix_stream_jobs j
+      LEFT JOIN matrix_stream_versions v ON v.id = j.version_id
+      WHERE j.state IN ('pending','sending','accepted','ambiguous')
+    `).all();
+    const daily = rows.filter(row => {
+      const day = String(row.reservation_day || '').trim();
+      if (day) return day === shanghaiDay(context.ms);
+      const at = Date.parse(String(row.updated_at || ''));
+      return Number.isFinite(at) && shanghaiDay(at) === shanghaiDay(context.ms);
+    }).length;
+    if (daily >= 5) throw new Error('daily delivery reservation limit 5');
+    const coolingStart = context.ms - 90 * 86400000;
+    const blockedDomain = rows.some(row => {
+      const storedDomain = String(row.recipient_domain || '').trim().toLowerCase()
+        || normalizedEmail(row.recipient_email).split('@')[1] || '';
+      if (domainIdentity(storedDomain) !== recipientDomain) return false;
+      if (row.state !== 'accepted') return true;
+      const at = Date.parse(String(row.updated_at || ''));
+      return Number.isFinite(at) && at >= coolingStart && at <= context.ms;
+    });
+    if (blockedDomain) throw new Error('recipient domain reservation or cooling active');
+  }
+
+  function reserveEventKeys(jobId, fingerprint, ownerToken, context) {
+    const keys = {
+      start: internalEventKey('start', jobId, fingerprint, ownerToken),
+      result: internalEventKey('result', jobId, fingerprint, ownerToken)
+    };
+    for (const [kind, eventKey] of Object.entries(keys)) {
+      if (db.prepare('SELECT 1 FROM matrix_stream_events WHERE idempotency_key = ?').get(eventKey)) {
+        throw new Error('delivery event key collision');
+      }
+      db.prepare(`
+        INSERT INTO matrix_stream_delivery_event_keys (event_key, job_id, event_kind, request_hash, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(eventKey, jobId, kind, fingerprint, context.iso);
+    }
+    return keys;
+  }
+
   function prepare(input) {
-    const context = { ...clockIso(clock), messageIdDomain: domain };
+    const context = { ...clockIso(clock), messageIdDomain: domain, dkimSelector: selector };
     const fingerprint = requestFingerprint(input);
     const transaction = db.transaction(() => {
       const existing = db.prepare('SELECT * FROM matrix_stream_jobs WHERE idempotency_key = ?').get(input.idempotencyKey);
@@ -264,6 +338,10 @@ function createMatrixStreamDelivery({ db, transport, clock = () => new Date(), f
           throw new Error('delivery idempotency conflict');
         }
         freshReplayAuthorization(db, input);
+        if (existing.state === 'sending') {
+          const leaseExpiresAt = Date.parse(String(existing.lease_expires_at || ''));
+          return { kind: Number.isFinite(leaseExpiresAt) && leaseExpiresAt > context.ms ? 'wait' : 'expired', job: existing };
+        }
         return { kind: 'replay', job: existing };
       }
       const gated = freshDeliveryGate(db, input, context);
@@ -273,20 +351,28 @@ function createMatrixStreamDelivery({ db, transport, clock = () => new Date(), f
         ORDER BY id DESC LIMIT 1
       `).get(input.versionId, input.expectedContentHash);
       if (blocking) throw new Error(`delivery ${blocking.state} blocks resend`);
+      const recipientDomain = domainIdentity(normalizedEmail(gated.version.recipient_email).split('@')[1]);
+      if (!recipientDomain) throw new Error('valid recipient reservation domain required');
+      reserveCapacity(recipientDomain, context);
+      const ownerToken = crypto.randomUUID();
+      const leaseExpiresAt = new Date(context.ms + timing.leaseMs).toISOString();
       const placeholder = `<pending-${crypto.createHash('sha256').update(`${input.idempotencyKey}:${fingerprint}`).digest('hex')}@invalid>`;
       const inserted = db.prepare(`
         INSERT INTO matrix_stream_jobs (
           work_item_id, version_id, idempotency_key, content_hash, message_id, state,
-          attempt_count, error_class, redacted_diagnostic, created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, '', '', ?, ?, ?)
+          attempt_count, error_class, redacted_diagnostic, created_by, owner_token,
+          lease_expires_at, recipient_domain, reservation_day, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, '', '', ?, ?, ?, ?, ?, ?, ?)
       `).run(input.workItemId, input.versionId, input.idempotencyKey, input.expectedContentHash,
-        placeholder, input.actorUserId, context.iso, context.iso);
+        placeholder, input.actorUserId, ownerToken, leaseExpiresAt, recipientDomain,
+        shanghaiDay(context.ms), context.iso, context.iso);
       const jobId = Number(inserted.lastInsertRowid);
       const messageId = `<matrix-stream-${jobId}-${input.expectedContentHash.slice(0, 20)}@${domain}>`;
       db.prepare(`
         UPDATE matrix_stream_jobs SET message_id = ?, state = 'sending', attempt_count = 1, updated_at = ?
         WHERE id = ? AND state = 'pending'
       `).run(messageId, context.iso, jobId);
+      const eventKeys = reserveEventKeys(jobId, fingerprint, ownerToken, context);
       db.prepare(`
         INSERT INTO matrix_stream_events (
           work_item_id, version_id, job_id, actor_user_id, matrix_binding_id,
@@ -294,7 +380,7 @@ function createMatrixStreamDelivery({ db, transport, clock = () => new Date(), f
           content_hash, before_json, after_json, diagnostic, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'delivery_started', ?, ?, ?, ?, ?, '', ?)
       `).run(input.workItemId, input.versionId, jobId, input.actorUserId, input.bindingId,
-        input.chatId, input.cardEventId, input.idempotencyKey, fingerprint, input.expectedContentHash,
+        input.chatId, input.cardEventId, eventKeys.start, fingerprint, input.expectedContentHash,
         JSON.stringify({ version_status: gated.version.status, approval_event: true }),
         JSON.stringify({ state: 'sending', version_id: input.versionId }), context.iso);
       return { kind: 'new', job: db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(jobId), version: gated.version };
@@ -306,25 +392,46 @@ function createMatrixStreamDelivery({ db, transport, clock = () => new Date(), f
     if (!['accepted', 'failed', 'ambiguous'].includes(state)) throw new Error('valid delivery result required');
     const context = clockIso(clock);
     const transaction = db.transaction(() => {
+      let current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
+      if (!current) throw new Error('delivery job not found');
+      if (current.state !== 'sending') return resultFor(db, current);
+      const currentLeaseMs = Date.parse(String(current.lease_expires_at || ''));
+      const ownsActiveLease = current.owner_token === job.owner_token
+        && current.lease_expires_at === job.lease_expires_at
+        && Number.isFinite(currentLeaseMs) && currentLeaseMs > context.ms;
+      if (!ownsActiveLease && Number.isFinite(currentLeaseMs) && currentLeaseMs > context.ms) {
+        throw new Error('delivery ownership lost');
+      }
+      const finalState = ownsActiveLease ? state : 'ambiguous';
+      const finalErrorClass = ownsActiveLease ? errorClass : 'expired_send_lease';
       const changed = db.prepare(`
         UPDATE matrix_stream_jobs
         SET state = ?, error_class = ?, redacted_diagnostic = ?, updated_at = ?
-        WHERE id = ? AND state = 'sending'
-      `).run(state, errorClass, errorClass, context.iso, job.id);
-      if (changed.changes !== 1) throw new Error('delivery result conflict');
-      if (state === 'accepted') {
+        WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
+      `).run(finalState, finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at);
+      if (changed.changes !== 1) {
+        current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
+        if (current && current.state !== 'sending') return resultFor(db, current);
+        throw new Error('delivery result conflict');
+      }
+      if (finalState === 'accepted') {
         scheduleReplyCheck(db, { jobId: job.id, channel: 'email', priority: 'normal' });
         db.prepare(`
           UPDATE matrix_work_items
           SET stream_state = 'sent', version = version + 1, updated_at = ?
           WHERE id = ? AND current_stream_version_id = ?
         `).run(context.iso, job.work_item_id, job.version_id);
-      } else if (state === 'ambiguous') {
+      } else if (finalState === 'ambiguous') {
         db.prepare(`
           UPDATE matrix_work_items SET stream_state = 'delivery_ambiguous', updated_at = ?
           WHERE id = ? AND current_stream_version_id = ?
         `).run(context.iso, job.work_item_id, job.version_id);
       }
+      const eventKey = db.prepare(`
+        SELECT event_key FROM matrix_stream_delivery_event_keys
+        WHERE job_id = ? AND event_kind = 'result' AND request_hash = ?
+      `).get(job.id, requestFingerprint(input))?.event_key;
+      if (!eventKey) throw new Error('reserved delivery result event key required');
       db.prepare(`
         INSERT INTO matrix_stream_events (
           work_item_id, version_id, job_id, actor_user_id, matrix_binding_id,
@@ -332,8 +439,8 @@ function createMatrixStreamDelivery({ db, transport, clock = () => new Date(), f
           before_json, after_json, diagnostic, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, '{"state":"sending"}', ?, ?, ?)
       `).run(job.work_item_id, job.version_id, job.id, input.actorUserId, input.bindingId,
-        input.chatId, input.cardEventId, `delivery_${state}`, `delivery-result-${job.id}`, job.content_hash,
-        JSON.stringify({ state, followup: state === 'accepted' ? 'scheduled' : 'not_scheduled' }), errorClass, context.iso);
+        input.chatId, input.cardEventId, `delivery_${finalState}`, eventKey, job.content_hash,
+        JSON.stringify({ state: finalState, followup: finalState === 'accepted' ? 'scheduled' : 'not_scheduled' }), finalErrorClass, context.iso);
       return resultFor(db, db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id));
     });
     return transaction.immediate();
@@ -361,18 +468,42 @@ function createMatrixStreamDelivery({ db, transport, clock = () => new Date(), f
       const classified = classifyError(error);
       return persistResult(job, input, classified.state, classified.errorClass);
     }
-    const accepted = (Array.isArray(response?.accepted) ? response.accepted : []).map(normalizedEmail);
-    if (accepted.includes(normalizedEmail(version.recipient_email))) return persistResult(job, input, 'accepted', '');
-    return persistResult(job, input, 'failed', 'recipient_rejected');
+    const target = normalizedEmail(version.recipient_email);
+    const accepted = Array.isArray(response?.accepted) ? response.accepted.map(normalizedEmail) : [];
+    const rejected = Array.isArray(response?.rejected) ? response.rejected.map(normalizedEmail) : [];
+    const targetAccepted = accepted.includes(target);
+    const targetRejected = rejected.includes(target);
+    if (targetAccepted && !targetRejected) return persistResult(job, input, 'accepted', '');
+    if (targetRejected && !targetAccepted) return persistResult(job, input, 'failed', 'recipient_rejected');
+    return persistResult(job, input, 'ambiguous', 'transport_outcome_unknown');
+  }
+
+  async function waitForTerminal(job, input) {
+    const deadline = Date.now() + timing.waitMs;
+    while (true) {
+      const current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
+      if (!current) throw new Error('delivery job not found');
+      if (current.state !== 'sending') return resultFor(db, current);
+      const now = clockIso(clock);
+      const leaseExpiresAt = Date.parse(String(current.lease_expires_at || ''));
+      if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now.ms) {
+        return persistResult(current, input, 'ambiguous', 'expired_send_lease');
+      }
+      if (Date.now() >= deadline) throw new Error('delivery in progress timeout');
+      await new Promise(resolve => setTimeout(resolve, timing.pollMs));
+    }
   }
 
   return {
     async confirm(rawInput) {
       const input = exactInput(rawInput);
       const prepared = prepare(input);
+      if (prepared.kind === 'wait') {
+        if (inFlight.has(prepared.job.id)) return inFlight.get(prepared.job.id);
+        return waitForTerminal(prepared.job, input);
+      }
+      if (prepared.kind === 'expired') return persistResult(prepared.job, input, 'ambiguous', 'expired_send_lease');
       if (prepared.kind === 'replay') {
-        if (prepared.job.state === 'sending' && inFlight.has(prepared.job.id)) return inFlight.get(prepared.job.id);
-        if (prepared.job.state === 'sending') return persistResult(prepared.job, input, 'ambiguous', 'interrupted_after_sending');
         return resultFor(db, prepared.job);
       }
       const pending = deliver(prepared, input);

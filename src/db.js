@@ -1013,6 +1013,10 @@ function initDb() {
       error_class TEXT NOT NULL DEFAULT '',
       redacted_diagnostic TEXT NOT NULL DEFAULT '',
       created_by INTEGER NOT NULL,
+      owner_token TEXT NOT NULL DEFAULT '',
+      lease_expires_at TEXT NOT NULL DEFAULT '',
+      recipient_domain TEXT NOT NULL DEFAULT '',
+      reservation_day TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
@@ -1036,6 +1040,16 @@ function initDb() {
       after_json TEXT NOT NULL DEFAULT '{}',
       diagnostic TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_stream_delivery_event_keys (
+      event_key TEXT PRIMARY KEY,
+      job_id INTEGER NOT NULL,
+      event_kind TEXT NOT NULL CHECK(event_kind IN ('start','result')),
+      request_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(job_id, event_kind),
+      FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id)
     );
 
     CREATE TABLE IF NOT EXISTS matrix_stream_api_requests (
@@ -1146,6 +1160,33 @@ function initDb() {
       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
     END;
 
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_delivery_event_keys_no_update
+    BEFORE UPDATE ON matrix_stream_delivery_event_keys
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_delivery_event_keys is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_delivery_event_keys_no_delete
+    BEFORE DELETE ON matrix_stream_delivery_event_keys
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_delivery_event_keys is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_reserved_event_key
+    BEFORE INSERT ON matrix_stream_events
+    WHEN EXISTS (
+      SELECT 1 FROM matrix_stream_delivery_event_keys k
+      WHERE k.event_key = NEW.idempotency_key
+        AND NOT (
+          k.job_id = NEW.job_id
+          AND ((k.event_kind = 'start' AND NEW.action = 'delivery_started')
+            OR (k.event_kind = 'result' AND NEW.action IN ('delivery_accepted','delivery_failed','delivery_ambiguous')))
+        )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix stream delivery event key is reserved');
+    END;
+
     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_api_requests_no_update
     BEFORE UPDATE ON matrix_stream_api_requests
     BEGIN
@@ -1208,6 +1249,19 @@ function initDb() {
 
   const matrixStreamVersionColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(column => column.name));
   if (!matrixStreamVersionColumns.has('recipient_evidence_id')) db.exec('ALTER TABLE matrix_stream_versions ADD COLUMN recipient_evidence_id INTEGER');
+
+  const matrixStreamJobColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_jobs)').all().map(column => column.name));
+  if (!matrixStreamJobColumns.has('owner_token')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''");
+  if (!matrixStreamJobColumns.has('lease_expires_at')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''");
+  if (!matrixStreamJobColumns.has('recipient_domain')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN recipient_domain TEXT NOT NULL DEFAULT ''");
+  if (!matrixStreamJobColumns.has('reservation_day')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN reservation_day TEXT NOT NULL DEFAULT ''");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_stream_jobs_active_domain_reservation
+      ON matrix_stream_jobs(recipient_domain)
+      WHERE recipient_domain <> '' AND state IN ('pending','sending','ambiguous');
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_reservation_day
+      ON matrix_stream_jobs(reservation_day, state);
+  `);
 
   db.exec(`
     DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;

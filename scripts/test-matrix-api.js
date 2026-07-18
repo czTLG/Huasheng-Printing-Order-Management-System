@@ -617,10 +617,11 @@ function reviewState(workItemId) {
     };
     const claimOptions = { leaseMs: 5000, waitMs: 1000, pollMs: 10 };
     const deliveryCalls = [];
+    let deliveryImpl = async () => ({ state: 'accepted', error_class: '', work_item_version: 4, message_id: '<must-not-leave-api@sender.test>' });
     const injectedDeliveryService = {
       async confirm(input) {
         deliveryCalls.push(input);
-        return { state: 'accepted', error_class: '', work_item_version: 4, message_id: '<must-not-leave-api@sender.test>' };
+        return deliveryImpl(input);
       }
     };
     const injectedApp = express();
@@ -667,6 +668,16 @@ function reviewState(workItemId) {
         cardEventId: 'card-send-api',
         idempotencyKey: 'send-api-1'
       });
+      deliveryImpl = async () => { throw new Error('delivery in progress timeout'); };
+      const timedOut = await request(sendRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...sendBody, idempotency_key: 'send-api-timeout-1' }
+      });
+      assert.deepStrictEqual(timedOut, {
+        status: 503,
+        body: { error: { code: 'delivery_in_progress', message: 'Delivery confirmation is still in progress.' } }
+      });
+      deliveryImpl = async () => ({ state: 'accepted', error_class: '', work_item_version: 4 });
       for (const field of ['recipient', 'subject', 'body', 'smtp_host', 'callback_url', 'attachment', 'retry']) {
         const rejected = await request(sendRoute, {
           port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
@@ -674,7 +685,7 @@ function reviewState(workItemId) {
         });
         assert.strictEqual(rejected.status, 400, `${field}: ${JSON.stringify(rejected.body)}`);
       }
-      assert.strictEqual(deliveryCalls.length, 1, 'unknown send fields must be rejected before delivery service');
+      assert.strictEqual(deliveryCalls.length, 2, 'unknown send fields must be rejected before delivery service');
 
       const reviseBody = {
         expected_work_version: 3,
