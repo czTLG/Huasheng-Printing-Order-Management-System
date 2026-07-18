@@ -152,6 +152,29 @@ Whenever a session adds a reusable capability:
 
 A capability is `ready` only when its canonical path exists, required configuration is present, and the documented preflight passes. Missing credentials, deferred authorization, or incomplete setup makes it `partial`. A known-broken or intentionally unavailable capability is `disabled`.
 
+## Mandatory Catalog Reconciliation Rule
+
+Every session must reconcile the user catalog whenever it installs, configures, discovers, repairs, upgrades, or materially uses something that may be reusable across projects or sessions. This is not optional documentation cleanup.
+
+The reconciliation runs at two points:
+
+1. **Before use:** search `INDEX.md` for the capability or authoritative resource and read the matching entry when present.
+2. **After change or discovery:** compare the verified current state with the catalog before declaring the task complete.
+
+The session must then take exactly one of these actions:
+
+- **Missing entry:** create a neutral-codename entry and add it to `INDEX.md` after minimum verification.
+- **Existing and current:** leave it unchanged and record no duplicate entry.
+- **Existing but stale:** update paths, status, approval boundaries, limitations, and `last_verified` from authoritative evidence.
+- **Present but unverifiable:** mark it `partial` or `disabled` with the exact reason; do not preserve a false `ready` claim.
+- **Project-specific only:** leave it in the owner project and do not register it globally, but make that classification explicit in the task handoff.
+
+Material changes include a new API or integration, new shared sender or account, new skill or launcher, changed endpoint or service name, changed canonical repository or database path, changed authorization state, changed approval requirement, repaired broken capability, revoked credential, or decommissioned resource.
+
+The reconciliation must inspect only relevant in-scope locations. It does not authorize a broad secret scan, unrestricted data read, or automatic discovery of private customer information. Secret values remain unread and unrecorded unless the current task requires a protected runtime to consume them.
+
+An implementation or configuration task involving a reusable capability is not complete until this reconciliation passes.
+
 ## Session Discovery Flow
 
 For a task involving an API, external communication, website operation, management-system data, or private knowledge:
@@ -198,6 +221,8 @@ Implementation will verify:
 7. both services are discoverable and their current status is recorded at verification time;
 8. a simulated new session starting outside both projects can locate the website, management system, email sender, social workflow, and private knowledge entry from `INDEX.md` alone;
 9. missing or deferred capabilities are not labeled `ready`.
+10. an audit of the initial in-scope locations finds no verified reusable capability missing from `INDEX.md`;
+11. a simulated new addition is detected as absent, registered once, verified, and not duplicated on a second reconciliation.
 
 ## Acceptance Criteria
 
@@ -207,6 +232,7 @@ Implementation will verify:
 - No credential or sensitive business record is copied into user instructions or catalog files.
 - External-action approvals and duplicate-send protections remain explicit.
 - Future verified APIs have a mandatory, repeatable registration process.
+- Every session has an explicit pre-use and post-change reconciliation rule, and missing reusable items are added after verification.
 
 ## Non-Goals
 
