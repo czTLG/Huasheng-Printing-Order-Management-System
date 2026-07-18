@@ -153,20 +153,17 @@ function failInboxJob(openId, jobId, input) {
   return call(openId, `/inbox/jobs/${positiveId(jobId, 'inbox job id')}/fail`, { method: 'POST', body });
 }
 
+function startReplyDraft(openId, notificationId) {
+  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/reply-draft`, { method: 'POST', body: {} });
+}
+
+function retryTranslation(openId, notificationId) {
+  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/retry-translation`, { method: 'POST', body: {} });
+}
+
 module.exports = {
-  facets,
-  createSession,
-  rehydrateSession,
-  listCandidates,
-  candidateDetail,
-  today,
-  selectCandidate,
-  workItems,
-  claimInboxJob,
-  inboxWorkbench,
-  contextSearch,
-  contextResolve,
-  contextRecord,
-  ackInboxJob,
-  failInboxJob
+  facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
+  selectCandidate, workItems, claimInboxJob, inboxWorkbench, contextSearch,
+  contextResolve, contextRecord, ackInboxJob, failInboxJob, startReplyDraft,
+  retryTranslation
 };

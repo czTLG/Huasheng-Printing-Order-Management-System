@@ -5,7 +5,7 @@ const fs = require('fs');
 const defaultChoiceContext = require('../scripts/matrix-choice-context.js');
 const defaultAssetContext = require('../scripts/matrix-asset-context.js');
 
-const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category'];
+const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.reply_draft', 'mx.retry_translation'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
@@ -655,6 +655,33 @@ function register(context) {
     }, index);
   }
 
+  async function replyDraftAction({ evt, value }) {
+    const openId = String(evt?.operator?.openId || '').trim();
+    const notificationId = Number(value?.n);
+    if (!openId || !Number.isInteger(notificationId) || notificationId < 1) throw new Error('valid reply draft action required');
+    if (typeof client.startReplyDraft !== 'function') throw new Error('reply draft service unavailable');
+    const result = await client.startReplyDraft(openId, notificationId);
+    if (!result || result.state !== 'draft_pending' || Number(result.notification_id) !== notificationId) {
+      throw new Error('invalid reply draft result');
+    }
+    await sendForEvent(evt, cardHelpers.card([
+      cardHelpers.md(`工作项 #${Number(result.work_item_id)} 已进入 **draft_pending**。`),
+      cardHelpers.note('尚未发送；请继续人工审阅草稿。')
+    ], { summary: '回复草稿待审阅' }));
+  }
+
+  async function retryTranslationAction({ evt, value }) {
+    const openId = String(evt?.operator?.openId || '').trim();
+    const notificationId = Number(value?.n);
+    if (!openId || !Number.isInteger(notificationId) || notificationId < 1) throw new Error('valid translation retry action required');
+    if (typeof client.retryTranslation !== 'function') throw new Error('translation retry service unavailable');
+    const result = await client.retryTranslation(openId, notificationId);
+    if (!result || Number(result.notification_id) !== notificationId
+        || !['ready', 'pending'].includes(result.translation_status)) throw new Error('invalid translation retry result');
+    await sendForEvent(evt, infoCard(cardHelpers,
+      `translation_status=${result.translation_status}；${result.translation_status === 'ready' ? '请重新查看回复通知。' : '翻译仍待处理，未生成推测内容。'}`));
+  }
+
   const actionHandlers = {
     'mx.today': todayAction,
     'mx.pick': detailAction,
@@ -666,7 +693,9 @@ function register(context) {
     'mx.work': workAction,
     'mx.filters': filterAction,
     'mx.region': payload => applyFilters(payload, 'region'),
-    'mx.category': payload => applyFilters(payload, 'category')
+    'mx.category': payload => applyFilters(payload, 'category'),
+    'mx.reply_draft': replyDraftAction,
+    'mx.retry_translation': retryTranslationAction
   };
   for (const action of ACTIONS) {
     dispatcher.on(action, async payload => {

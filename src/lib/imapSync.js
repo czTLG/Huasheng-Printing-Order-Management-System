@@ -1,6 +1,7 @@
 const { db, now } = require('../db');
 const { createAttachmentStore } = require('./matrixInboxStore');
 const { processInboundEmail } = require('../services/matrixInbox');
+const { correlateInbound: defaultCorrelateInbound } = require('../services/matrixStreamCorrelation');
 
 function text(value) {
   if (value === undefined || value === null) return '';
@@ -306,6 +307,29 @@ function upsertEmailMessage(mailbox, folder, rawMessage) {
   return { id: result.lastInsertRowid, inserted: true, normalized };
 }
 
+async function importAndCorrelateEmailMessage(mailbox, folder, rawMessage, {
+  database = db,
+  correlate = defaultCorrelateInbound,
+  correlationOptions = {}
+} = {}) {
+  if (database !== db) throw new Error('email import database mismatch');
+  const imported = upsertEmailMessage(mailbox, folder, rawMessage);
+  if (imported.normalized.direction !== 'inbound') return { imported, correlation: null, correlation_error: null };
+  try {
+    const correlation = await correlate(database, imported.normalized, correlationOptions);
+    return { imported, correlation, correlation_error: null };
+  } catch (_) {
+    return {
+      imported,
+      correlation: null,
+      correlation_error: {
+        code: 'MATRIX_INBOUND_CORRELATION_FAILED',
+        message: 'Inbound correlation failed.'
+      }
+    };
+  }
+}
+
 function resolveFolderName(folder) {
   const value = text(folder || 'INBOX');
   const lowered = value.toLowerCase();
@@ -352,7 +376,9 @@ async function syncMailbox({
   operator = 'system',
   syncType = 'manual',
   attachmentStore,
-  afterImport = processInboundEmail
+  afterImport = processInboundEmail,
+  correlate = defaultCorrelateInbound,
+  correlationOptions = {}
 } = {}) {
   const rawConfig = getImapConfig();
   const cfgCheck = validateImapConfig(rawConfig);
@@ -453,7 +479,7 @@ async function syncMailbox({
               size: Number(item.size || 0)
             }))
           : [];
-        const imported = upsertEmailMessage(mailbox, folder, {
+        const outcome = await importAndCorrelateEmailMessage(mailbox, folder, {
           message_uid: String(msg.uid || ''),
           message_id: parsed.messageId || msg.envelope?.messageId || '',
           in_reply_to: parsed.inReplyTo || '',
@@ -476,7 +502,8 @@ async function syncMailbox({
             references: parsed.references || '',
           }),
           parsed_at: now()
-        });
+        }, { correlate, correlationOptions });
+        const imported = outcome.imported;
         persistParsedAttachments(imported.id, parsed.attachments, { attachmentStore: resolvedAttachmentStore });
         if (imported.normalized.direction === 'inbound' && typeof afterImport === 'function') {
           afterImport(db, imported.id);
@@ -488,6 +515,10 @@ async function syncMailbox({
         } else {
           skippedCount += 1;
           result.skipped.push(imported.id);
+        }
+        if (outcome.correlation_error) {
+          errorCount += 1;
+          result.errors.push(outcome.correlation_error);
         }
       } catch (err) {
         errorCount += 1;
@@ -547,6 +578,7 @@ module.exports = {
   normalizeSubject,
   resolveFolderName,
   upsertEmailMessage,
+  importAndCorrelateEmailMessage,
   sanitizeErrorMessage,
   persistParsedAttachments,
   syncMailbox

@@ -206,6 +206,44 @@ function reminderCard(rows) {
   };
 }
 
+function positiveId(value, label) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 1) throw new Error(`valid ${label} required`);
+  return number;
+}
+
+function replyNotificationCard(notification) {
+  if (!notification || typeof notification !== 'object' || Array.isArray(notification)) throw new Error('valid reply notification required');
+  const notificationId = positiveId(notification.id, 'notification id');
+  const workItemId = positiveId(notification.work_item_id, 'work item id');
+  positiveId(notification.job_id, 'job id');
+  const status = String(notification.translation_status || 'pending');
+  if (!['ready', 'pending'].includes(status)) throw new Error('valid translation status required');
+  const original = clip(notification.original_preview, 320);
+  const translation = status === 'ready' ? clip(notification.translation_cn, 260) : '翻译待处理';
+  const requirements = status === 'ready' ? clip(notification.requirements_cn, 180) : '翻译待处理';
+  const workState = clip(notification.work_item_state, 40);
+  return {
+    schema: '2.0',
+    config: { update_multi: true },
+    header: { template: 'blue', title: { tag: 'plain_text', content: '收到回复' } },
+    body: { elements: [
+      { tag: 'markdown', content: `**原文预览**\n${original}\n\n**中文翻译**\n${translation}\n\n**需求摘要**\n${requirements}\n\n**工作项状态**\n${workState}` },
+      {
+        tag: 'column_set', flex_mode: 'flow', horizontal_spacing: 'small',
+        columns: status === 'ready' ? [{ tag: 'column', width: 'auto', elements: [{
+          tag: 'button', text: { tag: 'plain_text', content: 'View reply draft' }, type: 'default',
+          behaviors: [{ type: 'callback', value: { a: 'mx.reply_draft', n: notificationId, w: workItemId } }]
+        }] }] : [{ tag: 'column', width: 'auto', elements: [{
+          tag: 'button', text: { tag: 'plain_text', content: 'Retry translation' }, type: 'default',
+          behaviors: [{ type: 'callback', value: { a: 'mx.retry_translation', n: notificationId } }]
+        }] }]
+      },
+      { tag: 'markdown', content: status === 'pending' ? '翻译服务暂不可用，可稍后人工重试；未生成推测内容。' : '查看操作只创建待审阅草稿，不会发送。' }
+    ] }
+  };
+}
+
 async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatId, send, hour = 9, minute = 0 }) {
   if (!client || typeof client.today !== 'function') throw new Error('read-only matrix client required');
   if (!ownerOpenId || !chatId || typeof send !== 'function') throw new Error('watcher binding and sender required');
@@ -253,4 +291,4 @@ if (require.main === module) main().catch(error => {
   process.exit(1);
 });
 
-module.exports = { runDue, reminderCard, shanghaiParts, queueReminder, deliveryId };
+module.exports = { runDue, reminderCard, replyNotificationCard, shanghaiParts, queueReminder, deliveryId };

@@ -19,7 +19,12 @@ async function testNarrowClient() {
   const clientPath = require.resolve('../scripts/matrix-client.js');
   delete require.cache[clientPath];
   const client = require(clientPath);
-  assert.deepStrictEqual(Object.keys(client).sort(), ['ackInboxJob', 'candidateDetail', 'claimInboxJob', 'contextRecord', 'contextResolve', 'contextSearch', 'createSession', 'facets', 'failInboxJob', 'inboxWorkbench', 'listCandidates', 'rehydrateSession', 'selectCandidate', 'today', 'workItems']);
+  assert.deepStrictEqual(Object.keys(client).sort(), [
+    'ackInboxJob', 'candidateDetail', 'claimInboxJob', 'contextRecord', 'contextResolve',
+    'contextSearch', 'createSession', 'facets', 'failInboxJob', 'inboxWorkbench',
+    'listCandidates', 'rehydrateSession', 'retryTranslation', 'selectCandidate',
+    'startReplyDraft', 'today', 'workItems'
+  ]);
   const originalFetch = global.fetch;
   const requests = [];
   global.fetch = async (url, options) => {
@@ -43,6 +48,8 @@ async function testNarrowClient() {
     await client.claimInboxJob('ou-client');
     await client.ackInboxJob('ou-client', 9, { lease_token: 'lease', notification_uuid: 'uuid', status: 'delivered' });
     await client.failInboxJob('ou-client', 9, { lease_token: 'lease', error_code: 'delivery_failed' });
+    await client.startReplyDraft('ou-client', 41);
+    await client.retryTranslation('ou-client', 42);
     assert.ok(requests.every(item => new URL(item.url).origin === 'https://matrix.test'));
     assert.ok(requests.every(item => new URL(item.url).pathname.startsWith('/api/matrix/')));
     assert.ok(requests.every(item => item.options.redirect === 'manual'));
@@ -55,6 +62,9 @@ async function testNarrowClient() {
     assert.strictEqual(requests[1].options.method, 'POST');
     assert.strictEqual(requests[2].options.method, 'PATCH');
     assert.ok(requests[2].url.endsWith('/sessions/7'));
+    assert.ok(requests.at(-2).url.endsWith('/notifications/41/reply-draft'));
+    assert.ok(requests.at(-1).url.endsWith('/notifications/42/retry-translation'));
+    assert.strictEqual(requests.at(-1).options.method, 'POST');
     assert.throws(() => client.candidateDetail('ou-client', '../outside'), /candidate id/);
 
     global.fetch = async () => ({ ok: false, status: 302, headers: { get: () => 'application/json' }, json: async () => ({}) });
@@ -255,6 +265,75 @@ async function testReadOnlyWatcher() {
   } finally {
     fs.rmSync(spoolRoot, { recursive: true, force: true });
   }
+}
+
+async function testReplyNotificationCardAndDraftAction() {
+  const watcher = require('../scripts/matrix-watch.js');
+  const ready = watcher.replyNotificationCard({
+    id: 41,
+    work_item_id: 91,
+    job_id: 71,
+    kind: 'reply',
+    original_preview: 'Please send the current specifications.',
+    translation_status: 'ready',
+    translation_cn: '请发送当前规格。',
+    requirements_cn: '需要当前规格',
+    work_item_state: 'replied'
+  });
+  const readyText = visibleText(ready);
+  for (const expected of ['原文预览', 'Please send the current specifications.', '中文翻译', '请发送当前规格。', '需求摘要', '需要当前规格', '工作项状态', 'replied', 'View reply draft']) {
+    assert.ok(readyText.includes(expected), `reply notification missing ${expected}`);
+  }
+  assert.ok(JSON.stringify(ready).includes('"a":"mx.reply_draft"'));
+  assert.ok(JSON.stringify(ready).includes('"n":41'));
+  assert.ok(!JSON.stringify(ready).includes('credential'));
+  assert.ok([...readyText].length <= 900);
+
+  const pending = watcher.replyNotificationCard({
+    id: 42, work_item_id: 92, job_id: 72, kind: 'reply',
+    original_preview: 'Hello', translation_status: 'pending', translation_cn: '',
+    requirements_cn: '', work_item_state: 'replied'
+  });
+  const pendingText = visibleText(pending);
+  assert.ok(pendingText.includes('翻译待处理'));
+  assert.ok(!pendingText.includes('请发送当前规格。'));
+  assert.ok(JSON.stringify(pending).includes('"a":"mx.retry_translation"'));
+  assert.ok(!JSON.stringify(pending).includes('"a":"mx.reply_draft"'));
+
+  const handlers = new Map();
+  const sent = [];
+  const draftCalls = [];
+  const registered = extension.register({
+    channel: {},
+    dispatcher: { on: (name, handler) => handlers.set(name, handler) },
+    card: helpers(),
+    client: {
+      startReplyDraft: async (openId, notificationId) => {
+        draftCalls.push({ openId, notificationId });
+        return { notification_id: notificationId, work_item_id: 91, state: 'draft_pending' };
+      },
+      retryTranslation: async (openId, notificationId) => ({ notification_id: notificationId, translation_status: 'ready', retry_available: false }),
+      confirmSend: async () => { throw new Error('must never send'); }
+    },
+    sendManagedCard: async (_channel, _chatId, card) => sent.push(card),
+    scheduleReminderPoll: () => ({ unref() {} }),
+    clearReminderPoll: () => undefined
+  });
+  assert.strictEqual(typeof handlers.get('mx.reply_draft'), 'function');
+  await handlers.get('mx.reply_draft')({
+    evt: { operator: { openId: 'ou-reply' }, chatId: 'chat-reply', threadId: '', messageId: 'evt-reply' },
+    value: { a: 'mx.reply_draft', n: 41 }
+  });
+  assert.deepStrictEqual(draftCalls, [{ openId: 'ou-reply', notificationId: 41 }]);
+  assert.ok(visibleText(sent.at(-1)).includes('draft_pending'));
+  assert.ok(visibleText(sent.at(-1)).includes('尚未发送'));
+  assert.strictEqual(typeof handlers.get('mx.retry_translation'), 'function');
+  await handlers.get('mx.retry_translation')({
+    evt: { operator: { openId: 'ou-reply' }, chatId: 'chat-reply', threadId: '', messageId: 'evt-retry' },
+    value: { a: 'mx.retry_translation', n: 42 }
+  });
+  assert.ok(visibleText(sent.at(-1)).includes('translation_status=ready'));
+  registered.dispose();
 }
 
 function testWatcherWholeCardBudget() {
@@ -752,6 +831,7 @@ async function testRecommendationSnapshotTransitions() {
   await testShortImageConfirmationUsesBoundContext();
   await testImageConfirmationReportsReadFailure();
   await testReadOnlyWatcher();
+  await testReplyNotificationCardAndDraftAction();
   testWatcherWholeCardBudget();
   await testFreshQuickChoiceRecovery();
   await testReminderPollingAndRetry();
@@ -995,7 +1075,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
   incomplete.dispose();
   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
-  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.quick', 'mx.region', 'mx.select', 'mx.today', 'mx.work']);
+  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.select', 'mx.today', 'mx.work']);
 
   console.log('stream card extension tests passed');
 })().catch(error => {

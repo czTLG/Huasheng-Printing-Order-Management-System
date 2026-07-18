@@ -358,6 +358,7 @@ function createMatrixRouter({
   clock,
   reviewService = require('../services/matrixStreamReview'),
   deliveryService,
+  correlationService = require('../services/matrixStreamCorrelation'),
   textService = createMatrixStreamText(),
   claimOptions = {}
 } = {}) {
@@ -878,6 +879,48 @@ function createMatrixRouter({
       if (!item) return res.status(404).json({ error: 'work item not found' });
       res.json(item);
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.post('/notifications/:id/reply-draft', (req, res) => {
+    try {
+      rejectUnknown(req.body, new Set(), 'body');
+      const identity = reviewIdentity(req);
+      if (!correlationService || typeof correlationService.startReplyDraft !== 'function') {
+        throw new Error('reply draft service unavailable');
+      }
+      const result = correlationService.startReplyDraft(db, {
+        actorUserId: identity.actorUserId,
+        notificationId: positiveInteger(req.params.id, 'notification id'),
+        clock
+      });
+      if (!result || result.state !== 'draft_pending') throw new Error('invalid reply draft result');
+      res.json({
+        notification_id: positiveInteger(result.notification_id, 'notification id'),
+        work_item_id: positiveInteger(result.work_item_id, 'work item id'),
+        state: 'draft_pending'
+      });
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/notifications/:id/retry-translation', async (req, res) => {
+    try {
+      rejectUnknown(req.body, new Set(), 'body');
+      const identity = reviewIdentity(req);
+      if (!correlationService || typeof correlationService.retryInboundTranslation !== 'function') {
+        throw new Error('translation retry service unavailable');
+      }
+      const result = await correlationService.retryInboundTranslation(db, {
+        actorUserId: identity.actorUserId,
+        notificationId: positiveInteger(req.params.id, 'notification id'),
+        clock
+      });
+      if (!result || !['ready', 'pending'].includes(result.translation_status)) throw new Error('invalid translation retry result');
+      res.json({
+        notification_id: positiveInteger(result.notification_id, 'notification id'),
+        translation_status: result.translation_status,
+        retry_available: result.translation_status === 'pending'
+      });
+    } catch (error) { sendReviewError(res, error); }
   });
 
   router.post('/work-items/:id/versions', async (req, res) => {
