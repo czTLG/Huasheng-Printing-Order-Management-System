@@ -1,0 +1,8 @@
+{
+  "items": [
+    { "itemKey": "item-1", "title": "complete", "required": true },
+    { "itemKey": "item-2", "title": "ready", "required": true },
+    { "itemKey": "item-3", "title": "waiting factory", "required": true },
+    { "itemKey": "item-4", "title": "waiting customer", "required": true }
+  ]
+}

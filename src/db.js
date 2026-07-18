@@ -888,6 +888,102 @@ function initDb() {
       FOREIGN KEY(link_id) REFERENCES matrix_entity_links(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_inquiry_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      inquiry_id INTEGER NOT NULL,
+      item_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      required INTEGER NOT NULL DEFAULT 1 CHECK(required IN (0,1)),
+      version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+      specification_id INTEGER,
+      requirement_state TEXT NOT NULL DEFAULT 'incomplete' CHECK(requirement_state IN ('incomplete','complete','waiting_factory','waiting_customer')),
+      costing_state TEXT NOT NULL DEFAULT 'pending' CHECK(costing_state IN ('pending','in_progress','completed','blocked','not_required')),
+      quote_state TEXT NOT NULL DEFAULT 'pending' CHECK(quote_state IN ('pending','ready','approved','sent','blocked','not_required')),
+      disposition TEXT NOT NULL DEFAULT 'active' CHECK(disposition IN ('active','completed','cancelled')),
+      blocker_code TEXT NOT NULL DEFAULT '',
+      next_action TEXT NOT NULL DEFAULT '',
+      evidence_json TEXT NOT NULL DEFAULT '[]',
+      actor_user_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(inquiry_id, item_key),
+      FOREIGN KEY(inquiry_id) REFERENCES inquiries(id),
+      FOREIGN KEY(specification_id) REFERENCES inquiry_specifications(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_inquiry_item_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      item_version INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      actor_user_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(item_id) REFERENCES matrix_inquiry_items(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_inquiry_item_commands (
+      idempotency_key TEXT PRIMARY KEY,
+      request_fingerprint TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_source_version_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_version INTEGER NOT NULL CHECK(source_version >= 1),
+      source_content_hash TEXT NOT NULL,
+      actor_user_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(source_type, source_id, source_version),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_item_source_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      actor_user_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(item_id, source_type, source_id),
+      FOREIGN KEY(item_id) REFERENCES matrix_inquiry_items(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_item_source_version_bindings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_source_link_id INTEGER NOT NULL,
+      source_version_event_id INTEGER NOT NULL,
+      source_version INTEGER NOT NULL,
+      source_content_hash TEXT NOT NULL,
+      bound_item_version INTEGER NOT NULL,
+      specification_id INTEGER,
+      specification_version INTEGER,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','superseded')),
+      supersedes_binding_id INTEGER,
+      actor_user_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(item_source_link_id, source_version_event_id),
+      FOREIGN KEY(item_source_link_id) REFERENCES matrix_item_source_links(id),
+      FOREIGN KEY(source_version_event_id) REFERENCES matrix_source_version_events(id),
+      FOREIGN KEY(specification_id) REFERENCES inquiry_specifications(id),
+      FOREIGN KEY(supersedes_binding_id) REFERENCES matrix_item_source_version_bindings(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
@@ -1118,6 +1214,11 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_entity_links_lookup ON matrix_entity_links(namespace, external_key_hash);
     CREATE INDEX IF NOT EXISTS idx_matrix_entity_links_entity ON matrix_entity_links(entity_type, entity_id);
     CREATE INDEX IF NOT EXISTS idx_matrix_identity_commands_link ON matrix_identity_commands(link_id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_inquiry_items_inquiry ON matrix_inquiry_items(inquiry_id, required, disposition);
+    CREATE INDEX IF NOT EXISTS idx_matrix_item_events_item ON matrix_inquiry_item_events(item_id, item_version);
+    CREATE INDEX IF NOT EXISTS idx_matrix_source_versions_identity ON matrix_source_version_events(source_type, source_id, source_version);
+    CREATE INDEX IF NOT EXISTS idx_matrix_item_sources_identity ON matrix_item_source_links(source_type, source_id, item_id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_item_source_bindings_link ON matrix_item_source_version_bindings(item_source_link_id, source_version DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
@@ -1149,6 +1250,71 @@ function initDb() {
     BEFORE DELETE ON matrix_entity_links
     BEGIN
       SELECT RAISE(ABORT, 'matrix_entity_links evidence is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_inquiry_item_events_no_update
+    BEFORE UPDATE ON matrix_inquiry_item_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_inquiry_item_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_inquiry_item_events_no_delete
+    BEFORE DELETE ON matrix_inquiry_item_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_inquiry_item_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_source_version_events_no_update
+    BEFORE UPDATE ON matrix_source_version_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_source_version_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_source_version_events_no_delete
+    BEFORE DELETE ON matrix_source_version_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_source_version_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_item_source_links_no_update
+    BEFORE UPDATE ON matrix_item_source_links
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_item_source_links is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_item_source_links_no_delete
+    BEFORE DELETE ON matrix_item_source_links
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_item_source_links is immutable');
+    END;
+
+    DROP TRIGGER IF EXISTS trg_matrix_item_source_version_bindings_no_update;
+    CREATE TRIGGER trg_matrix_item_source_version_bindings_no_update
+    BEFORE UPDATE ON matrix_item_source_version_bindings
+    WHEN NOT (
+      OLD.status = 'active' AND NEW.status = 'superseded'
+      AND OLD.id IS NEW.id
+      AND OLD.item_source_link_id IS NEW.item_source_link_id
+      AND OLD.source_version_event_id IS NEW.source_version_event_id
+      AND OLD.source_version IS NEW.source_version
+      AND OLD.source_content_hash IS NEW.source_content_hash
+      AND OLD.bound_item_version IS NEW.bound_item_version
+      AND OLD.specification_id IS NEW.specification_id
+      AND OLD.specification_version IS NEW.specification_version
+      AND OLD.supersedes_binding_id IS NEW.supersedes_binding_id
+      AND OLD.actor_user_id IS NEW.actor_user_id
+      AND OLD.idempotency_key IS NEW.idempotency_key
+      AND OLD.request_fingerprint IS NEW.request_fingerprint
+      AND OLD.created_at IS NEW.created_at
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_item_source_version_bindings is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_item_source_version_bindings_no_delete
+    BEFORE DELETE ON matrix_item_source_version_bindings
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_item_source_version_bindings is immutable');
     END;
 
     INSERT OR IGNORE INTO matrix_identity_commands (
@@ -1611,6 +1777,12 @@ function initDb() {
   if (!icols.includes('quote_next_action')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_next_action TEXT");
   if (!icols.includes('quote_readiness_updated_at')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_updated_at TEXT");
 
+  const iscols = db.prepare("PRAGMA table_info(inquiry_specifications)").all().map(c => c.name);
+  if (!iscols.includes('matrix_item_id')) db.exec("ALTER TABLE inquiry_specifications ADD COLUMN matrix_item_id INTEGER");
+
+  const crcols = db.prepare("PRAGMA table_info(costing_requests)").all().map(c => c.name);
+  if (!crcols.includes('matrix_item_id')) db.exec("ALTER TABLE costing_requests ADD COLUMN matrix_item_id INTEGER");
+
   const cscols = db.prepare("PRAGMA table_info(cost_snapshots)").all().map(c => c.name);
   if (!cscols.includes('customer_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN customer_id INTEGER");
   if (!cscols.includes('inquiry_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN inquiry_id INTEGER");
@@ -1620,9 +1792,11 @@ function initDb() {
   if (!cscols.includes('is_current')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN is_current INTEGER DEFAULT 1");
   if (!cscols.includes('crm_quote_status')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN crm_quote_status TEXT");
   if (!cscols.includes('crm_notes')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN crm_notes TEXT");
+  if (!cscols.includes('matrix_item_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN matrix_item_id INTEGER");
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_user_kind ON cost_snapshots(user_name, kind, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_crm ON cost_snapshots(costing_request_id, inquiry_id, specification_id, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_matrix_item ON cost_snapshots(matrix_item_id, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_salesperson ON customers(salesperson_id, active, name)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_stage ON customers(stage, priority, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_priority ON customers(priority, stage, next_followup_at, updated_at DESC)");
@@ -1635,8 +1809,10 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_customer ON inquiries(customer_id, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status, priority, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_inquiry_specifications_inquiry ON inquiry_specifications(inquiry_id, version_no DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_inquiry_specifications_matrix_item ON inquiry_specifications(matrix_item_id, version_no DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_specification_layers_spec ON specification_layers(specification_id, layer_order)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_costing_requests_inquiry ON costing_requests(inquiry_id, created_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_costing_requests_matrix_item ON costing_requests(matrix_item_id, created_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_costing_requests_assigned ON costing_requests(assigned_to_user_id, assigned_to, status, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_sheet_lines_request ON cost_sheet_lines(costing_request_id, specification_id, id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_freight_quotes_inquiry ON freight_quotes(inquiry_id, is_current DESC, version_no DESC, id DESC)");

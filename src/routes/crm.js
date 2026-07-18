@@ -9,6 +9,7 @@ const { attachmentsFromJson, normalizeCrmAttachments, summarizeAttachments } = r
 const { importEmailToCrmMessage, batchImportEmailsToCrmMessages } = require('../lib/emailToCrmMessage');
 const { buildCrmWorkbench, getFatherReviewTaskDetail, listFatherReviewTasks, markFatherTaskSalesHandled } = require('../lib/crmWorkbench');
 const { interpretCrmMessage, buildInquiryFillPlan, deriveInquiryAiSummary } = require('../services/crmMessageInterpreter');
+const { createMatrixInquiryItems } = require('../services/matrixInquiryItems');
 const {
   approveReplyDraft,
   generateReplyDraft,
@@ -19,6 +20,7 @@ const {
 } = require('../services/crmReplyDraftService');
 
 const router = express.Router();
+const matrixInquiryItems = createMatrixInquiryItems({ db, clock: now });
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
 const COSTING_ROLES = ['super_admin', 'foreign_trade_crm_admin', 'costing_user'];
 const FREIGHT_ROLES = ['super_admin', 'foreign_trade_crm_admin', 'freight_user'];
@@ -66,6 +68,29 @@ function jsonDetail(value) {
 function handleError(res, err, fallback = 'CRM 操作失败') {
   console.warn('[crm]', err?.message || err);
   return res.status(400).json({ ok: false, error: fallback });
+}
+
+function requestIdempotencyKey(req, fallbackPrefix) {
+  return text(req.get('Idempotency-Key') || req.body?.idempotency_key || `${fallbackPrefix}:${crypto.randomUUID()}`);
+}
+
+function syncInquiryItemAggregate(inquiryId, timestamp = now()) {
+  const aggregate = matrixInquiryItems.aggregateInquiry(inquiryId);
+  const status = aggregate.status === 'complete'
+    ? 'costing_completed'
+    : aggregate.status === 'empty'
+      ? 'needs_migration_review'
+      : aggregate.status === 'partial'
+        ? 'costing_partial'
+        : 'costing';
+  const nextAction = aggregate.status === 'complete'
+    ? 'Review all item costing results'
+    : aggregate.status === 'empty'
+      ? 'Bind legacy request to an exact inquiry item'
+      : `${aggregate.completedCount}/${aggregate.requiredCount} items complete; continue item review`;
+  db.prepare('UPDATE inquiries SET status=?,next_action=?,updated_at=? WHERE id=?')
+    .run(status, nextAction, timestamp, inquiryId);
+  return aggregate;
 }
 
 function parseJsonObject(value, fallback = {}) {
@@ -2903,6 +2928,79 @@ function getLatestCostSnapshot(costingRequestId, inquiryId, specificationId) {
   `).get(costingRequestId, costingRequestId, inquiryId, inquiryId, specificationId, specificationId) || null;
 }
 
+router.get('/inquiries/:id/items', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    if (!getInquiry(inquiryId)) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    res.json({ ok: true, aggregate: matrixInquiryItems.aggregateInquiry(inquiryId) });
+  } catch (err) {
+    handleError(res, err, '询盘品项读取失败');
+  }
+});
+
+router.post('/inquiries/:id/items', (req, res) => {
+  try {
+    const inquiryId = idParam(req.params.id);
+    if (!getInquiry(inquiryId)) return res.status(404).json({ ok: false, error: '询盘不存在' });
+    const item = matrixInquiryItems.createItem({
+      inquiryId,
+      itemKey: req.body?.item_key,
+      title: req.body?.title,
+      required: req.body?.required !== false,
+      actorUserId: req.user.id,
+      idempotencyKey: requestIdempotencyKey(req, `inquiry-item:create:${inquiryId}`)
+    });
+    const aggregate = syncInquiryItemAggregate(inquiryId);
+    crmAudit(req, 'create_matrix_inquiry_item', 'crm_inquiry_item', item.id, { inquiry_id: inquiryId, item_key: item.itemKey });
+    res.status(201).json({ ok: true, item, aggregate });
+  } catch (err) {
+    handleError(res, err, '询盘品项创建失败');
+  }
+});
+
+router.post('/inquiry-items/:id/specification', (req, res) => {
+  try {
+    const item = matrixInquiryItems.bindSpecification({
+      itemId: idParam(req.params.id),
+      specificationId: req.body?.specification_id,
+      expectedItemVersion: req.body?.expected_item_version,
+      actorUserId: req.user.id,
+      idempotencyKey: requestIdempotencyKey(req, `inquiry-item:specification:${req.params.id}`)
+    });
+    db.prepare('UPDATE inquiry_specifications SET matrix_item_id=? WHERE id=? AND inquiry_id=?')
+      .run(item.id, item.specificationId, item.inquiryId);
+    const aggregate = syncInquiryItemAggregate(item.inquiryId);
+    crmAudit(req, 'bind_matrix_inquiry_item_specification', 'crm_inquiry_item', item.id, { inquiry_id: item.inquiryId, specification_id: item.specificationId, item_version: item.version });
+    res.json({ ok: true, item, aggregate });
+  } catch (err) {
+    handleError(res, err, '询盘品项规格绑定失败');
+  }
+});
+
+router.patch('/inquiry-items/:id/state', (req, res) => {
+  try {
+    const body = req.body || {};
+    const item = matrixInquiryItems.applyState({
+      itemId: idParam(req.params.id),
+      expectedItemVersion: body.expected_item_version,
+      requirementState: body.requirement_state,
+      costingState: body.costing_state,
+      quoteState: body.quote_state,
+      disposition: body.disposition,
+      blockerCode: body.blocker_code,
+      nextAction: body.next_action,
+      evidenceIds: body.evidence_ids,
+      actorUserId: req.user.id,
+      idempotencyKey: requestIdempotencyKey(req, `inquiry-item:state:${req.params.id}`)
+    });
+    const aggregate = syncInquiryItemAggregate(item.inquiryId);
+    crmAudit(req, 'update_matrix_inquiry_item_state', 'crm_inquiry_item', item.id, { inquiry_id: item.inquiryId, item_version: item.version, disposition: item.disposition, blocker_code: item.blockerCode });
+    res.json({ ok: true, item, aggregate });
+  } catch (err) {
+    handleError(res, err, '询盘品项状态更新失败');
+  }
+});
+
 router.post('/inquiries/:id/costing-requests', (req, res) => {
   try {
     const inquiryId = idParam(req.params.id);
@@ -2916,22 +3014,33 @@ router.post('/inquiries/:id/costing-requests', (req, res) => {
     if (!customer) return res.status(400).json({ ok: false, error: '客户不存在' });
 
     const body = req.body || {};
+    const matrixItemId = Number(body.matrix_item_id || 0) || null;
+    if (matrixItemId) {
+      const matrixItem = db.prepare('SELECT id,inquiry_id,specification_id FROM matrix_inquiry_items WHERE id=?').get(matrixItemId);
+      if (!matrixItem || Number(matrixItem.inquiry_id) !== inquiryId) {
+        return res.status(400).json({ ok: false, error: '成本核算请求必须绑定当前询盘的准确品项' });
+      }
+      if (matrixItem.specification_id && Number(matrixItem.specification_id) !== specificationId) {
+        return res.status(400).json({ ok: false, error: '品项绑定规格与当前规格不一致' });
+      }
+    }
     const ts = now();
     const tx = db.transaction(() => {
       const code = generateCostingRequestCode();
       const result = db.prepare(`
         INSERT INTO costing_requests (
-          costing_request_code, customer_id, inquiry_id, specification_id, requested_by,
+          costing_request_code, customer_id, inquiry_id, specification_id, matrix_item_id, requested_by,
           assigned_to, assigned_to_user_id, status, request_note, required_quote_terms,
           required_currency, required_unit, target_margin, customer_target_price, urgency,
           due_at, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         code,
         Number(inquiry.customer_id || 0),
         inquiryId,
         specificationId,
+        matrixItemId,
         req.user.userName,
         text(body.assigned_to),
         Number(body.assigned_to_user_id || 0) || null,
@@ -2946,6 +3055,18 @@ router.post('/inquiries/:id/costing-requests', (req, res) => {
         ts,
         ts
       );
+      if (matrixItemId) {
+        const currentItem = db.prepare('SELECT version FROM matrix_inquiry_items WHERE id=?').get(matrixItemId);
+        matrixInquiryItems.applyState({
+          itemId: matrixItemId,
+          expectedItemVersion: currentItem.version,
+          costingState: 'pending',
+          nextAction: `Complete costing request ${code}`,
+          evidenceIds: [],
+          actorUserId: req.user.id,
+          idempotencyKey: `costing-request:${result.lastInsertRowid}:item-state`
+        });
+      }
       db.prepare("UPDATE inquiries SET costing_required = 1, status = 'costing', next_action = 'Waiting for costing', updated_at = ? WHERE id = ?").run(ts, inquiryId);
       return { id: result.lastInsertRowid, code };
     });
@@ -3111,12 +3232,40 @@ router.patch('/costing-requests/:id', (req, res) => {
     if (nextStatus === 'completed' && !text(updateBody.completed_at)) updateBody.completed_at = ts;
     const fields = [...COSTING_UPDATE_FIELDS];
     if (nextStatus) fields.push('status');
-    updateByFields('costing_requests', id, updateBody, fields);
-    if (nextStatus === 'completed') {
-      db.prepare("UPDATE inquiries SET status = 'costing_completed', next_action = 'Review costing result', updated_at = ? WHERE id = ?").run(ts, oldRow.inquiry_id);
-    } else if (nextStatus === 'revision_needed') {
-      db.prepare("UPDATE inquiries SET status = 'costing', next_action = 'Revise specification or costing request', updated_at = ? WHERE id = ?").run(ts, oldRow.inquiry_id);
-    }
+    db.transaction(() => {
+      updateByFields('costing_requests', id, updateBody, fields);
+      if (nextStatus === 'completed') {
+        if (oldRow.matrix_item_id) {
+          const currentItem = db.prepare('SELECT version FROM matrix_inquiry_items WHERE id=?').get(oldRow.matrix_item_id);
+          if (!currentItem) throw new Error('costing request item binding missing');
+          matrixInquiryItems.applyState({
+            itemId: oldRow.matrix_item_id,
+            expectedItemVersion: currentItem.version,
+            costingState: 'completed',
+            nextAction: 'Review item costing result and prepare quote',
+            evidenceIds: [`costing_request:${id}`],
+            actorUserId: req.user.id,
+            idempotencyKey: `costing-request:${id}:completed:${text(updateBody.completed_at || ts)}`
+          });
+        }
+        syncInquiryItemAggregate(oldRow.inquiry_id, ts);
+      } else if (nextStatus === 'revision_needed') {
+        if (oldRow.matrix_item_id) {
+          const currentItem = db.prepare('SELECT version FROM matrix_inquiry_items WHERE id=?').get(oldRow.matrix_item_id);
+          if (!currentItem) throw new Error('costing request item binding missing');
+          matrixInquiryItems.applyState({
+            itemId: oldRow.matrix_item_id,
+            expectedItemVersion: currentItem.version,
+            costingState: 'in_progress',
+            nextAction: 'Revise item specification or costing request',
+            evidenceIds: [`costing_request:${id}`],
+            actorUserId: req.user.id,
+            idempotencyKey: `costing-request:${id}:revision:${ts}`
+          });
+        }
+        syncInquiryItemAggregate(oldRow.inquiry_id, ts);
+      }
+    })();
 
     const action = nextStatus === 'completed'
       ? 'complete_costing_request'
