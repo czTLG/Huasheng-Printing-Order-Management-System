@@ -4,11 +4,12 @@ const crypto = require('crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
-const { defaultPermissionsByRole } = require('../lib/permissions');
+const { defaultPermissionsByRole, normalizePermissions } = require('../lib/permissions');
 const { createCacheIndexView } = require('../lib/cacheIndexView');
 const { createPacketGate } = require('../lib/packetGate');
 const { buildMatrixOverview } = require('../services/matrixOverview');
 const { searchMatrixContext, resolveMatrixContext, contextByRecordId } = require('../services/matrixContextSearch');
+const { createMatrixStreamText } = require('../services/matrixStreamText');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -16,6 +17,8 @@ const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
 const STATUSES = new Set(['valid', 'needs_review']);
 const STAGES = new Set(['selected', 'draft_pending', 'review_pending', 'suppressed']);
 const LIST_FIELDS = new Set(['region', 'country', 'category', 'priority', 'status', 'page', 'page_size']);
+const VERSION_FIELDS = new Set(['expected_work_version', 'base_version_id', 'revision_instruction', 'idempotency_key']);
+const APPROVAL_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']);
 
 function plainObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -113,8 +116,9 @@ function requireMatrixRole(req, res, next) {
 
 function errorStatus(error) {
   const message = String(error?.message || 'request failed');
-  if (/stale version|session rehydration incomplete/.test(message)) return 409;
-  if (/not authorized|actor binding|required binding|service binding|inactive|revoked/.test(message)) return 403;
+  if (/stale (?:work )?version|session rehydration incomplete/.test(message)) return 409;
+  if (/not authorized|actor binding|required binding|service binding|inactive|revoked|matrixSend capability/.test(message)) return 403;
+  if (/text_provider_unavailable/.test(message)) return 503;
   if (/not found/.test(message)) return 404;
   return 400;
 }
@@ -275,10 +279,19 @@ function productionBacklogItems() {
   } catch (_) { return []; }
 }
 
-function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_STREAM_DB_PATH, clock } = {}) {
+function createMatrixRouter({
+  db,
+  audit,
+  candidateDbPath = process.env.MATRIX_STREAM_DB_PATH,
+  clock,
+  reviewService = require('../services/matrixStreamReview'),
+  deliveryService
+} = {}) {
   const router = express.Router();
   const view = createCacheIndexView({ dbPath: candidateDbPath });
   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
+  const textService = createMatrixStreamText();
+  void deliveryService;
 
   router.use(requireMatrixRole);
 
@@ -435,6 +448,98 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
     return binding;
   }
 
+  function requireReviewAccess(req) {
+    if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+    const active = db.prepare(`
+      SELECT b.id FROM matrix_actor_bindings b
+      JOIN users u ON u.id = b.user_id
+      WHERE b.id = ? AND b.user_id = ? AND b.status = 'active' AND u.status = 'active'
+    `).get(req.matrixBinding.id, req.user.id);
+    if (!active) throw new Error('active actor binding required');
+    const permissions = normalizePermissions(req.user.role, req.user.permissions);
+    if (!permissions.capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
+  }
+
+  function ownedReviewItem(workItemId, actorUserId, expectedVersion) {
+    const item = db.prepare('SELECT * FROM matrix_work_items WHERE id = ?').get(workItemId);
+    if (!item) throw new Error('work item not found');
+    if (item.owner_user_id !== actorUserId) throw new Error('not authorized');
+    if (item.stage === 'suppressed' || item.stream_state === 'suppressed') throw new Error('work item is suppressed');
+    if (expectedVersion !== undefined && item.version !== expectedVersion) throw new Error('stale work version');
+    return item;
+  }
+
+  function httpsUrl(value) {
+    try {
+      const url = new URL(String(value || ''));
+      return url.protocol === 'https:' && url.hostname.includes('.') ? url.toString() : '';
+    } catch (_) { return ''; }
+  }
+
+  function candidateDraft(detail) {
+    const evidence = Array.isArray(detail.official_evidence) ? detail.official_evidence : [];
+    const organizationDomain = String(detail.official_domain || '').trim().toLowerCase();
+    if (!organizationDomain) throw new Error('official organization domain required');
+    const official = evidence.find(row => {
+      const source = httpsUrl(row.source_url);
+      if (!source) return false;
+      const hostname = new URL(source).hostname.toLowerCase();
+      return hostname === organizationDomain || hostname.endsWith(`.${organizationDomain}`);
+    });
+    if (!official) throw new Error('official recipient source evidence required');
+    const email = String(detail.contacts?.email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('public company email required; contact form is not eligible');
+    const sourceUrl = httpsUrl(detail.contacts?.contact_page) || httpsUrl(official.source_url);
+    if (!sourceUrl) throw new Error('official recipient source evidence required');
+    const verifiedValue = detail.updated_at || official.observed_at;
+    const verifiedMs = Date.parse(String(verifiedValue || ''));
+    if (!Number.isFinite(verifiedMs)) throw new Error('recipient evidence verification timestamp required');
+
+    const category = String((detail.categories || [])[0] || '').trim().toLowerCase();
+    const categoryCn = ({ coffee: '咖啡', tea: '茶', snacks: '零食' })[category];
+    if (!category || !categoryCn) throw new Error('deterministic draft category is unsupported');
+    const products = evidence.map(row => String(row.excerpt || row.page_title || '').trim()).filter(Boolean);
+    const specs = [...new Set(products.join(' ').match(/\b\d+(?:\.\d+)?\s*(?:kg|g)\b/gi) || [])];
+    if (!specs.length) throw new Error('official product specifications required for deterministic draft');
+    const specText = specs.join(' and ');
+    const specTextCn = specs.join('和');
+    const company = String(detail.company_name || '').trim();
+    const entryProduct = `${category} pouch`;
+    const subject = `${specText} ${entryProduct} options for ${company}`;
+    const bodyEn = `Dear ${company} team,\nWe reviewed your ${specText} ${category} range. We would like to discuss ${category} pouches. Could you share your current material structure and annual volume?\nBest regards`;
+    const bodyCn = `您好，\n我们查看了贵司${specTextCn}${categoryCn}产品，希望沟通${categoryCn}袋。请问能否提供当前材料结构和年用量？\n此致敬礼`;
+    const snapshot = {
+      organization_domain: organizationDomain,
+      recipient_email: email,
+      source_url: sourceUrl,
+      company,
+      categories: detail.categories || [],
+      products,
+      entryProduct,
+      supportedClaims: [],
+      evidenceIds: evidence.map(row => row.source_url).filter(Boolean),
+      official_evidence: evidence.map(row => ({
+        source_url: row.source_url,
+        observed_at: row.observed_at,
+        excerpt: row.excerpt
+      }))
+    };
+    return {
+      recipient: { email, sourceUrl, verifiedAt: new Date(verifiedMs).toISOString(), kind: 'public_company' },
+      subject,
+      bodyEn,
+      bodyCn,
+      strategySummary: `Official evidence reviewed for ${company}`,
+      sourceSnapshot: snapshot,
+      organizationDomain
+    };
+  }
+
+  function withWorkVersion(version) {
+    const item = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(version.work_item_id);
+    return { ...version, work_item_version: item?.version || null };
+  }
+
   router.post('/sessions', (req, res) => {
     try {
       const body = rejectUnknown(req.body, new Set(['chat_id', 'thread_id', 'filters', 'snapshot_key', 'candidate_ids', 'expires_at']), 'body');
@@ -541,6 +646,113 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
       const item = gate.getWorkItem({ workItemId: positiveInteger(req.params.id, 'work item id'), actorUserId: req.user.id });
       if (!item) return res.status(404).json({ error: 'work item not found' });
       res.json(item);
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.post('/work-items/:id/versions', async (req, res) => {
+    try {
+      requireReviewAccess(req);
+      const body = rejectUnknown(req.body, VERSION_FIELDS, 'body');
+      const workItemId = positiveInteger(req.params.id, 'work item id');
+      const expectedWorkVersion = positiveInteger(body.expected_work_version, 'expected work version');
+      const idempotencyKey = String(body.idempotency_key || '').trim();
+      if (!idempotencyKey) throw new Error('idempotency key required');
+      const hasBase = body.base_version_id !== undefined;
+      const hasInstruction = body.revision_instruction !== undefined;
+      if (hasBase !== hasInstruction) throw new Error('base version and revision instruction must be supplied together');
+      ownedReviewItem(workItemId, req.user.id);
+
+      if (hasBase) {
+        ownedReviewItem(workItemId, req.user.id, expectedWorkVersion);
+        const baseVersionId = positiveInteger(body.base_version_id, 'base version id');
+        const instruction = String(body.revision_instruction || '').trim();
+        if (!instruction) throw new Error('revision instruction required');
+        const current = reviewService.getVersion(db, { actorUserId: req.user.id, versionId: baseVersionId });
+        if (!current || current.work_item_id !== workItemId) throw new Error('base version not found');
+        let sourceSnapshot;
+        try { sourceSnapshot = JSON.parse(current.source_snapshot_json); } catch (_) { throw new Error('stored source snapshot invalid'); }
+        const generated = await textService.revise({ current, instruction, sourceSnapshot });
+        if (generated?.ok === false) throw new Error(generated.reason || 'text provider failed');
+        const revised = reviewService.reviseVersion(db, {
+          actorUserId: req.user.id,
+          workItemId,
+          baseVersionId,
+          expectedWorkVersion,
+          subject: generated.subject,
+          bodyEn: generated.body_en,
+          bodyCn: generated.body_cn,
+          idempotencyKey
+        });
+        return res.status(201).json(withWorkVersion(revised));
+      }
+
+      const item = ownedReviewItem(workItemId, req.user.id);
+      const detail = view.detail(item.candidate_id, { revealContacts: true });
+      if (!detail) throw new Error('candidate not found');
+      const draft = candidateDraft(detail);
+      const create = db.transaction(() => {
+        db.prepare(`
+          INSERT OR IGNORE INTO matrix_stream_recipient_evidence (
+            work_item_id, organization_domain, recipient_email, source_url, verified_at,
+            snapshot_json, status, created_by, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+        `).run(
+          workItemId, draft.organizationDomain, draft.recipient.email, draft.recipient.sourceUrl,
+          draft.recipient.verifiedAt, JSON.stringify(draft.sourceSnapshot), req.user.id,
+          typeof clock === 'function' ? new Date(clock()).toISOString() : new Date().toISOString()
+        );
+        const version = reviewService.createInitialVersion(db, {
+          actorUserId: req.user.id,
+          workItemId,
+          expectedWorkVersion,
+          recipient: draft.recipient,
+          subject: draft.subject,
+          bodyEn: draft.bodyEn,
+          bodyCn: draft.bodyCn,
+          strategySummary: draft.strategySummary,
+          sourceSnapshot: draft.sourceSnapshot,
+          idempotencyKey
+        });
+        let quality;
+        try { quality = JSON.parse(version.quality_json); } catch (_) { quality = null; }
+        if (!quality?.passed) throw new Error('initial draft quality gate blocked');
+        return version;
+      });
+      const created = create.immediate();
+      return res.status(created.current_status ? 200 : 201).json(withWorkVersion(created));
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.post('/work-items/:id/versions/:versionId/approve', (req, res) => {
+    try {
+      requireReviewAccess(req);
+      const body = rejectUnknown(req.body, APPROVAL_FIELDS, 'body');
+      const workItemId = positiveInteger(req.params.id, 'work item id');
+      const versionId = positiveInteger(req.params.versionId, 'version id');
+      const expectedWorkVersion = positiveInteger(body.expected_work_version, 'expected work version');
+      ownedReviewItem(workItemId, req.user.id);
+      const approved = reviewService.approveVersion(db, {
+        actorUserId: req.user.id,
+        workItemId,
+        versionId,
+        expectedWorkVersion,
+        expectedContentHash: String(body.expected_content_hash || '').trim(),
+        idempotencyKey: String(body.idempotency_key || '').trim()
+      });
+      res.json(withWorkVersion(approved));
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.get('/work-items/:id/versions/:versionId/preview', (req, res) => {
+    try {
+      requireReviewAccess(req);
+      rejectUnknown(req.query, new Set(), 'query');
+      const workItemId = positiveInteger(req.params.id, 'work item id');
+      const versionId = positiveInteger(req.params.versionId, 'version id');
+      const item = ownedReviewItem(workItemId, req.user.id);
+      const preview = reviewService.finalPreview(db, { actorUserId: req.user.id, versionId });
+      if (!preview || preview.version.work_item_id !== item.id) throw new Error('version not found');
+      res.json({ ...preview, work_item_version: item.version });
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 

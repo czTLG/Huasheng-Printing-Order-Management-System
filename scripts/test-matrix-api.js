@@ -88,6 +88,16 @@ function seedApplicationDb() {
   `);
   insertBinding.run('ou-service', 103);
   insertBinding.run('ou-disabled', 105);
+  insertBinding.run('ou-worker', 102);
+  insertBinding.run('ou-no-cap', 104);
+  insertBinding.run('ou-inactive', 104);
+  db.prepare("UPDATE matrix_actor_bindings SET status = 'revoked', revoked_at = '2026-07-17 00:00:00' WHERE feishu_open_id = 'ou-inactive'").run();
+  db.prepare(`
+    UPDATE users SET permissions_json = ? WHERE id = 103
+  `).run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: true } }));
+  db.prepare(`
+    UPDATE users SET permissions_json = ? WHERE id = 102
+  `).run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: true } }));
   db.close();
 }
 
@@ -125,7 +135,7 @@ function seedCandidateDb() {
   insert.run({ id: 2, company: 'Beta Tea', country: 'GB', domain: 'beta.test', url: 'https://beta.test/', categories: '["tea"]', email: 'sales@beta.test', phone: '', whatsapp: '', contact: 'https://beta.test/contact', priority: 'P1', score: 88, status: 'valid', updated: '2026-07-16T00:00:00Z' });
   insert.run({ id: 3, company: 'India Blocked', country: 'IN', domain: 'blocked.test', url: 'https://blocked.test/', categories: '["coffee"]', email: '', phone: '', whatsapp: '', contact: '', priority: 'P0', score: 99, status: 'valid', updated: '2026-07-17T00:00:00Z' });
   insert.run({ id: 4, company: 'Review Snacks', country: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["snacks"]', email: '', phone: '', whatsapp: '', contact: 'https://review.test/contact', priority: 'P2', score: 70, status: 'needs_review', updated: '2026-07-15T00:00:00Z' });
-  db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-17T00:00:00Z', 'Coffee', 'e1');
+  db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-17T00:00:00Z', '250g and 500g roasted coffee', 'e1');
   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members/alpha', 'https://alpha.test/', 'official_association_directory', '2026-07-17T00:00:00Z', 'd1');
   db.close();
 }
@@ -165,6 +175,24 @@ async function stopServer() {
     const timer = setTimeout(resolve, 2000);
     child.once('exit', () => { clearTimeout(timer); resolve(); });
   });
+}
+
+function reviewState(workItemId) {
+  const stateDb = new Database(appDbPath, { readonly: true });
+  try {
+    return {
+      evidence: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_recipient_evidence').get().count,
+      versions: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count,
+      events: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_events').get().count,
+      jobs: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_jobs').get().count,
+      workItem: stateDb.prepare(`
+        SELECT owner_user_id, stage, stream_state, current_stream_version_id, version
+        FROM matrix_work_items WHERE id = ?
+      `).get(workItemId)
+    };
+  } finally {
+    stateDb.close();
+  }
 }
 
 (async () => {
@@ -348,7 +376,7 @@ async function stopServer() {
       const mutableCandidateDb = new Database(candidateDbPath);
       try {
         mutableCandidateDb.prepare("UPDATE cache_records SET country_code='VN', status='valid', stage_code='observed', audited_at='2026-07-17T00:00:00Z', updated_at='2026-07-17T00:00:00Z', public_email='team@alpha.test', public_phone='+1 202 555 0123', public_whatsapp='+1 202 555 0456', contact_url='https://alpha.test/contact' WHERE id=1").run();
-        mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','Coffee','e1')").run();
+        mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
         mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_discovery VALUES (1,1,'alpha.test','official_association_directory','https://association.test/members/alpha','https://alpha.test/','official_association_directory','2026-07-17T00:00:00Z','d1')").run();
         mutate(mutableCandidateDb);
       } finally { mutableCandidateDb.close(); }
@@ -375,6 +403,173 @@ async function stopServer() {
     const workItem = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}`, { serviceToken: bridgeToken, openId: 'ou-service' });
     assert.strictEqual(workItem.status, 200);
     assert.strictEqual(workItem.body.candidate_id, 1);
+
+    const workItemId = firstSelection.body.work_item_id;
+    const mutateApp = callback => {
+      const stateDb = new Database(appDbPath);
+      try { callback(stateDb); } finally { stateDb.close(); }
+    };
+    const mutateCandidate = callback => {
+      const stateDb = new Database(candidateDbPath);
+      try { callback(stateDb); } finally { stateDb.close(); }
+    };
+    const assertFailedWithoutReviewWrite = async (label, expectedStatus, action) => {
+      const before = reviewState(workItemId);
+      const response = await action();
+      assert.strictEqual(response.status, expectedStatus, `${label}: ${JSON.stringify(response.body)}`);
+      assert.deepStrictEqual(reviewState(workItemId), before, `${label} must not write review state`);
+      return response;
+    };
+    const versionRoute = `/api/matrix/work-items/${workItemId}/versions`;
+
+    mutateCandidate(db => {
+      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+    });
+
+    await assertFailedWithoutReviewWrite('JWT request without a Matrix binding', 403, () => request(versionRoute, {
+      method: 'POST', token: rootToken, body: { expected_work_version: 1, idempotency_key: 'jwt-no-binding' }
+    }));
+    await assertFailedWithoutReviewWrite('inactive binding', 403, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-inactive',
+      body: { expected_work_version: 1, idempotency_key: 'inactive-binding' }
+    }));
+
+    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 102 WHERE id = ?').run(workItemId));
+    await assertFailedWithoutReviewWrite('worker role with requested capability', 403, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-worker',
+      body: { expected_work_version: 1, idempotency_key: 'worker-role' }
+    }));
+    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 103 WHERE id = ?').run(workItemId));
+
+    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 104 WHERE id = ?').run(workItemId));
+    await assertFailedWithoutReviewWrite('missing explicit matrixSend capability', 403, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-no-cap',
+      body: { expected_work_version: 1, idempotency_key: 'missing-capability' }
+    }));
+    await assertFailedWithoutReviewWrite('another owner', 403, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'another-owner' }
+    }));
+    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 103 WHERE id = ?').run(workItemId));
+
+    await assertFailedWithoutReviewWrite('unknown create field', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, recipient_email: 'other@outside.test', idempotency_key: 'bad-field' }
+    }));
+    await assertFailedWithoutReviewWrite('base without instruction', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, base_version_id: 1, idempotency_key: 'base-only' }
+    }));
+    await assertFailedWithoutReviewWrite('instruction without base', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, revision_instruction: '更简洁', idempotency_key: 'instruction-only' }
+    }));
+    await assertFailedWithoutReviewWrite('stale create work version', 409, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 99, idempotency_key: 'stale-create' }
+    }));
+
+    mutateCandidate(db => db.prepare("UPDATE cache_records SET public_email='', contact_url='https://alpha.test/contact' WHERE id=1").run());
+    await assertFailedWithoutReviewWrite('contact-form-only candidate', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'contact-form-only' }
+    }));
+    mutateCandidate(db => {
+      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='' WHERE id=1").run();
+      db.prepare('DELETE FROM cache_evidence WHERE record_id=1').run();
+    });
+    await assertFailedWithoutReviewWrite('missing official source evidence', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'missing-source' }
+    }));
+    mutateCandidate(db => {
+      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://outside.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+    });
+    await assertFailedWithoutReviewWrite('official evidence on another organization domain', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'foreign-source' }
+    }));
+    mutateCandidate(db => {
+      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+    });
+
+    const createdVersion = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}/versions`, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
+    });
+    assert.strictEqual(createdVersion.status, 201, JSON.stringify(createdVersion.body));
+    assert.strictEqual(createdVersion.body.revision, 1);
+    assert.strictEqual(createdVersion.body.recipient_email, 'team@alpha.test');
+    assert.strictEqual(createdVersion.body.recipient_source_url, 'https://alpha.test/contact');
+    assert.strictEqual(createdVersion.body.work_item_version, 2);
+    assert.ok(createdVersion.body.quality_score >= 80);
+    assert.strictEqual(JSON.parse(createdVersion.body.quality_json).passed, true);
+    const createdReplayState = reviewState(workItemId);
+    const createdReplay = await request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
+    });
+    assert.strictEqual(createdReplay.status, 200, JSON.stringify(createdReplay.body));
+    assert.strictEqual(createdReplay.body.id, createdVersion.body.id);
+    assert.deepStrictEqual(reviewState(workItemId), createdReplayState, 'create replay must not write');
+
+    await assertFailedWithoutReviewWrite('unknown revision field', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, base_version_id: createdVersion.body.id, revision_instruction: '更简洁', subject: 'client supplied', idempotency_key: 'bad-revision-field' }
+    }));
+    await assertFailedWithoutReviewWrite('bounded text provider unavailable', 503, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, base_version_id: createdVersion.body.id, revision_instruction: '语气更简洁，询问年用量', idempotency_key: 'revision-provider-unavailable' }
+    }));
+
+    const approveRoute = `${versionRoute}/${createdVersion.body.id}/approve`;
+    await assertFailedWithoutReviewWrite('stale approval work version', 409, () => request(approveRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'stale-approve' }
+    }));
+    await assertFailedWithoutReviewWrite('stale approval hash', 400, () => request(approveRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, expected_content_hash: '0'.repeat(64), idempotency_key: 'stale-hash' }
+    }));
+    await assertFailedWithoutReviewWrite('unknown approval field', 400, () => request(approveRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, recipient_email: 'other@outside.test', idempotency_key: 'bad-approve-field' }
+    }));
+
+    const approvedVersion = await request(approveRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'approve-api-1' }
+    });
+    assert.strictEqual(approvedVersion.status, 200, JSON.stringify(approvedVersion.body));
+    assert.strictEqual(approvedVersion.body.status, 'approved');
+    assert.strictEqual(approvedVersion.body.work_item_version, 3);
+    const approvedReplayState = reviewState(workItemId);
+    const approvedReplay = await request(approveRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'approve-api-1' }
+    });
+    assert.strictEqual(approvedReplay.status, 200, JSON.stringify(approvedReplay.body));
+    assert.strictEqual(approvedReplay.body.id, approvedVersion.body.id);
+    assert.deepStrictEqual(reviewState(workItemId), approvedReplayState, 'approval replay must not write');
+
+    const preview = await request(`${versionRoute}/${createdVersion.body.id}/preview`, {
+      serviceToken: bridgeToken, openId: 'ou-service'
+    });
+    assert.strictEqual(preview.status, 200, JSON.stringify(preview.body));
+    assert.strictEqual(preview.body.allowed, true);
+    assert.strictEqual(preview.body.version.id, createdVersion.body.id);
+    assert.strictEqual(preview.body.version.recipient_email, 'team@alpha.test');
+    assert.strictEqual(preview.body.version.subject, createdVersion.body.subject);
+    assert.strictEqual(preview.body.version.body_en, createdVersion.body.body_en);
+    assert.strictEqual(preview.body.version.body_cn, createdVersion.body.body_cn);
+    assert.strictEqual(preview.body.work_item_version, 3);
+    assert.strictEqual(reviewState(workItemId).jobs, 0, 'preview must never create a delivery job');
+    await assertFailedWithoutReviewWrite('preview path work-item mismatch', 404, () => request(`/api/matrix/work-items/99999/versions/${createdVersion.body.id}/preview`, {
+      serviceToken: bridgeToken, openId: 'ou-service'
+    }));
 
     await stopServer();
     const inspect = new Database(appDbPath, { readonly: true });
