@@ -43,21 +43,35 @@ const CLAIM_SEMANTICS = Object.freeze({
 });
 
 function unsupportedClaims(input) {
-  const output = claimKeys([input.subject, input.bodyEn, input.bodyCn]);
+  const output = claimKeys([input.subject, input.bodyEn, input.bodyCn], input.evidence || {});
   const supported = claimKeys(Array.isArray(input.evidence?.supportedClaims) ? input.evidence.supportedClaims : []);
   return [...new Set(output.filter(claim => !supported.includes(claim)).map(claim => claim.split(':', 1)[0]))];
 }
 
-function claimKeys(values) {
+function productToken(value) {
+  return compact(value).replace(/pouches/g, 'pouch').replace(/bags/g, 'bag');
+}
+
+function claimKeys(values, evidence = null) {
   const keys = [];
   for (const value of values) {
     for (const raw of splitSentences(value)) {
-      if (isNonAssertionRequest(raw) || /^(?:we (?:would like|want) to discuss)\b/i.test(raw)
-          || (/(?:希望|想要)(?:沟通|了解)/u.test(raw) && !/(?:为|是|保证|固定|已|正式|官方|授权|独家)/u.test(raw))) continue;
+      if (isNonAssertionRequest(raw)) continue;
       const statement = normalizeTextNumbers(raw).replace(/[。.!?！？]+$/u, '').trim();
-      for (const [type, semantic] of Object.entries(CLAIM_SEMANTICS)) {
-        if (semantic.test(statement)) keys.push(`${type}:${compact(statement)}`);
-      }
+      const matched = Object.entries(CLAIM_SEMANTICS).filter(([, semantic]) => semantic.test(statement)).map(([type]) => type);
+      const intent = /^(?:we (?:would like|want) to discuss)\b/i.test(raw) || /(?:希望|想要)(?:沟通|了解)/u.test(raw);
+      const products = evidence ? [evidence.entryProduct, ...(Array.isArray(evidence.products) ? evidence.products : [])]
+        .map(productToken).filter(Boolean) : [];
+      const statementFacts = [extractOntologyFacts(statement, 'en'), extractOntologyFacts(statement, 'cn')];
+      const evidenceText = evidence ? [evidence.entryProduct, ...(Array.isArray(evidence.products) ? evidence.products : [])].join('\n') : '';
+      const evidenceFacts = [extractOntologyFacts(evidenceText, 'en'), extractOntologyFacts(evidenceText, 'cn')];
+      const ontologyOverlap = statementFacts.some(facts => Object.entries(facts).some(([role, values]) => {
+        const supported = new Set(evidenceFacts.flatMap(item => item[role] || []));
+        return values.some(value => supported.has(value));
+      }));
+      const mentionsEvidenceProduct = products.some(product => productToken(statement).includes(product)) || ontologyOverlap;
+      if (intent && matched.every(type => type === 'unsupported_performance') && mentionsEvidenceProduct) continue;
+      for (const type of matched) keys.push(`${type}:${compact(statement)}`);
     }
   }
   return [...new Set(keys)];
@@ -139,12 +153,20 @@ function isoDate(value) {
   return `${match[3]}-${String(month).padStart(2, '0')}-${String(match[2]).padStart(2, '0')}`;
 }
 
-function bilingualFacts(text, language) {
+function durationDays(number, unit) {
+  return Number(number) * (/week|周/i.test(unit) ? 7 : /month|月/i.test(unit) ? 30 : 1);
+}
+
+function bilingualFacts(text, language, evidenceMode = false) {
   const value = normalizeTextNumbers(text);
   const facts = {};
   const add = (role, item) => { if (item !== undefined) (facts[role] ||= new Set()).add(String(item).toLowerCase()); };
   const annual = language === 'en' ? /annual\s+(?:volume|quantity)\s*(?:is|:)?\s*(\d[\d,.]*)/gi : /年(?:用量|需求|数量)\s*(?:为|是|约|:|：)\s*(\d[\d,.]*)/gu;
   for (const match of value.matchAll(annual)) add('annual_volume', Number(match[1].replace(/,/g, '')));
+  const quantity = language === 'en' ? /(?:order\s+)?quantity\s*(?:is|:)?\s*(\d[\d,.]*)/gi : /(?:订单)?数量\s*(?:为|是|:|：)\s*(\d[\d,.]*)/gu;
+  for (const match of value.matchAll(quantity)) add('quantity', Number(match[1].replace(/,/g, '')));
+  const lead = language === 'en' ? /lead[ -]?time\s*(?:is|:)?\s*(\d+(?:\.\d+)?)\s*(days?|weeks?|months?)/gi : /交期\s*(?:为|是|:|：)\s*(\d+(?:\.\d+)?)\s*(天|周|个月|月)/gu;
+  for (const match of value.matchAll(lead)) add('lead_time', `${durationDays(match[1], match[2])}days`);
   const thickness = language === 'en' ? /thickness[^\d]{0,12}(\d+(?:\.\d+)?)\s*(microns?|um|μm|mm)/gi : /厚度[^\d]{0,8}(\d+(?:\.\d+)?)\s*(微米|毫米|mm)/giu;
   for (const match of value.matchAll(thickness)) {
     add('thickness', canonicalUnit(match[1], match[2]));
@@ -155,6 +177,11 @@ function bilingualFacts(text, language) {
   for (const match of value.matchAll(size)) add('size_dimension', canonicalUnit(match[1], match[2]));
   for (const match of value.matchAll(/(\d+(?:\.\d+)?)%/g)) add('percent', Number(match[1]));
   const date = isoDate(value); if (date) add('date', date);
+  if (evidenceMode) {
+    for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(kg|g|公斤|克)\b/giu)) add('weight', canonicalUnit(match[1], match[2]));
+    for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(microns?|um|μm|微米|mm|毫米)\b/giu)) add('thickness', canonicalUnit(match[1], match[2]));
+    for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(cm|厘米|mm|毫米)\b/giu)) add('size_dimension', canonicalUnit(match[1], match[2]));
+  }
   for (const [role, items] of Object.entries(extractOntologyFacts(value, language))) for (const item of items) add(role, item);
   return Object.fromEntries(Object.entries(facts).map(([role, items]) => [role, [...items].sort()]));
 }
@@ -168,13 +195,16 @@ function alignedFacts(bodyEn, bodyCn) {
 }
 
 function unsupportedProductFacts(bodyEn, bodyCn, evidence) {
-  const bodyFacts = [bilingualFacts(bodyEn, 'en'), bilingualFacts(bodyCn, 'cn')];
+  const safeQuestion = sentence => isNonAssertionRequest(sentence)
+    || (/\?$|？$/u.test(sentence) && /^(?:could|would|can|please|what|请|烦请|能否|可以|可否)/iu.test(sentence.trim()));
+  const asserted = value => splitSentences(value).filter(sentence => !safeQuestion(sentence)).join('\n');
+  const bodyFacts = [bilingualFacts(asserted(bodyEn), 'en'), bilingualFacts(asserted(bodyCn), 'cn')];
   const evidenceText = [
     ...(Array.isArray(evidence.products) ? evidence.products : []),
     evidence.entryProduct || '',
     ...(Array.isArray(evidence.supportedClaims) ? evidence.supportedClaims : [])
   ].join('\n');
-  const evidenceFacts = [bilingualFacts(evidenceText, 'en'), bilingualFacts(evidenceText, 'cn')];
+  const evidenceFacts = [bilingualFacts(evidenceText, 'en', true), bilingualFacts(evidenceText, 'cn', true)];
   for (const facts of bodyFacts) for (const [role, values] of Object.entries(facts)) {
     const supported = new Set(evidenceFacts.flatMap(item => item[role] || []));
     if (values.some(value => !supported.has(value))) return true;
@@ -182,11 +212,24 @@ function unsupportedProductFacts(bodyEn, bodyCn, evidence) {
   return false;
 }
 
+function hasUnknownProductFact(bodyEn, bodyCn) {
+  const safeQuestion = sentence => isNonAssertionRequest(sentence)
+    || (/\?$|？$/u.test(sentence) && /^(?:could|would|can|please|what|请|烦请|能否|可以|可否)/iu.test(sentence.trim()));
+  return [[bodyEn, 'en'], [bodyCn, 'cn']].some(([body, language]) => splitSentences(body).some(sentence => {
+    if (safeQuestion(sentence)) return false;
+    const property = language === 'en'
+      ? /\b(?:material|finish|surface|closure|color|colour|transparen|opaque|zipper|velcro|valve|pouch)\b/i.test(sentence)
+      : /(?:材料|表面|封口|颜色|透明|不透明|拉链|魔术贴|阀|袋型)/u.test(sentence);
+    return property && Object.keys(extractOntologyFacts(sentence, language)).length === 0;
+  }));
+}
+
 function questionIntents(text, language) {
   const questions = normalized(text).split(/(?<=[?？])/u).filter(part => /[?？]/u.test(part));
   const intents = new Set();
   for (const question of questions) {
     for (const [name, en, cn] of QUESTION_INTENTS) if ((language === 'en' ? en : cn).test(question)) intents.add(name);
+    if (Object.keys(extractOntologyFacts(question, language)).length) intents.add('product_fact');
   }
   return { count: questions.length, intents: [...intents].sort() };
 }
@@ -274,7 +317,8 @@ function scoreDraft(input = {}) {
   const hardFailures = unsupportedClaims(input);
   const factAlignment = alignedFacts(bodyEn, bodyCn);
   if (!factAlignment.aligned) hardFailures.push('bilingual_key_fact_conflict');
-  if (unsupportedProductFacts(bodyEn, bodyCn, evidence)) hardFailures.push('unsupported_product_fact');
+  if (unsupportedProductFacts(input.bodyEn, input.bodyCn, evidence)) hardFailures.push('unsupported_product_fact');
+  if (hasUnknownProductFact(input.bodyEn, input.bodyCn)) hardFailures.push('unknown_product_fact');
   if (!provenanceOk) hardFailures.push('invalid_recipient_provenance');
   return { score, passed: score >= 80 && hardFailures.length === 0, components, hardFailures };
 }
@@ -415,4 +459,4 @@ function evaluateInitialContact(db, input = {}) {
   }
 }
 
-module.exports = { MAXIMUMS, scoreDraft, evaluateInitialContact, extractBilingualFacts: bilingualFacts };
+module.exports = { MAXIMUMS, scoreDraft, evaluateInitialContact, extractBilingualFacts: bilingualFacts, unsupportedProductFacts };

@@ -195,6 +195,57 @@ const canonicalUnits = scoreDraft({
 });
 assert.strictEqual(canonicalUnits.components.bilingual_consistency.points, 10);
 assert.ok(!canonicalUnits.hardFailures.includes('bilingual_key_fact_conflict'));
+assert.strictEqual(canonicalUnits.passed, true);
+assert.deepStrictEqual(canonicalUnits.hardFailures, []);
+
+const mixedIntent = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nWe would like to discuss our guaranteed delivery and price is USD 0.05.`,
+  evidence: { ...base.evidence, supportedClaims: [] }
+});
+assert.strictEqual(mixedIntent.passed, false);
+assert.ok(mixedIntent.hardFailures.includes('unsupported_delivery'));
+assert.ok(mixedIntent.hardFailures.includes('unsupported_price'));
+
+for (const [enFact, cnFact] of [
+  ['Lead time is 2 weeks.', '交期为3周。'],
+  ['Order quantity is 100000 units.', '订单数量为500000个。'],
+  ['Use a Velcro closure and transparent pouch.', '使用扎丝封口和不透明袋。']
+]) {
+  const result = scoreDraft({ ...base, bodyEn: `${base.bodyEn}\n${enFact}`, bodyCn: `${base.bodyCn}\n${cnFact}`,
+    evidence: { ...base.evidence, supportedClaims: [enFact, cnFact] } });
+  assert.strictEqual(result.components.bilingual_consistency.points, 0);
+  assert.strictEqual(result.passed, false);
+  assert.ok(result.hardFailures.includes('bilingual_key_fact_conflict'));
+}
+
+for (const [enQuestion, cnQuestion] of [
+  ['Could you confirm whether you use PET and a zipper?', '请确认贵司是否使用PET和拉链？'],
+  ['Could you share whether you prefer matte or glossy finish?', '请告知贵司偏好哑光还是亮光？']
+]) {
+  const result = scoreDraft({ ...base, bodyEn: `${base.bodyEn}\n${enQuestion}`, bodyCn: `${base.bodyCn}\n${cnQuestion}` });
+  assert.ok(!result.hardFailures.includes('unsupported_product_fact'));
+  assert.ok(result.components.questions.points > 0);
+}
+
+const unitConflict = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nThickness is 100 micron and date is July 20, 2026.`,
+  bodyCn: `${base.bodyCn}\n厚度为0.2毫米，日期为2026年7月21日。`,
+  evidence: { ...base.evidence, supportedClaims: ['100 micron', '0.2毫米', 'July 20, 2026', '2026年7月21日'] }
+});
+assert.strictEqual(unitConflict.components.bilingual_consistency.points, 0);
+assert.strictEqual(unitConflict.passed, false);
+assert.ok(unitConflict.hardFailures.includes('bilingual_key_fact_conflict'));
+
+const unknownProductFact = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nClosure is magnetic.`,
+  bodyCn: `${base.bodyCn}\n封口为磁吸式。`,
+  evidence: { ...base.evidence, supportedClaims: ['magnetic closure', '磁吸封口'] }
+});
+assert.strictEqual(unknownProductFact.passed, false);
+assert.ok(unknownProductFact.hardFailures.includes('unknown_product_fact'));
 
 const { evaluateInitialContact } = require('../src/services/matrixStreamGate');
 const db = new Database(':memory:');

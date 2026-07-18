@@ -18,7 +18,9 @@ const ONTOLOGY = Object.freeze({
     ['valve_pouch', /valve\s+pouch/i, /带阀袋/u], ['stand_up_pouch', /stand[ -]?up\s+pouch/i, /自立袋/u],
     ['flat_bottom', /flat[ -]?bottom/i, /方底袋/u], ['spout_pouch', /spout\s+pouch/i, /吸嘴袋/u],
     ['three_side_seal', /three[ -]?side[ -]?seal/i, /三边封/u]
-  ]
+  ],
+  transparency: [['transparent', /\btransparent\b/i, /透明/u], ['opaque', /\bopaque\b/i, /不透明/u]],
+  closure: [['velcro', /\bvelcro\b/i, /魔术贴/u], ['wire_tie', /\bwire[ -]?tie\b/i, /扎丝/u], ['none', /\bno\s+closure\b/i, /无封口/u]]
 });
 
 function extractOntologyFacts(text, language) {
