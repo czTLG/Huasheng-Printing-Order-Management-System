@@ -428,16 +428,30 @@ function reasonList(value) {
   return [...new Set(values)];
 }
 
-function gateProjection(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return { state: 'unknown', reasons: [] };
-  if (value.ok === false) return { state: 'blocked', reasons: reasonList(value) };
-  for (const key of ['reasons', 'hardFailures', 'hard_failures']) {
-    if (Object.prototype.hasOwnProperty.call(value, key) && !Array.isArray(value[key])) {
-      return { state: 'unknown', reasons: [] };
+const REASON_FIELDS = ['reasons', 'hardFailures', 'hard_failures'];
+
+function strictReasonProjection(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { valid: false, reasons: [] };
+  const reasons = [];
+  for (const key of REASON_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    if (!Array.isArray(value[key])) return { valid: false, reasons: [] };
+    for (const item of value[key]) {
+      if (typeof item !== 'string') return { valid: false, reasons: [] };
+      const reason = item.trim();
+      if (!reason || [...reason].length > 256 || /[\r\n\0]/.test(reason)) return { valid: false, reasons: [] };
+      reasons.push(reason);
     }
   }
-  const reasons = reasonList(value);
-  if (reasons.length) return { state: 'blocked', reasons };
+  return { valid: true, reasons: [...new Set(reasons)] };
+}
+
+function gateProjection(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { state: 'unknown', reasons: [] };
+  const reasonProjection = strictReasonProjection(value);
+  if (value.ok === false) return { state: 'blocked', reasons: reasonProjection.valid ? reasonProjection.reasons : [] };
+  if (!reasonProjection.valid) return { state: 'unknown', reasons: [] };
+  if (reasonProjection.reasons.length) return { state: 'blocked', reasons: reasonProjection.reasons };
   if (value.ok === true) return { state: 'passed', reasons: [] };
   return { state: 'unknown', reasons: [] };
 }
@@ -458,7 +472,8 @@ function renderFinalPreview(preview, cardHelpers, retry = 0) {
   };
   const requiredGates = [preview?.duplicate, preview?.cooling, preview?.quota, preview?.readiness, preview?.policy];
   const gatesPassed = requiredGates.every(value => gateProjection(value).state === 'passed');
-  const confirmAllowed = preview?.allowed === true && gatesPassed && reasonList(preview).length === 0;
+  const topLevelReasons = strictReasonProjection(preview);
+  const confirmAllowed = preview?.allowed === true && gatesPassed && topLevelReasons.valid && topLevelReasons.reasons.length === 0;
   const elements = [
     md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${Number(quality.score ?? version.quality_score ?? 0)}/100`),
     md(`**质量组成**\n${components.length ? components.join('\n') : '暂无组成明细'}\n${reasonList(quality).length ? `硬性原因：${clip(reasonList(quality).join(','), 130)}` : ''}`),
@@ -468,7 +483,9 @@ function renderFinalPreview(preview, cardHelpers, retry = 0) {
       gateLine('当日配额', preview.quota),
       gateLine('发送方就绪', preview.readiness),
       gateLine('国家/渠道政策', preview.policy),
-      ...(reasonList(preview).length ? [`最终原因：${clip(reasonList(preview).join(','), 150)}`] : [])
+      ...(!topLevelReasons.valid
+        ? ['最终状态：提交时复核']
+        : topLevelReasons.reasons.length ? [`最终原因：${clip(topLevelReasons.reasons.join(','), 150)}`] : [])
     ].join('\n'))
   ];
   if (confirmAllowed) {
