@@ -53,6 +53,8 @@ DONE
 - Missing, non-object, empty, unknown, non-boolean `ok`, or malformed reason projections are displayed as `提交时复核` and suppress final confirmation.
 - Explicit `ok === false` or any blocking reason is displayed as blocked. A contradictory `allowed: true` response with any blocked gate exposes no `mx.confirm` action.
 - RED fixtures cover `{}`, `{ ok: null }`, unknown status, string `ok`, missing gates, and `allowed: true` plus an explicitly blocked readiness gate; the normal five-gate passing path remains covered.
+- R2 adds a shared strict reason projection for gate and top-level metadata. Present reason fields must be arrays containing only trimmed, non-empty, bounded strings without control newlines; malformed containers or null/boolean/number/object/empty elements fail closed before display filtering.
+- R2 RED fixtures cover `reasons: [null]`, `hardFailures: [false, '', '   ']`, `hard_failures: [0]`, mixed valid/object arrays, and malformed top-level string/object/array payloads. All suppress `mx.confirm`; the strict five-gate pass remains covered.
 
 ## 蒸馏进度
 

@@ -254,7 +254,12 @@ async function testTwoConfirmationReviewFlow() {
     ['重复检查', 'duplicate', {}],
     ['冷却期', 'cooling', { ok: null }],
     ['当日配额', 'quota', { status: 'unknown' }],
-    ['发送方就绪', 'readiness', { ok: 'true', reasons: [] }]
+    ['发送方就绪', 'readiness', { ok: 'true', reasons: [] }],
+    ['重复检查', 'duplicate', { ok: true, reasons: [null] }],
+    ['发送方就绪', 'readiness', { ok: true, hardFailures: [false, '', '   '] }],
+    ['国家/渠道政策', 'policy', { ok: true, hard_failures: [0] }],
+    ['冷却期', 'cooling', { ok: true, reasons: ['valid_reason', { code: 'malformed' }] }],
+    ['当日配额', 'quota', { ok: true, reasons: ['x'.repeat(257)] }]
   ]) {
     previewOverride = {
       allowed: true, work_item_version: 4, version: currentVersion,
@@ -288,6 +293,26 @@ async function testTwoConfirmationReviewFlow() {
   const explicitFalseCard = sent.at(-1);
   assert.ok(visibleText(explicitFalseCard).includes('国家/渠道政策：阻断'), 'explicit false must remain blocked even if its reason container is malformed');
   assert.ok(!buttons(explicitFalseCard).some(item => item.value?.a === 'mx.confirm'));
+
+  for (const [label, topLevelReasons] of [
+    ['string container', { reasons: 'malformed' }],
+    ['object container', { hardFailures: { code: 'malformed' } }],
+    ['null element', { reasons: [null] }],
+    ['boolean and empty elements', { hardFailures: [false, '', '   '] }],
+    ['number element', { hard_failures: [0] }],
+    ['mixed malformed elements', { reasons: ['valid_reason', { code: 'malformed' }] }],
+    ['overlong element', { reasons: ['x'.repeat(257)] }]
+  ]) {
+    previewOverride = {
+      allowed: true, work_item_version: 4, version: currentVersion,
+      quality: JSON.parse(currentVersion.quality_json),
+      ...trustedGates, ...topLevelReasons
+    };
+    await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
+    const malformedTopLevelCard = sent.at(-1);
+    assert.ok(!buttons(malformedTopLevelCard).some(item => item.value?.a === 'mx.confirm'), `${label} top-level reasons must fail closed`);
+    assert.ok(!visibleText(malformedTopLevelCard).includes('[object Object]'), `${label} must not stringify malformed reason objects`);
+  }
   previewOverride = null;
 
   await handlers.get('mx.revise')({ evt, value: { a: 'mx.revise', w: 91, x: 302, v: 4, h: 'b'.repeat(64) } });
