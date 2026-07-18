@@ -31,14 +31,19 @@ const policy = {
 assert.throws(() => setPolicy(db, { ...policy, actor: 'missing' }), /active super_admin/);
 assert.throws(() => setPolicy(db, { ...policy, actor: 'worker' }), /active super_admin/);
 assert.throws(() => setPolicy(db, { ...policy, country: '*' }), /ISO country/);
+assert.throws(() => setPolicy(db, { ...policy, country: 'ZZ' }), /ISO country/);
+assert.throws(() => setPolicy(db, { ...policy, channel: 'sms' }), /channel/);
 assert.throws(() => setPolicy(db, { ...policy, sourceUrls: [] }), /source URL/);
 assert.throws(() => setPolicy(db, { ...policy, expiresAt: policy.reviewedAt }), /expiry/);
-const saved = setPolicy(db, policy);
+const operationAt = '2026-07-18T12:34:56.000Z';
+const saved = setPolicy(db, policy, { clock: () => new Date(operationAt) });
 assert.strictEqual(saved.country_code, 'US');
 assert.strictEqual(saved.status, 'approved');
 assert.deepStrictEqual(listPolicies(db, { country: 'US', channel: 'email' }).map(row => row.status), ['approved']);
 const audit = db.prepare('SELECT * FROM audit_logs').get();
 assert.strictEqual(audit.action, 'matrix_policy_set');
+assert.strictEqual(audit.created_at, operationAt);
+assert.notStrictEqual(audit.created_at, policy.reviewedAt);
 assert.ok(!audit.detail.includes('authority.example'));
 assert.ok(!audit.detail.includes('secret'));
 assert.deepStrictEqual(JSON.parse(audit.detail), {
@@ -49,6 +54,7 @@ assert.deepStrictEqual(parseArgs(['list', '--country', 'US', '--channel', 'email
   command: 'list', country: 'US', channel: 'email'
 });
 assert.throws(() => parseArgs(['set', '--actor', 'root', '--country', '*', '--channel', 'email']), /ISO country/);
+assert.throws(() => parseArgs(['set', '--actor', 'root', '--country', 'ZZ', '--channel', 'email']), /ISO country/);
 assert.throws(() => parseArgs(['remove']), /command/);
 db.close();
 process.stdout.write('matrix policy tests passed\n');

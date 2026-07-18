@@ -36,13 +36,27 @@ function thirdWeekdayAtTen(sentAt) {
   return `${yyyy}-${mm}-${dd}T10:00:00+08:00`;
 }
 
+function syncWorkItemDue(db, workItemId, updatedAt) {
+  const next = db.prepare(`
+    SELECT MIN(due_at) AS due_at FROM matrix_stream_reply_checks
+    WHERE work_item_id = ? AND state = 'active' AND due_at IS NOT NULL
+  `).get(workItemId);
+  const dueAt = next?.due_at || null;
+  db.prepare(`
+    UPDATE matrix_work_items SET next_action = ?, next_followup_at = ?, updated_at = ? WHERE id = ?
+  `).run(dueAt ? 'reply_check' : '', dueAt, updatedAt, workItemId);
+}
+
 function scheduleReplyCheck(db, input = {}) {
   const jobId = positiveInteger(input.jobId, 'job id');
   const channel = boundedToken(input.channel, 'channel', 'email');
   const priority = boundedToken(input.priority, 'priority', 'normal');
   const schedule = db.transaction(() => {
     const existing = db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(jobId);
-    if (existing) return existing;
+    if (existing) {
+      syncWorkItemDue(db, existing.work_item_id, existing.created_at);
+      return existing;
+    }
     const job = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(jobId);
     if (!job || job.state !== 'accepted') throw new Error('accepted delivery job required');
     const workItem = db.prepare('SELECT id FROM matrix_work_items WHERE id = ?').get(job.work_item_id);
@@ -55,9 +69,7 @@ function scheduleReplyCheck(db, input = {}) {
         state, terminal_reason, created_at, closed_at
       ) VALUES (?, ?, 'reply_check', ?, ?, ?, 'active', '', ?, NULL)
     `).run(job.work_item_id, jobId, channel, priority, dueAt, createdAt);
-    db.prepare(`
-      UPDATE matrix_work_items SET next_action = 'reply_check', next_followup_at = ?, updated_at = ? WHERE id = ?
-    `).run(dueAt, createdAt, job.work_item_id);
+    syncWorkItemDue(db, job.work_item_id, createdAt);
     return db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE id = ?').get(Number(result.lastInsertRowid));
   });
   return schedule.immediate();
@@ -79,10 +91,7 @@ function closeReplyCheck(db, input = {}) {
         SET due_at = NULL, state = 'closed', terminal_reason = ?, closed_at = ?
         WHERE id = ? AND state = 'active'
       `).run(reason, closedAt, row.id);
-      db.prepare(`
-        UPDATE matrix_work_items SET next_action = '', next_followup_at = NULL, updated_at = ?
-        WHERE id = ? AND next_action = 'reply_check'
-      `).run(closedAt, row.work_item_id);
+      syncWorkItemDue(db, row.work_item_id, closedAt);
     } else if (row.terminal_reason !== reason) {
       throw new Error('reply check already closed with another terminal reason');
     }
