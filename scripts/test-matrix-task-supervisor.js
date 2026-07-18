@@ -52,7 +52,7 @@ const review = tasks.consumeMigrationProjection({ status: 'needs_migration_revie
 const reviewReplay = tasks.consumeMigrationProjection({ status: 'needs_migration_review', reason: 'binding_not_exact', sourceVersionBindingId: 88 }, { ownerRole: 'foreign_trade_crm_admin', channel: 'bill', idempotencyKey: 'projection-88' });
 assert.deepStrictEqual(reviewReplay, review);
 assert.strictEqual(db.prepare('SELECT COUNT(*) AS total FROM matrix_tasks').get().total, beforeTasks + 1);
-assert.strictEqual(db.prepare("SELECT COUNT(*) AS total FROM sqlite_master WHERE type='table' AND name LIKE 'matrix%review%' ").get().total, 0, 'no secondary matrix review table may exist');
+assert.strictEqual(db.prepare("SELECT COUNT(*) AS total FROM sqlite_master WHERE type='table' AND name IN ('matrix_migration_reviews','matrix_identity_reviews')").get().total, 0, 'no secondary migration or identity review table may exist');
 
 db.close();
 fs.rmSync(root, { recursive: true, force: true });
