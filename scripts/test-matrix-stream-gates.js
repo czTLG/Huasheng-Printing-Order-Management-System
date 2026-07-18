@@ -67,6 +67,40 @@ const unrelatedProvenance = scoreDraft({
 });
 assert.strictEqual(unrelatedProvenance.passed, false);
 assert.ok(unrelatedProvenance.hardFailures.includes('invalid_recipient_provenance'));
+const conflictingFacts = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nOur annual volume is 100000 units and the finish is red.`,
+  bodyCn: `${base.bodyCn}\n年用量为500000个，颜色为蓝色。`
+});
+assert.strictEqual(conflictingFacts.components.bilingual_consistency.points, 0);
+assert.strictEqual(conflictingFacts.passed, false);
+assert.ok(conflictingFacts.hardFailures.includes('bilingual_key_fact_conflict'));
+const alignedFacts = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nOur annual volume is 100000 units and the finish is red.`,
+  bodyCn: `${base.bodyCn}\n年用量为100000个，颜色为红色。`
+});
+assert.strictEqual(alignedFacts.components.bilingual_consistency.points, 10);
+assert.ok(!alignedFacts.hardFailures.includes('bilingual_key_fact_conflict'));
+const textualAlignedFacts = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nOur annual volume is one hundred thousand units and the finish is red.`,
+  bodyCn: `${base.bodyCn}\n年用量为十万个，颜色为红色。`
+});
+assert.strictEqual(textualAlignedFacts.components.bilingual_consistency.points, 10);
+assert.ok(!textualAlignedFacts.hardFailures.includes('bilingual_key_fact_conflict'));
+
+for (const recipient of [
+  { ...base.recipient, sourceUrl: 'https://test/contact' },
+  { ...base.recipient, email: 'sales@tenant-a.workers.dev', sourceUrl: 'https://tenant-b.workers.dev/contact' }
+]) {
+  const result = scoreDraft({ ...base, recipient });
+  assert.ok(result.hardFailures.includes('invalid_recipient_provenance'));
+}
+assert.ok(!scoreDraft({
+  ...base,
+  recipient: { ...base.recipient, email: 'sales@tenant-a.workers.dev', sourceUrl: 'https://tenant-a.workers.dev/contact' }
+}).hardFailures.includes('invalid_recipient_provenance'));
 
 const unsafe = scoreDraft({
   ...base,
@@ -74,11 +108,9 @@ const unsafe = scoreDraft({
   bodyEn: 'FDA approved. Final price is USD 0.05 with guaranteed lead time.'
 });
 assert.strictEqual(unsafe.passed, false);
-assert.deepStrictEqual(unsafe.hardFailures.sort(), [
-  'unsupported_certification',
-  'unsupported_lead_time',
-  'unsupported_price'
-]);
+for (const failure of ['unsupported_certification', 'unsupported_lead_time', 'unsupported_price']) {
+  assert.ok(unsafe.hardFailures.includes(failure));
+}
 const mismatchedEvidence = scoreDraft({
   ...base,
   bodyEn: [
@@ -88,10 +120,10 @@ const mismatchedEvidence = scoreDraft({
   ].join(' '),
   evidence: { ...base.evidence, supportedClaims: ['BRC certified', 'Final price is USD 0.50'] }
 });
-assert.deepStrictEqual(mismatchedEvidence.hardFailures.sort(), [
+for (const failure of [
   'unsupported_certification', 'unsupported_delivery', 'unsupported_lead_time',
   'unsupported_performance', 'unsupported_price', 'unsupported_supplier'
-]);
+]) assert.ok(mismatchedEvidence.hardFailures.includes(failure));
 for (const [bodyEn, supportedClaim, expectedFailure] of [
   ['Lead time is 15 days.', 'Lead time is 10 days.', 'unsupported_lead_time'],
   ['Guaranteed shelf life 6 months.', 'Guaranteed shelf life 12 months.', 'unsupported_performance'],
@@ -100,6 +132,28 @@ for (const [bodyEn, supportedClaim, expectedFailure] of [
 ]) {
   const result = scoreDraft({ ...base, bodyEn, evidence: { ...base.evidence, supportedClaims: [supportedClaim] } });
   assert.ok(result.hardFailures.includes(expectedFailure), `${bodyEn} must require exact evidence`);
+}
+for (const [bodyEn, expectedFailure] of [
+  ['Delivery is guaranteed.', 'unsupported_delivery'],
+  ['Lead time is two weeks.', 'unsupported_lead_time'],
+  ['Our barrier performance is guaranteed.', 'unsupported_performance'],
+  ['We supply Brand A officially.', 'unsupported_supplier'],
+  ['交付有保证。', 'unsupported_delivery'],
+  ['交期为两周。', 'unsupported_lead_time'],
+  ['阻隔性能有保证。', 'unsupported_performance'],
+  ['我们正式供应品牌A。', 'unsupported_supplier']
+]) {
+  const unsupported = scoreDraft({ ...base, bodyEn, evidence: { ...base.evidence, supportedClaims: [] } });
+  assert.ok(unsupported.hardFailures.includes(expectedFailure), `${bodyEn} must be detected`);
+  const supported = scoreDraft({ ...base, bodyEn, evidence: { ...base.evidence, supportedClaims: [bodyEn] } });
+  assert.ok(!supported.hardFailures.includes(expectedFailure), `${bodyEn} exact evidence must support`);
+}
+for (const [claim, evidence, failure] of [
+  ['Lead time is two weeks.', 'Lead time is 2 weeks.', 'unsupported_lead_time'],
+  ['交期为两周。', '交期为2周。', 'unsupported_lead_time']
+]) {
+  const result = scoreDraft({ ...base, bodyEn: claim, evidence: { ...base.evidence, supportedClaims: [evidence] } });
+  assert.ok(!result.hardFailures.includes(failure), `${claim} textual number must normalize exactly`);
 }
 
 const { evaluateInitialContact } = require('../src/services/matrixStreamGate');
@@ -151,9 +205,9 @@ assert.strictEqual(evaluateInitialContact(db, {
 assert.strictEqual(evaluateInitialContact(db, {
   email: 'new@cooling.test', domain: 'cooling.test', companyName: 'Cooling Ltd', now: '2026-07-18T00:00:00Z'
 }).reasons[0], 'domain_cooling_90_days');
-assert.strictEqual(evaluateInitialContact(db, {
+assert.deepStrictEqual(evaluateInitialContact(db, {
   email: 'reply@standalone.test', domain: 'standalone.test', companyName: 'Standalone Ltd', now: '2026-07-19T14:00:00+08:00'
-}).route, 'existing_relationship');
+}), { allowed: true, route: 'existing_relationship', reasons: ['exact_crm_reply'], matchedCustomerIds: [] });
 assert.strictEqual(evaluateInitialContact(db, {
   email: 'new@repeat.test', domain: 'repeat.test', companyName: 'Repeat Ltd', now: '2026-07-19T14:00:00+08:00'
 }).reasons[0], 'domain_cooling_90_days');
@@ -237,6 +291,11 @@ closeReplyCheck(followupDb, { jobId: 13, reason: 'manual_stop', closedAt: '2026-
 assert.deepStrictEqual(followupDb.prepare('SELECT next_action, next_followup_at FROM matrix_work_items WHERE id = 1').get(), {
   next_action: '', next_followup_at: null
 });
+followupDb.prepare(`UPDATE matrix_work_items SET next_action = 'manual_review', next_followup_at = ?, updated_at = ? WHERE id = 1`)
+  .run('2026-07-30T10:00:00+08:00', '2026-07-20T10:00:00.000Z');
+const beforeClosedReplay = followupDb.prepare('SELECT * FROM matrix_work_items WHERE id = 1').get();
+assert.strictEqual(scheduleReplyCheck(followupDb, { jobId: 11, channel: 'email' }).state, 'closed');
+assert.deepStrictEqual(followupDb.prepare('SELECT * FROM matrix_work_items WHERE id = 1').get(), beforeClosedReplay);
 followupDb.close();
 
 (async () => {

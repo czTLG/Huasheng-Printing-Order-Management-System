@@ -1,5 +1,8 @@
 'use strict';
 
+const { parse: parseDomain } = require('tldts');
+const { isNonAssertionRequest, splitSentences } = require('./matrixStreamText');
+
 const MAXIMUMS = Object.freeze({
   product_match: 20,
   company_specific: 15,
@@ -29,14 +32,15 @@ function component(points, maximum, reasons, evidenceIds) {
   return { points, maximum, reasons, evidence_ids: evidenceIds };
 }
 
-const CLAIM_TYPES = Object.freeze({
-  unsupported_price: /(?:[$€£¥]\s*\d|\b(?:usd|eur|rmb|cny|gbp)\s*\d|\d+(?:[.,]\d+)?\s*(?:usd|eur|rmb|cny|gbp|美元|元)\b|(?:price|cost|quote|amount|价格|报价|单价|售价|费用|金额|成本).{0,24}(?:\d|面议|待定))/iu,
-  unsupported_certification: /(?:\b(?:fda|iso|brcgs?|haccp|gmp|ce|rohs|reach|sedex)\b|approved|certified|compliant|认证|资质|合规|许可证|审核通过)/iu,
-  unsupported_supplier: /(?:(?:approved|authorized|exclusive|official)\s+(?:supplier|vendor|manufacturer)|(?:指定|授权|独家|官方)(?:供应商|制造商))/iu,
-  unsupported_performance: /(?:(?:guaranteed|proven).{0,40}(?:performance|barrier|shelf\s*life|quality)|shelf\s*life\s+\d|(?:保证|确保|已验证).{0,24}(?:性能|阻隔|保质期|质量))/iu,
-  unsupported_delivery: /(?:(?:guaranteed|fixed)\s+(?:delivery|arrival|shipping)|(?:delivery|arrival|shipping).{0,24}(?:\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(?:保证|固定).{0,16}(?:交付|到货|发货))/iu,
-  unsupported_lead_time: /(?:lead[ -]?time.{0,24}(?:\d|guaranteed|fixed)|(?:guaranteed|fixed)\s+lead[ -]?time|(?:交期|生产周期).{0,16}\d|(?:保证|固定).{0,12}(?:交期|生产周期))/iu
+const CLAIM_SEMANTICS = Object.freeze({
+  unsupported_price: /(?:[$€£¥]|\b(?:usd|eur|rmb|cny|gbp)\b|美元|元|price|cost|quote|amount|价格|报价|单价|售价|费用|金额|成本)/iu,
+  unsupported_certification: /(?:\b(?:fda|iso|brcgs?|haccp|gmp|ce|rohs|reach|sedex)\b|certif|compliant|认证|资质|合规|许可证|审核)/iu,
+  unsupported_supplier: /(?:supplier|vendor|manufacturer|\bsuppl(?:y|ies|ied)\b|供应商|制造商|供应)/iu,
+  unsupported_performance: /(?:performance|barrier|shelf\s*life|quality|性能|阻隔|保质期|质量)/iu,
+  unsupported_delivery: /(?:delivery|arrival|shipping|交付|到货|发货)/iu,
+  unsupported_lead_time: /(?:lead[ -]?time|交期|生产周期)/iu
 });
+const ASSERTION = /(?:\b(?:is|are|has|have|guaranteed|fixed|proven|approved|certified|officially|official|authorized|exclusive|we\s+supply)\b|(?:为|是|有保证|保证|固定|已|通过|正式|官方|授权|独家|供应))/iu;
 
 function unsupportedClaims(input) {
   const output = claimKeys([input.subject, input.bodyEn, input.bodyCn]);
@@ -47,13 +51,49 @@ function unsupportedClaims(input) {
 function claimKeys(values) {
   const keys = [];
   for (const value of values) {
-    for (const statement of normalized(value).split(/(?:[!?。！？\n]+|\.(?=\s|$))/u).map(part => part.trim()).filter(Boolean)) {
-      for (const [type, pattern] of Object.entries(CLAIM_TYPES)) {
-        if (pattern.test(statement)) keys.push(`${type}:${compact(statement)}`);
+    for (const raw of splitSentences(value)) {
+      if (isNonAssertionRequest(raw)) continue;
+      const statement = normalizeTextNumbers(raw).replace(/[。.!?！？]+$/u, '').trim();
+      for (const [type, semantic] of Object.entries(CLAIM_SEMANTICS)) {
+        if (semantic.test(statement) && ASSERTION.test(statement)) keys.push(`${type}:${compact(statement)}`);
       }
     }
   }
   return [...new Set(keys)];
+}
+
+const EN_NUMBERS = Object.freeze({ zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 });
+const EN_NUMBER_WORD = '(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)';
+
+function englishNumber(value) {
+  let total = 0; let current = 0;
+  for (const token of String(value).toLowerCase().replace(/-/g, ' ').split(/\s+/).filter(word => word !== 'and')) {
+    if (Object.prototype.hasOwnProperty.call(EN_NUMBERS, token)) current += EN_NUMBERS[token];
+    else if (token === 'hundred') current = (current || 1) * 100;
+    else if (token === 'thousand') { total += (current || 1) * 1000; current = 0; }
+    else if (token === 'million') { total += (current || 1) * 1000000; current = 0; }
+    else return null;
+  }
+  return total + current;
+}
+
+function chineseNumber(value) {
+  const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const units = { 十: 10, 百: 100, 千: 1000, 万: 10000 };
+  let total = 0; let section = 0; let number = 0;
+  for (const char of String(value)) {
+    if (Object.prototype.hasOwnProperty.call(digits, char)) number = digits[char];
+    else if (units[char] === 10000) { total += (section + number) * 10000; section = 0; number = 0; }
+    else if (units[char]) { section += (number || 1) * units[char]; number = 0; }
+    else return null;
+  }
+  return total + section + number;
+}
+
+function normalizeTextNumbers(value) {
+  return normalized(value)
+    .replace(new RegExp(`\\b${EN_NUMBER_WORD}(?:(?:[ -]+and)?[ -]+${EN_NUMBER_WORD})*\\b`, 'gi'), words => String(englishNumber(words) ?? words))
+    .replace(/[零〇一二两三四五六七八九十百千万]+/gu, word => String(chineseNumber(word) ?? word));
 }
 
 const CONCEPTS = Object.freeze([
@@ -69,8 +109,49 @@ const QUESTION_INTENTS = Object.freeze([
 ]);
 
 function numericSpecs(text) {
-  return [...normalized(text).matchAll(/\b\d+(?:[.,]\d+)?\s*(?:g|kg|克|公斤|mm|cm|毫米|厘米)\b/giu)]
+  return [...normalizeTextNumbers(text).matchAll(/\b\d+(?:[.,]\d+)?\s*(?:g|kg|克|公斤|mm|cm|毫米|厘米)\b/giu)]
     .map(match => compact(match[0]).replace('克', 'g').replace('公斤', 'kg'));
+}
+
+const CONTROLLED_FACTS = Object.freeze({
+  color: [['red', /\bred\b/i, /红/u], ['blue', /\bblue\b/i, /蓝/u], ['black', /\bblack\b/i, /黑/u], ['white', /\bwhite\b/i, /白/u], ['green', /\bgreen\b/i, /绿/u]],
+  material: [['pet', /\bpet\b/i, /聚酯|PET/iu], ['pe', /\bpe\b/i, /聚乙烯|PE/iu], ['kraft', /\bkraft\b/i, /牛皮纸/u], ['aluminum', /alumin(?:um|ium)\s*foil/i, /铝箔/u]],
+  bag_type: [['valve_pouch', /valve\s+pouch/i, /带阀袋/u], ['stand_up_pouch', /stand[ -]?up\s+pouch/i, /自立袋/u], ['flat_bottom', /flat[ -]?bottom/i, /方底/u], ['spout_pouch', /spout\s+pouch/i, /吸嘴袋/u]]
+});
+
+function bilingualFacts(text, language) {
+  const value = normalizeTextNumbers(text);
+  const facts = {};
+  const add = (role, item) => { if (item !== undefined) (facts[role] ||= new Set()).add(String(item).toLowerCase()); };
+  const patterns = language === 'en' ? {
+    annual_volume: /annual\s+(?:volume|quantity)[^\d]{0,16}(\d[\d,.]*)/gi,
+    quantity: /(?:quantity|volume)[^\d]{0,16}(\d[\d,.]*)/gi,
+    thickness: /thickness[^\d]{0,12}(\d+(?:\.\d+)?\s*(?:micron|um|μm|mm)?)/gi,
+    lead_time: /lead[ -]?time[^\d]{0,16}(\d+(?:\.\d+)?\s*(?:day|week|month)s?)/gi,
+    percent: /(\d+(?:\.\d+)?%)/g,
+    date: /\b(\d{4}-\d{1,2}-\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2})\b/gi
+  } : {
+    annual_volume: /年(?:用量|需求|数量)[^\d]{0,8}(\d[\d,.]*)/gu,
+    quantity: /(?:数量|用量)[^\d]{0,8}(\d[\d,.]*)/gu,
+    thickness: /厚度[^\d]{0,8}(\d+(?:\.\d+)?\s*(?:微米|丝|毫米|mm)?)/giu,
+    lead_time: /(?:交期|生产周期)[^\d]{0,8}(\d+(?:\.\d+)?\s*(?:天|周|个月|月))/gu,
+    percent: /(\d+(?:\.\d+)?%)/g,
+    date: /(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{1,2}-\d{1,2})/gu
+  };
+  for (const [role, pattern] of Object.entries(patterns)) for (const match of value.matchAll(pattern)) add(role, compact(match[1]));
+  for (const spec of numericSpecs(value)) add('size', spec);
+  for (const [role, entries] of Object.entries(CONTROLLED_FACTS)) {
+    for (const [name, en, cn] of entries) if ((language === 'en' ? en : cn).test(value)) add(role, name);
+  }
+  return Object.fromEntries(Object.entries(facts).map(([role, items]) => [role, [...items].sort()]));
+}
+
+function alignedFacts(bodyEn, bodyCn) {
+  const en = bilingualFacts(bodyEn, 'en');
+  const cn = bilingualFacts(bodyCn, 'cn');
+  const roles = new Set([...Object.keys(en), ...Object.keys(cn)]);
+  const conflicts = [...roles].filter(role => JSON.stringify(en[role] || []) !== JSON.stringify(cn[role] || []));
+  return { aligned: conflicts.length === 0, conflicts };
 }
 
 function questionIntents(text, language) {
@@ -86,13 +167,21 @@ function conceptMatches(text, language) {
   return CONCEPTS.filter(([, en, cn]) => (language === 'en' ? en : cn).test(text)).map(([name]) => name);
 }
 
+function domainIdentity(value) {
+  const parsed = parseDomain(String(value || '').toLowerCase().replace(/\.$/, ''), { allowPrivateDomains: true, validateHostname: true });
+  const supported = parsed.isIcann || parsed.isPrivate || parsed.publicSuffix === 'test';
+  return supported && !parsed.isIp && parsed.hostname && parsed.domain ? parsed.domain : null;
+}
+
 function validProvenance(recipient, nowMs) {
   try {
     const email = normalized(recipient.email);
     const emailDomain = email.split('@')[1];
     const source = new URL(String(recipient.sourceUrl || ''));
     const verifiedAt = Date.parse(String(recipient.verifiedAt || ''));
-    const bound = source.hostname === emailDomain || source.hostname.endsWith(`.${emailDomain}`) || emailDomain.endsWith(`.${source.hostname}`);
+    const emailIdentity = domainIdentity(emailDomain);
+    const sourceIdentity = domainIdentity(source.hostname);
+    const bound = emailIdentity !== null && emailIdentity === sourceIdentity;
     return recipient.kind === 'public_company' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
       && source.protocol === 'https:' && bound && Number.isFinite(verifiedAt) && verifiedAt <= nowMs
       && nowMs - verifiedAt <= 180 * 86400000;
@@ -131,7 +220,7 @@ function scoreDraft(input = {}) {
     && (expectedSpecs.some(value => numericSpecs(subject).includes(value)) || categories.some(value => includesPhrase(subject, value)))
     ? MAXIMUMS.subject : 0;
   const bilingualMatch = productMatch && entryMatch && questionMatch
-    && JSON.stringify([...new Set(numericSpecs(bodyEn))].sort()) === JSON.stringify([...new Set(numericSpecs(bodyCn))].sort());
+    && alignedFacts(bodyEn, bodyCn).aligned;
   const bilingualPoints = bilingualMatch ? MAXIMUMS.bilingual_consistency : 0;
   const readabilityPoints = bodyEn.length >= 80 && bodyEn.length <= 1200 && bodyCn.length >= 30 && bodyCn.length <= 800
     && String(input.bodyEn || '').split(/\r?\n/).filter(line => line.trim()).length >= 2
@@ -155,6 +244,8 @@ function scoreDraft(input = {}) {
   };
   const score = Object.values(components).reduce((sum, value) => sum + value.points, 0);
   const hardFailures = unsupportedClaims(input);
+  const factAlignment = alignedFacts(bodyEn, bodyCn);
+  if (!factAlignment.aligned) hardFailures.push('bilingual_key_fact_conflict');
   if (!provenanceOk) hardFailures.push('invalid_recipient_provenance');
   return { score, passed: score >= 80 && hardFailures.length === 0, components, hardFailures };
 }
@@ -228,7 +319,9 @@ function evaluateInitialContact(db, input = {}) {
       const exactInbound = messages.filter(message => normalized(message.direction) === 'inbound'
         && [message.sender_contact, message.receiver_contact].some(contact => normalizedEmail(contact) === email || contactDomain(contact) === domain));
       if (exactInbound.length) {
-        const ids = [...new Set(exactInbound.map(message => Number(message.customer_id)).filter(Number.isInteger))].sort((a, b) => a - b);
+        const ids = [...new Set(exactInbound.map(message => message.customer_id)
+          .filter(value => value !== null && value !== undefined && value !== '')
+          .map(Number).filter(value => Number.isInteger(value) && value > 0))].sort((a, b) => a - b);
         return { allowed: true, route: 'existing_relationship', reasons: ['exact_crm_reply'], matchedCustomerIds: ids };
       }
 

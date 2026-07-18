@@ -59,6 +59,14 @@ DONE_WITH_CONCERNS
 - Policy RED: `ZZ` and unlisted channels were accepted, and audit time reused caller-controlled `reviewedAt`. GREEN: a fixed offline ISO alpha-2 membership set and exact channel allowlist are enforced by parsing and persistence; audit `created_at` comes from the operation clock while `reviewed_at` remains business data.
 - Follow-up RED: scheduling a later active check replaced the earlier due state, then closing the earlier check cleared the still-active later check. GREEN: schedule and close run in immediate transactions and recompute `MIN(due_at)` across all active checks; only closing the final active check clears work-item due state.
 
+## R3 review repair
+
+- Bilingual facts RED: English `annual volume 100000, red` and Chinese `年用量500000，蓝色` still received 10/10 consistency. GREEN: both bodies now produce role-keyed facts for size/weight, annual volume, quantity, thickness, lead time, percentage, date, color, material, and bag type. Arabic, common English number phrases, and Chinese textual numbers normalize before comparison. Any missing/conflicting role produces zero consistency plus `bilingual_key_fact_conflict`; aligned `one hundred thousand`/`十万` and red/红 remain green.
+- Sensitive predicates RED: inverse assertions such as `Delivery is guaranteed`, `Lead time is two weeks`, `barrier performance is guaranteed`, `We supply Brand A officially`, and their Chinese counterparts were not classified. GREEN: Task 2's reviewed sentence splitter and non-assertion request classifier are reused; category and assertion detection are word-order independent, textual numbers normalize, and the complete normalized assertion must have exact evidence. Explicit request sentences remain outside the assertion gate.
+- Provenance RED: `https://test/` and cross-tenant private suffix sources were accepted. GREEN: `tldts` with private-domain support now requires both email and HTTPS source to resolve to the same valid registrable domain; public suffixes, unknown suffixes, cross-tenant sources, stale/future verification, and non-public-company kinds fail closed.
+- CRM id RED: a null standalone message customer id became `[0]`. GREEN: only non-empty positive integer ids are returned.
+- Reply-check replay RED: replaying a closed originating job rewrote a newer manual work-item action/due/update time. GREEN: any existing active or closed row returns immediately with no database write; a full before/after work-item equality assertion covers the closed replay.
+
 ## Concerns
 
 - Similar-name matching is deliberately narrow and deterministic. Names outside the normalized legal-suffix equivalence require an explicit alias from the reviewed candidate context; aliases only produce `possible_duplicate_review`.

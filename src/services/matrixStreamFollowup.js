@@ -53,10 +53,7 @@ function scheduleReplyCheck(db, input = {}) {
   const priority = boundedToken(input.priority, 'priority', 'normal');
   const schedule = db.transaction(() => {
     const existing = db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(jobId);
-    if (existing) {
-      syncWorkItemDue(db, existing.work_item_id, existing.created_at);
-      return existing;
-    }
+    if (existing) return existing;
     const job = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(jobId);
     if (!job || job.state !== 'accepted') throw new Error('accepted delivery job required');
     const workItem = db.prepare('SELECT id FROM matrix_work_items WHERE id = ?').get(job.work_item_id);
