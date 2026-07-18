@@ -1098,6 +1098,34 @@ function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_conversation_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id TEXT NOT NULL,
+      platform_namespace TEXT NOT NULL,
+      immutable_chat_id_hash TEXT NOT NULL,
+      immutable_root_id_hash TEXT NOT NULL,
+      event_kind TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound','internal')),
+      channel TEXT NOT NULL CHECK(channel IN ('bill','vmci')),
+      chat_id_hash TEXT NOT NULL,
+      thread_id_hash TEXT NOT NULL DEFAULT '',
+      platform_message_id_hash TEXT NOT NULL DEFAULT '',
+      edit_version INTEGER NOT NULL DEFAULT 1,
+      card_event_id_hash TEXT NOT NULL DEFAULT '',
+      actor_user_id INTEGER,
+      binding_id TEXT NOT NULL,
+      normalized_text TEXT NOT NULL DEFAULT '',
+      attachment_refs_json TEXT NOT NULL DEFAULT '[]',
+      bindings_json TEXT NOT NULL DEFAULT '{}',
+      occurred_at TEXT NOT NULL,
+      source_json TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      UNIQUE(platform_namespace, immutable_chat_id_hash, platform_message_id_hash, edit_version, event_kind),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
@@ -1338,6 +1366,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_task_dependencies_blocking ON matrix_task_dependencies(blocking_task_id, state);
     CREATE INDEX IF NOT EXISTS idx_matrix_decisions_task ON matrix_decisions(task_id, state, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_digest_outbox_claim ON matrix_digest_outbox(channel, state, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_conversation_events_timeline ON matrix_conversation_events(conversation_id, occurred_at, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
@@ -1448,6 +1477,12 @@ function initDb() {
     CREATE TRIGGER IF NOT EXISTS trg_matrix_decision_events_no_delete
     BEFORE DELETE ON matrix_decision_events
     BEGIN SELECT RAISE(ABORT, 'matrix_decision_events is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_conversation_events_no_update
+    BEFORE UPDATE ON matrix_conversation_events
+    BEGIN SELECT RAISE(ABORT, 'matrix_conversation_events is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_conversation_events_no_delete
+    BEFORE DELETE ON matrix_conversation_events
+    BEGIN SELECT RAISE(ABORT, 'matrix_conversation_events is append-only'); END;
 
     INSERT OR IGNORE INTO matrix_identity_commands (
       idempotency_key, request_fingerprint, outcome_kind, link_id, result_json, created_at

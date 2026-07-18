@@ -11,6 +11,8 @@ const { createMatrixTaskSupervisor } = require('../services/matrixTaskSupervisor
 const { createMatrixTaskSchedule } = require('../services/matrixTaskSchedule');
 const { createMatrixChannelPolicy } = require('../services/matrixChannelPolicy');
 const { createMatrixCoreRouter } = require('./matrixCore');
+const { createMatrixConversationLedger } = require('../services/matrixConversationLedger');
+const { createMatrixLedgerRouter } = require('./matrixLedger');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -223,6 +225,8 @@ function createMatrixRouter({
       vmciChatId: process.env.MATRIX_VMCI_CHAT_ID
     });
     router.use('/core', createMatrixCoreRouter({ db, items, tasks, schedule, channelPolicy }));
+    const conversationLedger = createMatrixConversationLedger({ db, clock: coreClock });
+    router.use('/ledger', createMatrixLedgerRouter({ db, conversationLedger }));
   } else {
     router.use('/core', (_req, res) => res.status(503).json({ error: { code: 'supervisor_disabled', message: 'Matrix supervisor is disabled.' } }));
   }

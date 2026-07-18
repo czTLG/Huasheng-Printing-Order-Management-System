@@ -299,7 +299,7 @@ async function main() {
   const me = await httpJson('/api/auth/me', { token: adminToken });
   assert.strictEqual(me.user.username, 'admin');
   assert.strictEqual(me.user.role, 'super_admin');
-  assert.deepStrictEqual(me.user.permissions, { all: true, capabilities: { matrixSend: false } });
+  assert.deepStrictEqual(me.user.permissions, { all: true, capabilities: { matrixSend: false, matrixDecide: false } });
 
   await httpJson('/api/orders', { expectedStatus: 401 });
 
@@ -386,7 +386,7 @@ async function main() {
     modules: { orders: true, workorder: true, board: false, cost: false, stats: false, admin: false, crm: false },
     ordersStages: ['印刷', '复膜', '制袋', '发货', '完成', '全部'],
     boardStages: [],
-    capabilities: { matrixSend: false }
+    capabilities: { matrixSend: false, matrixDecide: false }
   });
 
   const crmAdminLogin = await login('crm_admin_guard', 'guard123');
@@ -1739,7 +1739,7 @@ async function main() {
     },
     ordersStages: ['印刷'],
     boardStages: ['印刷'],
-    capabilities: { matrixSend: false }
+    capabilities: { matrixSend: false, matrixDecide: false }
   });
   const workerOrders = await httpJson('/api/orders', { token: workerLogin.token });
   assert(workerOrders.some(row => Number(row.id) === orderId), 'worker should see assigned order');
