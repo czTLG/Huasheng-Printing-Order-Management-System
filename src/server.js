@@ -101,7 +101,9 @@ app.get(['/crm', '/crm/*'], (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'new', 'index.html'));
 });
 app.use('/api/matrix', matrixBridgeAuth, (req, res, next) => {
-  if (req.authMode === 'matrix_bridge') return dispatchMatrix(req, res, next);
+  if (req.authMode === 'matrix_bridge') {
+    return dispatchMatrix(req, res, () => res.status(404).json({ error: 'matrix endpoint not found' }));
+  }
   next();
 });
 app.use(fakeAuth);
