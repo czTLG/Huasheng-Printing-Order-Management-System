@@ -1,4 +1,25 @@
 const crypto = require('node:crypto');
+const net = require('node:net');
+const { domainToASCII } = require('node:url');
+
+const MULTI_LABEL_PUBLIC_SUFFIXES = new Set([
+  'ac.uk', 'co.uk', 'gov.uk', 'ltd.uk', 'me.uk', 'net.uk', 'nhs.uk', 'org.uk', 'plc.uk', 'police.uk', 'sch.uk',
+  'ac.cn', 'com.cn', 'edu.cn', 'gov.cn', 'net.cn', 'org.cn',
+  'asn.au', 'com.au', 'edu.au', 'gov.au', 'id.au', 'net.au', 'org.au',
+  'ac.jp', 'co.jp', 'go.jp', 'ne.jp', 'or.jp',
+  'ac.kr', 'co.kr', 'go.kr', 'ne.kr', 'or.kr', 'pe.kr', 're.kr',
+  'ac.nz', 'co.nz', 'govt.nz', 'net.nz', 'org.nz', 'school.nz',
+  'com.br', 'net.br', 'org.br', 'com.hk', 'net.hk', 'org.hk',
+  'com.mx', 'com.sg', 'com.tw', 'co.in', 'firm.in', 'gen.in', 'ind.in', 'net.in', 'org.in',
+  'appspot.com', 'cloudfront.net', 'github.io', 'netlify.app', 'pages.dev', 'vercel.app'
+]);
+const COMMON_CC_REGISTRY_LABELS = new Set(['ac', 'asn', 'co', 'com', 'edu', 'firm', 'gen', 'go', 'gov', 'id', 'ind', 'ltd', 'me', 'ne', 'net', 'or', 'org', 'pe', 'plc', 're', 'school']);
+const VALID_GENERIC_TLDS = new Set([
+  'aero', 'ai', 'app', 'asia', 'biz', 'blog', 'cloud', 'club', 'com', 'company', 'coop', 'dev', 'digital',
+  'edu', 'email', 'gov', 'info', 'int', 'io', 'live', 'me', 'mil', 'mobi', 'museum', 'name', 'net', 'news',
+  'online', 'org', 'pro', 'shop', 'site', 'solutions', 'space', 'store', 'tech', 'test', 'top', 'travel', 'tv',
+  'vip', 'website', 'world', 'xyz'
+]);
 
 function positiveInteger(value, name) {
   const number = Number(value);
@@ -77,10 +98,33 @@ function versionById(db, versionId) {
   return db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ?').get(versionId) || null;
 }
 
-function hostnameMatchesDomain(hostname, domain) {
-  const host = String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
-  const normalizedDomain = String(domain || '').trim().toLowerCase().replace(/^www\./, '');
-  return !!normalizedDomain && (host === normalizedDomain || host.endsWith(`.${normalizedDomain}`));
+function normalizedHostname(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  const ascii = domainToASCII(raw);
+  if (!ascii || net.isIP(ascii)) return null;
+  const labels = ascii.split('.');
+  if (labels.some(label => !label || label.length > 63 || !/^[a-z0-9-]+$/.test(label) || label.startsWith('-') || label.endsWith('-'))) return null;
+  return ascii;
+}
+
+function registrableDomain(value) {
+  const hostname = normalizedHostname(value);
+  if (!hostname) return null;
+  const labels = hostname.split('.');
+  if (labels.length < 2) return null;
+  const topLevel = labels.at(-1);
+  if (topLevel.length !== 2 && !VALID_GENERIC_TLDS.has(topLevel)) return null;
+  let suffixLabels = 1;
+  for (const suffix of MULTI_LABEL_PUBLIC_SUFFIXES) {
+    if (hostname === suffix || hostname.endsWith(`.${suffix}`)) {
+      suffixLabels = Math.max(suffixLabels, suffix.split('.').length);
+    }
+  }
+  const last = topLevel;
+  const secondLast = labels.at(-2);
+  if (last.length === 2 && COMMON_CC_REGISTRY_LABELS.has(secondLast)) suffixLabels = Math.max(suffixLabels, 2);
+  if (labels.length <= suffixLabels) return null;
+  return labels.slice(-(suffixLabels + 1)).join('.');
 }
 
 function checkedRecipientEvidence(db, { workItemId, recipient, evidenceId } = {}) {
@@ -102,11 +146,15 @@ function checkedRecipientEvidence(db, { workItemId, recipient, evidenceId } = {}
     }
     const emailDomain = normalized.email.split('@')[1];
     const verifiedAt = Date.parse(row.verified_at);
+    const organizationDomain = normalizedHostname(row.organization_domain);
+    const organizationRegistrable = registrableDomain(organizationDomain);
     return normalizeEmail(row.recipient_email) === normalized.email
       && evidenceSource.toString() === normalized.sourceUrl
       && new Date(verifiedAt).toISOString() === normalized.verifiedAt
-      && hostnameMatchesDomain(emailDomain, row.organization_domain)
-      && hostnameMatchesDomain(evidenceSource.hostname, row.organization_domain);
+      && organizationRegistrable !== null
+      && organizationDomain === organizationRegistrable
+      && registrableDomain(emailDomain) === organizationRegistrable
+      && registrableDomain(evidenceSource.hostname) === organizationRegistrable;
   });
   if (!evidence) throw new Error('trusted recipient evidence binding required');
   let snapshot;
@@ -164,7 +212,10 @@ function replay(db, { idempotencyKey, actorUserId, workItemId, action, fingerpri
   const version = versionById(db, after.version_id || event.version_id);
   if (!version || version.work_item_id !== workItemId) throw new Error('recorded version scope mismatch');
   validateStoredRecipient(db, version);
-  return version;
+  const recorded = after.response && typeof after.response === 'object' && !Array.isArray(after.response)
+    ? after.response
+    : { ...version, ...(after.status ? { status: after.status } : {}) };
+  return { ...recorded, current_status: version.status };
 }
 
 function addEvent(db, { workItemId, versionId, actorUserId, action, idempotencyKey, fingerprint, contentHash: hash, before, after, at }) {
@@ -232,7 +283,7 @@ function createInitialVersion(db, input = {}) {
     const result = versionById(db, versionId);
     addEvent(db, {
       workItemId, versionId, actorUserId, action: 'created', idempotencyKey, fingerprint,
-      contentHash: hash, before: {}, after: { version_id: versionId, revision: 1, status: result.status }, at
+      contentHash: hash, before: {}, after: { version_id: versionId, revision: 1, status: result.status, response: result }, at
     });
     return result;
   });
@@ -284,7 +335,7 @@ function approveVersion(db, input = {}) {
     addEvent(db, {
       workItemId, versionId, actorUserId, action: 'approved', idempotencyKey, fingerprint,
       contentHash: result.content_hash, before: { status: version.status },
-      after: { version_id: versionId, revision: result.revision, status: result.status }, at
+      after: { version_id: versionId, revision: result.revision, status: result.status, response: result }, at
     });
     return result;
   });
@@ -348,7 +399,7 @@ function reviseVersion(db, input = {}) {
     addEvent(db, {
       workItemId, versionId, actorUserId, action: 'revised', idempotencyKey, fingerprint,
       contentHash: hash, before: { version_id: base.id, revision: base.revision, status: base.status },
-      after: { version_id: versionId, revision: result.revision, status: result.status }, at
+      after: { version_id: versionId, revision: result.revision, status: result.status, response: result }, at
     });
     return result;
   });
