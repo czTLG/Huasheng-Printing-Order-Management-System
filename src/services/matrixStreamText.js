@@ -89,10 +89,11 @@ function priceClaims(value) {
   for (const segment of text.split(/[。；;，,\n]/)) {
     if (!/(?:单价|售价|价格|报价|费用|金额|成本)/.test(segment)) continue;
     const amountMatch = segment.match(new RegExp(AMOUNT_PATTERN, 'i'));
-    if (!amountMatch) continue;
+    const priceState = /(?:面议|待定|另议|请询价|询价|视[^。；，,\n]{0,16}而定|\b(?:negotiable|tbd|to be determined|contact for price)\b)/i;
+    if (!amountMatch && !priceState.test(segment)) continue;
     const normalizedPriceLanguage = new RegExp(`(?:单价|售价|价格|报价|费用|金额|成本)\\s*(?:为|是|约|：|:)?\\s*${AMOUNT_PATTERN}(?:\\s*${CURRENCY_PATTERN})?`, 'i');
-    if (!normalizedPriceLanguage.test(segment)) {
-      const fallback = segment.replace(/\s+/g, '').toLowerCase();
+    if (!amountMatch || !normalizedPriceLanguage.test(segment)) {
+      const fallback = segment.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
       if (fallback) claims.add(`price:fallback:${fallback}`);
     }
   }
@@ -109,35 +110,47 @@ function qualificationClaims(value) {
   if (/(?:有机)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:organic');
   if (/(?:清真)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:halal');
   if (/(?:犹太)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:kosher');
-  for (const match of text.matchAll(/(?:符合|满足|达到)\s*([^。；，,\n]{1,24}?)\s*(?:标准|规范|要求)/g)) {
-    const identifier = match[1].replace(/\s+/g, '').toLowerCase();
-    if (identifier && identifier !== '食品级' && identifier !== '欧盟') claims.add(`qualification:requirement:${identifier}`);
-  }
-  for (const match of text.matchAll(/([^。；，,\n]{1,24}?)(?:认证|资质)/g)) {
-    const rawIdentifier = match[1].replace(/\s+/g, '').toLowerCase();
-    const strippedIdentifier = rawIdentifier.replace(/^(?:我们|产品|材料|该产品|已|通过|获得|拥有|具备)+/, '');
-    const identifier = strippedIdentifier || rawIdentifier;
-    if (identifier && !/(食品级|欧盟|有机|清真|犹太)$/.test(identifier)) claims.add(`qualification:credential:${identifier}`);
-  }
   for (const segment of text.split(/[。；;，,\n]/)) {
-    if (!/(?:认证|资质|合规|\b(?:compliant|compliance|certified|certification|qualified)\b)/i.test(segment)) continue;
+    const qualificationSignal = /(?:审核|认证|证书|许可证|许可|资质|合规|(?:符合|满足|达到)[^。；，,\n]{0,32}(?:标准|规范|要求)|\b(?:audit(?:ed)?|license[ds]?|certificate|certified|certification|compliant|compliance|qualified|qualification)\b)/i;
+    if (!qualificationSignal.test(segment)) continue;
     if (/\b(?:ISO|BRCGS?|FDA|HACCP|GMP|CE|ROHS|REACH)\b|食品级|\bfood[- ]grade\b|(?:欧盟|有机|清真|犹太)(?:认证|资质|标准|规范|要求)/i.test(segment)) continue;
-    const fallback = segment.replace(/\s+/g, '').toLowerCase();
+    const fallback = segment.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
     if (fallback) claims.add(`qualification:fallback:${fallback}`);
   }
   return [...claims];
 }
 
-function evidenceText(input) {
-  return JSON.stringify(input?.sourceSnapshot || input?.source_snapshot || input?.publicEvidence || input?.public_evidence || {});
+function collectEvidenceValues(value, output) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        collectEvidenceValues(JSON.parse(trimmed), output);
+        return output;
+      } catch (_) {
+        // A non-JSON string remains evidence text.
+      }
+    }
+    if (trimmed) output.push(trimmed);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectEvidenceValues(item, output);
+  } else if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) collectEvidenceValues(item, output);
+  }
+  return output;
+}
+
+function evidenceValues(input) {
+  const source = input?.sourceSnapshot ?? input?.source_snapshot ?? input?.publicEvidence ?? input?.public_evidence ?? {};
+  return collectEvidenceValues(source, []);
 }
 
 function validateClaims(output, input) {
   const outputText = Object.values(output).join('\n');
-  const source = evidenceText(input);
-  const sourcePrices = new Set(priceClaims(source));
-  const sourceQualifications = new Set(qualificationClaims(source));
-  const allowedUrlText = [source, JSON.stringify(input?.current || {}), String(input?.inboundText || input?.message || '')].join('\n');
+  const sourceValues = evidenceValues(input);
+  const sourcePrices = new Set(sourceValues.flatMap(priceClaims));
+  const sourceQualifications = new Set(sourceValues.flatMap(qualificationClaims));
+  const allowedUrlText = [sourceValues.join('\n'), JSON.stringify(input?.current || {}), String(input?.inboundText || input?.message || '')].join('\n');
   for (const url of extractUrls(outputText)) {
     if (!allowedUrlText.includes(url)) throw new Error('invalid bilingual output: model introduced URL');
   }
