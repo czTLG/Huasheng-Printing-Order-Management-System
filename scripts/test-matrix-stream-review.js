@@ -368,6 +368,32 @@ try {
     })
   }).revise({ current: v1, instruction: '使用已有价格', sourceSnapshot: { supportedClaims: ['USD 99', '99美元'] } });
   assert.match(exactPriceEvidence.body_en, /99/);
+  for (const unsupportedSemanticClaim of [
+    '价格面议。', '报价待定。', '单价请询价。',
+    '产品已通过Sedex审核。', '产品拥有XYZ许可证。'
+  ]) {
+    await assert.rejects(
+      () => createMatrixStreamText({
+        callJson: async () => ({
+          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: unsupportedSemanticClaim
+        })
+      }).revise({ current: v1, instruction: '增加声明' }),
+      /unsupported (?:price|qualification)/i,
+      `${unsupportedSemanticClaim} must fail closed without evidence`
+    );
+  }
+  for (const supportedSemanticClaim of ['价格面议。', '产品已通过Sedex审核。', '产品拥有XYZ许可证。']) {
+    const supportedFallback = await createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Evidence-bound statement', body_en: 'Hello Alpha team.', body_cn: supportedSemanticClaim
+      })
+    }).revise({
+      current: v1,
+      instruction: '使用相同证据声明',
+      sourceSnapshot: { supportedClaims: [supportedSemanticClaim] }
+    });
+    assert.strictEqual(supportedFallback.body_cn, supportedSemanticClaim);
+  }
   const reasonableNumbers = await createMatrixStreamText({
     callJson: async () => ({
       subject: 'Dimension follow-up',
