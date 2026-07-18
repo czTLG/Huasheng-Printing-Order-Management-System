@@ -223,6 +223,11 @@ async function main() {
   assert.strictEqual(pending.translation_cn, '');
   assert.strictEqual(pending.requirements_cn, '');
   assert.strictEqual(pending.retry_available, 1);
+  await assert.rejects(() => retryInboundTranslation(db, {
+    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId,
+    notificationId: pending.id, clock: () => new Date(NOW),
+    translateInbound: async () => { throw new Error('unpublished pending card must not invoke provider'); }
+  }), /delivery eligible/i);
   const pendingClaim = claimNotification(db, {
     actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId, clock: () => new Date(NOW)
   });
@@ -256,16 +261,32 @@ async function main() {
   });
   assert.deepStrictEqual(retryResult, { notification_id: pending.id, translation_status: 'ready', retry_available: false });
   assert.deepStrictEqual(db.prepare(`
-    SELECT translation_status, translation_cn, requirements_cn, retry_available, delivery_state
+    SELECT translation_status, delivery_state, notification_key
     FROM matrix_stream_notification_spool WHERE id = ?
   `).get(pending.id), {
+    translation_status: 'pending', delivery_state: 'delivered', notification_key: pending.notification_key
+  }, 'retry must not mutate the delivered notification generation');
+  const readyGeneration = db.prepare(`
+    SELECT * FROM matrix_stream_notification_spool
+    WHERE inbound_message_id = ? AND generation = 2
+  `).get('<reply-fallback@test>');
+  assert.ok(readyGeneration);
+  assert.strictEqual(readyGeneration.supersedes_notification_id, pending.id);
+  assert.notStrictEqual(readyGeneration.notification_key, pending.notification_key);
+  assert.deepStrictEqual({
+    translation_status: readyGeneration.translation_status,
+    translation_cn: readyGeneration.translation_cn,
+    requirements_cn: readyGeneration.requirements_cn,
+    retry_available: readyGeneration.retry_available,
+    delivery_state: readyGeneration.delivery_state
+  }, {
     translation_status: 'ready', translation_cn: '您好。', requirements_cn: '待确认具体需求', retry_available: 0,
     delivery_state: 'pending'
   });
   const readyClaim = claimNotification(db, {
     actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId, clock: () => new Date(NOW)
   });
-  assert.strictEqual(readyClaim.id, pending.id);
+  assert.strictEqual(readyClaim.id, readyGeneration.id);
   assert.strictEqual(readyClaim.translation_status, 'ready', 'successful retry must queue one ready card');
 
   const direct = seedAccepted(10, { recipient: 'direct@header.test', subject: 'Direct parent' });
@@ -402,6 +423,97 @@ async function main() {
   }), { notification_id: scavengedClaim.id, delivery_state: 'manual_review' }, 'scavenger-first finalize must replay safely');
   db3.close();
 
+  const inflightRetry = seedAccepted(18, { recipient: 'notify@inflight-retry.test', subject: 'Inflight translation retry' });
+  const inflightText = 'Visible pending reply before acknowledgement';
+  upsertEmailMessage('sales@sender.test', 'INBOX', {
+    message_uid: 'inflight-retry-uid', message_id: '<inflight-retry@test>', from_email: inflightRetry.recipient,
+    to_emails: inflightRetry.sender, subject: `Re: ${inflightRetry.subject}`, text_body: inflightText,
+    cleaned_text: inflightText, received_at: NOW
+  });
+  await correlateInbound(db, {
+    message_id: '<inflight-retry@test>', in_reply_to: inflightRetry.messageId,
+    from_email: inflightRetry.recipient, to_emails: inflightRetry.sender,
+    subject: `Re: ${inflightRetry.subject}`, cleaned_text: inflightText
+  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
+  const inflightOld = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = ? AND generation = 1').get('<inflight-retry@test>');
+  const inflightClaim = claimNotification(db, {
+    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId, clock: () => new Date(NOW)
+  });
+  const readyValue = {
+    translation_cn: '可见回复', requirements_cn: '待处理', suggested_subject: `Re: ${inflightRetry.subject}`,
+    suggested_body_en: 'Thank you.', suggested_body_cn: '谢谢。'
+  };
+  let repeatProviderCalls = 0;
+  await retryInboundTranslation(db, {
+    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId,
+    notificationId: inflightOld.id, clock: () => new Date(NOW),
+    translateInbound: async () => { repeatProviderCalls += 1; return readyValue; }
+  });
+  assert.deepStrictEqual(db.prepare(`
+    SELECT delivery_state, owner_token, notification_key FROM matrix_stream_notification_spool WHERE id = ?
+  `).get(inflightOld.id), {
+    delivery_state: 'inflight', owner_token: inflightClaim.claim_token, notification_key: inflightOld.notification_key
+  }, 'retry-before-ack must preserve the old inflight identity');
+  assert.deepStrictEqual(ackNotification(db, {
+    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId,
+    notificationId: inflightOld.id, claimToken: inflightClaim.claim_token,
+    receiptId: 'inflight-old-receipt', clock: () => new Date(NOW)
+  }), { notification_id: inflightOld.id, delivery_state: 'delivered' });
+  await retryInboundTranslation(db, {
+    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId,
+    notificationId: inflightOld.id, clock: () => new Date(NOW),
+    translateInbound: async () => { repeatProviderCalls += 1; throw new Error('response-loss replay must not call provider'); }
+  });
+  assert.strictEqual(repeatProviderCalls, 1);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<inflight-retry@test>').count, 2, 'retry replay must create one generation');
+  const inflightReadyClaim = claimNotification(db, {
+    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId, clock: () => new Date(NOW)
+  });
+  assert.strictEqual(inflightReadyClaim.translation_status, 'ready');
+  assert.strictEqual(db.prepare('SELECT supersedes_notification_id FROM matrix_stream_notification_spool WHERE id = ?').get(inflightReadyClaim.id).supersedes_notification_id, inflightOld.id);
+
+  const concurrentRetry = seedAccepted(19, { recipient: 'notify@concurrent-retry.test', subject: 'Concurrent translation retry' });
+  const concurrentText = 'Concurrent pending reply';
+  upsertEmailMessage('sales@sender.test', 'INBOX', {
+    message_uid: 'concurrent-retry-uid', message_id: '<concurrent-retry@test>', from_email: concurrentRetry.recipient,
+    to_emails: concurrentRetry.sender, subject: `Re: ${concurrentRetry.subject}`, text_body: concurrentText,
+    cleaned_text: concurrentText, received_at: NOW
+  });
+  await correlateInbound(db, {
+    message_id: '<concurrent-retry@test>', in_reply_to: concurrentRetry.messageId,
+    from_email: concurrentRetry.recipient, to_emails: concurrentRetry.sender,
+    subject: `Re: ${concurrentRetry.subject}`, cleaned_text: concurrentText
+  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
+  const concurrentOld = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<concurrent-retry@test>');
+  const concurrentClaim = claimNotification(db, {
+    actorUserId: concurrentRetry.userId, bindingId: concurrentRetry.bindingId, clock: () => new Date(NOW)
+  });
+  ackNotification(db, {
+    actorUserId: concurrentRetry.userId, bindingId: concurrentRetry.bindingId,
+    notificationId: concurrentOld.id, claimToken: concurrentClaim.claim_token,
+    receiptId: 'concurrent-pending-card', clock: () => new Date(NOW)
+  });
+  const db4 = new Database(process.env.DB_PATH);
+  const db5 = new Database(process.env.DB_PATH);
+  db4.pragma('foreign_keys = ON'); db5.pragma('foreign_keys = ON');
+  let concurrentStarted = 0;
+  let releaseConcurrent;
+  const concurrentGate = new Promise(resolve => { releaseConcurrent = resolve; });
+  const concurrentProvider = async () => {
+    concurrentStarted += 1;
+    if (concurrentStarted === 2) releaseConcurrent();
+    await concurrentGate;
+    return readyValue;
+  };
+  await Promise.all([db4, db5].map(connection => retryInboundTranslation(connection, {
+    actorUserId: concurrentRetry.userId, bindingId: concurrentRetry.bindingId,
+    notificationId: concurrentOld.id, clock: () => new Date(NOW), translateInbound: concurrentProvider
+  })));
+  assert.strictEqual(concurrentStarted, 2);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool WHERE inbound_message_id = ? AND generation = 2').get('<concurrent-retry@test>').count, 1);
+  assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE action = 'inbound_translation_ready' AND work_item_id = ?").get(concurrentRetry.workItemId).count, 1);
+  db4.close(); db5.close();
+
   const redactedDelivery = seedAccepted(17, { recipient: 'notify@redact.test', subject: 'Notification redaction' });
   await correlateInbound(db, {
     message_id: '<notify-redact@test>', in_reply_to: redactedDelivery.messageId,
@@ -428,6 +540,10 @@ async function main() {
     subject: `Re: ${authRetry.subject}`, cleaned_text: authText
   }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
   const authNotification = db.prepare("SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = '<auth-retry@test>'").get();
+  const authClaim = claimNotification(db, {
+    actorUserId: authRetry.userId, bindingId: authRetry.bindingId, clock: () => new Date(NOW)
+  });
+  assert.strictEqual(authClaim.id, authNotification.id);
   await assert.rejects(() => retryInboundTranslation(db, {
     actorUserId: authRetry.userId, bindingId: authRetry.bindingId,
     notificationId: authNotification.id, clock: () => new Date(NOW),

@@ -1146,7 +1146,7 @@ function initDb() {
 
     CREATE TABLE IF NOT EXISTS matrix_stream_notification_spool (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      inbound_message_id TEXT NOT NULL UNIQUE,
+      inbound_message_id TEXT NOT NULL,
       work_item_id INTEGER NOT NULL,
       job_id INTEGER NOT NULL,
       kind TEXT NOT NULL CHECK(kind IN ('reply','refusal')),
@@ -1169,12 +1169,16 @@ function initDb() {
       last_error_class TEXT NOT NULL DEFAULT '',
       finalized_token TEXT NOT NULL DEFAULT '',
       finalized_state TEXT NOT NULL DEFAULT '',
+      generation INTEGER NOT NULL DEFAULT 1 CHECK(generation >= 1),
+      supersedes_notification_id INTEGER,
       created_at TEXT NOT NULL,
       delivered_at TEXT,
+      UNIQUE(inbound_message_id, generation),
       FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
       FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
       FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id),
-      FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id)
+      FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id),
+      FOREIGN KEY(supersedes_notification_id) REFERENCES matrix_stream_notification_spool(id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
@@ -1388,14 +1392,14 @@ function initDb() {
   if (!matrixInboundLinkColumns.has('email_message_row_id')) db.exec('ALTER TABLE matrix_stream_inbound_links ADD COLUMN email_message_row_id INTEGER');
 
   const notificationSql = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='matrix_stream_notification_spool'").get()?.sql || '');
-  if (/\bclaimed\b/.test(notificationSql) || !/\bmanual_review\b/.test(notificationSql)) {
+  if (/\bclaimed\b/.test(notificationSql) || !/\bmanual_review\b/.test(notificationSql) || !/\bgeneration\b/.test(notificationSql)) {
     db.pragma('foreign_keys = OFF');
     try {
       db.exec(`
         ALTER TABLE matrix_stream_notification_spool RENAME TO matrix_stream_notification_spool_legacy;
         CREATE TABLE matrix_stream_notification_spool (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          inbound_message_id TEXT NOT NULL UNIQUE,
+          inbound_message_id TEXT NOT NULL,
           work_item_id INTEGER NOT NULL,
           job_id INTEGER NOT NULL,
           kind TEXT NOT NULL CHECK(kind IN ('reply','refusal')),
@@ -1409,10 +1413,13 @@ function initDb() {
           owner_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT NOT NULL DEFAULT '', attempt_count INTEGER NOT NULL DEFAULT 0,
           receipt_id TEXT NOT NULL DEFAULT '', last_error_class TEXT NOT NULL DEFAULT '',
           finalized_token TEXT NOT NULL DEFAULT '', finalized_state TEXT NOT NULL DEFAULT '',
+          generation INTEGER NOT NULL DEFAULT 1 CHECK(generation >= 1), supersedes_notification_id INTEGER,
           created_at TEXT NOT NULL, delivered_at TEXT,
+          UNIQUE(inbound_message_id, generation),
           FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
           FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id), FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id),
-          FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id)
+          FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id),
+          FOREIGN KEY(supersedes_notification_id) REFERENCES matrix_stream_notification_spool(id)
         );
       `);
       const legacyRows = db.prepare('SELECT * FROM matrix_stream_notification_spool_legacy ORDER BY id').all();
@@ -1421,16 +1428,36 @@ function initDb() {
           id, inbound_message_id, work_item_id, job_id, kind, original_preview,
           translation_status, translation_cn, requirements_cn, suggested_subject,
           suggested_body_en, suggested_body_cn, work_item_state, retry_available,
-          reply_draft_id, notification_key, delivery_state, created_at, delivered_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          reply_draft_id, notification_key, delivery_state, owner_token, lease_expires_at,
+          attempt_count, receipt_id, last_error_class, finalized_token, finalized_state,
+          generation, supersedes_notification_id, created_at, delivered_at
+        ) VALUES (
+          @id, @inbound_message_id, @work_item_id, @job_id, @kind, @original_preview,
+          @translation_status, @translation_cn, @requirements_cn, @suggested_subject,
+          @suggested_body_en, @suggested_body_cn, @work_item_state, @retry_available,
+          @reply_draft_id, @notification_key, @delivery_state, @owner_token, @lease_expires_at,
+          @attempt_count, @receipt_id, @last_error_class, @finalized_token, @finalized_state,
+          @generation, @supersedes_notification_id, @created_at, @delivered_at
+        )
       `);
       for (const row of legacyRows) {
-        insertMigrated.run(row.id, row.inbound_message_id, row.work_item_id, row.job_id, row.kind,
-          row.original_preview, row.translation_status, row.translation_cn, row.requirements_cn,
-          row.suggested_subject, row.suggested_body_en, row.suggested_body_cn, row.work_item_state,
-          row.retry_available, row.reply_draft_id,
-          crypto.randomUUID(), row.delivery_state === 'delivered' ? 'delivered' : row.delivery_state === 'pending' ? 'pending' : 'manual_review',
-          row.created_at, row.delivered_at);
+        const deliveryState = ['pending', 'inflight', 'delivered', 'manual_review'].includes(row.delivery_state)
+          ? row.delivery_state : 'manual_review';
+        insertMigrated.run({
+          id: row.id, inbound_message_id: row.inbound_message_id, work_item_id: row.work_item_id,
+          job_id: row.job_id, kind: row.kind, original_preview: row.original_preview,
+          translation_status: row.translation_status, translation_cn: row.translation_cn || '',
+          requirements_cn: row.requirements_cn || '', suggested_subject: row.suggested_subject || '',
+          suggested_body_en: row.suggested_body_en || '', suggested_body_cn: row.suggested_body_cn || '',
+          work_item_state: row.work_item_state, retry_available: Number(row.retry_available || 0),
+          reply_draft_id: row.reply_draft_id || null, notification_key: row.notification_key || crypto.randomUUID(),
+          delivery_state: deliveryState, owner_token: row.owner_token || '', lease_expires_at: row.lease_expires_at || '',
+          attempt_count: Number(row.attempt_count || 0), receipt_id: row.receipt_id || '',
+          last_error_class: row.last_error_class || '', finalized_token: row.finalized_token || '',
+          finalized_state: row.finalized_state || '', generation: Number(row.generation || 1),
+          supersedes_notification_id: row.supersedes_notification_id || null,
+          created_at: row.created_at, delivered_at: row.delivered_at || null
+        });
       }
       db.exec('DROP TABLE matrix_stream_notification_spool_legacy');
     } finally {
