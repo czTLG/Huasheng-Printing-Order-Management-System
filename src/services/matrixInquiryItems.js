@@ -105,7 +105,7 @@ function bindingResult(row) {
   };
 }
 
-function createMatrixInquiryItems({ db, clock = () => new Date() } = {}) {
+function createMatrixInquiryItems({ db, clock = () => new Date(), versionOutbox = null } = {}) {
   if (!db || typeof db.prepare !== 'function') throw new Error('db required');
 
   function command(idempotencyKey, request, operation) {
@@ -157,6 +157,7 @@ function createMatrixInquiryItems({ db, clock = () => new Date() } = {}) {
       `).run(request.inquiryId, request.itemKey, request.title, request.required ? 1 : 0, request.actorUserId, createdAt, createdAt);
       const row = getItem(info.lastInsertRowid);
       appendEvent(row, 'created', request, request.actorUserId, key, requestFingerprint);
+      if (versionOutbox) versionOutbox.appendInTransaction({ entityType: 'inquiry_item', entityId: row.id, entityVersion: row.version, itemId: row.id, specificationId: null, actorUserId: request.actorUserId, idempotencyKey: `${key}:version` });
       return itemResult(row);
     });
   }
@@ -181,6 +182,7 @@ function createMatrixInquiryItems({ db, clock = () => new Date() } = {}) {
         .run(request.specificationId, nextVersion, request.actorUserId, clockIso(clock), row.id, row.version);
       const updated = getItem(row.id);
       appendEvent(updated, 'specification_bound', request, request.actorUserId, key, requestFingerprint);
+      if (versionOutbox) versionOutbox.appendInTransaction({ entityType: 'inquiry_item', entityId: updated.id, entityVersion: updated.version, itemId: updated.id, specificationId: updated.specification_id, actorUserId: request.actorUserId, idempotencyKey: `${key}:version` });
       return itemResult(updated);
     });
   }
@@ -233,6 +235,7 @@ function createMatrixInquiryItems({ db, clock = () => new Date() } = {}) {
       if (info.changes !== 1) throw new Error('stale item version');
       const updated = getItem(row.id);
       appendEvent(updated, 'state_applied', request, request.actorUserId, key, requestFingerprint);
+      if (versionOutbox) versionOutbox.appendInTransaction({ entityType: 'inquiry_item', entityId: updated.id, entityVersion: updated.version, itemId: updated.id, specificationId: updated.specification_id, actorUserId: request.actorUserId, idempotencyKey: `${key}:version` });
       return itemResult(updated);
     });
   }

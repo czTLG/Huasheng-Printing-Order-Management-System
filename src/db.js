@@ -1126,6 +1126,81 @@ function initDb() {
       FOREIGN KEY(actor_user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_knowledge_candidates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_event_ids_json TEXT NOT NULL,
+      source_acceptance_id INTEGER,
+      statement TEXT NOT NULL,
+      predicates_json TEXT NOT NULL,
+      exclusions_json TEXT NOT NULL,
+      unresolved_json TEXT NOT NULL,
+      conflicts_json TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','scoped','broader_review','superseded')),
+      actor_user_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS matrix_knowledge_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      candidate_id INTEGER NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      scope TEXT NOT NULL CHECK(scope IN ('A','B','C','D')),
+      scope_predicates_json TEXT NOT NULL,
+      exclusions_json TEXT NOT NULL,
+      statement TEXT NOT NULL,
+      unresolved_json TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','superseded')),
+      supersedes_rule_id INTEGER,
+      actor_user_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(candidate_id) REFERENCES matrix_knowledge_candidates(id),
+      FOREIGN KEY(supersedes_rule_id) REFERENCES matrix_knowledge_rules(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS matrix_knowledge_attention (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_id INTEGER NOT NULL,
+      item_id INTEGER NOT NULL,
+      specification_id INTEGER,
+      source_event_id INTEGER,
+      state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','resolved','superseded')),
+      content_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(rule_id,item_id,specification_id,content_hash),
+      FOREIGN KEY(rule_id) REFERENCES matrix_knowledge_rules(id)
+    );
+    CREATE TABLE IF NOT EXISTS matrix_knowledge_commands (
+      idempotency_key TEXT PRIMARY KEY,
+      request_fingerprint TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS matrix_item_version_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      producer_key TEXT NOT NULL UNIQUE,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      entity_version INTEGER NOT NULL,
+      item_id INTEGER NOT NULL,
+      specification_id INTEGER,
+      source_version_binding_id INTEGER,
+      actor_user_id INTEGER NOT NULL,
+      payload_fingerprint TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','claimed','delivered','manual_review')),
+      owner_token TEXT NOT NULL DEFAULT '',
+      claim_token TEXT NOT NULL DEFAULT '',
+      lease_expires_at TEXT NOT NULL DEFAULT '',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      attention_ids_json TEXT NOT NULL DEFAULT '[]',
+      last_error_code TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
@@ -1367,6 +1442,9 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_decisions_task ON matrix_decisions(task_id, state, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_digest_outbox_claim ON matrix_digest_outbox(channel, state, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_conversation_events_timeline ON matrix_conversation_events(conversation_id, occurred_at, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_knowledge_rules_active ON matrix_knowledge_rules(state, scope, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_knowledge_attention_item ON matrix_knowledge_attention(item_id, state, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_item_version_events_claim ON matrix_item_version_events(state, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);

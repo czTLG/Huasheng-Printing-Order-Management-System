@@ -13,6 +13,8 @@ const { createMatrixChannelPolicy } = require('../services/matrixChannelPolicy')
 const { createMatrixCoreRouter } = require('./matrixCore');
 const { createMatrixConversationLedger } = require('../services/matrixConversationLedger');
 const { createMatrixLedgerRouter } = require('./matrixLedger');
+const { createMatrixKnowledgeLedger } = require('../services/matrixKnowledgeLedger');
+const { createMatrixItemVersionOutbox } = require('../services/matrixItemVersionOutbox');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -217,7 +219,8 @@ function createMatrixRouter({
 
   if (process.env.MATRIX_SUPERVISOR_ENABLED === '1') {
     const coreClock = clock || (() => new Date());
-    const items = createMatrixInquiryItems({ db, clock: coreClock });
+    const versionOutbox = createMatrixItemVersionOutbox({ db, clock: coreClock });
+    const items = createMatrixInquiryItems({ db, clock: coreClock, versionOutbox });
     const tasks = createMatrixTaskSupervisor({ db, clock: coreClock });
     const schedule = createMatrixTaskSchedule({ db, clock: coreClock });
     const channelPolicy = createMatrixChannelPolicy({
@@ -226,7 +229,8 @@ function createMatrixRouter({
     });
     router.use('/core', createMatrixCoreRouter({ db, items, tasks, schedule, channelPolicy }));
     const conversationLedger = createMatrixConversationLedger({ db, clock: coreClock });
-    router.use('/ledger', createMatrixLedgerRouter({ db, conversationLedger }));
+    const knowledgeLedger = createMatrixKnowledgeLedger({ db, clock: coreClock, taskSupervisor: tasks });
+    router.use('/ledger', createMatrixLedgerRouter({ db, conversationLedger, knowledgeLedger }));
   } else {
     router.use('/core', (_req, res) => res.status(503).json({ error: { code: 'supervisor_disabled', message: 'Matrix supervisor is disabled.' } }));
   }

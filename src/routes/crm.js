@@ -10,6 +10,7 @@ const { importEmailToCrmMessage, batchImportEmailsToCrmMessages } = require('../
 const { buildCrmWorkbench, getFatherReviewTaskDetail, listFatherReviewTasks, markFatherTaskSalesHandled } = require('../lib/crmWorkbench');
 const { interpretCrmMessage, buildInquiryFillPlan, deriveInquiryAiSummary } = require('../services/crmMessageInterpreter');
 const { createMatrixInquiryItems } = require('../services/matrixInquiryItems');
+const { createMatrixItemVersionOutbox } = require('../services/matrixItemVersionOutbox');
 const {
   approveReplyDraft,
   generateReplyDraft,
@@ -20,7 +21,8 @@ const {
 } = require('../services/crmReplyDraftService');
 
 const router = express.Router();
-const matrixInquiryItems = createMatrixInquiryItems({ db, clock: now });
+const matrixItemVersionOutbox = createMatrixItemVersionOutbox({ db, clock: now });
+const matrixInquiryItems = createMatrixInquiryItems({ db, clock: now, versionOutbox: matrixItemVersionOutbox });
 const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
 const COSTING_ROLES = ['super_admin', 'foreign_trade_crm_admin', 'costing_user'];
 const FREIGHT_ROLES = ['super_admin', 'foreign_trade_crm_admin', 'freight_user'];

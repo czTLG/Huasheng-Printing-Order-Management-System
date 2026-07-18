@@ -1,0 +1,6 @@
+{
+  "statement": "浅米黄色印刷时，加调墨油通常更稳妥。",
+  "predicates": { "color": "浅米黄色" },
+  "unresolved": ["ink_system", "material", "machine", "additive_ratio"],
+  "scopes": ["A", "B", "C", "D"]
+}
