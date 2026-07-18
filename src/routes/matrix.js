@@ -6,6 +6,11 @@ const { defaultPermissionsByRole, normalizePermissions } = require('../lib/permi
 const { createCacheIndexView } = require('../lib/cacheIndexView');
 const { createPacketGate } = require('../lib/packetGate');
 const { createMatrixStreamText } = require('../services/matrixStreamText');
+const { createMatrixInquiryItems } = require('../services/matrixInquiryItems');
+const { createMatrixTaskSupervisor } = require('../services/matrixTaskSupervisor');
+const { createMatrixTaskSchedule } = require('../services/matrixTaskSchedule');
+const { createMatrixChannelPolicy } = require('../services/matrixChannelPolicy');
+const { createMatrixCoreRouter } = require('./matrixCore');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -207,6 +212,20 @@ function createMatrixRouter({
   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
 
   router.use(requireMatrixRole);
+
+  if (process.env.MATRIX_SUPERVISOR_ENABLED === '1') {
+    const coreClock = clock || (() => new Date());
+    const items = createMatrixInquiryItems({ db, clock: coreClock });
+    const tasks = createMatrixTaskSupervisor({ db, clock: coreClock });
+    const schedule = createMatrixTaskSchedule({ db, clock: coreClock });
+    const channelPolicy = createMatrixChannelPolicy({
+      billChatId: process.env.MATRIX_BILL_CHAT_ID,
+      vmciChatId: process.env.MATRIX_VMCI_CHAT_ID
+    });
+    router.use('/core', createMatrixCoreRouter({ db, items, tasks, schedule, channelPolicy }));
+  } else {
+    router.use('/core', (_req, res) => res.status(503).json({ error: { code: 'supervisor_disabled', message: 'Matrix supervisor is disabled.' } }));
+  }
 
   router.get('/ready', (req, res) => {
     try {

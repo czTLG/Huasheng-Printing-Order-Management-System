@@ -104,6 +104,20 @@ function createMatrixTaskSupervisor({ db, clock = () => new Date() } = {}) {
     return row ? decisionResult(row) : null;
   }
 
+  function listTasks({ channel, state, dueBefore, limit = 50, afterId = 0 } = {}) {
+    const params = [];
+    const where = [];
+    if (channel) { where.push('channel=?'); params.push(String(channel)); }
+    if (state) { where.push('state=?'); params.push(String(state)); }
+    if (dueBefore) { where.push('due_at<=?'); params.push(String(dueBefore)); }
+    if (afterId) { where.push('id>?'); params.push(Number(afterId)); }
+    const boundedLimit = Math.max(1, Math.min(100, Number(limit) || 50));
+    const rows = db.prepare(`SELECT * FROM matrix_tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id LIMIT ?`)
+      .all(...params, boundedLimit + 1);
+    const page = rows.slice(0, boundedLimit).map(taskResult);
+    return { rows: page, nextCursor: rows.length > boundedLimit ? String(page[page.length - 1].id) : null };
+  }
+
   function appendTaskEvent(row, eventType, payload, actorUserId, context, idempotencyKey) {
     db.prepare(`INSERT INTO matrix_task_events (task_id,task_version,event_type,payload_json,actor_user_id,binding_id,channel,chat_id,card_event_id,idempotency_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
       .run(row.id, row.version, eventType, canonicalJson(payload), actorUserId || null, row.binding_id, row.channel,
@@ -219,7 +233,9 @@ function createMatrixTaskSupervisor({ db, clock = () => new Date() } = {}) {
       const decision = db.prepare('SELECT * FROM matrix_decisions WHERE id=?').get(request.decisionId);
       if (!decision) throw new Error('decision not found');
       if (decision.version !== request.expectedDecisionVersion || decision.state !== 'pending') throw new Error('stale decision version');
-      if (decision.binding_id !== request.bindingId) throw new Error('decision binding mismatch');
+      const actorBinding = db.prepare("SELECT id FROM matrix_actor_bindings WHERE id=? AND user_id=? AND status='active'")
+        .get(Number(request.bindingId), request.actorUserId);
+      if (!actorBinding) throw new Error('decision binding mismatch');
       const task = db.prepare('SELECT * FROM matrix_tasks WHERE id=?').get(decision.task_id);
       if (!task || task.channel !== request.channel) throw new Error('decision channel mismatch');
       const options = parse(decision.options_json, []);
@@ -276,7 +292,7 @@ function createMatrixTaskSupervisor({ db, clock = () => new Date() } = {}) {
     });
   }
 
-  return { ensureTask, transition, createDecision, resolveDecision, linkDependency, consumeMigrationProjection, createReviewTask, getTask, getDecision };
+  return { ensureTask, transition, createDecision, resolveDecision, linkDependency, consumeMigrationProjection, createReviewTask, getTask, getDecision, listTasks };
 }
 
 module.exports = { createMatrixTaskSupervisor };

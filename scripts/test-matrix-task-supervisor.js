@@ -16,6 +16,7 @@ const NOW = '2026-07-18T10:00:00.000Z';
 initDb();
 db.prepare("INSERT INTO users (id,username,password,role,status,created_at) VALUES (9401,'task-owner','x','foreign_trade_crm_admin','active',?)").run(NOW);
 db.prepare("INSERT INTO users (id,username,password,role,status,created_at) VALUES (9402,'task-cost','x','costing_user','active',?)").run(NOW);
+db.prepare("INSERT INTO matrix_actor_bindings (id,feishu_open_id,user_id,status,bound_by,bound_at) VALUES (9420,'ou-task-cost',9402,'active',9401,?)").run(NOW);
 
 assert.deepStrictEqual(normalizePermissions('manager', { capabilities: { matrixDecide: true, matrixSend: true } }).capabilities, { matrixSend: false, matrixDecide: false });
 assert.deepStrictEqual(normalizePermissions('foreign_trade_crm_admin', { capabilities: { matrixDecide: true } }).capabilities, { matrixSend: false, matrixDecide: true });
@@ -35,7 +36,7 @@ assert.strictEqual(decision.decision.state, 'pending');
 assert.throws(() => tasks.createDecision({ taskId: bill.id, expectedTaskVersion: tasks.getTask(bill.id).version, affectedItemIds: [2], question: 'Wrong', recommendedOption: 'A', options: [{ key: 'A', label: 'A' }], idempotencyKey: 'decision-cross' }), /affected item.*task binding/i);
 assert.throws(() => tasks.resolveDecision({ decisionId: decision.decision.id, expectedDecisionVersion: decision.decision.version, option: 'A', actorUserId: 9402, bindingId: 'wrong-binding', channel: 'vmci', chatId: 'vmci-chat', cardEventId: 'event-wrong', idempotencyKey: 'resolve-wrong' }), /binding mismatch/i);
 
-const resolved = tasks.resolveDecision({ decisionId: decision.decision.id, expectedDecisionVersion: decision.decision.version, option: 'A', actorUserId: 9402, bindingId: decision.decision.bindingId, channel: 'vmci', chatId: 'vmci-chat', cardEventId: 'event-1', idempotencyKey: 'resolve-1' });
+const resolved = tasks.resolveDecision({ decisionId: decision.decision.id, expectedDecisionVersion: decision.decision.version, option: 'A', actorUserId: 9402, bindingId: '9420', channel: 'vmci', chatId: 'vmci-chat', cardEventId: 'event-1', idempotencyKey: 'resolve-1' });
 assert.strictEqual(resolved.decision.state, 'resolved');
 assert.deepStrictEqual(resolved.resumedTaskIds, [bill.id]);
 assert.strictEqual(tasks.getTask(bill.id).state, 'open');

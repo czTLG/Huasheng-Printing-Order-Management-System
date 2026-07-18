@@ -1,0 +1,11 @@
+{
+  "billChatId": "oc_bill_exact",
+  "vmciChatId": "oc_vmci_exact",
+  "taskTypes": {
+    "quote_followup": "bill",
+    "customer_reply": "bill",
+    "cost_review": "vmci",
+    "freight_review": "vmci",
+    "migration_review": "bill"
+  }
+}
