@@ -139,6 +139,70 @@ try {
     sourceSnapshot: { url: 'https://unrelated.test/contact' },
     idempotencyKey: 'unverified-create'
   }), /evidence|binding/i);
+  const createDomainFixture = ({ candidateId, domain, email, sourceUrl, key }) => {
+    const scopedWorkItemId = Number(db.prepare(`
+      INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run(candidateId, userId, now, now).lastInsertRowid);
+    insertRecipientEvidence({
+      workItemId: scopedWorkItemId,
+      domain,
+      email,
+      sourceUrl,
+      verifiedAt: '2026-07-16T00:00:00.000Z',
+      snapshot: {
+        organization_domain: domain,
+        recipient_email: email,
+        source_url: sourceUrl
+      }
+    });
+    return {
+      actorUserId: userId,
+      workItemId: scopedWorkItemId,
+      expectedWorkVersion: 1,
+      recipient: { email, sourceUrl, verifiedAt: '2026-07-16T00:00:00Z', kind: 'public_company' },
+      subject: 'Registrable domain check',
+      bodyEn: 'Dear team, please confirm your requirements.',
+      bodyCn: '您好，请确认需求。',
+      idempotencyKey: key
+    };
+  };
+  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899996,
+    domain: 'test',
+    email: 'guessed@person.test',
+    sourceUrl: 'https://unrelated.test/contact',
+    key: 'public-suffix-test-create'
+  })), /registrable|evidence|binding/i);
+  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899995,
+    domain: 'co.uk',
+    email: 'sales@person.co.uk',
+    sourceUrl: 'https://unrelated.co.uk/contact',
+    key: 'public-suffix-couk-create'
+  })), /registrable|evidence|binding/i);
+  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899994,
+    domain: 'com.cn',
+    email: 'sales@person.com.cn',
+    sourceUrl: 'https://unrelated.com.cn/contact',
+    key: 'public-suffix-comcn-create'
+  })), /registrable|evidence|binding/i);
+  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899992,
+    domain: 'alpha.invalidtld',
+    email: 'sales@alpha.invalidtld',
+    sourceUrl: 'https://alpha.invalidtld/contact',
+    key: 'unknown-tld-create'
+  })), /registrable|evidence|binding/i);
+  const validMultiLevelDomain = review.createInitialVersion(db, createDomainFixture({
+    candidateId: 899993,
+    domain: 'alpha.co.uk',
+    email: 'sales@mail.alpha.co.uk',
+    sourceUrl: 'https://official.alpha.co.uk/contact',
+    key: 'registrable-couk-create'
+  }));
+  assert.strictEqual(validMultiLevelDomain.recipient_email, 'sales@mail.alpha.co.uk');
   const v1 = review.createInitialVersion(db, {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -228,6 +292,34 @@ try {
       `${qualificationClaim} must require evidence`
     );
   }
+  for (const unsupportedClaim of ['单价为99。', '单价为九十九元。', '材料符合食品级要求。', '产品已通过认证。']) {
+    await assert.rejects(
+      () => createMatrixStreamText({
+        callJson: async () => ({
+          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: unsupportedClaim
+        })
+      }).revise({ current: v1, instruction: '增加声明' }),
+      /unsupported (?:price|qualification)/i,
+      `${unsupportedClaim} must require exact evidence`
+    );
+  }
+  await assert.rejects(
+    () => createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: '单价为99美元。'
+      })
+    }).revise({ current: v1, instruction: '增加价格', sourceSnapshot: { supportedClaims: ['199美元'] } }),
+    /unsupported price/i,
+    '199美元 must not support 99美元'
+  );
+  const reasonableNumbers = await createMatrixStreamText({
+    callJson: async () => ({
+      subject: 'Dimension follow-up',
+      body_en: 'Please confirm the 250 mm width for the 2026-07-18 review.',
+      body_cn: '请确认250mm宽度，参考日期为2026-07-18。'
+    })
+  }).revise({ current: v1, instruction: '补充尺寸和日期' });
+  assert.match(reasonableNumbers.body_cn, /250mm/);
   const translated = await createMatrixStreamText({
     callJson: async () => ({
       translation_cn: '请提供报价。',
@@ -364,7 +456,10 @@ try {
     expectedContentHash: v1.content_hash,
     idempotencyKey: 'approve-1'
   };
-  assert.strictEqual(review.approveVersion(db, approveReplayInput).id, v1.id);
+  const approvedReplay = review.approveVersion(db, approveReplayInput);
+  assert.strictEqual(approvedReplay.id, v1.id);
+  assert.strictEqual(approvedReplay.status, 'approved');
+  assert.strictEqual(approvedReplay.current_status, 'superseded');
   const createReplayInput = {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -382,7 +477,10 @@ try {
     sourceSnapshot: { url: 'https://alpha.test/products' },
     idempotencyKey: 'version-create-1'
   };
-  assert.strictEqual(review.createInitialVersion(db, createReplayInput).id, v1.id);
+  const createReplay = review.createInitialVersion(db, createReplayInput);
+  assert.strictEqual(createReplay.id, v1.id);
+  assert.strictEqual(createReplay.status, 'draft');
+  assert.strictEqual(createReplay.current_status, 'superseded');
   assert.throws(() => review.approveVersion(db, {
     ...approveReplayInput,
     expectedContentHash: 'changed-hash'
@@ -432,7 +530,10 @@ try {
     bodyCn: `${v1.body_cn}\n请提供年用量。`,
     idempotencyKey: 'revise-1'
   };
-  assert.strictEqual(review.reviseVersion(db, reviseReplayInput).id, v2.id);
+  const reviseReplay = review.reviseVersion(db, reviseReplayInput);
+  assert.strictEqual(reviseReplay.id, v2.id);
+  assert.strictEqual(reviseReplay.status, 'draft');
+  assert.strictEqual(reviseReplay.current_status, 'draft');
   assert.throws(() => review.reviseVersion(db, {
     ...reviseReplayInput,
     bodyEn: `${reviseReplayInput.bodyEn}\nChanged replay content.`
@@ -478,6 +579,9 @@ try {
     idempotencyKey: 'revise-concurrent-winner'
   });
   assert.strictEqual(v3.revision, 3);
+  const revisedAfterSupersessionReplay = review.reviseVersion(db, reviseReplayInput);
+  assert.strictEqual(revisedAfterSupersessionReplay.status, 'draft');
+  assert.strictEqual(revisedAfterSupersessionReplay.current_status, 'superseded');
   assert.throws(
     () => db.prepare('UPDATE matrix_stream_versions SET subject = ? WHERE id = ?').run('Forbidden in-place edit', v3.id),
     /immutable/i
