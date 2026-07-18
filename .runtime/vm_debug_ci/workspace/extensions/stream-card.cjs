@@ -3,9 +3,10 @@
 const crypto = require('crypto');
 const fs = require('fs');
 
-const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.reply_draft', 'mx.retry_translation'];
+const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.reply_draft', 'mx.retry_translation'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
+const REVISION_TTL_MS = 10 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
@@ -263,55 +264,110 @@ function infoCard(cardHelpers, message) {
   return cardHelpers.card([cardHelpers.note(clip(message, 180))], { summary: '操作提示' });
 }
 
-function renderSelectedDraft(detail, result, state, cardHelpers) {
+function actionKey(kind, ...values) {
+  return crypto.createHash('sha256').update([kind, ...values].map(value => String(value ?? '')).join('\u0000')).digest('hex');
+}
+
+function versionAction(version, action, extra = {}) {
+  return {
+    a: action,
+    w: Number(version.work_item_id),
+    x: Number(version.id),
+    v: Number(version.work_item_version),
+    h: String(version.content_hash || ''),
+    ...extra
+  };
+}
+
+function renderVersionReview(version, cardHelpers) {
   const { card, md, note, actions, button } = cardHelpers;
-  const strategy = detail.strategy_signal || {};
-  const categories = Array.isArray(detail.categories) && detail.categories.length
-    ? detail.categories.join(', ')
-    : 'your current product range';
-  const entryProduct = String(strategy.entry_product || (detail.format_signals || []).join(', ') || categories).trim();
-  const goal = String(strategy.first_contact_goal || result.next_action || detail.next_action_cn || 'confirm the current requirements and purchasing plan').trim();
-  const questions = Array.isArray(strategy.questions) && strategy.questions.length
-    ? strategy.questions.slice(0, 3).map(value => clip(value, 65))
-    : ['What product structure and size are you currently using?', 'What is the expected order volume or annual demand?'];
-  const supplier = detail.supplier_signal;
-  const supplierLine = supplier && ['confirmed', 'public_lead'].includes(supplier.confidence)
-    ? `${supplier.confidence === 'confirmed' ? '已确认' : '公开线索'}｜${clip(supplier.supplier_name, 45)}｜${clip(supplier.supplied_category, 55)}`
-    : '未知｜暂无可靠公开关系证据';
-  const englishQuestions = questions.map(value => `- ${value}`).join('\n');
-  const chineseQuestions = questions.map(value => `- ${value}`).join('\n');
-  const english = [
-    `Subject: ${clip(entryProduct, 65)} for ${clip(detail.company_name, 45)}`,
-    `Dear ${clip(detail.company_name, 45)} team,`,
-    `We reviewed your publicly available product range, including ${clip(categories, 85)}. Based on this information, we would like to discuss ${clip(entryProduct, 85)} and explore whether a stable, repeatable solution could fit your current plan.`,
-    `To prepare a relevant proposal, could you please help confirm:`,
-    englishQuestions,
-    `Our first objective is to ${clip(goal, 90)}. If appropriate, we can then prepare a focused recommendation for your review.`,
-    'Best regards'
-  ].join('\n');
-  const chinese = [
-    `主题：与${clip(detail.company_name, 35)}沟通${clip(entryProduct, 55)}`,
-    `您好，${clip(detail.company_name, 35)}团队：`,
-    `我们查看了贵司公开展示的产品，包括${clip(categories, 70)}。基于这些信息，希望沟通${clip(entryProduct, 70)}，了解稳定、可重复的方案是否匹配贵司当前计划。`,
-    '为了准备更有针对性的建议，想请您确认：',
-    chineseQuestions,
-    `首轮沟通目标：${clip(goal, 80)}。如果合适，我们再整理一份聚焦的建议供您审阅。`,
-    '此致'
-  ].join('\n');
-  const strategyLine = strategy.differentiation_angle
-    ? clip(withoutQualification(strategy.differentiation_angle), 95)
-    : '先核实实际需求，再给出针对性方案';
+  const quality = (() => { try { return JSON.parse(version.quality_json); } catch (_) { return null; } })();
+  const score = Number.isFinite(Number(version.quality_score)) ? Number(version.quality_score) : Number(quality?.score || 0);
   return card([
-    md(`**已完成：已加入进行中｜候选 #${result.candidate_id}**\n**尚未发送：** 邮件、WhatsApp 和网站联系均未执行。`),
-    md(`**英文草稿**\n${english}`),
-    md(`**中文翻译**\n${chinese}`),
-    md(`**策略依据**\n差异点：${strategyLine}\n供应链线索：${supplierLine}`),
+    md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${score}/100`),
+    md(`**英文草稿**\n${clip(version.body_en, 360)}`),
+    md(`**中文翻译**\n${clip(version.body_cn, 280)}`),
     actions([
-      button('返回列表', { a: 'mx.back', s: state.session.id, v: state.session.version }, 'default'),
-      button('查看进行中', { a: 'mx.work', s: state.session.id, v: state.session.version }, 'default')
+      button('确认采用', versionAction(version, 'mx.approve'), 'primary'),
+      button('修改草稿', versionAction(version, 'mx.revise'), 'default'),
+      button('暂不处理', versionAction(version, 'mx.review'), 'default')
     ]),
-    note('请确认草稿是否采用，或直接说明需要修改的内容。本步只生成审阅稿，不会自动外发。')
-  ], { header: { title: '已生成待审阅草稿', template: 'blue' }, summary: '已生成待审阅草稿' });
+    note('尚未发送。确认采用仅记录审批，仍需打开最终预览并再次确认。')
+  ], { header: { title: `草稿 v${Number(version.revision || 1)} 待审阅`, template: 'blue' }, summary: '草稿待审阅' });
+}
+
+function renderApproved(version, cardHelpers) {
+  const { card, md, note, actions, button } = cardHelpers;
+  return card([
+    md(`**首次确认已记录**\n收件人：${clip(version.recipient_email, 100)}\n主题：${clip(version.subject, 100)}\n状态：尚未发送`),
+    actions([
+      button('查看最终预览', versionAction(version, 'mx.preview', { r: 0 }), 'primary'),
+      button('修改草稿', versionAction(version, 'mx.revise'), 'default')
+    ]),
+    note('最终预览会重新展示质量与发送门禁；只有第二次确认才可能提交。')
+  ], { header: { title: '已审批，等待最终确认', template: 'blue' }, summary: '等待最终确认' });
+}
+
+function reasonList(value) {
+  const values = [
+    ...(Array.isArray(value?.reasons) ? value.reasons : []),
+    ...(Array.isArray(value?.hardFailures) ? value.hardFailures : []),
+    ...(Array.isArray(value?.hard_failures) ? value.hard_failures : [])
+  ].map(item => String(item || '').trim()).filter(Boolean);
+  return [...new Set(values)];
+}
+
+function renderFinalPreview(preview, cardHelpers, retry = 0) {
+  const { card, md, note, actions, button } = cardHelpers;
+  const version = preview?.version || {};
+  const quality = preview?.quality || {};
+  const components = Object.entries(quality.components || {}).slice(0, 8).map(([name, item]) => {
+    const reasons = reasonList(item);
+    return `${clip(name, 28)} ${Number(item?.points || 0)}/${Number(item?.maximum || 0)}${reasons.length ? `：${clip(reasons.join(','), 90)}` : ''}`;
+  });
+  const gateLine = (label, value) => {
+    if (!value || typeof value !== 'object') return `${label}：提交时复核`;
+    const reasons = reasonList(value);
+    return `${label}：${value?.ok === false || reasons.length ? `阻断 ${clip(reasons.join(','), 130)}` : '通过'}`;
+  };
+  const elements = [
+    md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${Number(quality.score ?? version.quality_score ?? 0)}/100`),
+    md(`**质量组成**\n${components.length ? components.join('\n') : '暂无组成明细'}\n${reasonList(quality).length ? `硬性原因：${clip(reasonList(quality).join(','), 130)}` : ''}`),
+    md([
+      gateLine('重复检查', preview.duplicate),
+      gateLine('冷却期', preview.cooling),
+      gateLine('当日配额', preview.quota),
+      gateLine('发送方就绪', preview.readiness),
+      gateLine('国家/渠道政策', preview.policy),
+      ...(reasonList(preview).length ? [`最终原因：${clip(reasonList(preview).join(','), 150)}`] : [])
+    ].join('\n'))
+  ];
+  if (preview?.allowed === true) {
+    const cardEventId = `mx-card-${actionKey('confirm-card', version.work_item_id, version.id, version.content_hash, retry).slice(0, 24)}`;
+    elements.push(actions([button('确认发送', versionAction({ ...version, work_item_version: preview.work_item_version }, 'mx.confirm', { d: cardEventId, r: Number(retry || 0) }), 'primary')]));
+    elements.push(note('第二次确认将提交当前不可变版本；重复点击使用同一幂等键。'));
+  } else {
+    elements.push(note('当前门禁阻断，未提供确认发送操作，也不会提交发送。'));
+  }
+  return card(elements, { header: { title: preview?.allowed === true ? '最终预览' : '最终预览已阻断', template: preview?.allowed === true ? 'blue' : 'red' }, summary: '最终预览' });
+}
+
+function renderDeliveryResult(result, versionValue, cardHelpers) {
+  const { card, md, note, actions, button } = cardHelpers;
+  if (result?.state === 'accepted') return card([
+    md('**邮件服务器已接受**\n已记录一次受控提交结果。'),
+    note('此状态表示服务器已接受，不展示服务器原始响应或消息标识。')
+  ], { header: { title: '提交已接受', template: 'green' }, summary: '提交已接受' });
+  if (result?.state === 'failed') return card([
+    md('**明确失败**\n本次未被邮件服务器接受。'),
+    actions([button('重新预览', { ...versionValue, a: 'mx.preview', r: Number(versionValue.r || 0) + 1 }, 'default')]),
+    note('再次尝试前会重新打开最终预览，并使用新的人工确认幂等键。')
+  ], { header: { title: '提交失败', template: 'red' }, summary: '提交失败' });
+  if (result?.state === 'ambiguous') return card([
+    md('**提交结果不明确**\n可能已被服务器接收，禁止自动或按钮重试。'),
+    note('请人工核对后再处理；不展示原始服务器诊断。')
+  ], { header: { title: '需要人工核对', template: 'orange' }, summary: '提交结果不明确' });
+  throw new Error('invalid delivery result');
 }
 
 function renderFilters(facets, state, cardHelpers) {
@@ -343,6 +399,7 @@ function register(context) {
   const now = typeof context.now === 'function' ? context.now : () => Date.now();
   const sessions = new Map();
   const selectionEvents = new Map();
+  const revisionContexts = new Map();
   const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
   const clearReminderPoll = context.clearReminderPoll || (timer => clearInterval(timer));
   const logReminder = context.logReminder || (message => process.stderr.write(`${message}\n`));
@@ -597,10 +654,79 @@ function register(context) {
     }
     const result = await client.selectCandidate(openId, input);
     if (Number(result.session_version) > Number(state.session.version)) state.session.version = result.session_version;
-    const detail = await sessionBound(() => client.candidateDetail(openId, result.candidate_id, {
-      session_id: state.session.id, chat_id: evt.chatId, thread_id: evt.threadId || ''
-    }));
-    await sendForEvent(evt, renderSelectedDraft(detail, result, state, cardHelpers));
+    if (typeof client.createVersion !== 'function') throw new Error('version review service unavailable');
+    const version = await client.createVersion(openId, result.work_item_id, {
+      expected_work_version: 1,
+      idempotency_key: `${key}:version`
+    });
+    await sendForEvent(evt, renderVersionReview(version, cardHelpers));
+  }
+
+  function reviewActionValue(evt, value) {
+    const openId = String(evt?.operator?.openId || '').trim();
+    const workItemId = Number(value?.w);
+    const versionId = Number(value?.x);
+    const expectedWorkVersion = Number(value?.v);
+    const contentHash = String(value?.h || '').trim();
+    if (!openId || !Number.isInteger(workItemId) || workItemId < 1
+        || !Number.isInteger(versionId) || versionId < 1
+        || !Number.isInteger(expectedWorkVersion) || expectedWorkVersion < 1
+        || !/^[a-f0-9]{64}$/i.test(contentHash)) throw new Error('invalid review action');
+    return { openId, workItemId, versionId, expectedWorkVersion, contentHash };
+  }
+
+  async function deferReviewAction({ evt, value }) {
+    reviewActionValue(evt, value);
+    revisionContexts.delete(sessionKey(evt.chatId, evt.operator.openId, evt.threadId));
+    await sendForEvent(evt, infoCard(cardHelpers, '已暂不处理；尚未发送。需要时可从进行中项目重新打开。'));
+  }
+
+  async function reviseAction({ evt, value }) {
+    const binding = reviewActionValue(evt, value);
+    revisionContexts.set(sessionKey(evt.chatId, binding.openId, evt.threadId), {
+      ...binding,
+      expiresAt: clockMillis() + REVISION_TTL_MS
+    });
+    await sendForEvent(evt, cardHelpers.card([
+      cardHelpers.md('请回复“修改：……”说明需要调整的内容。'),
+      cardHelpers.note('编辑上下文仅绑定当前会话、操作者和话题，10 分钟后自动失效；回复“取消”可立即清理。')
+    ], { header: { title: '等待修改说明', template: 'blue' }, summary: '等待修改说明' }));
+  }
+
+  async function approveAction({ evt, value }) {
+    const binding = reviewActionValue(evt, value);
+    revisionContexts.delete(sessionKey(evt.chatId, binding.openId, evt.threadId));
+    if (typeof client.approveVersion !== 'function') throw new Error('approval service unavailable');
+    const version = await client.approveVersion(binding.openId, binding.workItemId, binding.versionId, {
+      expected_work_version: binding.expectedWorkVersion,
+      expected_content_hash: binding.contentHash,
+      idempotency_key: actionKey('approve', binding.openId, binding.workItemId, binding.versionId, binding.expectedWorkVersion, binding.contentHash)
+    });
+    await sendForEvent(evt, renderApproved(version, cardHelpers));
+  }
+
+  async function previewAction({ evt, value }) {
+    const binding = reviewActionValue(evt, value);
+    if (typeof client.versionPreview !== 'function') throw new Error('preview service unavailable');
+    const preview = await client.versionPreview(binding.openId, binding.workItemId, binding.versionId);
+    await sendForEvent(evt, renderFinalPreview(preview, cardHelpers, Number(value?.r || 0)));
+  }
+
+  async function confirmAction({ evt, value }) {
+    const binding = reviewActionValue(evt, value);
+    const cardEventId = String(value?.d || '').trim();
+    const retry = Number(value?.r || 0);
+    if (!cardEventId || cardEventId.length > 256 || /[\r\n\0]/.test(cardEventId)
+        || !Number.isInteger(retry) || retry < 0) throw new Error('invalid final confirmation');
+    if (typeof client.confirmSend !== 'function') throw new Error('confirmation service unavailable');
+    const result = await client.confirmSend(binding.openId, binding.workItemId, binding.versionId, {
+      expected_work_version: binding.expectedWorkVersion,
+      expected_content_hash: binding.contentHash,
+      chat_id: String(evt.chatId || ''),
+      card_event_id: cardEventId,
+      idempotency_key: actionKey('confirm', binding.openId, binding.workItemId, binding.versionId, binding.expectedWorkVersion, binding.contentHash, retry)
+    });
+    await sendForEvent(evt, renderDeliveryResult(result, value, cardHelpers));
   }
 
   async function workAction({ evt, value }) {
@@ -663,6 +789,11 @@ function register(context) {
     'mx.filters': filterAction,
     'mx.region': payload => applyFilters(payload, 'region'),
     'mx.category': payload => applyFilters(payload, 'category'),
+    'mx.review': deferReviewAction,
+    'mx.revise': reviseAction,
+    'mx.approve': approveAction,
+    'mx.preview': previewAction,
+    'mx.confirm': confirmAction,
     'mx.reply_draft': replyDraftAction,
     'mx.retry_translation': retryTranslationAction
   };
@@ -689,6 +820,33 @@ function register(context) {
     },
     async onMessage({ msg }) {
       const text = String(msg?.content || '').trim();
+      const revisionKey = sessionKey(msg?.chatId, msg?.senderId, msg?.threadId);
+      const revision = revisionContexts.get(revisionKey);
+      if (revision) {
+        if (revision.expiresAt <= clockMillis()) {
+          revisionContexts.delete(revisionKey);
+        } else if (text === '取消') {
+          revisionContexts.delete(revisionKey);
+          await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '已取消修改并清理编辑上下文；尚未发送。'), msg.messageId, Boolean(msg.threadId));
+          return true;
+        } else if (text.startsWith('修改：')) {
+          const instruction = text.slice('修改：'.length).trim();
+          if (!instruction) {
+            await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '修改说明不能为空，请回复“修改：……”或“取消”。'), msg.messageId, Boolean(msg.threadId));
+            return true;
+          }
+          if (typeof client.reviseVersion !== 'function') throw new Error('revision service unavailable');
+          const version = await client.reviseVersion(revision.openId, revision.workItemId, {
+            expected_work_version: revision.expectedWorkVersion,
+            base_version_id: revision.versionId,
+            revision_instruction: instruction,
+            idempotency_key: actionKey('revise', revision.openId, revision.workItemId, revision.versionId, revision.expectedWorkVersion, instruction)
+          });
+          revisionContexts.delete(revisionKey);
+          await sendManagedCard(channel, msg.chatId, renderVersionReview(version, cardHelpers), msg.messageId, Boolean(msg.threadId));
+          return true;
+        }
+      }
       if (text === '开发客户') {
         await start(msg);
         return true;
