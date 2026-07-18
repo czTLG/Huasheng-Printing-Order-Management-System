@@ -984,6 +984,94 @@ function initDb() {
       FOREIGN KEY(actor_user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_type TEXT NOT NULL,
+      owner_role TEXT NOT NULL,
+      channel TEXT NOT NULL CHECK(channel IN ('bill','vmci')),
+      due_at TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','blocked','waiting_decision','completed','cancelled')),
+      version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+      binding_id TEXT NOT NULL UNIQUE,
+      bindings_json TEXT NOT NULL,
+      blocker TEXT NOT NULL DEFAULT '',
+      next_action TEXT NOT NULL DEFAULT '',
+      evidence_json TEXT NOT NULL DEFAULT '[]',
+      followup_count INTEGER NOT NULL DEFAULT 0 CHECK(followup_count BETWEEN 0 AND 2),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_task_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      task_version INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      actor_user_id INTEGER,
+      binding_id TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      chat_id TEXT NOT NULL DEFAULT '',
+      card_event_id TEXT NOT NULL DEFAULT '',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(task_id) REFERENCES matrix_tasks(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_task_dependencies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      blocked_task_id INTEGER NOT NULL,
+      blocking_task_id INTEGER NOT NULL,
+      resume_action TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','resolved')),
+      idempotency_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      UNIQUE(blocked_task_id, blocking_task_id),
+      FOREIGN KEY(blocked_task_id) REFERENCES matrix_tasks(id),
+      FOREIGN KEY(blocking_task_id) REFERENCES matrix_tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+      state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','resolved','cancelled')),
+      binding_id TEXT NOT NULL UNIQUE,
+      affected_item_ids_json TEXT NOT NULL,
+      question TEXT NOT NULL,
+      recommended_option TEXT NOT NULL,
+      options_json TEXT NOT NULL,
+      selected_option TEXT NOT NULL DEFAULT '',
+      resolved_by INTEGER,
+      resolved_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(task_id) REFERENCES matrix_tasks(id),
+      FOREIGN KEY(resolved_by) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_decision_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      decision_id INTEGER NOT NULL,
+      decision_version INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      actor_user_id INTEGER,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(decision_id) REFERENCES matrix_decisions(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_task_commands (
+      idempotency_key TEXT PRIMARY KEY,
+      request_fingerprint TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
@@ -1219,6 +1307,10 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_source_versions_identity ON matrix_source_version_events(source_type, source_id, source_version);
     CREATE INDEX IF NOT EXISTS idx_matrix_item_sources_identity ON matrix_item_source_links(source_type, source_id, item_id);
     CREATE INDEX IF NOT EXISTS idx_matrix_item_source_bindings_link ON matrix_item_source_version_bindings(item_source_link_id, source_version DESC);
+    CREATE INDEX IF NOT EXISTS idx_matrix_tasks_queue ON matrix_tasks(channel, state, due_at, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_task_events_task ON matrix_task_events(task_id, task_version, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_task_dependencies_blocking ON matrix_task_dependencies(blocking_task_id, state);
+    CREATE INDEX IF NOT EXISTS idx_matrix_decisions_task ON matrix_decisions(task_id, state, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
@@ -1316,6 +1408,19 @@ function initDb() {
     BEGIN
       SELECT RAISE(ABORT, 'matrix_item_source_version_bindings is immutable');
     END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_task_events_no_update
+    BEFORE UPDATE ON matrix_task_events
+    BEGIN SELECT RAISE(ABORT, 'matrix_task_events is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_task_events_no_delete
+    BEFORE DELETE ON matrix_task_events
+    BEGIN SELECT RAISE(ABORT, 'matrix_task_events is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_decision_events_no_update
+    BEFORE UPDATE ON matrix_decision_events
+    BEGIN SELECT RAISE(ABORT, 'matrix_decision_events is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_decision_events_no_delete
+    BEFORE DELETE ON matrix_decision_events
+    BEGIN SELECT RAISE(ABORT, 'matrix_decision_events is append-only'); END;
 
     INSERT OR IGNORE INTO matrix_identity_commands (
       idempotency_key, request_fingerprint, outcome_kind, link_id, result_json, created_at

@@ -10,13 +10,18 @@ function clone(obj) {
 function defaultPermissionsByRole(role = 'ai_sales') {
   const key = String(role || 'default');
   const hit = DEFAULTS[key] || DEFAULTS.default || { modules: {} };
-  return clone(hit);
+  const result = clone(hit);
+  result.capabilities = {
+    matrixSend: !!result.capabilities?.matrixSend,
+    matrixDecide: !!result.capabilities?.matrixDecide,
+  };
+  return result;
 }
 
 function normalizePermissions(role = 'ai_sales', permissions) {
   const defaults = defaultPermissionsByRole(role);
   if (!permissions || typeof permissions !== 'object') return defaults;
-  if (permissions.all) return { all: true, capabilities: { matrixSend: true } };
+  if (permissions.all) return { all: true, capabilities: { matrixSend: true, matrixDecide: true } };
 
   const baseModules = {};
   MODULE_KEYS.forEach((key) => {
@@ -26,12 +31,16 @@ function normalizePermissions(role = 'ai_sales', permissions) {
 
   const uniq = (arr = []) => [...new Set(arr.filter(Boolean))];
   const allowedForRole = role === 'super_admin' || role === 'foreign_trade_crm_admin';
-  const requested = !!permissions?.capabilities?.matrixSend;
+  const sendRequested = !!permissions?.capabilities?.matrixSend;
+  const decideRequested = !!permissions?.capabilities?.matrixDecide;
   return {
     modules: mergedModules,
     ordersStages: uniq(Array.isArray(permissions.ordersStages) ? permissions.ordersStages : (defaults.ordersStages || [])),
     boardStages: uniq(Array.isArray(permissions.boardStages) ? permissions.boardStages : (defaults.boardStages || [])),
-    capabilities: { matrixSend: allowedForRole && requested },
+    capabilities: {
+      matrixSend: allowedForRole && sendRequested,
+      matrixDecide: allowedForRole && decideRequested,
+    },
   };
 }
 

@@ -1,0 +1,5 @@
+{
+  "bill": { "taskType": "quote_followup", "ownerRole": "foreign_trade_crm_admin", "channel": "bill" },
+  "vmci": { "taskType": "cost_review", "ownerRole": "costing_user", "channel": "vmci" },
+  "resumeAction": "Prepare the exact customer quote"
+}

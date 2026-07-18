@@ -1,6 +1,6 @@
 {
   "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin", "crm"],
-  "capabilityKeys": ["matrixSend"],
+  "capabilityKeys": ["matrixSend", "matrixDecide"],
   "defaultsByRole": {
     "super_admin": {
       "all": true,
