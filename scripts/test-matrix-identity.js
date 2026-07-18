@@ -333,6 +333,38 @@ for (const [index, markerOverlapKey] of [
   );
 }
 
+for (const [index, primitiveKey, primitiveEvidence] of [
+  [0, 'true', { verified: true }],
+  [1, 'false', { verified: false }],
+  [2, 'null', { observed: null }]
+]) {
+  const primitiveLink = link({
+    entityId: `primitive-domain-${index}`,
+    externalKey: primitiveKey,
+    evidence: primitiveEvidence,
+    idempotencyKey: `primitive-domain-${index}`
+  });
+  assert.strictEqual(
+    primitiveLink.status,
+    'linked',
+    `JSON primitive text ${primitiveKey} must not be mistaken for a leaked string key`
+  );
+}
+
+const numericPrimitiveLink = link({
+  entityId: 'primitive-legal-id',
+  namespace: 'legal_id',
+  externalKey: '1',
+  matchMethod: 'legal_id',
+  evidence: { recordNumber: 1 },
+  idempotencyKey: 'primitive-legal-id-1'
+});
+assert.strictEqual(
+  numericPrimitiveLink.status,
+  'linked',
+  'numeric JSON serialization must not be mistaken for a leaked string key'
+);
+
 const aliasRawKey = '\u534e\u76db   \u5305\u88c5';
 const aliasLink = link({
   entityId: 'unicode-multiword-alias',

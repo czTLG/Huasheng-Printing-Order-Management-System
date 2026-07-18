@@ -132,13 +132,33 @@ function redactExternalKey(value, redactionForms) {
   }, value);
 }
 
-function assertRedactionBoundary(serializedEvidence, redactionForms) {
-  const leaked = redactionForms.some(form => (
-    /^[\x00-\x7f]+$/.test(form)
-      ? serializedEvidence.toLowerCase().includes(form.toLowerCase())
-      : serializedEvidence.includes(form)
-  ));
-  if (leaked) throw new Error('external key redaction boundary failed');
+function assertRedactionBoundary(value, redactionForms) {
+  function stringLeaksExternalKey(text) {
+    return redactionForms.some(form => (
+      /^[\x00-\x7f]+$/.test(form)
+        ? text.toLowerCase().includes(form.toLowerCase())
+        : text.includes(form)
+    ));
+  }
+
+  function inspect(item) {
+    if (typeof item === 'string') {
+      if (stringLeaksExternalKey(item)) throw new Error('external key redaction boundary failed');
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item) inspect(child);
+      return;
+    }
+    if (item && typeof item === 'object') {
+      for (const [key, child] of Object.entries(item)) {
+        if (stringLeaksExternalKey(key)) throw new Error('external key redaction boundary failed');
+        inspect(child);
+      }
+    }
+  }
+
+  inspect(value);
 }
 
 function reviewCandidate(value) {
@@ -300,7 +320,7 @@ function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } =
     const evidence = evidenceObject(input.evidence);
     const safeEvidence = redactExternalKey(structuredClone(evidence), redactionForms);
     const evidenceJson = canonicalJson(safeEvidence);
-    assertRedactionBoundary(evidenceJson, redactionForms);
+    assertRedactionBoundary(safeEvidence, redactionForms);
 
     if (!EXACT_METHODS.has(matchMethod)) {
       return reviewExact(input, namespace, keyHash, safeEvidence, 'method_not_allowlisted');

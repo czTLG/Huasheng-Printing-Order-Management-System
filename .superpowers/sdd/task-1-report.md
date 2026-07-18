@@ -119,6 +119,28 @@ git diff --check
 
 Observed result: all focused, syntax, shared database, API, and whitespace checks completed with exit 0.
 
+## Independent Review R4 Fix
+
+The final review probe showed that scanning serialized JSON confused primitive text
+such as `true`, `null`, and `1` with leaked string evidence. The boundary check now
+walks only evidence property names and string values; booleans, numbers, and null
+are ignored because they cannot contain an external-key string. Regression cases
+cover domain keys `true`, `false`, and `null`, plus legal ID `1`, while retaining
+the Unicode, marker-overlap, collision, replay, and immutable-evidence coverage.
+
+Verification:
+
+```text
+node scripts/test-matrix-identity.js
+node --check src/services/matrixIdentity.js
+node --check scripts/test-matrix-identity.js
+node scripts/test-matrix-stream-review.js
+node scripts/test-matrix-stream-gates.js
+git diff --check
+```
+
+All commands completed with exit 0.
+
 ## Independent Review R3 Fix
 
 ### RED
