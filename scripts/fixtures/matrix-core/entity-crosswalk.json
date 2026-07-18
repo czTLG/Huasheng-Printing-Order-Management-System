@@ -1,0 +1,29 @@
+{
+  "namespace": "organization_domain",
+  "externalKey": "northstar.example",
+  "matchMethod": "exact_domain",
+  "links": [
+    { "entityType": "atlas_candidate", "entityId": "atlas-901", "source": "atlas_snapshot" },
+    { "entityType": "crm_customer", "entityId": "customer-301", "source": "crm_record" },
+    { "entityType": "public_identity", "entityId": "email-sales", "source": "public_email" },
+    { "entityType": "public_identity", "entityId": "whatsapp-main", "source": "public_whatsapp" },
+    { "entityType": "inquiry", "entityId": "inquiry-501", "source": "inquiry_record" },
+    { "entityType": "order", "entityId": "order-701", "source": "order_record" }
+  ],
+  "suppressionTargets": [
+    "atlas_candidate:atlas-901",
+    "crm_customer:customer-301",
+    "public_identity:email-sales",
+    "public_identity:whatsapp-main",
+    "inquiry:inquiry-501",
+    "order:order-701"
+  ],
+  "revocationTargets": [
+    "atlas_candidate:atlas-901",
+    "crm_customer:customer-301",
+    "public_identity:email-sales",
+    "public_identity:whatsapp-main",
+    "inquiry:inquiry-501",
+    "order:order-701"
+  ]
+}

@@ -858,6 +858,22 @@ function initDb() {
       FOREIGN KEY(actor_user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_entity_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      external_key_hash TEXT NOT NULL,
+      match_method TEXT NOT NULL CHECK(match_method IN ('exact_domain','verified_email_domain','legal_id','lei','confirmed_alias')),
+      evidence_json TEXT NOT NULL,
+      actor_user_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(entity_type, entity_id, namespace, external_key_hash),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
@@ -1085,6 +1101,8 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_matrix_entity_links_lookup ON matrix_entity_links(namespace, external_key_hash);
+    CREATE INDEX IF NOT EXISTS idx_matrix_entity_links_entity ON matrix_entity_links(entity_type, entity_id);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
@@ -1104,6 +1122,18 @@ function initDb() {
     BEFORE DELETE ON matrix_selection_events
     BEGIN
       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_entity_links_no_update
+    BEFORE UPDATE ON matrix_entity_links
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_entity_links evidence is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_entity_links_no_delete
+    BEFORE DELETE ON matrix_entity_links
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_entity_links evidence is immutable');
     END;
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_update
