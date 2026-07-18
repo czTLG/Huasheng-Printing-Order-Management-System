@@ -24,6 +24,39 @@ function extractUrls(value) {
   return String(value || '').match(/https?:\/\/[^\s<>'"）)]+/gi) || [];
 }
 
+const PRICE_SEMANTIC = /(?:价格|报价|单价|售价|费用|收费|免费|成本|\b(?:price|quote|rate|fee|cost|free)\b)/i;
+const QUALIFICATION_SEMANTIC = /(?:认证|证书|资质|许可证|许可|审核|认可|批准|合规|标准|规范|要求|\b(?:certified|certificate|certification|license[ds]?|permit(?:ted)?|audit(?:ed)?|approved|recognized|compliant|compliance|standard|requirement)\b)/i;
+const ASSERTION_MARKER = /(?:已|拥有|通过|获得|获|无需|免收费|免费|符合|满足|达到|具备|持有|取得|认可|批准|备案|\b(?:has|have|had|holds?|obtained|approved|recognized|certified|compliant|meets?|satisfies?|free|no[ -]?fee)\b)/i;
+const REQUEST_MARKER = /^\s*(?:请问?|麻烦|(?:could|can|would) you\b|please\b|what (?:is|are)\b|do you\b|does\b|is there\b|are there\b|may i\b)/i;
+
+function splitSentences(value) {
+  return String(value || '')
+    .replace(/\r/g, '')
+    .split(/(?<=[。！？!?])|(?<=\.)\s+|\n+/u)
+    .map(sentence => sentence.trim())
+    .filter(Boolean);
+}
+
+function normalizedSentence(value) {
+  return String(value || '').normalize('NFKC').trim().replace(/[。.!?！？]+$/u, '').replace(/\s+/g, '').toLowerCase();
+}
+
+function sensitiveKinds(sentence) {
+  return {
+    price: PRICE_SEMANTIC.test(sentence),
+    qualification: QUALIFICATION_SEMANTIC.test(sentence)
+  };
+}
+
+function isNonAssertionRequest(sentence) {
+  if (ASSERTION_MARKER.test(sentence)) return false;
+  return /[?？]\s*$/u.test(sentence) || REQUEST_MARKER.test(sentence);
+}
+
+function assertionText(value) {
+  return splitSentences(value).filter(sentence => !isNonAssertionRequest(sentence)).join('\n');
+}
+
 const AMOUNT_PATTERN = '(?:\\d[\\d,.]*(?:\\.\\d+)?|[零〇一二两三四五六七八九十百千万点]+)';
 const CURRENCY_PATTERN = '(?:usd|eur|gbp|cny|rmb|[$€£¥]|美元|美金|人民币|欧元|英镑|日元|元)';
 
@@ -73,7 +106,7 @@ function normalizedCurrency(value) {
 }
 
 function priceClaims(value) {
-  const text = String(value || '');
+  const text = assertionText(value);
   const claims = new Set();
   const currencyAdjacent = new RegExp(`(?:${CURRENCY_PATTERN}\\s*${AMOUNT_PATTERN}|${AMOUNT_PATTERN}\\s*${CURRENCY_PATTERN})`, 'gi');
   for (const match of text.matchAll(currencyAdjacent)) {
@@ -101,7 +134,7 @@ function priceClaims(value) {
 }
 
 function qualificationClaims(value) {
-  const text = String(value || '');
+  const text = assertionText(value);
   const claims = new Set();
   for (const match of text.matchAll(/\b(ISO)\s*(\d+(?:[-:]\d+)?)?\b/gi)) claims.add(`qualification:iso:${match[2] || 'unspecified'}`);
   for (const match of text.matchAll(/\b(BRCGS?|FDA|HACCP|GMP|CE|ROHS|REACH)\b/gi)) claims.add(`qualification:${match[1].toLowerCase()}`);
@@ -146,13 +179,23 @@ function evidenceValues(input) {
 }
 
 function validateClaims(output, input) {
-  const outputText = Object.values(output).join('\n');
+  const outputValues = Object.values(output);
+  const outputText = outputValues.join('\n');
   const sourceValues = evidenceValues(input);
+  const sourceSentences = new Set(sourceValues.flatMap(splitSentences).map(normalizedSentence).filter(Boolean));
   const sourcePrices = new Set(sourceValues.flatMap(priceClaims));
   const sourceQualifications = new Set(sourceValues.flatMap(qualificationClaims));
   const allowedUrlText = [sourceValues.join('\n'), JSON.stringify(input?.current || {}), String(input?.inboundText || input?.message || '')].join('\n');
   for (const url of extractUrls(outputText)) {
     if (!allowedUrlText.includes(url)) throw new Error('invalid bilingual output: model introduced URL');
+  }
+  for (const sentence of outputValues.flatMap(splitSentences)) {
+    const kinds = sensitiveKinds(sentence);
+    if ((!kinds.price && !kinds.qualification) || isNonAssertionRequest(sentence)) continue;
+    if (!sourceSentences.has(normalizedSentence(sentence))) {
+      const kind = kinds.price ? 'price' : 'qualification';
+      throw new Error(`invalid bilingual output: unsupported ${kind} claim`);
+    }
   }
   for (const price of priceClaims(outputText)) {
     if (!sourcePrices.has(price)) throw new Error('invalid bilingual output: unsupported price claim');
