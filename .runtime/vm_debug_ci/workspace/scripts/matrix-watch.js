@@ -228,35 +228,70 @@ function replyNotificationCard(notification) {
 
 async function claimAndQueueReply({
   client, ownerOpenId, chatId,
-  spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH
+  spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH,
+  lockPath = `${spoolPath}.lock`, lockStaleMs = 300000
 }) {
   if (!client || typeof client.claimNotification !== 'function' || !ownerOpenId || !chatId) throw new Error('reply watcher binding required');
-  if (readJson(spoolPath) || readJson(inflightPath)) return { status: 'busy' };
-  const response = await client.claimNotification(ownerOpenId);
-  const notification = response?.notification;
-  if (!notification) return { status: 'empty' };
-  const record = {
-    version: 1,
-    id: positiveId(notification.id, 'notification id'),
-    notification_key: String(notification.notification_key || ''),
-    claim_token: String(notification.claim_token || ''),
-    chat_id: String(chatId),
-    card: replyNotificationCard(notification)
-  };
-  if (!/^[0-9a-f-]{36}$/i.test(record.notification_key) || !/^[0-9a-f-]{36}$/i.test(record.claim_token)) throw new Error('valid reply notification claim required');
-  const temporary = `${spoolPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  let lockFd;
   try {
-    fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
-    fs.renameSync(temporary, spoolPath);
-  } catch (error) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        lockFd = fs.openSync(lockPath, 'wx', 0o600);
+        fs.writeFileSync(lockFd, `${JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() })}\n`);
+        fs.fsyncSync(lockFd);
+        break;
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error;
+        const age = Date.now() - fs.statSync(lockPath).mtimeMs;
+        if (attempt === 0 && age > Math.max(1000, Number(lockStaleMs || 300000))) {
+          let owner = null;
+          try { owner = readJson(lockPath); } catch (_) {}
+          if (Number.isInteger(owner?.pid) && owner.pid > 0) {
+            try {
+              process.kill(owner.pid, 0);
+              return { status: 'busy' };
+            } catch (ownerError) {
+              if (ownerError?.code !== 'ESRCH') return { status: 'busy' };
+            }
+          }
+          try { fs.unlinkSync(lockPath); } catch (unlinkError) { if (unlinkError?.code !== 'ENOENT') throw unlinkError; }
+          continue;
+        }
+        return { status: 'busy' };
+      }
+    }
+    if (readJson(spoolPath) || readJson(inflightPath)) return { status: 'busy' };
+    const response = await client.claimNotification(ownerOpenId);
+    const notification = response?.notification;
+    if (!notification) return { status: 'empty' };
+    const record = {
+      version: 1,
+      id: positiveId(notification.id, 'notification id'),
+      notification_key: String(notification.notification_key || ''),
+      claim_token: String(notification.claim_token || ''),
+      chat_id: String(chatId),
+      card: replyNotificationCard(notification)
+    };
+    if (!/^[0-9a-f-]{36}$/i.test(record.notification_key) || !/^[0-9a-f-]{36}$/i.test(record.claim_token)) throw new Error('valid reply notification claim required');
+    const temporary = `${spoolPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
     try {
-      await client.nackNotification(ownerOpenId, record.id, { claim_token: record.claim_token, outcome: 'failed' });
-    } catch (_) {}
-    throw error;
+      fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
+      fs.linkSync(temporary, spoolPath);
+    } catch (error) {
+      try {
+        await client.nackNotification(ownerOpenId, record.id, { claim_token: record.claim_token, outcome: 'failed' });
+      } catch (_) {}
+      throw error;
+    } finally {
+      try { fs.unlinkSync(temporary); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    }
+    return { status: 'queued', id: record.id };
   } finally {
-    try { fs.unlinkSync(temporary); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    if (lockFd !== undefined) {
+      fs.closeSync(lockFd);
+      try { fs.unlinkSync(lockPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    }
   }
-  return { status: 'queued', id: record.id };
 }
 
 async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatId, send, hour = 9, minute = 0 }) {

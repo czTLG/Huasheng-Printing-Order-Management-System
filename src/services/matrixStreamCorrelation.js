@@ -223,7 +223,8 @@ function claimNotification(db, input = {}) {
     for (const row of expired) {
       db.prepare(`
         UPDATE matrix_stream_notification_spool
-        SET delivery_state = 'manual_review', owner_token = '', lease_expires_at = '', last_error_class = 'claim_expired'
+        SET delivery_state = 'manual_review', finalized_token = owner_token, finalized_state = 'manual_review',
+            owner_token = '', lease_expires_at = '', last_error_class = 'claim_expired'
         WHERE id = ? AND delivery_state = 'inflight' AND lease_expires_at <= ?
       `).run(row.id, context.iso);
     }
@@ -232,7 +233,7 @@ function claimNotification(db, input = {}) {
       JOIN matrix_work_items w ON w.id = n.work_item_id
       JOIN matrix_actor_bindings b ON b.user_id = w.owner_user_id
       JOIN users u ON u.id = w.owner_user_id
-      WHERE n.delivery_state = 'pending' AND n.kind = 'reply'
+      WHERE n.delivery_state = 'pending' AND n.kind = 'reply' AND w.stream_state = 'replied'
         AND w.owner_user_id = ? AND b.id = ? AND b.status = 'active' AND u.status = 'active'
       ORDER BY n.id LIMIT 1
     `).get(identity.actorUserId, identity.bindingId);
@@ -241,7 +242,8 @@ function claimNotification(db, input = {}) {
     const leaseExpiresAt = new Date(context.ms + leaseMs).toISOString();
     const changed = db.prepare(`
       UPDATE matrix_stream_notification_spool
-      SET delivery_state = 'inflight', owner_token = ?, lease_expires_at = ?, attempt_count = attempt_count + 1
+      SET delivery_state = 'inflight', owner_token = ?, lease_expires_at = ?, attempt_count = attempt_count + 1,
+          finalized_token = '', finalized_state = ''
       WHERE id = ? AND delivery_state = 'pending'
     `).run(token, leaseExpiresAt, row.id);
     if (changed.changes !== 1) return null;
@@ -250,15 +252,53 @@ function claimNotification(db, input = {}) {
   return transaction.immediate();
 }
 
-function claimedRow(db, input) {
+function authorizedNotification(db, input) {
   const identity = requiredClaimInput(input);
   const notificationId = positiveInteger(input.notificationId, 'notification id');
   const claimToken = String(input.claimToken || '').trim();
   if (!/^[0-9a-f-]{36}$/i.test(claimToken)) throw new Error('valid notification claim token required');
-  const row = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE id = ?').get(notificationId);
+  const row = db.prepare(`
+    SELECT n.*, w.stream_state AS current_work_state
+    FROM matrix_stream_notification_spool n
+    JOIN matrix_work_items w ON w.id = n.work_item_id
+    WHERE n.id = ?
+  `).get(notificationId);
   if (!row || !activeOwnerBinding(db, identity.actorUserId, identity.bindingId, row.work_item_id)) throw new Error('notification claim not authorized');
-  if (row.delivery_state !== 'inflight' || row.owner_token !== claimToken) throw new Error('notification claim mismatch');
   return { identity, row, notificationId, claimToken };
+}
+
+function expireOrCancelClaim(db, claim, context) {
+  const expired = claim.row.delivery_state === 'inflight' && claim.row.lease_expires_at <= context.iso;
+  const cancelled = claim.row.kind !== 'reply' || claim.row.current_work_state !== 'replied';
+  if (claim.row.delivery_state === 'inflight' && claim.row.owner_token === claim.claimToken && (expired || cancelled)) {
+    db.prepare(`
+      UPDATE matrix_stream_notification_spool
+      SET delivery_state = 'manual_review', finalized_token = ?, finalized_state = 'manual_review',
+          owner_token = '', lease_expires_at = '', last_error_class = ?
+      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ?
+    `).run(claim.claimToken, expired ? 'claim_expired' : 'terminal_cancelled', claim.notificationId, claim.claimToken);
+    return 'manual_review';
+  }
+  return null;
+}
+
+function replayedState(claim) {
+  return claim.row.finalized_token === claim.claimToken && claim.row.finalized_state
+    ? claim.row.finalized_state : '';
+}
+
+function notificationStatus(db, input = {}) {
+  const context = clockIso(input.clock);
+  const transaction = db.transaction(() => {
+    const claim = authorizedNotification(db, input);
+    const terminal = expireOrCancelClaim(db, claim, context) || replayedState(claim);
+    if (terminal) return { notification_id: claim.notificationId, delivery_state: terminal, can_deliver: false };
+    if (claim.row.delivery_state !== 'inflight' || claim.row.owner_token !== claim.claimToken) {
+      throw new Error('notification claim mismatch');
+    }
+    return { notification_id: claim.notificationId, delivery_state: 'inflight', can_deliver: true };
+  });
+  return transaction.immediate();
 }
 
 function ackNotification(db, input = {}) {
@@ -266,12 +306,16 @@ function ackNotification(db, input = {}) {
   const receiptId = String(input.receiptId || '').trim();
   if (!receiptId || receiptId.length > 256 || /[\r\n\0]/.test(receiptId)) throw new Error('valid notification receipt required');
   const transaction = db.transaction(() => {
-    const claim = claimedRow(db, input);
+    const claim = authorizedNotification(db, input);
+    const terminal = expireOrCancelClaim(db, claim, context) || replayedState(claim);
+    if (terminal) return { notification_id: claim.notificationId, delivery_state: terminal };
+    if (claim.row.delivery_state !== 'inflight' || claim.row.owner_token !== claim.claimToken) throw new Error('notification claim mismatch');
     db.prepare(`
       UPDATE matrix_stream_notification_spool
-      SET delivery_state = 'delivered', receipt_id = ?, delivered_at = ?, owner_token = '', lease_expires_at = '', last_error_class = ''
-      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ?
-    `).run(receiptId, context.iso, claim.notificationId, claim.claimToken);
+      SET delivery_state = 'delivered', receipt_id = ?, delivered_at = ?,
+          finalized_token = ?, finalized_state = 'delivered', owner_token = '', lease_expires_at = '', last_error_class = ''
+      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ? AND lease_expires_at > ?
+    `).run(receiptId, context.iso, claim.claimToken, claim.notificationId, claim.claimToken, context.iso);
     return { notification_id: claim.notificationId, delivery_state: 'delivered' };
   });
   return transaction.immediate();
@@ -280,14 +324,19 @@ function ackNotification(db, input = {}) {
 function nackNotification(db, input = {}) {
   const outcome = String(input.outcome || '').trim();
   if (!['failed', 'ambiguous'].includes(outcome)) throw new Error('valid notification outcome required');
+  const context = clockIso(input.clock);
   const transaction = db.transaction(() => {
-    const claim = claimedRow(db, input);
+    const claim = authorizedNotification(db, input);
+    const terminal = expireOrCancelClaim(db, claim, context) || replayedState(claim);
+    if (terminal) return { notification_id: claim.notificationId, delivery_state: terminal };
+    if (claim.row.delivery_state !== 'inflight' || claim.row.owner_token !== claim.claimToken) throw new Error('notification claim mismatch');
     const nextState = outcome === 'failed' && claim.row.attempt_count < 3 ? 'pending' : 'manual_review';
     db.prepare(`
       UPDATE matrix_stream_notification_spool
-      SET delivery_state = ?, owner_token = '', lease_expires_at = '', last_error_class = ?
-      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ?
-    `).run(nextState, outcome === 'failed' ? 'explicit_failure' : 'ambiguous_delivery', claim.notificationId, claim.claimToken);
+      SET delivery_state = ?, finalized_token = ?, finalized_state = ?, owner_token = '', lease_expires_at = '', last_error_class = ?
+      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ? AND lease_expires_at > ?
+    `).run(nextState, claim.claimToken, nextState,
+      outcome === 'failed' ? 'explicit_failure' : 'ambiguous_delivery', claim.notificationId, claim.claimToken, context.iso);
     return { notification_id: claim.notificationId, delivery_state: nextState };
   });
   return transaction.immediate();
@@ -376,6 +425,16 @@ async function correlateInbound(db, emailMessage = {}, options = {}) {
       SET stream_state = ?, stage = CASE WHEN ? = 'suppressed' THEN 'suppressed' ELSE stage END,
           version = version + 1, updated_at = ? WHERE id = ?
     `).run(nextState, nextState, context.iso, job.work_item_id);
+    if (nextState !== 'replied') {
+      db.prepare(`
+        UPDATE matrix_stream_notification_spool
+        SET delivery_state = 'manual_review',
+            finalized_token = CASE WHEN delivery_state = 'inflight' THEN owner_token ELSE finalized_token END,
+            finalized_state = CASE WHEN delivery_state = 'inflight' THEN 'manual_review' ELSE finalized_state END,
+            owner_token = '', lease_expires_at = '', last_error_class = 'terminal_cancelled'
+        WHERE work_item_id = ? AND kind = 'reply' AND delivery_state IN ('pending','inflight')
+      `).run(job.work_item_id);
+    }
     db.prepare(`
       INSERT INTO matrix_stream_inbound_links (inbound_message_id, email_message_row_id, status, kind, work_item_id, job_id, created_at)
       VALUES (?, ?, 'matched', ?, ?, ?, ?)
@@ -487,7 +546,7 @@ async function retryInboundTranslation(db, input = {}) {
   const context = clockIso(input.clock);
   const bindingId = positiveInteger(input.bindingId, 'actor binding id');
   const row = db.prepare(`
-    SELECT n.*, w.owner_user_id, l.email_message_row_id, e.cleaned_text, e.text_body
+    SELECT n.*, w.owner_user_id, w.stream_state, l.email_message_row_id, e.cleaned_text, e.text_body
     FROM matrix_stream_notification_spool n
     JOIN matrix_work_items w ON w.id = n.work_item_id
     JOIN matrix_stream_inbound_links l ON l.inbound_message_id = n.inbound_message_id
@@ -496,6 +555,7 @@ async function retryInboundTranslation(db, input = {}) {
   `).get(notificationId);
   if (!row) throw new Error('reply notification not found');
   if (!activeOwnerBinding(db, actorUserId, bindingId, row.work_item_id)) throw new Error('translation retry not authorized');
+  if (row.kind !== 'reply' || row.stream_state !== 'replied') throw new Error('reply notification is not retry eligible');
   if (row.translation_status === 'ready') {
     return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
   }
@@ -509,12 +569,13 @@ async function retryInboundTranslation(db, input = {}) {
   }
   const transaction = db.transaction(() => {
     const current = db.prepare(`
-      SELECT n.*, w.owner_user_id
+      SELECT n.*, w.owner_user_id, w.stream_state
       FROM matrix_stream_notification_spool n
       JOIN matrix_work_items w ON w.id = n.work_item_id
       WHERE n.id = ?
     `).get(notificationId);
     if (!current || !activeOwnerBinding(db, actorUserId, bindingId, current.work_item_id)) throw new Error('translation retry not authorized');
+    if (current.kind !== 'reply' || current.stream_state !== 'replied') throw new Error('reply notification is not retry eligible');
     if (current.translation_status === 'ready') {
       return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
     }
@@ -522,11 +583,14 @@ async function retryInboundTranslation(db, input = {}) {
     db.prepare(`
       UPDATE matrix_stream_notification_spool
       SET translation_status = 'ready', translation_cn = ?, requirements_cn = ?,
-          suggested_subject = ?, suggested_body_en = ?, suggested_body_cn = ?, retry_available = 0
+          suggested_subject = ?, suggested_body_en = ?, suggested_body_cn = ?, retry_available = 0,
+          notification_key = ?, delivery_state = 'pending', owner_token = '', lease_expires_at = '',
+          attempt_count = 0, receipt_id = '', delivered_at = NULL, last_error_class = '',
+          finalized_token = '', finalized_state = ''
       WHERE id = ? AND translation_status = 'pending'
     `).run(safePreview(value.translation_cn, 800), safePreview(value.requirements_cn, 500),
       safePreview(value.suggested_subject, 200), safePreview(value.suggested_body_en, 1200),
-      safePreview(value.suggested_body_cn, 1200), notificationId);
+      safePreview(value.suggested_body_cn, 1200), crypto.randomUUID(), notificationId);
     db.prepare(`
       INSERT INTO matrix_stream_events (
         work_item_id, job_id, actor_user_id, action, idempotency_key,
@@ -547,6 +611,7 @@ module.exports = {
   claimNotification,
   ackNotification,
   nackNotification,
+  notificationStatus,
   classifyKind,
   normalizedSubject,
   normalizeMessageId,

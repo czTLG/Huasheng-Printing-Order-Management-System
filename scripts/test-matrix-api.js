@@ -645,6 +645,10 @@ function reviewState(workItemId) {
       nackNotification(_db, input) {
         replyDraftCalls.push({ nack: true, ...input });
         return { notification_id: input.notificationId, delivery_state: input.outcome === 'ambiguous' ? 'manual_review' : 'pending' };
+      },
+      notificationStatus(_db, input) {
+        replyDraftCalls.push({ status: true, ...input });
+        return { notification_id: input.notificationId, delivery_state: 'delivered', can_deliver: false };
       }
     };
     const injectedApp = express();
@@ -750,6 +754,11 @@ function reviewState(workItemId) {
         body: { claim_token: '00000000-0000-4000-8000-000000000052', outcome: 'ambiguous' }
       });
       assert.deepStrictEqual(nackedNotification, { status: 200, body: { notification_id: 51, delivery_state: 'manual_review' } });
+      const notificationStatus = await request('/api/matrix/notifications/51/status', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { claim_token: '00000000-0000-4000-8000-000000000052' }
+      });
+      assert.deepStrictEqual(notificationStatus, { status: 200, body: { notification_id: 51, delivery_state: 'delivered', can_deliver: false } });
       const rejectedClaim = await request('/api/matrix/notifications/claim', {
         port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { limit: 2 }
       });

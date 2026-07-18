@@ -14,7 +14,7 @@ async function testNarrowClient() {
   const clientPath = require.resolve('../scripts/matrix-client.js');
   delete require.cache[clientPath];
   const client = require(clientPath);
-  assert.deepStrictEqual(Object.keys(client).sort(), ['ackNotification', 'candidateDetail', 'claimNotification', 'createSession', 'facets', 'listCandidates', 'nackNotification', 'rehydrateSession', 'retryTranslation', 'selectCandidate', 'startReplyDraft', 'today', 'workItems']);
+  assert.deepStrictEqual(Object.keys(client).sort(), ['ackNotification', 'candidateDetail', 'claimNotification', 'createSession', 'facets', 'listCandidates', 'nackNotification', 'notificationStatus', 'rehydrateSession', 'retryTranslation', 'selectCandidate', 'startReplyDraft', 'today', 'workItems']);
   const originalFetch = global.fetch;
   const requests = [];
   global.fetch = async (url, options) => {
@@ -36,6 +36,7 @@ async function testNarrowClient() {
     await client.claimNotification('ou-client');
     await client.ackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', receipt_id: 'message-51' });
     await client.nackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', outcome: 'ambiguous' });
+    await client.notificationStatus('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052' });
     assert.ok(requests.every(item => new URL(item.url).origin === 'https://matrix.test'));
     assert.ok(requests.every(item => new URL(item.url).pathname.startsWith('/api/matrix/')));
     assert.ok(requests.every(item => item.options.redirect === 'manual'));
@@ -50,6 +51,7 @@ async function testNarrowClient() {
     assert.ok(requests.some(item => item.url.endsWith('/notifications/claim')));
     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/ack')));
     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/nack')));
+    assert.ok(requests.some(item => item.url.endsWith('/notifications/51/status')));
     assert.strictEqual(requests.at(-1).options.method, 'POST');
     assert.throws(() => client.candidateDetail('ou-client', '../outside'), /candidate id/);
 
@@ -218,6 +220,49 @@ async function testReplyNotificationCardAndDraftAction() {
     work_item_state: 'replied', attempt_count: 1
   };
   try {
+    let releaseFirst;
+    let firstClaimStarted;
+    const started = new Promise(resolve => { firstClaimStarted = resolve; });
+    const held = new Promise(resolve => { releaseFirst = resolve; });
+    let claimCalls = 0;
+    const racingClient = {
+      claimNotification: async () => {
+        claimCalls += 1;
+        if (claimCalls === 1) { firstClaimStarted(); await held; }
+        return { notification: { ...claimedRow, id: 50 + claimCalls, notification_key: `00000000-0000-4000-8000-00000000005${claimCalls}` } };
+      },
+      nackNotification: async () => undefined
+    };
+    const firstQueue = watcher.claimAndQueueReply({
+      client: racingClient, ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
+    });
+    await started;
+    const lockPath = `${spoolPath}.lock`;
+    assert.strictEqual(fs.statSync(lockPath).mode & 0o777, 0o600, 'relay lock must be private');
+    const secondQueue = await watcher.claimAndQueueReply({
+      client: racingClient, ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
+    });
+    releaseFirst();
+    assert.deepStrictEqual(await firstQueue, { status: 'queued', id: 51 });
+    assert.deepStrictEqual(secondQueue, { status: 'busy' });
+    assert.strictEqual(claimCalls, 1, 'watcher without the filesystem lock must not call claim API');
+    assert.strictEqual(fs.existsSync(lockPath), false, 'relay lock must be cleaned');
+    fs.unlinkSync(spoolPath);
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, created_at: '2020-01-01T00:00:00Z' })}\n`, { mode: 0o600, flag: 'wx' });
+    fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+    assert.deepStrictEqual(await watcher.claimAndQueueReply({
+      client: { claimNotification: async () => { throw new Error('live lock must prevent claim'); } },
+      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000
+    }), { status: 'busy' });
+    fs.unlinkSync(lockPath);
+    fs.writeFileSync(lockPath, 'stale', { mode: 0o600, flag: 'wx' });
+    fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+    assert.deepStrictEqual(await watcher.claimAndQueueReply({
+      client: { claimNotification: async () => ({ notification: null }) },
+      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000
+    }), { status: 'empty' }, 'stale watcher lock must not wedge the relay');
+    assert.strictEqual(fs.existsSync(lockPath), false);
+
     assert.deepStrictEqual(await watcher.claimAndQueueReply({
       client: { claimNotification: async () => ({ notification: claimedRow }), nackNotification: async () => { throw new Error('must not nack'); } },
       ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
@@ -225,7 +270,11 @@ async function testReplyNotificationCardAndDraftAction() {
     const acknowledgements = [];
     let sends = 0;
     assert.deepStrictEqual(await extension.deliverQueuedReply({
-      client: { ackNotification: async (...args) => acknowledgements.push(args), nackNotification: async () => { throw new Error('must not nack'); } },
+      client: {
+        notificationStatus: async () => ({ notification_id: 51, delivery_state: 'inflight', can_deliver: true }),
+        ackNotification: async (...args) => { acknowledgements.push(args); return { notification_id: 51, delivery_state: 'delivered' }; },
+        nackNotification: async () => { throw new Error('must not nack'); }
+      },
       openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
       channel: {}, sendManagedCard: async (_channel, _chat, _card, _reply, _thread, _receiveType, uuid) => { sends += 1; return { messageId: `message-${uuid}` }; }
     }), { status: 'delivered', id: 51 });
@@ -237,17 +286,73 @@ async function testReplyNotificationCardAndDraftAction() {
     }), false);
 
     await watcher.claimAndQueueReply({
+      client: { claimNotification: async () => ({ notification: { ...claimedRow, id: 57, notification_key: '00000000-0000-4000-8000-000000000058' } }) },
+      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
+    });
+    let ackCommitted = false;
+    await assert.rejects(() => extension.deliverQueuedReply({
+      client: {
+        notificationStatus: async () => ({ notification_id: 57, delivery_state: 'inflight', can_deliver: true }),
+        ackNotification: async () => { ackCommitted = true; throw new Error('ack response lost'); }
+      },
+      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
+      channel: {}, sendManagedCard: async () => ({ messageId: 'message-57' })
+    }), /ack response lost/);
+    assert.strictEqual(ackCommitted, true);
+    assert.strictEqual(fs.existsSync(inflightPath), true, 'ack uncertainty must retain recovery file');
+    assert.deepStrictEqual(await extension.deliverQueuedReply({
+      client: { notificationStatus: async () => ({ notification_id: 57, delivery_state: 'delivered', can_deliver: false }) },
+      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
+      channel: {}, sendManagedCard: async () => { throw new Error('ack recovery must not resend'); }
+    }), { status: 'delivered', id: 57 });
+
+    await watcher.claimAndQueueReply({
       client: { claimNotification: async () => ({ notification: { ...claimedRow, id: 52, notification_key: '00000000-0000-4000-8000-000000000053' } }) },
       ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
     });
     fs.renameSync(spoolPath, inflightPath);
     const crashNacks = [];
     assert.deepStrictEqual(await extension.deliverQueuedReply({
-      client: { nackNotification: async (...args) => crashNacks.push(args) },
+      client: {
+        notificationStatus: async () => ({ notification_id: 52, delivery_state: 'inflight', can_deliver: true }),
+        nackNotification: async (...args) => { crashNacks.push(args); return { notification_id: 52, delivery_state: 'manual_review' }; }
+      },
       openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
       channel: {}, sendManagedCard: async () => { throw new Error('crash recovery must not resend'); }
     }), { status: 'manual_review', id: 52 });
     assert.strictEqual(crashNacks[0][2].outcome, 'ambiguous');
+
+    const recovered = { ...claimedRow, id: 53, notification_key: '00000000-0000-4000-8000-000000000054' };
+    fs.writeFileSync(inflightPath, `${JSON.stringify({ version: 1, id: recovered.id, notification_key: recovered.notification_key, claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
+    assert.deepStrictEqual(await extension.deliverQueuedReply({
+      client: { notificationStatus: async () => ({ notification_id: 53, delivery_state: 'delivered', can_deliver: false }) },
+      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
+      channel: {}, sendManagedCard: async () => { throw new Error('ack recovery must not resend'); }
+    }), { status: 'delivered', id: 53 });
+    assert.strictEqual(fs.existsSync(inflightPath), false);
+
+    fs.writeFileSync(inflightPath, `${JSON.stringify({ version: 1, id: 54, notification_key: '00000000-0000-4000-8000-000000000055', claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
+    assert.deepStrictEqual(await extension.deliverQueuedReply({
+      client: { notificationStatus: async () => ({ notification_id: 54, delivery_state: 'pending', can_deliver: false }) },
+      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
+      channel: {}, sendManagedCard: async () => { throw new Error('nack recovery must not resend'); }
+    }), { status: 'retry_pending', id: 54 });
+
+    fs.writeFileSync(spoolPath, `${JSON.stringify({ version: 1, id: 55, notification_key: '00000000-0000-4000-8000-000000000056', claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
+    assert.deepStrictEqual(await extension.deliverQueuedReply({
+      client: { notificationStatus: async () => ({ notification_id: 55, delivery_state: 'manual_review', can_deliver: false }) },
+      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
+      channel: {}, sendManagedCard: async () => { throw new Error('cancelled notification must not send'); }
+    }), { status: 'manual_review', id: 55 });
+
+    fs.writeFileSync(inflightPath, `${JSON.stringify({ version: 1, id: 56, notification_key: '00000000-0000-4000-8000-000000000057', claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
+    await assert.rejects(() => extension.deliverQueuedReply({
+      client: { notificationStatus: async () => { throw new Error('status unavailable'); } },
+      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
+      channel: {}, sendManagedCard: async () => { throw new Error('must not send'); }
+    }), /status unavailable/);
+    assert.strictEqual(fs.existsSync(inflightPath), true, 'unknown DB state must retain relay file');
+    fs.unlinkSync(inflightPath);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

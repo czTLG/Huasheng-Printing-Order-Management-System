@@ -104,29 +104,37 @@ async function deliverQueuedReply({
   spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH,
   expectedChatId = process.env.STREAM_CHAT_ID, channel, sendManagedCard
 }) {
+  const resolved = (record, result) => {
+    const state = String(result?.delivery_state || '');
+    if (!['pending', 'delivered', 'manual_review'].includes(state)) throw new Error('notification state unresolved');
+    fs.unlinkSync(inflightPath);
+    return { status: state === 'pending' ? 'retry_pending' : state, id: record.id };
+  };
   const existingInflight = readOptionalJson(inflightPath);
   if (existingInflight) {
     const record = validateReplyRecord(existingInflight, expectedChatId);
-    await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome: 'ambiguous' });
-    fs.unlinkSync(inflightPath);
-    return { status: 'manual_review', id: record.id };
+    const status = await client.notificationStatus(openId, record.id, { claim_token: record.claim_token });
+    if (status?.delivery_state !== 'inflight' || status?.can_deliver !== true) return resolved(record, status);
+    const result = await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome: 'ambiguous' });
+    return resolved(record, result);
   }
   const queued = readOptionalJson(spoolPath);
   if (!queued) return false;
   const record = validateReplyRecord(queued, expectedChatId);
   fs.renameSync(spoolPath, inflightPath);
+  const status = await client.notificationStatus(openId, record.id, { claim_token: record.claim_token });
+  if (status?.delivery_state !== 'inflight' || status?.can_deliver !== true) return resolved(record, status);
+  let sent;
   try {
-    const sent = await sendManagedCard(channel, record.chat_id, record.card, '', false, 'chat_id', record.notification_key);
-    const receiptId = String(sent?.messageId || record.notification_key);
-    await client.ackNotification(openId, record.id, { claim_token: record.claim_token, receipt_id: receiptId });
-    fs.unlinkSync(inflightPath);
-    return { status: 'delivered', id: record.id };
+    sent = await sendManagedCard(channel, record.chat_id, record.card, '', false, 'chat_id', record.notification_key);
   } catch (error) {
     const outcome = error?.definiteDeliveryFailure === true ? 'failed' : 'ambiguous';
-    await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome });
-    fs.unlinkSync(inflightPath);
-    return { status: outcome === 'failed' ? 'retry_pending' : 'manual_review', id: record.id };
+    const result = await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome });
+    return resolved(record, result);
   }
+  const receiptId = String(sent?.messageId || record.notification_key);
+  const result = await client.ackNotification(openId, record.id, { claim_token: record.claim_token, receipt_id: receiptId });
+  return resolved(record, result);
 }
 
 function clip(value, maximum = 90) {

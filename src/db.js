@@ -1068,6 +1068,8 @@ function initDb() {
       attempt_count INTEGER NOT NULL DEFAULT 0,
       receipt_id TEXT NOT NULL DEFAULT '',
       last_error_class TEXT NOT NULL DEFAULT '',
+      finalized_token TEXT NOT NULL DEFAULT '',
+      finalized_state TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       delivered_at TEXT,
       FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
@@ -1280,6 +1282,8 @@ function initDb() {
 
   const matrixNotificationColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_notification_spool)').all().map(column => column.name));
   if (!matrixNotificationColumns.has('reply_draft_id')) db.exec('ALTER TABLE matrix_stream_notification_spool ADD COLUMN reply_draft_id INTEGER');
+  if (!matrixNotificationColumns.has('finalized_token')) db.exec("ALTER TABLE matrix_stream_notification_spool ADD COLUMN finalized_token TEXT NOT NULL DEFAULT ''");
+  if (!matrixNotificationColumns.has('finalized_state')) db.exec("ALTER TABLE matrix_stream_notification_spool ADD COLUMN finalized_state TEXT NOT NULL DEFAULT ''");
 
   const matrixInboundLinkColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_inbound_links)').all().map(column => column.name));
   if (!matrixInboundLinkColumns.has('email_message_row_id')) db.exec('ALTER TABLE matrix_stream_inbound_links ADD COLUMN email_message_row_id INTEGER');
@@ -1305,6 +1309,7 @@ function initDb() {
           delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','inflight','delivered','manual_review')),
           owner_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT NOT NULL DEFAULT '', attempt_count INTEGER NOT NULL DEFAULT 0,
           receipt_id TEXT NOT NULL DEFAULT '', last_error_class TEXT NOT NULL DEFAULT '',
+          finalized_token TEXT NOT NULL DEFAULT '', finalized_state TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL, delivered_at TEXT,
           FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
           FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id), FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id),
