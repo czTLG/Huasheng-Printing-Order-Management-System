@@ -86,3 +86,35 @@ git diff --check
 ```
 
 Observed result: all commands completed with exit 0. The API baseline initially encountered sandbox `EPERM` while binding its local test port; the approved out-of-sandbox rerun completed successfully.
+
+## Independent Review R2 Fix
+
+### RED
+
+The R2 regression cases were added before each production change. The focused test produced these expected failures:
+
+- an ambiguous candidate carrying `externalKey` and `metadata` did not raise the required unknown-field error;
+- a case-expanding Unicode domain key remained verbatim in persisted evidence;
+- with collision detection removed, two evidence property names that redacted to one name were silently accepted instead of raising an evidence-key collision.
+
+### GREEN
+
+- Domain namespaces now canonicalize external keys through Unicode NFC and ASCII/Punycode domain conversion with label validation. Other namespaces canonicalize with NFKC and lowercase, then require visible ASCII.
+- Evidence sanitization covers the raw key, canonical key, case variants, and NFC/NFD/NFKC/NFKD variants in both property names and values.
+- Ambiguous candidates enforce an exact typed-field allowlist. Any unknown string or symbol field is rejected before fingerprinting, command reservation, or stub invocation.
+- Evidence objects are rebuilt with null prototypes, and duplicate property names created by redaction abort the command before link creation.
+- Tests cover case expansion, composed/decomposed normalization resolving to one domain key, non-domain non-ASCII rejection, unknown candidate fields, and post-redaction key collision.
+
+R2 verification commands:
+
+```text
+node scripts/test-matrix-identity.js
+node --check src/services/matrixIdentity.js
+node --check scripts/test-matrix-identity.js
+node scripts/test-matrix-stream-review.js
+node scripts/test-matrix-stream-gates.js
+node scripts/test-matrix-api.js
+git diff --check
+```
+
+Observed result: all focused, syntax, shared database, API, and whitespace checks completed with exit 0.

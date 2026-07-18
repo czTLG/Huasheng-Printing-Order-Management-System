@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { domainToASCII } = require('node:url');
 
 const EXACT_METHODS = new Set([
   'exact_domain',
@@ -30,32 +31,83 @@ function sha256(value) {
 }
 
 function normalizedNamespace(value) {
-  return requiredToken(value, 'namespace', 100).toLowerCase();
+  const namespace = requiredToken(value, 'namespace', 100).toLowerCase();
+  if (!/^[a-z][a-z0-9_:-]*$/.test(namespace)) throw new Error('namespace must use canonical ASCII');
+  return namespace;
 }
 
-function normalizedExternalKey(value) {
-  return requiredToken(value, 'external key', 1000).toLowerCase();
+function keyRedactionForms(rawKey, canonicalKey) {
+  const forms = new Set([rawKey, canonicalKey]);
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const value of [...forms]) {
+      for (const form of ['NFC', 'NFD', 'NFKC', 'NFKD']) forms.add(value.normalize(form));
+      forms.add(value.toLowerCase());
+      forms.add(value.toUpperCase());
+    }
+  }
+  forms.delete('');
+  return [...forms].sort((left, right) => right.length - left.length || left.localeCompare(right));
+}
+
+function canonicalExternalKey(namespace, value) {
+  const rawKey = requiredToken(value, 'external key', 1000);
+  let canonicalKey;
+  if (namespace.endsWith('_domain')) {
+    const unicodeDomain = rawKey.normalize('NFC').replace(/\.$/, '');
+    canonicalKey = domainToASCII(unicodeDomain).toLowerCase();
+    const labels = canonicalKey.split('.');
+    if (!canonicalKey || canonicalKey.length > 253 || labels.some(label => (
+      label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+    ))) {
+      throw new Error('external key must be a canonical domain');
+    }
+  } else {
+    canonicalKey = rawKey.normalize('NFKC').toLowerCase();
+    if (!/^[\x21-\x7e]+$/.test(canonicalKey)) {
+      throw new Error('external key must use canonical visible ASCII');
+    }
+  }
+  return {
+    canonicalKey,
+    redactionForms: keyRedactionForms(rawKey, canonicalKey)
+  };
 }
 
 function externalKeyHash(namespace, externalKey) {
   return sha256(`${namespace}\0${externalKey}`);
 }
 
-function redactExternalKey(value, externalKey, hash) {
-  if (Array.isArray(value)) return value.map(item => redactExternalKey(item, externalKey, hash));
+function redactExternalKey(value, redactionForms, hash) {
+  if (Array.isArray(value)) return value.map(item => redactExternalKey(item, redactionForms, hash));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
-      redactExternalKey(key, externalKey, hash),
-      redactExternalKey(item, externalKey, hash)
-    ]));
+    const redacted = Object.create(null);
+    for (const [key, item] of Object.entries(value)) {
+      const safeKey = redactExternalKey(key, redactionForms, hash);
+      if (Object.hasOwn(redacted, safeKey)) {
+        throw new Error('evidence key collision after external key redaction');
+      }
+      redacted[safeKey] = redactExternalKey(item, redactionForms, hash);
+    }
+    return redacted;
   }
   if (typeof value !== 'string') return value;
-  const escaped = externalKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return value.replace(new RegExp(escaped, 'gi'), `[external-key-sha256:${hash}]`);
+  const marker = `[external-key-sha256:${hash}]`;
+  return redactionForms.reduce((result, form) => {
+    const escaped = form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return result.replace(new RegExp(escaped, /^[\x00-\x7f]+$/.test(form) ? 'gi' : 'g'), marker);
+  }, value);
 }
 
 function reviewCandidate(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('candidate object required');
+  const allowedFields = new Set([
+    'entityType', 'entityId', 'method', 'namespace', 'proposedMethod', 'reason', 'externalKeyHash'
+  ]);
+  const unknownFields = Reflect.ownKeys(value)
+    .filter(key => typeof key !== 'string' || !allowedFields.has(key))
+    .map(key => typeof key === 'string' ? key : key.toString())
+    .sort();
+  if (unknownFields.length) throw new Error(`candidate unknown fields: ${unknownFields.join(', ')}`);
   const candidate = {
     entityType: requiredToken(value.entityType, 'candidate entity type', 100),
     entityId: requiredToken(value.entityId, 'candidate entity id')
@@ -192,14 +244,14 @@ function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } =
     const entityType = requiredToken(input.entityType, 'entity type', 100);
     const entityId = requiredToken(input.entityId, 'entity id');
     const namespace = normalizedNamespace(input.namespace);
-    const externalKey = normalizedExternalKey(input.externalKey);
+    const { canonicalKey: externalKey, redactionForms } = canonicalExternalKey(namespace, input.externalKey);
     const keyHash = externalKeyHash(namespace, externalKey);
     const matchMethod = requiredToken(input.matchMethod, 'match method', 100);
     const actorUserId = Number(input.actorUserId);
     const idempotencyKey = requiredToken(input.idempotencyKey, 'idempotency key');
     if (!Number.isInteger(actorUserId) || actorUserId <= 0) throw new Error('actor user id required');
     const evidence = evidenceObject(input.evidence);
-    const safeEvidence = redactExternalKey(structuredClone(evidence), externalKey, keyHash);
+    const safeEvidence = redactExternalKey(structuredClone(evidence), redactionForms, keyHash);
 
     if (!EXACT_METHODS.has(matchMethod)) {
       return reviewExact(input, namespace, keyHash, safeEvidence, 'method_not_allowlisted');
@@ -258,7 +310,7 @@ function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } =
 
   function resolve(input = {}) {
     const namespace = normalizedNamespace(input.namespace);
-    const key = normalizedExternalKey(input.externalKey);
+    const { canonicalKey: key } = canonicalExternalKey(namespace, input.externalKey);
     return db.prepare(`
       SELECT * FROM matrix_entity_links
       WHERE namespace = ? AND external_key_hash = ?

@@ -76,14 +76,26 @@ for (const [index, matchMethod] of [
 
 const beforeAmbiguous = db.prepare('SELECT COUNT(*) AS count FROM matrix_entity_links').get().count;
 const ambiguousRawKey = 'Do-Not-Forward-This-Key.Example';
+assert.throws(() => identity.proposeAmbiguous({
+  candidates: [{
+    method: 'caller_scored_match',
+    entityType: 'crm_customer',
+    entityId: 'candidate-unknown',
+    externalKey: ambiguousRawKey,
+    metadata: { score: 0.1 }
+  }],
+  sourceEventId: 'source-event-unknown',
+  actorUserId,
+  idempotencyKey: 'review-ambiguous-unknown'
+}), /candidate unknown fields: externalKey, metadata/i, 'ambiguous candidates must reject every unknown field');
+assert.strictEqual(reviewCalls.length, 0, 'invalid ambiguous candidates must not call the injected stub');
+
 const ambiguous = identity.proposeAmbiguous({
   candidates: [
     {
       method: 'caller_scored_match',
       entityType: 'crm_customer',
-      entityId: 'candidate-1',
-      externalKey: ambiguousRawKey,
-      metadata: { [ambiguousRawKey]: ambiguousRawKey }
+      entityId: 'candidate-1'
     },
     { method: 'approximate_name', entityType: 'crm_customer', entityId: 'candidate-2' },
     { method: 'approximate_address', entityType: 'crm_customer', entityId: 'candidate-3' },
@@ -104,9 +116,7 @@ const ambiguousReplay = identity.proposeAmbiguous({
     {
       method: 'caller_scored_match',
       entityType: 'crm_customer',
-      entityId: 'candidate-1',
-      externalKey: ambiguousRawKey,
-      metadata: { [ambiguousRawKey]: ambiguousRawKey }
+      entityId: 'candidate-1'
     },
     { method: 'approximate_name', entityType: 'crm_customer', entityId: 'candidate-2' },
     { method: 'approximate_address', entityType: 'crm_customer', entityId: 'candidate-3' },
@@ -125,6 +135,18 @@ assert.throws(() => identity.proposeAmbiguous({
   idempotencyKey: 'review-ambiguous-1'
 }), /idempotency conflict/i);
 assert.strictEqual(reviewCalls.length, 1, 'conflicting ambiguous replay must not call the injected stub');
+assert.throws(() => identity.proposeAmbiguous({
+  candidates: [{
+    method: 'caller_scored_match',
+    entityType: 'crm_customer',
+    entityId: 'candidate-1',
+    metadata: { score: 0.9 }
+  }],
+  sourceEventId: 'source-event-1',
+  actorUserId,
+  idempotencyKey: 'review-ambiguous-1'
+}), /candidate unknown fields: metadata/i, 'unknown-field changes must be rejected instead of replayed');
+assert.strictEqual(reviewCalls.length, 1, 'unknown-field replay must not call the injected stub');
 
 const invalidMethod = link({
   entityId: 'invalid-method',
@@ -242,6 +264,77 @@ assert.throws(() => link({
   matchMethod: 'exact_domain',
   idempotencyKey: 'review-ambiguous-1'
 }), /idempotency conflict/i, 'review idempotency keys must not be reusable by exact-link commands');
+
+const unicodeExternalKey = '\u0130.Example';
+const unicodeLowerVariant = 'i\u0307.example';
+const unicodeLink = link({
+  entityId: 'unicode-domain',
+  externalKey: unicodeExternalKey,
+  evidence: {
+    source: 'registry',
+    nestedKey: { [unicodeExternalKey]: 'observed' },
+    variants: [unicodeExternalKey, unicodeLowerVariant]
+  },
+  idempotencyKey: 'unicode-domain-1'
+});
+const unicodeStored = db.prepare('SELECT * FROM matrix_entity_links WHERE id = ?').get(unicodeLink.id);
+assert.ok(!unicodeStored.evidence_json.includes(unicodeExternalKey), 'Unicode raw key must not survive in evidence');
+assert.ok(!unicodeStored.evidence_json.includes(unicodeLowerVariant), 'Unicode case-expanded variant must not survive in evidence');
+assert.deepStrictEqual(
+  identity.resolve({ namespace: 'organization_domain', externalKey: unicodeLowerVariant }).map(item => item.entityId),
+  ['unicode-domain'],
+  'Unicode normalization variants must resolve to one canonical domain key'
+);
+
+const composedDomain = 'caf\u00e9.example';
+const decomposedDomain = 'cafe\u0301.example';
+const normalizationLink = link({
+  entityId: 'unicode-normalization',
+  externalKey: composedDomain,
+  evidence: {
+    source: 'registry',
+    composed: { [composedDomain]: 'observed' },
+    decomposed: { [decomposedDomain]: 'observed' },
+    variants: [composedDomain, decomposedDomain]
+  },
+  idempotencyKey: 'unicode-normalization-1'
+});
+const normalizationStored = db.prepare('SELECT * FROM matrix_entity_links WHERE id = ?').get(normalizationLink.id);
+assert.ok(!normalizationStored.evidence_json.includes(composedDomain), 'composed Unicode key must not survive in evidence');
+assert.ok(!normalizationStored.evidence_json.includes(decomposedDomain), 'decomposed Unicode key must not survive in evidence');
+assert.deepStrictEqual(
+  identity.resolve({ namespace: 'organization_domain', externalKey: decomposedDomain }).map(item => item.entityId),
+  ['unicode-normalization'],
+  'composed and decomposed domains must share one canonical key'
+);
+
+assert.throws(() => link({
+  entityId: 'unsafe-nondomain-key',
+  namespace: 'legal_id',
+  externalKey: '\u7f16\u53f7-1',
+  matchMethod: 'legal_id',
+  idempotencyKey: 'unsafe-nondomain-key-1'
+}), /external key must use canonical visible ASCII/i, 'non-domain namespaces must enforce the ASCII canonical-key policy');
+
+const collisionRawKey = 'collision.example';
+const collisionHash = crypto.createHash('sha256')
+  .update(`organization_domain\0${collisionRawKey}`)
+  .digest('hex');
+const collisionMarker = `[external-key-sha256:${collisionHash}]`;
+assert.throws(() => link({
+  entityId: 'redaction-key-collision',
+  externalKey: collisionRawKey,
+  evidence: {
+    [collisionRawKey]: 'redacted-key',
+    [collisionMarker]: 'preexisting-marker'
+  },
+  idempotencyKey: 'redaction-key-collision-1'
+}), /evidence key collision after external key redaction/i, 'post-redaction key collisions must be rejected');
+assert.strictEqual(
+  identity.resolve({ namespace: 'organization_domain', externalKey: collisionRawKey }).length,
+  0,
+  'colliding evidence must not create a link'
+);
 
 db.close();
 fs.rmSync(root, { recursive: true, force: true });
