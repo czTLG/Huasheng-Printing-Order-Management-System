@@ -6,6 +6,7 @@ const path = require('node:path');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-review-'));
 process.env.DB_PATH = path.join(root, 'app.db');
 
+async function main() {
 let db;
 
 try {
@@ -47,7 +48,13 @@ try {
 
   const database = require('../src/db');
   db = database.db;
-  database.initDb();
+  const originalConsoleLog = console.log;
+  console.log = () => {};
+  try {
+    database.initDb();
+  } finally {
+    console.log = originalConsoleLog;
+  }
 
   for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events']) {
     assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
@@ -70,6 +77,218 @@ try {
     INSERT INTO users (username, password, role, status, created_at)
     VALUES ('matrix_stream_review_guard', 'unused', 'super_admin', 'active', ?)
   `).run(now).lastInsertRowid);
+  const review = require('../src/services/matrixStreamReview');
+  assert.throws(
+    () => review.validateRecipient({ email: 'guessed@person.test', sourceUrl: '', verifiedAt: '' }, new Date('2026-07-17T00:00:00Z')),
+    /source/i
+  );
+  const reviewWorkItemId = Number(db.prepare(`
+    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+    VALUES (900000, ?, ?, ?)
+  `).run(userId, now, now).lastInsertRowid);
+  const v1 = review.createInitialVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    expectedWorkVersion: 1,
+    recipient: {
+      email: 'sales@alpha.test',
+      sourceUrl: 'https://alpha.test/contact',
+      verifiedAt: '2026-07-16T00:00:00Z',
+      kind: 'public_company'
+    },
+    subject: 'A focused proposal for Alpha',
+    bodyEn: 'Dear Alpha team,\nPlease confirm your current requirements.\nBest regards',
+    bodyCn: '您好，请确认当前需求。',
+    strategySummary: '公开产品页显示匹配品类',
+    sourceSnapshot: { url: 'https://alpha.test/products' },
+    idempotencyKey: 'version-create-1'
+  });
+  assert.strictEqual(v1.revision, 1);
+  const { createMatrixStreamText } = require('../src/services/matrixStreamText');
+  const textService = createMatrixStreamText({
+    callJson: async () => ({
+      subject: 'Short proposal for Alpha',
+      body_en: 'Dear Alpha team,\nCould you share annual volume?\nBest regards',
+      body_cn: '您好，请问能否提供年用量？'
+    })
+  });
+  const revisedText = await textService.revise({ current: v1, instruction: '语气更简洁，询问年用量' });
+  assert.strictEqual(revisedText.subject, 'Short proposal for Alpha');
+  assert.match(revisedText.body_en, /annual volume/i);
+  assert.match(revisedText.body_cn, /年用量/);
+  await assert.rejects(
+    () => createMatrixStreamText({ callJson: async () => ({ body_en: 'missing fields' }) })
+      .revise({ current: v1, instruction: '简化' }),
+    /invalid bilingual output/i
+  );
+  await assert.rejects(
+    () => createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Short proposal', body_en: 'Hello', body_cn: '您好', extra: 'not allowed'
+      })
+    }).revise({ current: v1, instruction: '简化' }),
+    /invalid bilingual output/i
+  );
+  await assert.rejects(
+    () => createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Short proposal', body_en: 'See https://unknown.test', body_cn: '请查看链接'
+      })
+    }).revise({ current: v1, instruction: '增加链接' }),
+    /introduced URL/i
+  );
+  await assert.rejects(
+    () => createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Short proposal', body_en: 'The price is USD 99.', body_cn: '价格为99美元。'
+      })
+    }).revise({ current: v1, instruction: '增加价格' }),
+    /unsupported price/i
+  );
+  await assert.rejects(
+    () => createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Certified supplier', body_en: 'We are ISO certified.', body_cn: '我们已通过认证。'
+      })
+    }).revise({ current: v1, instruction: '增加资质' }),
+    /unsupported qualification/i
+  );
+  const translated = await createMatrixStreamText({
+    callJson: async () => ({
+      translation_cn: '请提供报价。',
+      requirements_cn: '需要报价',
+      suggested_subject: 'Re: Alpha requirements',
+      suggested_body_en: 'Dear Alpha team,\nThank you for your message.',
+      suggested_body_cn: '您好，感谢您的来信。'
+    })
+  }).translateInbound({ inboundText: 'Please provide a proposal.' });
+  assert.deepStrictEqual(Object.keys(translated).sort(), [
+    'requirements_cn', 'suggested_body_cn', 'suggested_body_en', 'suggested_subject', 'translation_cn'
+  ]);
+  const previousTextProvider = process.env.MATRIX_TEXT_PROVIDER;
+  process.env.MATRIX_TEXT_PROVIDER = 'mock';
+  const versionCountBeforeUnavailable = db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count;
+  const unavailable = await createMatrixStreamText().revise({ current: v1, instruction: '简化' });
+  assert.deepStrictEqual({ ok: unavailable.ok, reason: unavailable.reason }, { ok: false, reason: 'text_provider_unavailable' });
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count, versionCountBeforeUnavailable);
+  if (previousTextProvider === undefined) delete process.env.MATRIX_TEXT_PROVIDER;
+  else process.env.MATRIX_TEXT_PROVIDER = previousTextProvider;
+  const staleEvidenceWorkItemId = Number(db.prepare(`
+    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+    VALUES (899999, ?, ?, ?)
+  `).run(userId, now, now).lastInsertRowid);
+  const staleEvidenceDraft = review.createInitialVersion(db, {
+    actorUserId: userId,
+    workItemId: staleEvidenceWorkItemId,
+    expectedWorkVersion: 1,
+    recipient: {
+      email: 'public@stale.test',
+      sourceUrl: 'https://stale.test/contact',
+      verifiedAt: '2026-07-16T00:00:00Z',
+      kind: 'public_company'
+    },
+    subject: 'Evidence freshness check',
+    bodyEn: 'Dear team,\nPlease confirm your requirements.',
+    bodyCn: '您好，请确认需求。',
+    sourceSnapshot: { url: 'https://stale.test/contact' },
+    idempotencyKey: 'stale-evidence-create'
+  });
+  db.prepare('UPDATE matrix_stream_versions SET recipient_verified_at = ? WHERE id = ?')
+    .run('2020-01-01T00:00:00.000Z', staleEvidenceDraft.id);
+  assert.throws(() => review.approveVersion(db, {
+    actorUserId: userId,
+    workItemId: staleEvidenceWorkItemId,
+    versionId: staleEvidenceDraft.id,
+    expectedWorkVersion: 2,
+    expectedContentHash: staleEvidenceDraft.content_hash,
+    idempotencyKey: 'stale-evidence-approve'
+  }), /stale/i);
+  const approved = review.approveVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    versionId: v1.id,
+    expectedWorkVersion: 2,
+    expectedContentHash: v1.content_hash,
+    idempotencyKey: 'approve-1'
+  });
+  assert.strictEqual(approved.status, 'approved');
+  const v2 = review.reviseVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    baseVersionId: v1.id,
+    expectedWorkVersion: 3,
+    subject: v1.subject,
+    bodyEn: `${v1.body_en}\nPlease share annual volume.`,
+    bodyCn: `${v1.body_cn}\n请提供年用量。`,
+    idempotencyKey: 'revise-1'
+  });
+  assert.strictEqual(v2.revision, 2);
+  assert.strictEqual(review.getVersion(db, { actorUserId: userId, versionId: v1.id }).status, 'superseded');
+  assert.strictEqual(review.approveVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    versionId: v1.id,
+    expectedWorkVersion: 1,
+    expectedContentHash: 'intentionally-stale',
+    idempotencyKey: 'approve-1'
+  }).id, v1.id);
+  assert.strictEqual(review.createInitialVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    expectedWorkVersion: 1,
+    idempotencyKey: 'version-create-1'
+  }).id, v1.id);
+  assert.throws(() => review.reviseVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    baseVersionId: v2.id,
+    expectedWorkVersion: 3,
+    subject: v2.subject,
+    bodyEn: v2.body_en,
+    bodyCn: v2.body_cn,
+    idempotencyKey: 'stale-revise'
+  }), /stale/i);
+  const hashInput = {
+    recipientEmail: v2.recipient_email,
+    recipientSourceUrl: v2.recipient_source_url,
+    subject: v2.subject,
+    bodyEn: v2.body_en,
+    bodyCn: v2.body_cn
+  };
+  for (const [key, value] of Object.entries({
+    recipientEmail: 'other@alpha.test',
+    recipientSourceUrl: 'https://alpha.test/other',
+    subject: `${v2.subject}!`,
+    bodyEn: `${v2.body_en}!`,
+    bodyCn: `${v2.body_cn}！`
+  })) {
+    assert.notStrictEqual(review.contentHash({ ...hashInput, [key]: value }), v2.content_hash, `${key} must change hash`);
+  }
+  const v3 = review.reviseVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    baseVersionId: v2.id,
+    expectedWorkVersion: 4,
+    subject: v2.subject,
+    bodyEn: `${v2.body_en}\nWhat is your timeline?`,
+    bodyCn: `${v2.body_cn}\n项目时间如何？`,
+    idempotencyKey: 'revise-concurrent-winner'
+  });
+  assert.strictEqual(v3.revision, 3);
+  assert.throws(() => review.reviseVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    baseVersionId: v2.id,
+    expectedWorkVersion: 4,
+    subject: v2.subject,
+    bodyEn: `${v2.body_en}\nConcurrent loser`,
+    bodyCn: `${v2.body_cn}\n并发失败`,
+    idempotencyKey: 'revise-concurrent-loser'
+  }), /stale/i);
+  assert.strictEqual(
+    db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE idempotency_key = 'revise-concurrent-loser'").get().count,
+    0
+  );
   const workItemId = Number(db.prepare(`
     INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
     VALUES (900001, ?, ?, ?)
@@ -164,3 +383,9 @@ try {
   if (db?.open) db.close();
   fs.rmSync(root, { recursive: true, force: true });
 }
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
