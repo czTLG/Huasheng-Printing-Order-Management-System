@@ -366,7 +366,11 @@ try {
     callJson: async () => ({
       subject: 'Supported price', body_en: 'The supported price is USD 99.', body_cn: '证据价格为99美元。'
     })
-  }).revise({ current: v1, instruction: '使用已有价格', sourceSnapshot: { supportedClaims: ['USD 99', '99美元'] } });
+  }).revise({
+    current: v1,
+    instruction: '使用已有价格',
+    sourceSnapshot: { supportedClaims: ['Supported price', 'The supported price is USD 99.', '证据价格为99美元。'] }
+  });
   assert.match(exactPriceEvidence.body_en, /99/);
   for (const unsupportedSemanticClaim of [
     '价格面议。', '报价待定。', '单价请询价。',
@@ -382,7 +386,7 @@ try {
       `${unsupportedSemanticClaim} must fail closed without evidence`
     );
   }
-  for (const supportedSemanticClaim of ['价格面议。', '产品已通过Sedex审核。', '产品拥有XYZ许可证。']) {
+  for (const supportedSemanticClaim of ['价格面议。', '单价请询价。', '产品已通过Sedex审核。', '产品拥有XYZ许可证。']) {
     const supportedFallback = await createMatrixStreamText({
       callJson: async () => ({
         subject: 'Evidence-bound statement', body_en: 'Hello Alpha team.', body_cn: supportedSemanticClaim
@@ -393,6 +397,40 @@ try {
       sourceSnapshot: { supportedClaims: [supportedSemanticClaim] }
     });
     assert.strictEqual(supportedFallback.body_cn, supportedSemanticClaim);
+  }
+  for (const sentenceLevelClaim of [
+    '价格免费。', '本项目无需费用。', '产品已获Sedex认可。',
+    '产品获得Acme批准。', '材料达到Acme规范。', '是否已通过Sedex审核？'
+  ]) {
+    await assert.rejects(
+      () => createMatrixStreamText({
+        callJson: async () => ({
+          subject: 'Sentence guard', body_en: 'Hello Alpha team.', body_cn: sentenceLevelClaim
+        })
+      }).revise({ current: v1, instruction: '增加敏感语义' }),
+      /unsupported (?:price|qualification)/i,
+      `${sentenceLevelClaim} must require sentence evidence`
+    );
+  }
+  for (const sentenceLevelEvidence of ['价格免费。', '本项目无需费用。', '产品已获Sedex认可。']) {
+    const acceptedSentence = await createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Sentence evidence', body_en: 'Hello Alpha team.', body_cn: sentenceLevelEvidence
+      })
+    }).revise({
+      current: v1,
+      instruction: '使用整句证据',
+      sourceSnapshot: { supportedClaims: [sentenceLevelEvidence] }
+    });
+    assert.strictEqual(acceptedSentence.body_cn, sentenceLevelEvidence);
+  }
+  for (const allowedQuestion of ['请提供报价。', '您是否有Sedex认证？', 'Could you quote this item?', 'What is the price?']) {
+    const acceptedQuestion = await createMatrixStreamText({
+      callJson: async () => ({
+        subject: 'Question only', body_en: 'Hello Alpha team.', body_cn: allowedQuestion
+      })
+    }).revise({ current: v1, instruction: '提出非断言问题' });
+    assert.strictEqual(acceptedQuestion.body_cn, allowedQuestion);
   }
   const reasonableNumbers = await createMatrixStreamText({
     callJson: async () => ({
@@ -410,7 +448,10 @@ try {
       suggested_body_en: 'Dear Alpha team,\nThank you for your message.',
       suggested_body_cn: '您好，感谢您的来信。'
     })
-  }).translateInbound({ inboundText: 'Please provide a proposal.' });
+  }).translateInbound({
+    inboundText: 'Please provide a proposal.',
+    sourceSnapshot: { supportedClaims: ['需要报价'] }
+  });
   assert.deepStrictEqual(Object.keys(translated).sort(), [
     'requirements_cn', 'suggested_body_cn', 'suggested_body_en', 'suggested_subject', 'translation_cn'
   ]);
