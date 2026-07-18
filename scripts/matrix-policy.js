@@ -2,16 +2,18 @@
 'use strict';
 
 const POLICY_STATUSES = new Set(['approved', 'paused', 'blocked']);
+const ISO_ALPHA_2 = new Set(`AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW`.split(' '));
+const POLICY_CHANNELS = new Set(['email']);
 
 function validCountry(value) {
   const country = String(value || '').trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(country)) throw new Error('exact ISO country required');
+  if (!ISO_ALPHA_2.has(country)) throw new Error('exact ISO country required');
   return country;
 }
 
 function validChannel(value) {
   const channel = String(value || '').trim().toLowerCase();
-  if (!/^[a-z][a-z0-9_-]{1,31}$/.test(channel) || channel === 'all') throw new Error('exact channel required');
+  if (!POLICY_CHANNELS.has(channel)) throw new Error('exact allowed channel required');
   return channel;
 }
 
@@ -66,10 +68,14 @@ function validatePolicy(input = {}) {
   };
 }
 
-function setPolicy(db, input = {}) {
+function setPolicy(db, input = {}, { clock = () => new Date() } = {}) {
   const value = validatePolicy(input);
   const actor = db.prepare('SELECT id, username, role, status FROM users WHERE username = ?').get(value.actor);
   if (!actor || actor.status !== 'active' || actor.role !== 'super_admin') throw new Error('active super_admin actor required');
+  const operation = clock();
+  const operationMs = operation instanceof Date ? operation.getTime() : Date.parse(String(operation));
+  if (!Number.isFinite(operationMs)) throw new Error('valid operation clock required');
+  const operationAt = new Date(operationMs).toISOString();
   const write = db.transaction(() => {
     db.prepare(`
       INSERT INTO matrix_stream_country_policies (
@@ -89,7 +95,7 @@ function setPolicy(db, input = {}) {
     db.prepare(`
       INSERT INTO audit_logs (role, user_name, action, resource_type, resource_id, detail, created_at)
       VALUES (?, ?, 'matrix_policy_set', 'matrix_country_policy', ?, ?, ?)
-    `).run(actor.role, actor.username, `${value.country}:${value.channel}`, JSON.stringify(detail), value.reviewedAt);
+    `).run(actor.role, actor.username, `${value.country}:${value.channel}`, JSON.stringify(detail), operationAt);
     return db.prepare('SELECT * FROM matrix_stream_country_policies WHERE country_code = ? AND channel = ?')
       .get(value.country, value.channel);
   });

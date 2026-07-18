@@ -50,6 +50,15 @@ DONE_WITH_CONCERNS
 - Static scan for mailer/send/delivery primitives and credential environment names in changed services/tool — no matches.
 - `git diff --check` — PASS.
 
+## Independent-review repair
+
+- Quality semantics RED: an unrelated English availability question plus a conflicting Chinese tea/carton/mood message previously scored 100. GREEN: product points now require the same evidence-backed specifications and category concepts in both languages; company points require that aligned observed range; entry value requires the same concrete entry concepts; question points require one-to-three matching recognized intents; bilingual points require all key facts and numeric specifications to align. Readability and provenance no longer copy unrelated evidence ids.
+- Provenance RED: stale evidence and a source on an unrelated domain could pass the standalone scorer. GREEN: public-company kind, HTTPS email/source domain binding, non-future verification, and 180-day freshness are a hard gate.
+- Claim-key RED: 15 versus 10 days, 6 versus 12 months, Brand A versus Brand B, and July 20 versus July 30 collided. GREEN: every sensitive statement produces a type plus its complete NFKC-normalized statement key, preserving numbers, units, named objects, and dates; only the identical normalized evidence key supports it.
+- Identity RED: an accepted job for the same domain routed as initial contact; a standalone inbound CRM reply routed as cooling; a missing relation was treated as empty. GREEN: the single read transaction requires all identity relations, joins accepted jobs to persisted version recipients for the exact 90-day interval, and classifies exact inbound CRM history as an existing relationship.
+- Policy RED: `ZZ` and unlisted channels were accepted, and audit time reused caller-controlled `reviewedAt`. GREEN: a fixed offline ISO alpha-2 membership set and exact channel allowlist are enforced by parsing and persistence; audit `created_at` comes from the operation clock while `reviewed_at` remains business data.
+- Follow-up RED: scheduling a later active check replaced the earlier due state, then closing the earlier check cleared the still-active later check. GREEN: schedule and close run in immediate transactions and recompute `MIN(due_at)` across all active checks; only closing the final active check clears work-item due state.
+
 ## Concerns
 
 - Similar-name matching is deliberately narrow and deterministic. Names outside the normalized legal-suffix equivalence require an explicit alias from the reviewed candidate context; aliases only produce `possible_duplicate_review`.
@@ -60,6 +69,6 @@ DONE_WITH_CONCERNS
 
 ## 蒸馏进度
 
-- 已确认模块：质量评分与硬失败、身份/冷却/日配额、sender readiness、国家渠道策略、第三工作日 reply check、版本质量持久化与最终质量门禁。
+- 已确认模块：语义一致质量评分与精确 claim keys、身份/accepted-job 冷却/日配额、sender readiness、ISO 国家渠道策略、并发安全第三工作日 reply check、版本质量持久化与最终质量门禁。
 - 未解决模块：不同国家的具体政策内容、法定节假日工作日历、后续真实交付集成；均不属于 Task 2A。
 - 下一优先知识缺口：逐国家/渠道的权威政策来源和复审周期，由 `super_admin` 审阅后逐条录入，禁止默认批准。

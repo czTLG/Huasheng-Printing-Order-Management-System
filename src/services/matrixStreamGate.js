@@ -29,59 +29,74 @@ function component(points, maximum, reasons, evidenceIds) {
   return { points, maximum, reasons, evidence_ids: evidenceIds };
 }
 
-const HARD_FAILURE_PATTERNS = Object.freeze({
-  unsupported_price: [
-    /\b(?:usd|eur|rmb|cny|gbp)\s*\d+(?:[.,]\d+)?/i,
-    /\b(?:price|cost|quote|amount)\s+(?:is|of|at)\b/i,
-    /(?:价格|报价|单价|售价|费用|金额|成本).{0,12}\d/u
-  ],
-  unsupported_certification: [
-    /\b(?:fda|iso|brcgs?|haccp|gmp|ce|rohs|reach|sedex)\b.{0,24}\b(?:approved|certified|compliant|qualification)/i,
-    /\b(?:approved|certified|compliant)\b/i,
-    /(?:认证|资质|合规|许可证|审核通过)/u
-  ],
-  unsupported_supplier: [
-    /\b(?:approved|authorized|exclusive|official)\s+(?:supplier|vendor|manufacturer)\b/i,
-    /(?:指定|授权|独家|官方)(?:供应商|制造商)/u
-  ],
-  unsupported_performance: [
-    /\b(?:guaranteed|proven)\s+(?:performance|barrier|shelf\s*life|quality)/i,
-    /(?:保证|确保|已验证).{0,16}(?:性能|阻隔|保质期|质量)/u
-  ],
-  unsupported_delivery: [
-    /\b(?:guaranteed|fixed)\s+(?:delivery|arrival|shipping)\b/i,
-    /(?:保证|固定).{0,12}(?:交付|到货|发货)/u
-  ],
-  unsupported_lead_time: [
-    /\b(?:guaranteed|fixed)\s+lead[ -]?time\b/i,
-    /\blead[ -]?time\s+(?:is|of)\s+\d/i,
-    /(?:保证|固定).{0,12}(?:交期|生产周期)/u
-  ]
+const CLAIM_TYPES = Object.freeze({
+  unsupported_price: /(?:[$€£¥]\s*\d|\b(?:usd|eur|rmb|cny|gbp)\s*\d|\d+(?:[.,]\d+)?\s*(?:usd|eur|rmb|cny|gbp|美元|元)\b|(?:price|cost|quote|amount|价格|报价|单价|售价|费用|金额|成本).{0,24}(?:\d|面议|待定))/iu,
+  unsupported_certification: /(?:\b(?:fda|iso|brcgs?|haccp|gmp|ce|rohs|reach|sedex)\b|approved|certified|compliant|认证|资质|合规|许可证|审核通过)/iu,
+  unsupported_supplier: /(?:(?:approved|authorized|exclusive|official)\s+(?:supplier|vendor|manufacturer)|(?:指定|授权|独家|官方)(?:供应商|制造商))/iu,
+  unsupported_performance: /(?:(?:guaranteed|proven).{0,40}(?:performance|barrier|shelf\s*life|quality)|shelf\s*life\s+\d|(?:保证|确保|已验证).{0,24}(?:性能|阻隔|保质期|质量))/iu,
+  unsupported_delivery: /(?:(?:guaranteed|fixed)\s+(?:delivery|arrival|shipping)|(?:delivery|arrival|shipping).{0,24}(?:\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(?:保证|固定).{0,16}(?:交付|到货|发货))/iu,
+  unsupported_lead_time: /(?:lead[ -]?time.{0,24}(?:\d|guaranteed|fixed)|(?:guaranteed|fixed)\s+lead[ -]?time|(?:交期|生产周期).{0,16}\d|(?:保证|固定).{0,12}(?:交期|生产周期))/iu
 });
 
 function unsupportedClaims(input) {
-  const text = [input.subject, input.bodyEn, input.bodyCn].map(normalized).join('\n');
-  const supported = Array.isArray(input.evidence?.supportedClaims)
-    ? input.evidence.supportedClaims.map(normalized).filter(Boolean)
-    : [];
-  return Object.entries(HARD_FAILURE_PATTERNS).filter(([, patterns]) => {
-    const keys = claimKeys(text, patterns);
-    if (!keys.size) return false;
-    const supportedKeys = claimKeys(supported.join('\n'), patterns);
-    return [...keys].some(key => !supportedKeys.has(key));
-  }).map(([failure]) => failure);
+  const output = claimKeys([input.subject, input.bodyEn, input.bodyCn]);
+  const supported = claimKeys(Array.isArray(input.evidence?.supportedClaims) ? input.evidence.supportedClaims : []);
+  return [...new Set(output.filter(claim => !supported.includes(claim)).map(claim => claim.split(':', 1)[0]))];
 }
 
-function claimKeys(text, patterns) {
-  const keys = new Set();
-  for (const pattern of patterns) {
-    const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
-    for (const match of String(text || '').matchAll(new RegExp(pattern.source, flags))) {
-      const key = compact(match[0]);
-      if (key) keys.add(key);
+function claimKeys(values) {
+  const keys = [];
+  for (const value of values) {
+    for (const statement of normalized(value).split(/(?:[!?。！？\n]+|\.(?=\s|$))/u).map(part => part.trim()).filter(Boolean)) {
+      for (const [type, pattern] of Object.entries(CLAIM_TYPES)) {
+        if (pattern.test(statement)) keys.push(`${type}:${compact(statement)}`);
+      }
     }
   }
-  return keys;
+  return [...new Set(keys)];
+}
+
+const CONCEPTS = Object.freeze([
+  ['coffee', /\bcoffee\b/i, /咖啡/u], ['tea', /\btea\b/i, /茶/u],
+  ['pouch', /\bpouches?\b/i, /袋/u], ['valve', /\bvalve\b/i, /阀/u],
+  ['barrier', /\bbarrier\b/i, /阻隔/u], ['printing', /\bprint(?:ing)?\b/i, /(?:印刷|套色)/u]
+]);
+const QUESTION_INTENTS = Object.freeze([
+  ['structure', /\bstructure\b/i, /结构/u],
+  ['volume', /(?:annual\s+volume|yearly\s+volume|volume|quantity)/i, /(?:年用量|年需求|数量|用量)/u],
+  ['size', /\b(?:size|format)\b/i, /(?:尺寸|规格)/u],
+  ['structure', /\bmaterial\b/i, /材料/u]
+]);
+
+function numericSpecs(text) {
+  return [...normalized(text).matchAll(/\b\d+(?:[.,]\d+)?\s*(?:g|kg|克|公斤|mm|cm|毫米|厘米)\b/giu)]
+    .map(match => compact(match[0]).replace('克', 'g').replace('公斤', 'kg'));
+}
+
+function questionIntents(text, language) {
+  const questions = normalized(text).split(/(?<=[?？])/u).filter(part => /[?？]/u.test(part));
+  const intents = new Set();
+  for (const question of questions) {
+    for (const [name, en, cn] of QUESTION_INTENTS) if ((language === 'en' ? en : cn).test(question)) intents.add(name);
+  }
+  return { count: questions.length, intents: [...intents].sort() };
+}
+
+function conceptMatches(text, language) {
+  return CONCEPTS.filter(([, en, cn]) => (language === 'en' ? en : cn).test(text)).map(([name]) => name);
+}
+
+function validProvenance(recipient, nowMs) {
+  try {
+    const email = normalized(recipient.email);
+    const emailDomain = email.split('@')[1];
+    const source = new URL(String(recipient.sourceUrl || ''));
+    const verifiedAt = Date.parse(String(recipient.verifiedAt || ''));
+    const bound = source.hostname === emailDomain || source.hostname.endsWith(`.${emailDomain}`) || emailDomain.endsWith(`.${source.hostname}`);
+    return recipient.kind === 'public_company' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      && source.protocol === 'https:' && bound && Number.isFinite(verifiedAt) && verifiedAt <= nowMs
+      && nowMs - verifiedAt <= 180 * 86400000;
+  } catch (_) { return false; }
 }
 
 function scoreDraft(input = {}) {
@@ -90,48 +105,57 @@ function scoreDraft(input = {}) {
   const subject = normalized(input.subject);
   const bodyEn = normalized(input.bodyEn);
   const bodyCn = normalized(input.bodyCn);
-  const allText = `${subject}\n${bodyEn}\n${bodyCn}`;
   const products = Array.isArray(evidence.products) ? evidence.products.filter(Boolean) : [];
   const categories = Array.isArray(evidence.categories) ? evidence.categories.filter(Boolean) : [];
-
-  const productSignals = [...products, ...categories].filter(value => includesPhrase(allText, value));
-  const productPoints = productSignals.length ? MAXIMUMS.product_match : 0;
-  const companyPoints = includesPhrase(allText, evidence.company) ? MAXIMUMS.company_specific : 0;
-  const entryPoints = includesPhrase(allText, evidence.entryProduct)
-    || (normalized(evidence.entryProduct).includes('pouch') && /\bpouches?\b/i.test(allText))
-    ? MAXIMUMS.entry_value : 0;
-  const questionPoints = /[?？]/u.test(bodyEn) && /[?？]/u.test(bodyCn) ? MAXIMUMS.questions : 0;
+  const expectedSpecs = [...new Set(products.flatMap(numericSpecs))];
+  const enConcepts = conceptMatches(bodyEn, 'en');
+  const cnConcepts = conceptMatches(bodyCn, 'cn');
+  const expectedConcepts = conceptMatches([...products, ...categories].join(' '), 'en');
+  const sharedProductConcepts = expectedConcepts.filter(value => enConcepts.includes(value) && cnConcepts.includes(value));
+  const specsMatch = expectedSpecs.length > 0 && expectedSpecs.every(value => numericSpecs(bodyEn).includes(value) && numericSpecs(bodyCn).includes(value));
+  const productMatch = specsMatch && sharedProductConcepts.length > 0;
+  const productPoints = productMatch ? MAXIMUMS.product_match : 0;
+  const companyMatch = includesPhrase(bodyEn, evidence.company) && /(?:贵司|您(?:司|们)?|公司)/u.test(bodyCn) && productMatch;
+  const companyPoints = companyMatch ? MAXIMUMS.company_specific : 0;
+  const expectedEntryConcepts = conceptMatches(evidence.entryProduct, 'en');
+  const entryMatch = expectedEntryConcepts.length > 0
+    && expectedEntryConcepts.every(value => enConcepts.includes(value) && cnConcepts.includes(value));
+  const entryPoints = entryMatch ? MAXIMUMS.entry_value : 0;
+  const enQuestions = questionIntents(bodyEn, 'en');
+  const cnQuestions = questionIntents(bodyCn, 'cn');
+  const questionMatch = enQuestions.count >= 1 && enQuestions.count <= 3 && cnQuestions.count >= 1 && cnQuestions.count <= 3
+    && enQuestions.intents.length > 0 && JSON.stringify(enQuestions.intents) === JSON.stringify(cnQuestions.intents);
+  const questionPoints = questionMatch ? MAXIMUMS.questions : 0;
   const subjectPoints = subject.length >= 12 && subject.length <= 120
-    && (includesPhrase(subject, evidence.company) || productSignals.some(value => includesPhrase(subject, value)))
+    && includesPhrase(subject, evidence.company)
+    && (expectedSpecs.some(value => numericSpecs(subject).includes(value)) || categories.some(value => includesPhrase(subject, value)))
     ? MAXIMUMS.subject : 0;
-  const bilingualPoints = bodyEn.length >= 40 && bodyCn.length >= 20 ? MAXIMUMS.bilingual_consistency : 0;
-  const readabilityPoints = bodyEn.length <= 1200 && bodyCn.length <= 800
+  const bilingualMatch = productMatch && entryMatch && questionMatch
+    && JSON.stringify([...new Set(numericSpecs(bodyEn))].sort()) === JSON.stringify([...new Set(numericSpecs(bodyCn))].sort());
+  const bilingualPoints = bilingualMatch ? MAXIMUMS.bilingual_consistency : 0;
+  const readabilityPoints = bodyEn.length >= 80 && bodyEn.length <= 1200 && bodyCn.length >= 30 && bodyCn.length <= 800
+    && String(input.bodyEn || '').split(/\r?\n/).filter(line => line.trim()).length >= 2
     && /\b(?:dear|hello|hi)\b/i.test(bodyEn) && /(?:您好|你好)/u.test(bodyCn)
     ? MAXIMUMS.readability : 0;
 
   const recipient = input.recipient && typeof input.recipient === 'object' ? input.recipient : {};
-  let provenancePoints = 0;
-  try {
-    const source = new URL(String(recipient.sourceUrl || ''));
-    const verifiedAt = Date.parse(String(recipient.verifiedAt || ''));
-    const now = Date.parse(String(input.now || ''));
-    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized(recipient.email))
-        && source.protocol === 'https:' && Number.isFinite(verifiedAt) && Number.isFinite(now)
-        && verifiedAt <= now) provenancePoints = MAXIMUMS.recipient_provenance;
-  } catch (_) {}
+  const nowMs = Date.parse(String(input.now || ''));
+  const provenanceOk = Number.isFinite(nowMs) && validProvenance(recipient, nowMs);
+  const provenancePoints = provenanceOk ? MAXIMUMS.recipient_provenance : 0;
 
   const components = {
-    product_match: component(productPoints, MAXIMUMS.product_match, productPoints ? ['evidence_product_match'] : ['no_evidence_product_match'], evidenceIds),
-    company_specific: component(companyPoints, MAXIMUMS.company_specific, companyPoints ? ['company_named'] : ['company_not_named'], evidenceIds),
-    entry_value: component(entryPoints, MAXIMUMS.entry_value, entryPoints ? ['entry_product_named'] : ['entry_product_missing'], evidenceIds),
-    questions: component(questionPoints, MAXIMUMS.questions, questionPoints ? ['bilingual_question_present'] : ['bilingual_question_missing'], evidenceIds),
-    subject: component(subjectPoints, MAXIMUMS.subject, subjectPoints ? ['specific_subject'] : ['subject_not_specific'], evidenceIds),
-    bilingual_consistency: component(bilingualPoints, MAXIMUMS.bilingual_consistency, bilingualPoints ? ['both_languages_substantive'] : ['bilingual_content_incomplete'], evidenceIds),
-    readability: component(readabilityPoints, MAXIMUMS.readability, readabilityPoints ? ['bounded_readable_copy'] : ['readability_boundary_failed'], evidenceIds),
-    recipient_provenance: component(provenancePoints, MAXIMUMS.recipient_provenance, provenancePoints ? ['current_https_public_source'] : ['recipient_provenance_invalid'], evidenceIds)
+    product_match: component(productPoints, MAXIMUMS.product_match, productMatch ? ['same_evidence_product_specs_in_both_languages'] : ['product_specs_not_bilingual'], productMatch ? evidenceIds : []),
+    company_specific: component(companyPoints, MAXIMUMS.company_specific, companyMatch ? ['company_and_observed_range_specific'] : ['company_context_not_bilingual'], companyMatch ? evidenceIds : []),
+    entry_value: component(entryPoints, MAXIMUMS.entry_value, entryMatch ? ['same_entry_value_concepts_in_both_languages'] : ['entry_value_not_bilingual'], entryMatch ? evidenceIds : []),
+    questions: component(questionPoints, MAXIMUMS.questions, questionMatch ? [`matching_question_intents:${enQuestions.intents.join(',')}`] : ['question_intents_not_aligned'], []),
+    subject: component(subjectPoints, MAXIMUMS.subject, subjectPoints ? ['company_and_evidence_product_in_subject'] : ['subject_not_evidence_specific'], subjectPoints ? evidenceIds : []),
+    bilingual_consistency: component(bilingualPoints, MAXIMUMS.bilingual_consistency, bilingualMatch ? ['company_product_entry_and_question_facts_aligned'] : ['key_facts_not_aligned'], bilingualMatch ? evidenceIds : []),
+    readability: component(readabilityPoints, MAXIMUMS.readability, readabilityPoints ? ['bounded_greeting_and_paragraph_structure'] : ['readability_boundary_failed'], []),
+    recipient_provenance: component(provenancePoints, MAXIMUMS.recipient_provenance, provenanceOk ? ['fresh_public_company_domain_bound_source'] : ['recipient_provenance_invalid'], [])
   };
   const score = Object.values(components).reduce((sum, value) => sum + value.points, 0);
   const hardFailures = unsupportedClaims(input);
+  if (!provenanceOk) hardFailures.push('invalid_recipient_provenance');
   return { score, passed: score >= 80 && hardFailures.length === 0, components, hardFailures };
 }
 
@@ -155,12 +179,10 @@ function companyKey(value) {
     .replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
-function tableExists(db, name) {
-  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
-}
-
-function rowsIfPresent(db, name) {
-  return tableExists(db, name) ? db.prepare(`SELECT * FROM ${name}`).all() : [];
+function requiredRows(db, name) {
+  const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  if (!exists) throw new Error(`required identity relation missing: ${name}`);
+  return db.prepare(`SELECT * FROM ${name}`).all();
 }
 
 function jsonObject(value) {
@@ -185,12 +207,13 @@ function evaluateInitialContact(db, input = {}) {
 
   try {
     const read = db.transaction(() => {
-      const customers = rowsIfPresent(db, 'customers');
-      const inquiries = rowsIfPresent(db, 'inquiries');
-      const orders = rowsIfPresent(db, 'orders');
-      const messages = rowsIfPresent(db, 'crm_messages');
-      const events = rowsIfPresent(db, 'matrix_stream_events');
-      const jobs = rowsIfPresent(db, 'matrix_stream_jobs');
+      const customers = requiredRows(db, 'customers');
+      const inquiries = requiredRows(db, 'inquiries');
+      const orders = requiredRows(db, 'orders');
+      const messages = requiredRows(db, 'crm_messages');
+      const events = requiredRows(db, 'matrix_stream_events');
+      const jobs = requiredRows(db, 'matrix_stream_jobs');
+      const versions = requiredRows(db, 'matrix_stream_versions');
       const aliases = Array.isArray(input.aliases) ? input.aliases.map(normalized).filter(Boolean) : [];
 
       const suppressed = events.some(event => {
@@ -201,6 +224,13 @@ function evaluateInitialContact(db, input = {}) {
           || contactDomain(payload.recipient_email) === domain);
       });
       if (suppressed) return { allowed: false, route: 'blocked', reasons: ['suppression_event'], matchedCustomerIds: [] };
+
+      const exactInbound = messages.filter(message => normalized(message.direction) === 'inbound'
+        && [message.sender_contact, message.receiver_contact].some(contact => normalizedEmail(contact) === email || contactDomain(contact) === domain));
+      if (exactInbound.length) {
+        const ids = [...new Set(exactInbound.map(message => Number(message.customer_id)).filter(Number.isInteger))].sort((a, b) => a - b);
+        return { allowed: true, route: 'existing_relationship', reasons: ['exact_crm_reply'], matchedCustomerIds: ids };
+      }
 
       const messageCustomerIds = new Set(messages.filter(message => {
         const contacts = [message.sender_contact, message.receiver_contact];
@@ -225,7 +255,15 @@ function evaluateInitialContact(db, input = {}) {
         return Number.isFinite(at) && at >= coolingStart && at <= nowMs
           && [message.sender_contact, message.receiver_contact].some(contact => contactDomain(contact) === domain);
       });
-      if (recentDomainContact) {
+      const versionById = new Map(versions.map(version => [Number(version.id), version]));
+      const recentAcceptedDomain = jobs.some(job => {
+        if (job.state !== 'accepted') return false;
+        const version = versionById.get(Number(job.version_id));
+        const at = Date.parse(String(job.updated_at || job.created_at || ''));
+        return version && contactDomain(version.recipient_email) === domain
+          && Number.isFinite(at) && at >= coolingStart && at <= nowMs;
+      });
+      if (recentDomainContact || recentAcceptedDomain) {
         return { allowed: false, route: 'blocked', reasons: ['domain_cooling_90_days'], matchedCustomerIds: [] };
       }
 
