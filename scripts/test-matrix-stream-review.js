@@ -95,6 +95,10 @@ try {
     () => db.prepare('UPDATE matrix_stream_versions SET subject=? WHERE id=?').run('Changed', approvedVersionId),
     /immutable/
   );
+  assert.throws(
+    () => db.prepare("UPDATE matrix_stream_versions SET status='draft' WHERE id=?").run(approvedVersionId),
+    /lifecycle/
+  );
   db.prepare("UPDATE matrix_stream_versions SET status='superseded', updated_at=? WHERE id=?").run(now, supersededVersionId);
   assert.throws(
     () => db.prepare('UPDATE matrix_stream_versions SET body_en=? WHERE id=?').run('Changed after supersession', supersededVersionId),
@@ -125,6 +129,13 @@ try {
     INSERT INTO matrix_stream_events (work_item_id, version_id, action, idempotency_key, created_at)
     VALUES (?, ?, 'approved', 'event-key-1', ?)
   `).run(workItemId, approvedVersionId, now).lastInsertRowid);
+  assert.throws(
+    () => db.prepare(`
+      INSERT INTO matrix_stream_events (work_item_id, version_id, action, idempotency_key, created_at)
+      VALUES (?, ?, 'duplicate', 'event-key-1', ?)
+    `).run(workItemId, approvedVersionId, now),
+    /UNIQUE constraint failed: matrix_stream_events.idempotency_key/
+  );
   assert.throws(
     () => db.prepare('UPDATE matrix_stream_events SET action=? WHERE id=?').run('changed', eventId),
     /append-only/
