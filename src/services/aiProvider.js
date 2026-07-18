@@ -79,7 +79,7 @@ function buildMessages({ systemPrompt, userPrompt }) {
   return messages;
 }
 
-async function fetchJson(endpoint, payload, apiKey) {
+async function fetchJson(endpoint, payload, apiKey, { signal } = {}) {
   if (typeof fetch !== 'function') {
     throw new Error('global fetch is not available in this runtime');
   }
@@ -90,7 +90,8 @@ async function fetchJson(endpoint, payload, apiKey) {
       'Content-Type': 'application/json',
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    ...(signal ? { signal } : {})
   });
 
   const text = await res.text();
@@ -107,6 +108,56 @@ async function fetchJson(endpoint, payload, apiKey) {
   }
 
   return json;
+}
+
+async function callJsonProvider({
+  provider,
+  model,
+  systemPrompt,
+  userPrompt,
+  exactKeys,
+  temperature = 0,
+  maxTokens = 1200,
+  timeoutMs = 15000
+} = {}) {
+  try {
+    const keys = Array.isArray(exactKeys) ? [...exactKeys] : [];
+    if (!keys.length || keys.some(key => typeof key !== 'string' || !key)) {
+      throw new Error('caller-owned exact key set required');
+    }
+    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4000) throw new Error('invalid maximum token count');
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw new Error('invalid timeout');
+    const cfg = getProviderConfig(provider || process.env.MATRIX_TEXT_PROVIDER);
+    if (cfg.provider === 'mock' || !cfg.apiKey) {
+      return { ok: false, reason: 'text_provider_unavailable', provider: cfg.provider, model: cfg.model };
+    }
+    const payload = {
+      model: model || cfg.model,
+      temperature,
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
+      messages: buildMessages({ systemPrompt, userPrompt })
+    };
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(timeoutMs) : undefined;
+    const raw = await fetchJson(cfg.endpoint || DEFAULT_ENDPOINTS[cfg.provider] || DEFAULT_ENDPOINTS.openai, payload, cfg.apiKey, { signal });
+    const content = raw?.choices?.[0]?.message?.content ?? raw?.choices?.[0]?.text ?? '';
+    const json = safeJsonParse(content);
+    if (!isPlainObject(json)) throw new Error('JSON provider output must be an object');
+    const actualKeys = Object.keys(json).sort();
+    const expectedKeys = [...keys].sort();
+    if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
+      throw new Error(`JSON provider output must contain exactly: ${keys.join(', ')}`);
+    }
+    return { ok: true, provider: cfg.provider, model: payload.model, json };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err.name === 'TimeoutError' ? 'text_provider_timeout' : err.message,
+      provider: String(provider || process.env.MATRIX_TEXT_PROVIDER || '').trim().toLowerCase(),
+      model: model || null
+    };
+  }
 }
 
 async function callStructuredProvider({
@@ -179,5 +230,6 @@ module.exports = {
   stripCodeFences,
   safeJsonParse,
   validateStructuredObject,
+  callJsonProvider,
   callStructuredProvider
 };
