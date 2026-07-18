@@ -25,11 +25,11 @@ function extractUrls(value) {
 }
 
 function priceClaims(value) {
-  return String(value || '').match(/(?:[$€£¥]\s*\d[\d,.]*|\b(?:usd|eur|gbp|cny|rmb)\s*\d[\d,.]*|\b\d[\d,.]*\s*(?:usd|eur|gbp|cny|rmb)\b)/gi) || [];
+  return String(value || '').match(/(?:[$€£¥]\s*\d[\d,.]*|\b(?:usd|eur|gbp|cny|rmb)\s*\d[\d,.]*|\b\d[\d,.]*\s*(?:usd|eur|gbp|cny|rmb)\b|(?:美元|美金|人民币|欧元|英镑|日元|元)\s*\d[\d,.]*|\d[\d,.]*\s*(?:美元|美金|人民币|欧元|英镑|日元|元))/gi) || [];
 }
 
 function qualificationClaims(value) {
-  return String(value || '').match(/\b(?:ISO(?:\s*\d+)?|BRCGS?|FDA|HACCP|certified|qualified)\b/gi) || [];
+  return String(value || '').match(/(?:\b(?:ISO(?:\s*\d+)?|BRCGS?|FDA|HACCP|GMP|CE|certified|qualified)\b|[\u4e00-\u9fffA-Za-z0-9 ]{0,24}(?:认证|资质))/gi) || [];
 }
 
 function evidenceText(input) {
