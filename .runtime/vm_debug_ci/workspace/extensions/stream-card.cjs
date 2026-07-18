@@ -317,6 +317,20 @@ function reasonList(value) {
   return [...new Set(values)];
 }
 
+function gateProjection(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { state: 'unknown', reasons: [] };
+  if (value.ok === false) return { state: 'blocked', reasons: reasonList(value) };
+  for (const key of ['reasons', 'hardFailures', 'hard_failures']) {
+    if (Object.prototype.hasOwnProperty.call(value, key) && !Array.isArray(value[key])) {
+      return { state: 'unknown', reasons: [] };
+    }
+  }
+  const reasons = reasonList(value);
+  if (reasons.length) return { state: 'blocked', reasons };
+  if (value.ok === true) return { state: 'passed', reasons: [] };
+  return { state: 'unknown', reasons: [] };
+}
+
 function renderFinalPreview(preview, cardHelpers, retry = 0) {
   const { card, md, note, actions, button } = cardHelpers;
   const version = preview?.version || {};
@@ -326,10 +340,14 @@ function renderFinalPreview(preview, cardHelpers, retry = 0) {
     return `${clip(name, 28)} ${Number(item?.points || 0)}/${Number(item?.maximum || 0)}${reasons.length ? `：${clip(reasons.join(','), 90)}` : ''}`;
   });
   const gateLine = (label, value) => {
-    if (!value || typeof value !== 'object') return `${label}：提交时复核`;
-    const reasons = reasonList(value);
-    return `${label}：${value?.ok === false || reasons.length ? `阻断 ${clip(reasons.join(','), 130)}` : '通过'}`;
+    const projection = gateProjection(value);
+    if (projection.state === 'unknown') return `${label}：提交时复核`;
+    if (projection.state === 'blocked') return `${label}：阻断 ${clip(projection.reasons.join(',') || '未提供明确原因', 130)}`;
+    return `${label}：通过`;
   };
+  const requiredGates = [preview?.duplicate, preview?.cooling, preview?.quota, preview?.readiness, preview?.policy];
+  const gatesPassed = requiredGates.every(value => gateProjection(value).state === 'passed');
+  const confirmAllowed = preview?.allowed === true && gatesPassed && reasonList(preview).length === 0;
   const elements = [
     md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${Number(quality.score ?? version.quality_score ?? 0)}/100`),
     md(`**质量组成**\n${components.length ? components.join('\n') : '暂无组成明细'}\n${reasonList(quality).length ? `硬性原因：${clip(reasonList(quality).join(','), 130)}` : ''}`),
@@ -342,14 +360,14 @@ function renderFinalPreview(preview, cardHelpers, retry = 0) {
       ...(reasonList(preview).length ? [`最终原因：${clip(reasonList(preview).join(','), 150)}`] : [])
     ].join('\n'))
   ];
-  if (preview?.allowed === true) {
+  if (confirmAllowed) {
     const cardEventId = `mx-card-${actionKey('confirm-card', version.work_item_id, version.id, version.content_hash, retry).slice(0, 24)}`;
     elements.push(actions([button('确认发送', versionAction({ ...version, work_item_version: preview.work_item_version }, 'mx.confirm', { d: cardEventId, r: Number(retry || 0) }), 'primary')]));
     elements.push(note('第二次确认将提交当前不可变版本；重复点击使用同一幂等键。'));
   } else {
-    elements.push(note('当前门禁阻断，未提供确认发送操作，也不会提交发送。'));
+    elements.push(note('当前门禁未全部明确通过，未提供确认发送操作，也不会提交发送。'));
   }
-  return card(elements, { header: { title: preview?.allowed === true ? '最终预览' : '最终预览已阻断', template: preview?.allowed === true ? 'blue' : 'red' }, summary: '最终预览' });
+  return card(elements, { header: { title: confirmAllowed ? '最终预览' : '最终预览已阻断', template: confirmAllowed ? 'blue' : 'red' }, summary: '最终预览' });
 }
 
 function renderDeliveryResult(result, versionValue, cardHelpers) {
