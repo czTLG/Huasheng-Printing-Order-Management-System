@@ -47,6 +47,13 @@ DONE
 - Copyable direct-message content, price presentation, FOB presentation, and knowledge archival remain unimplemented pending user design confirmation.
 - Task 7 still owns the complete runtime capability audit and manifest rebuild/re-signing.
 
+## Independent review repair
+
+- I1 repaired with a shared fail-closed gate projection: only strict `ok === true` with no blocking reasons is displayed as passed; any present reason fields must be valid arrays.
+- Missing, non-object, empty, unknown, non-boolean `ok`, or malformed reason projections are displayed as `提交时复核` and suppress final confirmation.
+- Explicit `ok === false` or any blocking reason is displayed as blocked. A contradictory `allowed: true` response with any blocked gate exposes no `mx.confirm` action.
+- RED fixtures cover `{}`, `{ ok: null }`, unknown status, string `ok`, missing gates, and `allowed: true` plus an explicitly blocked readiness gate; the normal five-gate passing path remains covered.
+
 ## 蒸馏进度
 
 - 已确认模块：固定源 exact client、不可变版本审阅卡、两次确认、三元组十分钟修改上下文、门禁阻断卡、三类提交结果、稳定幂等键、no-send/no-transport 边界。

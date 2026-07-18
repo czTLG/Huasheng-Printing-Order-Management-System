@@ -241,6 +241,7 @@ async function testTwoConfirmationReviewFlow() {
   };
   let blockedPreview = false;
   let minimalPreview = false;
+  let previewOverride = null;
   let deliveryState = 'accepted';
   const client = {
     today: async () => ({ rows: [row], snapshot_key: '9'.repeat(64) }),
@@ -274,6 +275,7 @@ async function testTwoConfirmationReviewFlow() {
     },
     versionPreview: async (openId, workItemId, versionId) => {
       clientCalls.push(['versionPreview', openId, workItemId, versionId]);
+      if (previewOverride) return previewOverride;
       if (minimalPreview) return {
         allowed: true, work_item_version: 4, version: currentVersion,
         quality: JSON.parse(currentVersion.quality_json), reasons: []
@@ -378,7 +380,53 @@ async function testTwoConfirmationReviewFlow() {
   await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
   const minimalText = visibleText(sent.at(-1));
   assert.strictEqual((minimalText.match(/提交时复核/g) || []).length, 5, 'absent gate projections must not be shown as passed');
-  assert.ok(buttons(sent.at(-1)).some(item => item.value?.a === 'mx.confirm'));
+  assert.ok(!buttons(sent.at(-1)).some(item => item.value?.a === 'mx.confirm'), 'missing required gates must fail closed');
+
+  minimalPreview = false;
+  const trustedGates = {
+    duplicate: { ok: true, reasons: [] }, cooling: { ok: true, reasons: [] },
+    quota: { ok: true, reasons: [] }, readiness: { ok: true, hardFailures: [] },
+    policy: { ok: true, hardFailures: [] }
+  };
+  for (const [label, key, malformed] of [
+    ['重复检查', 'duplicate', {}],
+    ['冷却期', 'cooling', { ok: null }],
+    ['当日配额', 'quota', { status: 'unknown' }],
+    ['发送方就绪', 'readiness', { ok: 'true', reasons: [] }]
+  ]) {
+    previewOverride = {
+      allowed: true, work_item_version: 4, version: currentVersion,
+      quality: JSON.parse(currentVersion.quality_json), reasons: [],
+      ...trustedGates, [key]: malformed
+    };
+    await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
+    const malformedCard = sent.at(-1);
+    assert.ok(visibleText(malformedCard).includes(`${label}：提交时复核`), `${key} malformed projection must be unknown`);
+    assert.ok(!buttons(malformedCard).some(item => item.value?.a === 'mx.confirm'), `${key} malformed projection must fail closed`);
+  }
+
+  previewOverride = {
+    allowed: true, work_item_version: 4, version: currentVersion,
+    quality: JSON.parse(currentVersion.quality_json), reasons: [],
+    ...trustedGates,
+    readiness: { ok: false, hardFailures: ['missing_dkim'] }
+  };
+  await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
+  const contradictoryCard = sent.at(-1);
+  assert.ok(visibleText(contradictoryCard).includes('发送方就绪：阻断 missing_dkim'));
+  assert.ok(!buttons(contradictoryCard).some(item => item.value?.a === 'mx.confirm'), 'allowed true plus blocked gate must fail closed');
+
+  previewOverride = {
+    allowed: true, work_item_version: 4, version: currentVersion,
+    quality: JSON.parse(currentVersion.quality_json), reasons: [],
+    ...trustedGates,
+    policy: { ok: false, reasons: 'malformed_reason_container' }
+  };
+  await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
+  const explicitFalseCard = sent.at(-1);
+  assert.ok(visibleText(explicitFalseCard).includes('国家/渠道政策：阻断'), 'explicit false must remain blocked even if its reason container is malformed');
+  assert.ok(!buttons(explicitFalseCard).some(item => item.value?.a === 'mx.confirm'));
+  previewOverride = null;
 
   await handlers.get('mx.revise')({ evt, value: { a: 'mx.revise', w: 91, x: 302, v: 4, h: 'b'.repeat(64) } });
   assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '取消' } }), true);
