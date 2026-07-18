@@ -1072,6 +1072,32 @@ function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_digest_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL CHECK(channel IN ('bill','vmci')),
+      slot_key TEXT NOT NULL,
+      membership_hash TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','inflight','delivered','manual_review')),
+      owner_token TEXT NOT NULL DEFAULT '',
+      claim_token TEXT NOT NULL DEFAULT '',
+      lease_expires_at TEXT NOT NULL DEFAULT '',
+      receipt_id TEXT NOT NULL DEFAULT '',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_outcome TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      delivered_at TEXT,
+      UNIQUE(channel, slot_key, membership_hash)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_schedule_commands (
+      idempotency_key TEXT PRIMARY KEY,
+      request_fingerprint TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
@@ -1311,6 +1337,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_task_events_task ON matrix_task_events(task_id, task_version, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_task_dependencies_blocking ON matrix_task_dependencies(blocking_task_id, state);
     CREATE INDEX IF NOT EXISTS idx_matrix_decisions_task ON matrix_decisions(task_id, state, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_digest_outbox_claim ON matrix_digest_outbox(channel, state, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
