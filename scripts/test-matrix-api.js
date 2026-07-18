@@ -185,6 +185,7 @@ function reviewState(workItemId) {
     return {
       evidence: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_recipient_evidence').get().count,
       apiRequests: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_api_requests').get().count,
+      claims: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_api_claims').get().count,
       versions: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count,
       events: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_events').get().count,
       jobs: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_jobs').get().count,
@@ -613,6 +614,7 @@ function reviewState(workItemId) {
         return providerImpl(input);
       }
     };
+    const claimOptions = { leaseMs: 5000, waitMs: 1000, pollMs: 10 };
     const injectedApp = express();
     injectedApp.use(express.json());
     injectedApp.use('/api/matrix', createMatrixBridgeAuth({ db: injectedDb, bridgeToken }));
@@ -621,7 +623,8 @@ function reviewState(workItemId) {
       audit: () => undefined,
       candidateDbPath,
       reviewService: injectedReviewService,
-      textService: injectedTextService
+      textService: injectedTextService,
+      claimOptions
     }));
     const injectedServer = await new Promise((resolve, reject) => {
       const server = injectedApp.listen(injectedPort, '127.0.0.1', () => resolve(server));
@@ -784,6 +787,152 @@ function reviewState(workItemId) {
       assert.ok(!/SQLITE|\/srv\/private|SMTP_PASS|hunter2/.test(JSON.stringify(internalFailure.body)));
       assert.deepStrictEqual(reviewState(workItemId), internalFailureState, 'internal failure must write nothing');
       injectedReviewService.approveVersion = originalApproveVersion;
+
+      const concurrentEntered = {};
+      concurrentEntered.promise = new Promise(resolve => { concurrentEntered.resolve = resolve; });
+      const concurrentRelease = {};
+      concurrentRelease.promise = new Promise(resolve => { concurrentRelease.resolve = resolve; });
+      const concurrentCallsBefore = providerCalls;
+      providerImpl = async ({ current }) => {
+        concurrentEntered.resolve();
+        await concurrentRelease.promise;
+        return { subject: current.subject, body_en: current.body_en, body_cn: current.body_cn };
+      };
+      const concurrentBody = {
+        expected_work_version: 4,
+        base_version_id: revisedVersion.body.id,
+        revision_instruction: 'concurrent exact revision',
+        idempotency_key: 'revision-concurrent-exact'
+      };
+      const concurrentFirst = request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: concurrentBody
+      });
+      await concurrentEntered.promise;
+      const concurrentSecond = request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: concurrentBody
+      });
+      const concurrentMismatch = await Promise.race([
+        request(versionRoute, {
+          port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+          body: { ...concurrentBody, revision_instruction: 'concurrent mismatched revision' }
+        }),
+        new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 250))
+      ]);
+      await new Promise(resolve => setTimeout(resolve, 25));
+      concurrentRelease.resolve();
+      const concurrentResults = await Promise.all([concurrentFirst, concurrentSecond]);
+      assert.strictEqual(concurrentMismatch.timeout, undefined, 'active-claim mismatch must fail without waiting');
+      assert.strictEqual(concurrentMismatch.status, 409, JSON.stringify(concurrentMismatch.body));
+      assert.deepStrictEqual(concurrentResults.map(result => result.status).sort(), [200, 201]);
+      assert.strictEqual(providerCalls - concurrentCallsBefore, 1, 'concurrent exact revisions must invoke provider once');
+      assert.strictEqual(concurrentResults[0].body.id, concurrentResults[1].body.id);
+      const concurrentDb = new Database(appDbPath, { readonly: true });
+      try {
+        assert.strictEqual(concurrentDb.prepare("SELECT COUNT(*) AS count FROM matrix_stream_api_requests WHERE idempotency_key='revision-concurrent-exact'").get().count, 1);
+        assert.strictEqual(concurrentDb.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE idempotency_key='revision-concurrent-exact'").get().count, 1);
+      } finally {
+        concurrentDb.close();
+      }
+
+      const concurrentVersion = concurrentResults.find(result => result.status === 201);
+      const takeoverBody = {
+        expected_work_version: 5,
+        base_version_id: concurrentVersion.body.id,
+        revision_instruction: 'crash takeover revision',
+        idempotency_key: 'revision-crash-takeover'
+      };
+      const takeoverFingerprint = crypto.createHash('sha256').update(matrixReviewService.canonicalJson({
+        action: 'revise',
+        actorUserId: 103,
+        workItemId,
+        expectedWorkVersion: takeoverBody.expected_work_version,
+        baseVersionId: takeoverBody.base_version_id,
+        instruction: takeoverBody.revision_instruction
+      })).digest('hex');
+      const crashedAt = new Date().toISOString();
+      mutateApp(db => db.prepare(`
+        INSERT INTO matrix_stream_api_claims (
+          idempotency_key, actor_user_id, work_item_id, action, request_fingerprint,
+          owner_token, lease_expires_at, created_at, updated_at
+        ) VALUES (?, 103, ?, 'revise', ?, 'crashed-owner', ?, ?, ?)
+      `).run(takeoverBody.idempotency_key, workItemId, takeoverFingerprint, new Date(Date.now() + 5000).toISOString(), crashedAt, crashedAt));
+      mutateApp(db => assert.throws(
+        () => db.prepare("UPDATE matrix_stream_api_claims SET action='approve' WHERE idempotency_key=?").run(takeoverBody.idempotency_key),
+        /identity is immutable/
+      ));
+      claimOptions.waitMs = 60;
+      const callsBeforeTimeout = providerCalls;
+      const waitTimeout = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: takeoverBody
+      });
+      assert.strictEqual(waitTimeout.status, 503, JSON.stringify(waitTimeout.body));
+      assert.deepStrictEqual(waitTimeout.body, {
+        error: { code: 'review_in_progress', message: 'Review request is still in progress.' }
+      });
+      assert.strictEqual(providerCalls, callsBeforeTimeout, 'active claim wait timeout must not invoke provider');
+      mutateApp(db => {
+        const claim = db.prepare('SELECT owner_token FROM matrix_stream_api_claims WHERE idempotency_key=?').get(takeoverBody.idempotency_key);
+        assert.strictEqual(claim.owner_token, 'crashed-owner', 'waiter must not delete another owner claim');
+        db.prepare("UPDATE matrix_stream_api_claims SET lease_expires_at=?, updated_at=? WHERE idempotency_key=? AND owner_token='crashed-owner'")
+          .run(new Date(Date.now() - 1000).toISOString(), new Date().toISOString(), takeoverBody.idempotency_key);
+      });
+      claimOptions.waitMs = 1000;
+      providerImpl = async ({ current }) => ({
+        subject: current.subject, body_en: current.body_en, body_cn: current.body_cn
+      });
+      const takeoverCallsBefore = providerCalls;
+      const takeover = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: takeoverBody
+      });
+      assert.strictEqual(takeover.status, 201, JSON.stringify(takeover.body));
+      assert.strictEqual(takeover.body.work_item_version, 6);
+      assert.strictEqual(providerCalls - takeoverCallsBefore, 1, 'expired claim takeover must invoke provider once');
+      mutateApp(db => {
+        assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_api_claims WHERE idempotency_key=?').get(takeoverBody.idempotency_key).count, 0);
+        assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_api_requests WHERE idempotency_key=?').get(takeoverBody.idempotency_key).count, 1);
+      });
+
+      const leaseEntered = {};
+      leaseEntered.promise = new Promise(resolve => { leaseEntered.resolve = resolve; });
+      const leaseRelease = {};
+      leaseRelease.promise = new Promise(resolve => { leaseRelease.resolve = resolve; });
+      providerImpl = async ({ current }) => {
+        leaseEntered.resolve();
+        await leaseRelease.promise;
+        return { subject: current.subject, body_en: current.body_en, body_cn: current.body_cn };
+      };
+      const leaseLossBody = {
+        expected_work_version: 6,
+        base_version_id: takeover.body.id,
+        revision_instruction: 'lease ownership loss',
+        idempotency_key: 'revision-lease-loss'
+      };
+      const leaseLossState = reviewState(workItemId);
+      const leaseLossRequest = request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: leaseLossBody
+      });
+      await leaseEntered.promise;
+      mutateApp(db => {
+        const changed = db.prepare(`
+          UPDATE matrix_stream_api_claims
+          SET owner_token='replacement-owner', lease_expires_at=?, updated_at=?
+          WHERE idempotency_key=?
+        `).run(new Date(Date.now() + 5000).toISOString(), new Date().toISOString(), leaseLossBody.idempotency_key);
+        assert.strictEqual(changed.changes, 1);
+      });
+      leaseRelease.resolve();
+      const leaseLoss = await leaseLossRequest;
+      assert.strictEqual(leaseLoss.status, 409, JSON.stringify(leaseLoss.body));
+      assert.deepStrictEqual(leaseLoss.body, {
+        error: { code: 'review_claim_lost', message: 'Review request lease was lost.' }
+      });
+      mutateApp(db => {
+        assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_api_requests WHERE idempotency_key=?').get(leaseLossBody.idempotency_key).count, 0);
+        assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_events WHERE idempotency_key=?').get(leaseLossBody.idempotency_key).count, 0);
+        assert.strictEqual(db.prepare('DELETE FROM matrix_stream_api_claims WHERE idempotency_key=? AND owner_token=?')
+          .run(leaseLossBody.idempotency_key, 'replacement-owner').changes, 1);
+      });
+      assert.deepStrictEqual(reviewState(workItemId), leaseLossState, 'lost lease must not commit a review transition');
     } finally {
       await new Promise(resolve => injectedServer.close(resolve));
       injectedDb.close();
@@ -795,7 +944,7 @@ function reviewState(workItemId) {
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
       assert.deepStrictEqual(
         inspect.prepare('SELECT action FROM matrix_stream_api_requests ORDER BY id').all().map(row => row.action),
-        ['create', 'approve', 'revise']
+        ['create', 'approve', 'revise', 'revise', 'revise']
       );
       const persistedSession = JSON.stringify(inspect.prepare('SELECT snapshot_key, candidate_ids_json, filters_json FROM matrix_sessions WHERE id = ?').get(createdSession.body.id));
       assert.ok(!persistedSession.includes('Alpha Foods'));

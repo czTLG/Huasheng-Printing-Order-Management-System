@@ -294,6 +294,12 @@ function reviewErrorDescriptor(error) {
   if (explicit === 'text_provider_failure') {
     return { status: 503, code: 'text_provider_failure', message: 'Text revision service is temporarily unavailable.' };
   }
+  if (explicit === 'claim_wait_timeout') {
+    return { status: 503, code: 'review_in_progress', message: 'Review request is still in progress.' };
+  }
+  if (explicit === 'claim_lost') {
+    return { status: 409, code: 'review_claim_lost', message: 'Review request lease was lost.' };
+  }
   if (/idempotency request conflict/.test(message)) {
     return { status: 409, code: 'idempotency_conflict', message: 'Idempotency key conflicts with another request.' };
   }
@@ -325,7 +331,8 @@ function createMatrixRouter({
   clock,
   reviewService = require('../services/matrixStreamReview'),
   deliveryService,
-  textService = createMatrixStreamText()
+  textService = createMatrixStreamText(),
+  claimOptions = {}
 } = {}) {
   const router = express.Router();
   const view = createCacheIndexView({ dbPath: candidateDbPath });
@@ -534,22 +541,115 @@ function createMatrixRouter({
     return crypto.createHash('sha256').update(reviewService.canonicalJson(value)).digest('hex');
   }
 
-  function apiReplay({ identity, workItemId, action, idempotencyKey, fingerprint }) {
-    const lookup = db.transaction(() => {
-      const row = db.prepare('SELECT * FROM matrix_stream_api_requests WHERE idempotency_key = ?').get(idempotencyKey);
-      if (!row) return null;
-      const authorization = freshReviewAuthorization(identity, workItemId);
-      if (row.actor_user_id !== identity.actorUserId || row.work_item_id !== workItemId
-          || row.action !== action || row.request_fingerprint !== fingerprint) {
-        throw new Error('idempotency request conflict');
+  function claimTiming() {
+    const bounded = (value, fallback, minimum, maximum) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, Math.trunc(number))) : fallback;
+    };
+    return {
+      leaseMs: bounded(claimOptions.leaseMs, 30000, 100, 60000),
+      waitMs: bounded(claimOptions.waitMs, 20000, 25, 60000),
+      pollMs: bounded(claimOptions.pollMs, 25, 5, 1000)
+    };
+  }
+
+  function claimNowMs() {
+    const value = typeof claimOptions.now === 'function' ? claimOptions.now() : Date.now();
+    const timestamp = value instanceof Date ? value.getTime() : Number(value);
+    if (!Number.isFinite(timestamp)) throw new Error('claim clock invalid');
+    return timestamp;
+  }
+
+  function claimScopeMatches(row, { identity, workItemId, action, fingerprint }) {
+    return row.actor_user_id === identity.actorUserId && row.work_item_id === workItemId
+      && row.action === action && row.request_fingerprint === fingerprint;
+  }
+
+  function recordedApiResponse(row, { identity, workItemId, action, fingerprint }) {
+    const authorization = freshReviewAuthorization(identity, workItemId);
+    if (!claimScopeMatches(row, { identity, workItemId, action, fingerprint })) throw new Error('idempotency request conflict');
+    let response;
+    try { response = JSON.parse(row.response_json); } catch (_) { throw new Error('stored API response invalid'); }
+    const version = db.prepare('SELECT status FROM matrix_stream_versions WHERE id = ? AND work_item_id = ?').get(row.version_id, workItemId);
+    if (!version) throw new Error('recorded version not found');
+    return { ...response, current_status: version.status, current_work_item_version: authorization.version };
+  }
+
+  function attemptApiClaim({ identity, workItemId, action, idempotencyKey, fingerprint, expectedWorkVersion, ownerToken }) {
+    const attempt = db.transaction(() => {
+      const recorded = db.prepare('SELECT * FROM matrix_stream_api_requests WHERE idempotency_key = ?').get(idempotencyKey);
+      if (recorded) return { kind: 'replay', response: recordedApiResponse(recorded, { identity, workItemId, action, fingerprint }) };
+      const nowMs = claimNowMs();
+      const now = new Date(nowMs).toISOString();
+      const { leaseMs } = claimTiming();
+      const leaseExpiresAt = new Date(nowMs + leaseMs).toISOString();
+      const claim = db.prepare('SELECT * FROM matrix_stream_api_claims WHERE idempotency_key = ?').get(idempotencyKey);
+      if (!claim) {
+        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+        db.prepare(`
+          INSERT INTO matrix_stream_api_claims (
+            idempotency_key, actor_user_id, work_item_id, action, request_fingerprint,
+            owner_token, lease_expires_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(idempotencyKey, identity.actorUserId, workItemId, action, fingerprint, ownerToken, leaseExpiresAt, now, now);
+        return { kind: 'owner', ownerToken };
       }
-      let response;
-      try { response = JSON.parse(row.response_json); } catch (_) { throw new Error('stored API response invalid'); }
-      const version = db.prepare('SELECT status FROM matrix_stream_versions WHERE id = ? AND work_item_id = ?').get(row.version_id, workItemId);
-      if (!version) throw new Error('recorded version not found');
-      return { ...response, current_status: version.status, current_work_item_version: authorization.version };
+      if (!claimScopeMatches(claim, { identity, workItemId, action, fingerprint })) throw new Error('idempotency request conflict');
+      freshReviewAuthorization(identity, workItemId);
+      const expiresMs = Date.parse(String(claim.lease_expires_at || ''));
+      if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) {
+        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+        const changed = db.prepare(`
+          UPDATE matrix_stream_api_claims
+          SET owner_token = ?, lease_expires_at = ?, updated_at = ?
+          WHERE id = ? AND owner_token = ? AND lease_expires_at = ?
+        `).run(ownerToken, leaseExpiresAt, now, claim.id, claim.owner_token, claim.lease_expires_at);
+        if (changed.changes === 1) return { kind: 'owner', ownerToken };
+      }
+      return { kind: 'wait' };
     });
-    return lookup.immediate();
+    return attempt.immediate();
+  }
+
+  async function acquireApiClaim(input) {
+    const ownerToken = crypto.randomUUID();
+    const deadline = Date.now() + claimTiming().waitMs;
+    while (true) {
+      const result = attemptApiClaim({ ...input, ownerToken });
+      if (result.kind !== 'wait') return result;
+      if (Date.now() >= deadline) throw reviewFailure('claim_wait_timeout');
+      await new Promise(resolve => setTimeout(resolve, claimTiming().pollMs));
+    }
+  }
+
+  function requireOwnedClaim({ identity, workItemId, action, idempotencyKey, fingerprint, expectedWorkVersion, ownerToken }) {
+    const recorded = db.prepare('SELECT * FROM matrix_stream_api_requests WHERE idempotency_key = ?').get(idempotencyKey);
+    if (recorded) return { replay: recordedApiResponse(recorded, { identity, workItemId, action, fingerprint }) };
+    const claim = db.prepare('SELECT * FROM matrix_stream_api_claims WHERE idempotency_key = ?').get(idempotencyKey);
+    const nowMs = claimNowMs();
+    const expiresMs = Date.parse(String(claim?.lease_expires_at || ''));
+    if (!claim || !claimScopeMatches(claim, { identity, workItemId, action, fingerprint })
+        || claim.owner_token !== ownerToken || !Number.isFinite(expiresMs) || expiresMs <= nowMs) {
+      throw reviewFailure('claim_lost');
+    }
+    freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+    return { claim };
+  }
+
+  function deleteOwnedClaim(idempotencyKey, ownerToken) {
+    const deleted = db.prepare('DELETE FROM matrix_stream_api_claims WHERE idempotency_key = ? AND owner_token = ?').run(idempotencyKey, ownerToken);
+    if (deleted.changes !== 1) throw reviewFailure('claim_lost');
+  }
+
+  function releaseOwnedClaim(idempotencyKey, ownerToken) {
+    if (!ownerToken) return;
+    try {
+      db.transaction(() => {
+        db.prepare('DELETE FROM matrix_stream_api_claims WHERE idempotency_key = ? AND owner_token = ?').run(idempotencyKey, ownerToken);
+      }).immediate();
+    } catch (_) {
+      console.warn('[matrix-review] claim_release_failed');
+    }
   }
 
   function recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId, response }) {
@@ -754,6 +854,8 @@ function createMatrixRouter({
   });
 
   router.post('/work-items/:id/versions', async (req, res) => {
+    let heldClaimToken = null;
+    let heldClaimKey = '';
     try {
       const body = rejectUnknown(req.body, VERSION_FIELDS, 'body');
       const identity = reviewIdentity(req);
@@ -775,11 +877,14 @@ function createMatrixRouter({
         expectedWorkVersion,
         ...(hasBase ? { baseVersionId, instruction } : {})
       });
-      const replay = apiReplay({ identity, workItemId, action, idempotencyKey, fingerprint });
-      if (replay) return res.status(200).json(replay);
+      const claim = await acquireApiClaim({
+        identity, workItemId, action, idempotencyKey, fingerprint, expectedWorkVersion
+      });
+      if (claim.kind === 'replay') return res.status(200).json(claim.response);
+      heldClaimToken = claim.ownerToken;
+      heldClaimKey = idempotencyKey;
 
       if (hasBase) {
-        db.transaction(() => freshReviewAuthorization(identity, workItemId, expectedWorkVersion)).immediate();
         const current = reviewService.getVersion(db, { actorUserId: identity.actorUserId, versionId: baseVersionId });
         if (!current || current.work_item_id !== workItemId) throw new Error('base version not found');
         let sourceSnapshot;
@@ -794,7 +899,10 @@ function createMatrixRouter({
           throw reviewFailure(generated.reason === 'text_provider_unavailable' ? 'text_provider_unavailable' : 'text_provider_failure');
         }
         const revise = db.transaction(() => {
-          freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+          const ownership = requireOwnedClaim({
+            identity, workItemId, action, idempotencyKey, fingerprint, expectedWorkVersion, ownerToken: heldClaimToken
+          });
+          if (ownership.replay) return { replay: true, response: ownership.replay };
           const revised = reviewService.reviseVersion(db, {
             actorUserId: identity.actorUserId,
             workItemId,
@@ -807,9 +915,12 @@ function createMatrixRouter({
           });
           const response = withWorkVersion(revised);
           recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId: revised.id, response });
-          return response;
+          deleteOwnedClaim(idempotencyKey, heldClaimToken);
+          return { replay: false, response };
         });
-        return res.status(201).json(revise.immediate());
+        const outcome = revise.immediate();
+        heldClaimToken = null;
+        return res.status(outcome.replay ? 200 : 201).json(outcome.response);
       }
 
       const item = db.transaction(() => freshReviewAuthorization(identity, workItemId, expectedWorkVersion)).immediate();
@@ -817,7 +928,10 @@ function createMatrixRouter({
       if (!detail) throw new Error('candidate not found');
       const draft = candidateDraft(detail);
       const create = db.transaction(() => {
-        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+        const ownership = requireOwnedClaim({
+          identity, workItemId, action, idempotencyKey, fingerprint, expectedWorkVersion, ownerToken: heldClaimToken
+        });
+        if (ownership.replay) return { replay: true, response: ownership.replay };
         db.prepare(`
           INSERT OR IGNORE INTO matrix_stream_recipient_evidence (
             work_item_id, organization_domain, recipient_email, source_url, verified_at,
@@ -845,14 +959,21 @@ function createMatrixRouter({
         if (!quality?.passed) throw new Error('initial draft quality gate blocked');
         const response = withWorkVersion(version);
         recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId: version.id, response });
-        return response;
+        deleteOwnedClaim(idempotencyKey, heldClaimToken);
+        return { replay: false, response };
       });
-      const created = create.immediate();
-      return res.status(201).json(created);
-    } catch (error) { sendReviewError(res, error); }
+      const outcome = create.immediate();
+      heldClaimToken = null;
+      return res.status(outcome.replay ? 200 : 201).json(outcome.response);
+    } catch (error) {
+      releaseOwnedClaim(heldClaimKey, heldClaimToken);
+      sendReviewError(res, error);
+    }
   });
 
-  router.post('/work-items/:id/versions/:versionId/approve', (req, res) => {
+  router.post('/work-items/:id/versions/:versionId/approve', async (req, res) => {
+    let heldClaimToken = null;
+    let heldClaimKey = '';
     try {
       const body = rejectUnknown(req.body, APPROVAL_FIELDS, 'body');
       const identity = reviewIdentity(req);
@@ -866,10 +987,18 @@ function createMatrixRouter({
         action: 'approve', actorUserId: identity.actorUserId, workItemId, versionId,
         expectedWorkVersion, expectedContentHash
       });
-      const replay = apiReplay({ identity, workItemId, action: 'approve', idempotencyKey, fingerprint });
-      if (replay) return res.json(replay);
+      const claim = await acquireApiClaim({
+        identity, workItemId, action: 'approve', idempotencyKey, fingerprint, expectedWorkVersion
+      });
+      if (claim.kind === 'replay') return res.json(claim.response);
+      heldClaimToken = claim.ownerToken;
+      heldClaimKey = idempotencyKey;
       const approve = db.transaction(() => {
-        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+        const ownership = requireOwnedClaim({
+          identity, workItemId, action: 'approve', idempotencyKey, fingerprint,
+          expectedWorkVersion, ownerToken: heldClaimToken
+        });
+        if (ownership.replay) return { replay: true, response: ownership.replay };
         const approved = reviewService.approveVersion(db, {
           actorUserId: identity.actorUserId,
           workItemId,
@@ -880,10 +1009,16 @@ function createMatrixRouter({
         });
         const response = withWorkVersion(approved);
         recordApiRequest({ identity, workItemId, action: 'approve', idempotencyKey, fingerprint, versionId: approved.id, response });
-        return response;
+        deleteOwnedClaim(idempotencyKey, heldClaimToken);
+        return { replay: false, response };
       });
-      res.json(approve.immediate());
-    } catch (error) { sendReviewError(res, error); }
+      const outcome = approve.immediate();
+      heldClaimToken = null;
+      res.json(outcome.response);
+    } catch (error) {
+      releaseOwnedClaim(heldClaimKey, heldClaimToken);
+      sendReviewError(res, error);
+    }
   });
 
   router.get('/work-items/:id/versions/:versionId/preview', (req, res) => {
