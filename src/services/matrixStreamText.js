@@ -26,8 +26,10 @@ function extractUrls(value) {
 
 const PRICE_SEMANTIC = /(?:价格|报价|单价|售价|费用|收费|免费|成本|\b(?:price|quote|rate|fee|cost|free)\b)/i;
 const QUALIFICATION_SEMANTIC = /(?:认证|证书|资质|许可证|许可|审核|认可|批准|合规|标准|规范|要求|\b(?:certified|certificate|certification|license[ds]?|permit(?:ted)?|audit(?:ed)?|approved|recognized|compliant|compliance|standard|requirement)\b)/i;
-const ASSERTION_MARKER = /(?:已|拥有|通过|获得|获|无需|免收费|免费|符合|满足|达到|具备|持有|取得|认可|批准|备案|\b(?:has|have|had|holds?|obtained|approved|recognized|certified|compliant|meets?|satisfies?|free|no[ -]?fee)\b)/i;
-const REQUEST_MARKER = /^\s*(?:请问?|麻烦|(?:could|can|would) you\b|please\b|what (?:is|are)\b|do you\b|does\b|is there\b|are there\b|may i\b)/i;
+const CHINESE_REQUEST = /^(?:(?:请|烦请)(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)|(?:能否|可以|可否)(?:请)?(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)|(?:是否有|您是否有|贵司是否有|贵司是否(?:可以|能够|提供)))(.*)$/i;
+const ENGLISH_REQUEST = /^(?:(?:(?:could|would|can) you)(?: please)? (?:provide|confirm|quote|tell|share|send)|please (?:provide|confirm|quote|tell|share|send)|what (?:is|are))(?:\s+|$)(.*)$/i;
+const CHINESE_ASSERTION = /(?:是|为|已|拥有|通过|获得|获|无需|免收费|免费|符合|满足|达到|具备|持有|取得|认可|批准|备案|单价请询价)/i;
+const ENGLISH_ASSERTION = /\b(?:is|are|our price|we are|we have|have|has|approved|certified|recognized|compliant|free|no[ -]?fee|note)\b|\b(?:price|quote|rate|fee|cost)\s+(?:is|are)\b/i;
 
 function splitSentences(value) {
   return String(value || '')
@@ -41,6 +43,10 @@ function normalizedSentence(value) {
   return String(value || '').normalize('NFKC').trim().replace(/[。.!?！？]+$/u, '').replace(/\s+/g, '').toLowerCase();
 }
 
+function normalizedSyntaxSentence(value) {
+  return String(value || '').normalize('NFKC').trim().replace(/[。.!?！？]+$/u, '').replace(/\s+/g, ' ');
+}
+
 function sensitiveKinds(sentence) {
   return {
     price: PRICE_SEMANTIC.test(sentence),
@@ -49,8 +55,11 @@ function sensitiveKinds(sentence) {
 }
 
 function isNonAssertionRequest(sentence) {
-  if (ASSERTION_MARKER.test(sentence)) return false;
-  return /[?？]\s*$/u.test(sentence) || REQUEST_MARKER.test(sentence);
+  const text = normalizedSyntaxSentence(sentence);
+  const chinese = text.match(CHINESE_REQUEST);
+  if (chinese) return !CHINESE_ASSERTION.test(chinese[1]);
+  const english = text.match(ENGLISH_REQUEST);
+  return Boolean(english && !ENGLISH_ASSERTION.test(english[1]));
 }
 
 function assertionText(value) {
