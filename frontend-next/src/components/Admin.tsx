@@ -46,6 +46,7 @@ export default function Admin() {
   const [modalLoading, setModalLoading] = useState(false);
   const [userForm, setUserForm] = useState({ username: '', password: '', fullName: '', role: 'ai_sales' });
   const [modulePerms, setModulePerms] = useState<Record<string, boolean>>({});
+  const [matrixSend, setMatrixSend] = useState(false);
 
   const ALL_MODULES: { key: string; label: string }[] = [
     { key: 'orders', label: '订单中心' },
@@ -111,7 +112,7 @@ export default function Admin() {
           </select>
           <button onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="搜账号/姓名"]')?.focus()} className="h-9 px-4 bg-slate-900 text-white rounded-xl text-[13px] font-bold">搜索</button>
         </div>
-        <button onClick={() => { setEditingUser(null); setUserForm({ username: '', password: '', fullName: '', role: 'ai_sales' }); setModulePerms({ ...getDefaultRoleModules('ai_sales') }); setShowUserModal('new'); }} className="h-9 px-4 bg-indigo-600 text-white rounded-xl text-[13px] font-bold flex items-center gap-2">
+        <button onClick={() => { setEditingUser(null); setUserForm({ username: '', password: '', fullName: '', role: 'ai_sales' }); setModulePerms({ ...getDefaultRoleModules('ai_sales') }); setMatrixSend(false); setShowUserModal('new'); }} className="h-9 px-4 bg-indigo-600 text-white rounded-xl text-[13px] font-bold flex items-center gap-2">
           <UserPlus className="w-4 h-4" /> 新增用户
         </button>
       </div>
@@ -185,6 +186,7 @@ export default function Admin() {
                          setEditingUser(u);
                          setUserForm({ username: u.username, password: '', fullName: u.full_name || '', role: u.role || 'ai_sales' });
                          setModulePerms(hasModules ? { ...modules } : { ...getDefaultRoleModules(u.role || 'ai_sales') });
+                         setMatrixSend(!!u.permissions?.capabilities?.matrixSend);
                          setShowUserModal('edit');
                        }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded"><Edit className="w-4 h-4" /></button>
                        <button onClick={async () => {
@@ -262,6 +264,15 @@ export default function Admin() {
                   ))}
                 </div>
               </div>
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={matrixSend}
+                  onChange={e => setMatrixSend(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+                <span className="text-[13px] font-medium text-slate-700 group-hover:text-indigo-600 transition-colors">Matrix Stream 发送确认</span>
+              </label>
             </div>
             <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-end gap-3">
               <button onClick={() => setShowUserModal(null)} className="h-10 px-4 border border-slate-200 rounded-xl text-sm font-bold text-slate-600">取消</button>
@@ -276,7 +287,17 @@ export default function Admin() {
                     await mockService.registerUser(userForm.username, userForm.password, userForm.fullName);
                     window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户已创建，等待审批' } }));
                   } else if (editingUser) {
-                    await mockService.updateUserPermissions(editingUser.id, { role: userForm.role, permissions: { modules: modulePerms } });
+                    await mockService.updateUserPermissions(editingUser.id, {
+                      role: userForm.role,
+                      permissions: {
+                        ...(editingUser.permissions || {}),
+                        modules: modulePerms,
+                        capabilities: {
+                          ...(editingUser.permissions?.capabilities || {}),
+                          matrixSend,
+                        },
+                      },
+                    });
                     window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户角色和权限已更新' } }));
                   }
                   setShowUserModal(null);

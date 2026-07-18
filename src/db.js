@@ -858,9 +858,102 @@ function initDb() {
       FOREIGN KEY(actor_user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_stream_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL,
+      crm_draft_id INTEGER,
+      revision INTEGER NOT NULL,
+      recipient_email TEXT NOT NULL,
+      recipient_source_url TEXT NOT NULL,
+      recipient_verified_at TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      body_en TEXT NOT NULL,
+      body_cn TEXT NOT NULL,
+      strategy_summary TEXT NOT NULL DEFAULT '',
+      source_snapshot_json TEXT NOT NULL DEFAULT '{}',
+      content_hash TEXT NOT NULL,
+      quality_score INTEGER NOT NULL DEFAULT 0,
+      quality_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL CHECK(status IN ('draft','approved','superseded')),
+      created_by INTEGER NOT NULL,
+      approved_by INTEGER,
+      approved_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(work_item_id, revision),
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(crm_draft_id) REFERENCES crm_reply_drafts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_stream_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL,
+      version_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      content_hash TEXT NOT NULL,
+      message_id TEXT NOT NULL UNIQUE,
+      state TEXT NOT NULL CHECK(state IN ('pending','sending','accepted','failed','ambiguous')),
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      error_class TEXT NOT NULL DEFAULT '',
+      redacted_diagnostic TEXT NOT NULL DEFAULT '',
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(version_id) REFERENCES matrix_stream_versions(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_stream_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL,
+      version_id INTEGER,
+      job_id INTEGER,
+      actor_user_id INTEGER,
+      matrix_binding_id INTEGER,
+      chat_id TEXT NOT NULL DEFAULT '',
+      card_event_id TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      content_hash TEXT NOT NULL DEFAULT '',
+      before_json TEXT NOT NULL DEFAULT '{}',
+      after_json TEXT NOT NULL DEFAULT '{}',
+      diagnostic TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_stream_sender_checks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender_domain TEXT NOT NULL,
+      checked_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      spf_ok INTEGER NOT NULL,
+      dkim_ok INTEGER NOT NULL,
+      dmarc_ok INTEGER NOT NULL,
+      tls_ok INTEGER NOT NULL,
+      smtp_ok INTEGER NOT NULL,
+      detail_json TEXT NOT NULL DEFAULT '{}',
+      UNIQUE(sender_domain, checked_at)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_stream_country_policies (
+      country_code TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('approved','paused','blocked')),
+      sender_identity_required INTEGER NOT NULL DEFAULT 1,
+      opt_out_required INTEGER NOT NULL DEFAULT 1,
+      reviewed_by INTEGER NOT NULL,
+      reviewed_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      source_urls_json TEXT NOT NULL,
+      PRIMARY KEY(country_code, channel)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
     BEFORE UPDATE ON matrix_selection_events
@@ -873,11 +966,54 @@ function initDb() {
     BEGIN
       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
     END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_update
+    BEFORE UPDATE ON matrix_stream_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_delete
+    BEFORE DELETE ON matrix_stream_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approved_content_immutable
+    BEFORE UPDATE ON matrix_stream_versions
+    WHEN OLD.status = 'approved' AND (
+      NEW.work_item_id IS NOT OLD.work_item_id OR
+      NEW.crm_draft_id IS NOT OLD.crm_draft_id OR
+      NEW.revision IS NOT OLD.revision OR
+      NEW.recipient_email IS NOT OLD.recipient_email OR
+      NEW.recipient_source_url IS NOT OLD.recipient_source_url OR
+      NEW.recipient_verified_at IS NOT OLD.recipient_verified_at OR
+      NEW.subject IS NOT OLD.subject OR
+      NEW.body_en IS NOT OLD.body_en OR
+      NEW.body_cn IS NOT OLD.body_cn OR
+      NEW.strategy_summary IS NOT OLD.strategy_summary OR
+      NEW.source_snapshot_json IS NOT OLD.source_snapshot_json OR
+      NEW.content_hash IS NOT OLD.content_hash OR
+      NEW.quality_score IS NOT OLD.quality_score OR
+      NEW.quality_json IS NOT OLD.quality_json OR
+      NEW.created_by IS NOT OLD.created_by OR
+      NEW.created_at IS NOT OLD.created_at
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
+    END;
   `);
 
   const sessionColumns = new Set(db.prepare('PRAGMA table_info(matrix_sessions)').all().map(column => column.name));
   if (!sessionColumns.has('snapshot_key')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN snapshot_key TEXT NOT NULL DEFAULT ''");
   if (!sessionColumns.has('candidate_ids_json')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN candidate_ids_json TEXT NOT NULL DEFAULT '[]'");
+
+  const matrixWorkItemColumns = new Set(db.prepare('PRAGMA table_info(matrix_work_items)').all().map(column => column.name));
+  if (!matrixWorkItemColumns.has('stream_state')) db.exec("ALTER TABLE matrix_work_items ADD COLUMN stream_state TEXT NOT NULL DEFAULT 'selected'");
+  if (!matrixWorkItemColumns.has('current_stream_version_id')) db.exec('ALTER TABLE matrix_work_items ADD COLUMN current_stream_version_id INTEGER');
+
+  const matrixReplyDraftColumns = new Set(db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(column => column.name));
+  if (!matrixReplyDraftColumns.has('matrix_work_item_id')) db.exec('ALTER TABLE crm_reply_drafts ADD COLUMN matrix_work_item_id INTEGER');
 
   db.prepare(`
     UPDATE matrix_sessions

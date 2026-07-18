@@ -1,8 +1,10 @@
 {
   "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin", "crm"],
+  "capabilityKeys": ["matrixSend"],
   "defaultsByRole": {
     "super_admin": {
-      "all": true
+      "all": true,
+      "capabilities": { "matrixSend": false }
     },
     "manager": {
       "modules": {
@@ -15,7 +17,8 @@
         "crm": false
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
-      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"]
+      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "capabilities": { "matrixSend": false }
     },
     "foreign_trade_crm_admin": {
       "modules": {
@@ -28,7 +31,8 @@
         "crm": true
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
-      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"]
+      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "capabilities": { "matrixSend": false }
     },
     "costing_user": {
       "modules": {
@@ -41,7 +45,8 @@
         "crm": false
       },
       "ordersStages": [],
-      "boardStages": []
+      "boardStages": [],
+      "capabilities": { "matrixSend": false }
     },
     "freight_user": {
       "modules": {
@@ -54,7 +59,8 @@
         "crm": false
       },
       "ordersStages": [],
-      "boardStages": []
+      "boardStages": [],
+      "capabilities": { "matrixSend": false }
     },
     "ai_sales": {
       "modules": {
@@ -67,7 +73,8 @@
         "crm": false
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
-      "boardStages": []
+      "boardStages": [],
+      "capabilities": { "matrixSend": false }
     },
     "worker_print": {
       "modules": {
@@ -80,7 +87,8 @@
         "crm": false
       },
       "ordersStages": ["印刷"],
-      "boardStages": ["印刷"]
+      "boardStages": ["印刷"],
+      "capabilities": { "matrixSend": false }
     },
     "worker_film": {
       "modules": {
@@ -93,7 +101,8 @@
         "crm": false
       },
       "ordersStages": ["复膜"],
-      "boardStages": ["复膜"]
+      "boardStages": ["复膜"],
+      "capabilities": { "matrixSend": false }
     },
     "worker_bag": {
       "modules": {
@@ -106,7 +115,8 @@
         "crm": false
       },
       "ordersStages": ["制袋"],
-      "boardStages": ["制袋"]
+      "boardStages": ["制袋"],
+      "capabilities": { "matrixSend": false }
     },
     "worker_ship": {
       "modules": {
@@ -119,7 +129,8 @@
         "crm": false
       },
       "ordersStages": ["发货"],
-      "boardStages": ["发货"]
+      "boardStages": ["发货"],
+      "capabilities": { "matrixSend": false }
     },
     "worker": {
       "modules": {
@@ -132,7 +143,8 @@
         "crm": false
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货"],
-      "boardStages": ["印刷", "复膜", "制袋", "发货"]
+      "boardStages": ["印刷", "复膜", "制袋", "发货"],
+      "capabilities": { "matrixSend": false }
     },
     "default": {
       "modules": {
@@ -145,7 +157,8 @@
         "crm": false
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
-      "boardStages": []
+      "boardStages": [],
+      "capabilities": { "matrixSend": false }
     }
   }
 }
