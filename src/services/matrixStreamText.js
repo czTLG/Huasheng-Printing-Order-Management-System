@@ -81,10 +81,20 @@ function priceClaims(value) {
     const amount = normalizedAmount(amountMatch?.[0]);
     if (amount !== null) claims.add(`price:${normalizedCurrency(match[0])}:${amount}`);
   }
-  const priceLanguage = new RegExp(`(?:单价|价格|报价|费用|金额|成本)\\s*(?:为|是|约|：|:)?\\s*(${AMOUNT_PATTERN})(?:\\s*(${CURRENCY_PATTERN}))?`, 'gi');
+  const priceLanguage = new RegExp(`(?:单价|售价|价格|报价|费用|金额|成本)\\s*(?:为|是|约|：|:)?\\s*(${AMOUNT_PATTERN})(?:\\s*(${CURRENCY_PATTERN}))?`, 'gi');
   for (const match of text.matchAll(priceLanguage)) {
     const amount = normalizedAmount(match[1]);
     if (amount !== null) claims.add(`price:${normalizedCurrency(match[2])}:${amount}`);
+  }
+  for (const segment of text.split(/[。；;，,\n]/)) {
+    if (!/(?:单价|售价|价格|报价|费用|金额|成本)/.test(segment)) continue;
+    const amountMatch = segment.match(new RegExp(AMOUNT_PATTERN, 'i'));
+    if (!amountMatch) continue;
+    const normalizedPriceLanguage = new RegExp(`(?:单价|售价|价格|报价|费用|金额|成本)\\s*(?:为|是|约|：|:)?\\s*${AMOUNT_PATTERN}(?:\\s*${CURRENCY_PATTERN})?`, 'i');
+    if (!normalizedPriceLanguage.test(segment)) {
+      const fallback = segment.replace(/\s+/g, '').toLowerCase();
+      if (fallback) claims.add(`price:fallback:${fallback}`);
+    }
   }
   return [...claims];
 }
@@ -93,13 +103,13 @@ function qualificationClaims(value) {
   const text = String(value || '');
   const claims = new Set();
   for (const match of text.matchAll(/\b(ISO)\s*(\d+(?:[-:]\d+)?)?\b/gi)) claims.add(`qualification:iso:${match[2] || 'unspecified'}`);
-  for (const match of text.matchAll(/\b(BRCGS?|FDA|HACCP|GMP|CE)\b/gi)) claims.add(`qualification:${match[1].toLowerCase()}`);
-  if (/食品级/.test(text)) claims.add('qualification:food-grade');
+  for (const match of text.matchAll(/\b(BRCGS?|FDA|HACCP|GMP|CE|ROHS|REACH)\b/gi)) claims.add(`qualification:${match[1].toLowerCase()}`);
+  if (/食品级|\bfood[- ]grade\b/i.test(text)) claims.add('qualification:food-grade');
   if (/(?:欧盟)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:eu');
   if (/(?:有机)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:organic');
   if (/(?:清真)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:halal');
   if (/(?:犹太)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:kosher');
-  for (const match of text.matchAll(/(?:符合|满足|达到)\s*([^。；，,\n]{1,24}?)\s*(?:标准|要求)/g)) {
+  for (const match of text.matchAll(/(?:符合|满足|达到)\s*([^。；，,\n]{1,24}?)\s*(?:标准|规范|要求)/g)) {
     const identifier = match[1].replace(/\s+/g, '').toLowerCase();
     if (identifier && identifier !== '食品级' && identifier !== '欧盟') claims.add(`qualification:requirement:${identifier}`);
   }
@@ -108,6 +118,12 @@ function qualificationClaims(value) {
     const strippedIdentifier = rawIdentifier.replace(/^(?:我们|产品|材料|该产品|已|通过|获得|拥有|具备)+/, '');
     const identifier = strippedIdentifier || rawIdentifier;
     if (identifier && !/(食品级|欧盟|有机|清真|犹太)$/.test(identifier)) claims.add(`qualification:credential:${identifier}`);
+  }
+  for (const segment of text.split(/[。；;，,\n]/)) {
+    if (!/(?:认证|资质|合规|\b(?:compliant|compliance|certified|certification|qualified)\b)/i.test(segment)) continue;
+    if (/\b(?:ISO|BRCGS?|FDA|HACCP|GMP|CE|ROHS|REACH)\b|食品级|\bfood[- ]grade\b|(?:欧盟|有机|清真|犹太)(?:认证|资质|标准|规范|要求)/i.test(segment)) continue;
+    const fallback = segment.replace(/\s+/g, '').toLowerCase();
+    if (fallback) claims.add(`qualification:fallback:${fallback}`);
   }
   return [...claims];
 }
