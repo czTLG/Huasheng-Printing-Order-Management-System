@@ -2,6 +2,7 @@
 
 const { parse: parseDomain } = require('tldts');
 const { isNonAssertionRequest, splitSentences } = require('./matrixStreamText');
+const { extractOntologyFacts } = require('./matrixStreamOntology');
 
 const MAXIMUMS = Object.freeze({
   product_match: 20,
@@ -40,7 +41,6 @@ const CLAIM_SEMANTICS = Object.freeze({
   unsupported_delivery: /(?:delivery|arrival|shipping|交付|到货|发货)/iu,
   unsupported_lead_time: /(?:lead[ -]?time|交期|生产周期)/iu
 });
-const ASSERTION = /(?:\b(?:is|are|has|have|guaranteed|fixed|proven|approved|certified|officially|official|authorized|exclusive|we\s+supply)\b|(?:为|是|有保证|保证|固定|已|通过|正式|官方|授权|独家|供应))/iu;
 
 function unsupportedClaims(input) {
   const output = claimKeys([input.subject, input.bodyEn, input.bodyCn]);
@@ -52,10 +52,11 @@ function claimKeys(values) {
   const keys = [];
   for (const value of values) {
     for (const raw of splitSentences(value)) {
-      if (isNonAssertionRequest(raw)) continue;
+      if (isNonAssertionRequest(raw) || /^(?:we (?:would like|want) to discuss)\b/i.test(raw)
+          || (/(?:希望|想要)(?:沟通|了解)/u.test(raw) && !/(?:为|是|保证|固定|已|正式|官方|授权|独家)/u.test(raw))) continue;
       const statement = normalizeTextNumbers(raw).replace(/[。.!?！？]+$/u, '').trim();
       for (const [type, semantic] of Object.entries(CLAIM_SEMANTICS)) {
-        if (semantic.test(statement) && ASSERTION.test(statement)) keys.push(`${type}:${compact(statement)}`);
+        if (semantic.test(statement)) keys.push(`${type}:${compact(statement)}`);
       }
     }
   }
@@ -109,40 +110,52 @@ const QUESTION_INTENTS = Object.freeze([
 ]);
 
 function numericSpecs(text) {
-  return [...normalizeTextNumbers(text).matchAll(/\b\d+(?:[.,]\d+)?\s*(?:g|kg|克|公斤|mm|cm|毫米|厘米)\b/giu)]
-    .map(match => compact(match[0]).replace('克', 'g').replace('公斤', 'kg'));
+  const value = normalizeTextNumbers(text);
+  const facts = [];
+  for (const match of value.matchAll(/\b(\d+(?:[.,]\d+)?)\s*(kg|g|公斤|克)\b/giu)) facts.push(`weight:${canonicalUnit(match[1], match[2])}`);
+  for (const match of value.matchAll(/\b(\d+(?:[.,]\d+)?)\s*(cm|mm|厘米|毫米|microns?|um|μm|微米)\b/giu)) facts.push(`length:${canonicalUnit(match[1], match[2])}`);
+  return facts;
 }
 
-const CONTROLLED_FACTS = Object.freeze({
-  color: [['red', /\bred\b/i, /红/u], ['blue', /\bblue\b/i, /蓝/u], ['black', /\bblack\b/i, /黑/u], ['white', /\bwhite\b/i, /白/u], ['green', /\bgreen\b/i, /绿/u]],
-  material: [['pet', /\bpet\b/i, /聚酯|PET/iu], ['pe', /\bpe\b/i, /聚乙烯|PE/iu], ['kraft', /\bkraft\b/i, /牛皮纸/u], ['aluminum', /alumin(?:um|ium)\s*foil/i, /铝箔/u]],
-  bag_type: [['valve_pouch', /valve\s+pouch/i, /带阀袋/u], ['stand_up_pouch', /stand[ -]?up\s+pouch/i, /自立袋/u], ['flat_bottom', /flat[ -]?bottom/i, /方底/u], ['spout_pouch', /spout\s+pouch/i, /吸嘴袋/u]]
-});
+function canonicalUnit(number, unit) {
+  const amount = Number(String(number).replace(/,/g, ''));
+  const key = String(unit || '').toLowerCase();
+  const converted = key === 'kg' || key === '公斤' ? amount * 1000
+      : key === 'cm' || key === '厘米' ? amount * 10
+        : /micron|um|μm|微米/i.test(key) ? amount / 1000
+      : key === 'mm' || key === '毫米' ? amount
+          : amount;
+  const suffix = /kg|g|公斤|克/i.test(key) ? 'g' : 'mm';
+  return `${Number(converted.toFixed(6))}${suffix}`;
+}
+
+function isoDate(value) {
+  const text = normalizeTextNumbers(value);
+  let match = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/u) || text.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (match) return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+  match = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})\b/i);
+  if (!match) return null;
+  const month = ['january','february','march','april','may','june','july','august','september','october','november','december'].indexOf(match[1].toLowerCase()) + 1;
+  return `${match[3]}-${String(month).padStart(2, '0')}-${String(match[2]).padStart(2, '0')}`;
+}
 
 function bilingualFacts(text, language) {
   const value = normalizeTextNumbers(text);
   const facts = {};
   const add = (role, item) => { if (item !== undefined) (facts[role] ||= new Set()).add(String(item).toLowerCase()); };
-  const patterns = language === 'en' ? {
-    annual_volume: /annual\s+(?:volume|quantity)[^\d]{0,16}(\d[\d,.]*)/gi,
-    quantity: /(?:quantity|volume)[^\d]{0,16}(\d[\d,.]*)/gi,
-    thickness: /thickness[^\d]{0,12}(\d+(?:\.\d+)?\s*(?:micron|um|μm|mm)?)/gi,
-    lead_time: /lead[ -]?time[^\d]{0,16}(\d+(?:\.\d+)?\s*(?:day|week|month)s?)/gi,
-    percent: /(\d+(?:\.\d+)?%)/g,
-    date: /\b(\d{4}-\d{1,2}-\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2})\b/gi
-  } : {
-    annual_volume: /年(?:用量|需求|数量)[^\d]{0,8}(\d[\d,.]*)/gu,
-    quantity: /(?:数量|用量)[^\d]{0,8}(\d[\d,.]*)/gu,
-    thickness: /厚度[^\d]{0,8}(\d+(?:\.\d+)?\s*(?:微米|丝|毫米|mm)?)/giu,
-    lead_time: /(?:交期|生产周期)[^\d]{0,8}(\d+(?:\.\d+)?\s*(?:天|周|个月|月))/gu,
-    percent: /(\d+(?:\.\d+)?%)/g,
-    date: /(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{1,2}-\d{1,2})/gu
-  };
-  for (const [role, pattern] of Object.entries(patterns)) for (const match of value.matchAll(pattern)) add(role, compact(match[1]));
-  for (const spec of numericSpecs(value)) add('size', spec);
-  for (const [role, entries] of Object.entries(CONTROLLED_FACTS)) {
-    for (const [name, en, cn] of entries) if ((language === 'en' ? en : cn).test(value)) add(role, name);
+  const annual = language === 'en' ? /annual\s+(?:volume|quantity)\s*(?:is|:)?\s*(\d[\d,.]*)/gi : /年(?:用量|需求|数量)\s*(?:为|是|约|:|：)\s*(\d[\d,.]*)/gu;
+  for (const match of value.matchAll(annual)) add('annual_volume', Number(match[1].replace(/,/g, '')));
+  const thickness = language === 'en' ? /thickness[^\d]{0,12}(\d+(?:\.\d+)?)\s*(microns?|um|μm|mm)/gi : /厚度[^\d]{0,8}(\d+(?:\.\d+)?)\s*(微米|毫米|mm)/giu;
+  for (const match of value.matchAll(thickness)) {
+    add('thickness', canonicalUnit(match[1], match[2]));
   }
+  const weight = language === 'en' ? /(?:weight|sample\s+weight)[^\d]{0,12}(\d+(?:\.\d+)?)\s*(kg|g)/gi : /重量[^\d]{0,8}(\d+(?:\.\d+)?)\s*(公斤|克|kg|g)/giu;
+  for (const match of value.matchAll(weight)) add('weight', canonicalUnit(match[1], match[2]));
+  const size = language === 'en' ? /size[^\d]{0,12}(\d+(?:\.\d+)?)\s*(cm|mm)/gi : /尺寸[^\d]{0,8}(\d+(?:\.\d+)?)\s*(厘米|毫米|cm|mm)/giu;
+  for (const match of value.matchAll(size)) add('size_dimension', canonicalUnit(match[1], match[2]));
+  for (const match of value.matchAll(/(\d+(?:\.\d+)?)%/g)) add('percent', Number(match[1]));
+  const date = isoDate(value); if (date) add('date', date);
+  for (const [role, items] of Object.entries(extractOntologyFacts(value, language))) for (const item of items) add(role, item);
   return Object.fromEntries(Object.entries(facts).map(([role, items]) => [role, [...items].sort()]));
 }
 
@@ -152,6 +165,21 @@ function alignedFacts(bodyEn, bodyCn) {
   const roles = new Set([...Object.keys(en), ...Object.keys(cn)]);
   const conflicts = [...roles].filter(role => JSON.stringify(en[role] || []) !== JSON.stringify(cn[role] || []));
   return { aligned: conflicts.length === 0, conflicts };
+}
+
+function unsupportedProductFacts(bodyEn, bodyCn, evidence) {
+  const bodyFacts = [bilingualFacts(bodyEn, 'en'), bilingualFacts(bodyCn, 'cn')];
+  const evidenceText = [
+    ...(Array.isArray(evidence.products) ? evidence.products : []),
+    evidence.entryProduct || '',
+    ...(Array.isArray(evidence.supportedClaims) ? evidence.supportedClaims : [])
+  ].join('\n');
+  const evidenceFacts = [bilingualFacts(evidenceText, 'en'), bilingualFacts(evidenceText, 'cn')];
+  for (const facts of bodyFacts) for (const [role, values] of Object.entries(facts)) {
+    const supported = new Set(evidenceFacts.flatMap(item => item[role] || []));
+    if (values.some(value => !supported.has(value))) return true;
+  }
+  return false;
 }
 
 function questionIntents(text, language) {
@@ -246,6 +274,7 @@ function scoreDraft(input = {}) {
   const hardFailures = unsupportedClaims(input);
   const factAlignment = alignedFacts(bodyEn, bodyCn);
   if (!factAlignment.aligned) hardFailures.push('bilingual_key_fact_conflict');
+  if (unsupportedProductFacts(bodyEn, bodyCn, evidence)) hardFailures.push('unsupported_product_fact');
   if (!provenanceOk) hardFailures.push('invalid_recipient_provenance');
   return { score, passed: score >= 80 && hardFailures.length === 0, components, hardFailures };
 }
@@ -386,4 +415,4 @@ function evaluateInitialContact(db, input = {}) {
   }
 }
 
-module.exports = { MAXIMUMS, scoreDraft, evaluateInitialContact };
+module.exports = { MAXIMUMS, scoreDraft, evaluateInitialContact, extractBilingualFacts: bilingualFacts };

@@ -1,0 +1,40 @@
+'use strict';
+
+const ONTOLOGY = Object.freeze({
+  material: [
+    ['pet', /\bpet\b/i, /(?:PET|聚酯)/iu], ['pe', /\bpe\b/i, /(?:PE|聚乙烯)/iu],
+    ['nylon', /\b(?:pa|ny|nylon)\b/i, /(?:PA|NY|尼龙)/iu], ['evoh', /\bevoh\b/i, /EVOH/iu],
+    ['aluminum', /\b(?:al|aluminum\s*foil)\b/i, /(?:AL|铝箔)/iu], ['vmpet', /\bvmpet\b/i, /VMPET/iu],
+    ['cpp', /\bcpp\b/i, /CPP/iu]
+  ],
+  finish: [['matte', /\b(?:matte|matt)\b/i, /(?:哑光|磨砂)/u], ['glossy', /\b(?:glossy|gloss)\b/i, /(?:亮光|光面)/u]],
+  color: [
+    ['red', /\bred\b/i, /红/u], ['orange', /\borange\b/i, /橙/u], ['yellow', /\byellow\b/i, /黄/u],
+    ['green', /\bgreen\b/i, /绿/u], ['blue', /\bblue\b/i, /蓝/u], ['purple', /\bpurple\b/i, /紫/u],
+    ['black', /\bblack\b/i, /黑/u], ['white', /\bwhite\b/i, /白/u], ['gray', /\bgr[ae]y\b/i, /灰/u],
+    ['brown', /\bbrown\b/i, /棕|褐/u], ['pink', /\bpink\b/i, /粉/u]
+  ],
+  bag_type: [
+    ['valve_pouch', /valve\s+pouch/i, /带阀袋/u], ['stand_up_pouch', /stand[ -]?up\s+pouch/i, /自立袋/u],
+    ['flat_bottom', /flat[ -]?bottom/i, /方底袋/u], ['spout_pouch', /spout\s+pouch/i, /吸嘴袋/u],
+    ['three_side_seal', /three[ -]?side[ -]?seal/i, /三边封/u]
+  ]
+});
+
+function extractOntologyFacts(text, language) {
+  const value = String(text || '').normalize('NFKC');
+  const facts = {};
+  const add = (role, item) => { (facts[role] ||= new Set()).add(item); };
+  for (const [role, entries] of Object.entries(ONTOLOGY)) {
+    for (const [name, en, cn] of entries) if ((language === 'en' ? en : cn).test(value)) add(role, name);
+  }
+  const absentZipper = language === 'en' ? /\b(?:no|without)\s+zipper\b/i.test(value) : /(?:无|不带|没有)拉链/u.test(value);
+  const presentZipper = language === 'en' ? /\b(?:has?|with)\s+(?:a\s+)?zipper\b/i.test(value) : /(?:带有?|有)拉链/u.test(value);
+  if (absentZipper) add('zipper', 'absent'); else if (presentZipper) add('zipper', 'present');
+  const absentValve = language === 'en' ? /\b(?:no|without)\s+valve\b/i.test(value) : /(?:无|不带|没有)阀/u.test(value);
+  const presentValve = language === 'en' ? /\b(?:has?|with)\s+(?:a\s+)?valve\b|valve\s+pouch/i.test(value) : /(?:带有?|有)阀|带阀袋/u.test(value);
+  if (absentValve) add('valve', 'absent'); else if (presentValve) add('valve', 'present');
+  return Object.fromEntries(Object.entries(facts).map(([role, items]) => [role, [...items].sort()]));
+}
+
+module.exports = { ONTOLOGY, extractOntologyFacts };

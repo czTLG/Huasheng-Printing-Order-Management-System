@@ -67,6 +67,13 @@ DONE_WITH_CONCERNS
 - CRM id RED: a null standalone message customer id became `[0]`. GREEN: only non-empty positive integer ids are returned.
 - Reply-check replay RED: replaying a closed originating job rewrote a newer manual work-item action/due/update time. GREEN: any existing active or closed row returns immediately with no database write; a full before/after work-item equality assertion covers the closed replay.
 
+## R4 review repair
+
+- Sensitive boundary RED: all six categories bypassed evidence as field-style values (`Price:`, `Certification:`, `Supplier:`, `Barrier performance:`, `Delivery:`, `Lead time:`), as did modal and Chinese no-colon variants. GREEN: after the reviewed safe-request classifier, any sentence containing a sensitive semantic category is evidence-gated without an assertion-marker allowlist. Complete normalized statements remain the collision-proof evidence key; identical English/Chinese textual-number evidence is accepted.
+- Ontology RED: matte/glossy, zipper/no-zipper, nylon/EVOH, yellow/purple, and stand-up/flat-bottom contradictions were invisible. GREEN: a separate auditable ontology centralizes PET/PE/PA/NY/nylon/EVOH/AL/VMPET/CPP materials, matte/glossy surfaces, zipper/valve positive and negative states, basic bilingual colors, and common bag types. Mutual-role differences force zero bilingual points and a hard conflict; extracted draft facts must also exist in products, entry-product, or supported-claim evidence.
+- Canonical values RED: equivalent units and dates compared as source tokens. GREEN: weights normalize to grams, dimensions/thickness to millimetres, percentages to numeric values, and full English/Chinese dates to ISO. `100 micron = 0.1毫米`, `0.25kg = 250克`, `10cm = 100毫米`, and `July 20, 2026 = 2026年7月20日` stay aligned while real value differences fail.
+- Regression matrix: all earlier quality, identity, readiness, policy, follow-up, provenance, exact-claim, textual-number, and replay tests remain green together with table-driven ontology and six-category variants.
+
 ## Concerns
 
 - Similar-name matching is deliberately narrow and deterministic. Names outside the normalized legal-suffix equivalence require an explicit alias from the reviewed candidate context; aliases only produce `possible_duplicate_review`.

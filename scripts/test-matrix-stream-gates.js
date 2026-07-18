@@ -155,6 +155,46 @@ for (const [claim, evidence, failure] of [
   const result = scoreDraft({ ...base, bodyEn: claim, evidence: { ...base.evidence, supportedClaims: [evidence] } });
   assert.ok(!result.hardFailures.includes(failure), `${claim} textual number must normalize exactly`);
 }
+for (const [claim, failure] of [
+  ['Price: USD 0.05.', 'unsupported_price'], ['Certification: FDA.', 'unsupported_certification'],
+  ['Supplier: Brand A.', 'unsupported_supplier'], ['Barrier performance: excellent.', 'unsupported_performance'],
+  ['Delivery: prompt.', 'unsupported_delivery'], ['Lead time: flexible.', 'unsupported_lead_time'],
+  ['We can guarantee delivery.', 'unsupported_delivery'], ['价格 USD 0.05。', 'unsupported_price'],
+  ['认证 FDA。', 'unsupported_certification'], ['供应商 品牌A。', 'unsupported_supplier'],
+  ['阻隔性能 优秀。', 'unsupported_performance'], ['交付 及时。', 'unsupported_delivery'],
+  ['交期 灵活。', 'unsupported_lead_time']
+]) {
+  const result = scoreDraft({ ...base, bodyEn: claim, evidence: { ...base.evidence, supportedClaims: [] } });
+  assert.ok(result.hardFailures.includes(failure), `${claim} semantic category must be evidence-gated`);
+  const supported = scoreDraft({ ...base, bodyEn: claim, evidence: { ...base.evidence, supportedClaims: [claim] } });
+  assert.ok(!supported.hardFailures.includes(failure));
+}
+
+for (const [englishFact, chineseFact, evidenceFacts] of [
+  ['Material is nylon.', '材料为EVOH。', ['nylon', 'EVOH']],
+  ['Finish is matte.', '表面为亮光。', ['matte', '亮光']],
+  ['The pouch has a zipper.', '袋子不带拉链。', ['zipper', '不带拉链']],
+  ['The color is yellow.', '颜色为紫色。', ['yellow', '紫色']],
+  ['Use a stand-up pouch.', '使用方底袋。', ['stand-up pouch', '方底袋']]
+]) {
+  const result = scoreDraft({
+    ...base,
+    bodyEn: `${base.bodyEn}\n${englishFact}`,
+    bodyCn: `${base.bodyCn}\n${chineseFact}`,
+    evidence: { ...base.evidence, supportedClaims: evidenceFacts }
+  });
+  assert.strictEqual(result.components.bilingual_consistency.points, 0, `${englishFact}/${chineseFact}`);
+  assert.ok(result.hardFailures.includes('bilingual_key_fact_conflict'));
+}
+
+const canonicalUnits = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nThickness is 100 micron, sample weight is 0.25kg, size is 10cm, target is 50%, date is July 20, 2026.`,
+  bodyCn: `${base.bodyCn}\n厚度为0.1毫米，样品重量为250克，尺寸为100毫米，目标为50%，日期为2026年7月20日。`,
+  evidence: { ...base.evidence, supportedClaims: ['100 micron', '0.1毫米', '0.25kg', '250克', '10cm', '100毫米', '50%', 'July 20, 2026', '2026年7月20日'] }
+});
+assert.strictEqual(canonicalUnits.components.bilingual_consistency.points, 10);
+assert.ok(!canonicalUnits.hardFailures.includes('bilingual_key_fact_conflict'));
 
 const { evaluateInitialContact } = require('../src/services/matrixStreamGate');
 const db = new Database(':memory:');
