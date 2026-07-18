@@ -24,6 +24,10 @@ function contentHash(value) {
   })).digest('hex');
 }
 
+function requestFingerprint(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
 function validateRecipient(input, nowValue = new Date()) {
   const recipient = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const email = normalizeEmail(recipient.email);
@@ -73,43 +77,104 @@ function versionById(db, versionId) {
   return db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ?').get(versionId) || null;
 }
 
-function validateStoredRecipient(version) {
-  return validateRecipient({
+function hostnameMatchesDomain(hostname, domain) {
+  const host = String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
+  const normalizedDomain = String(domain || '').trim().toLowerCase().replace(/^www\./, '');
+  return !!normalizedDomain && (host === normalizedDomain || host.endsWith(`.${normalizedDomain}`));
+}
+
+function checkedRecipientEvidence(db, { workItemId, recipient, evidenceId } = {}) {
+  const normalized = validateRecipient(recipient);
+  const rows = evidenceId
+    ? [db.prepare('SELECT * FROM matrix_stream_recipient_evidence WHERE id = ?').get(evidenceId)].filter(Boolean)
+    : db.prepare(`
+      SELECT * FROM matrix_stream_recipient_evidence
+      WHERE work_item_id = ? AND lower(recipient_email) = ? AND status = 'active'
+      ORDER BY id DESC
+    `).all(workItemId, normalized.email);
+  const evidence = rows.find(row => {
+    if (row.work_item_id !== workItemId || row.status !== 'active') return false;
+    let evidenceSource;
+    try {
+      evidenceSource = new URL(row.source_url);
+    } catch (_) {
+      return false;
+    }
+    const emailDomain = normalized.email.split('@')[1];
+    const verifiedAt = Date.parse(row.verified_at);
+    return normalizeEmail(row.recipient_email) === normalized.email
+      && evidenceSource.toString() === normalized.sourceUrl
+      && new Date(verifiedAt).toISOString() === normalized.verifiedAt
+      && hostnameMatchesDomain(emailDomain, row.organization_domain)
+      && hostnameMatchesDomain(evidenceSource.hostname, row.organization_domain);
+  });
+  if (!evidence) throw new Error('trusted recipient evidence binding required');
+  let snapshot;
+  try {
+    snapshot = JSON.parse(evidence.snapshot_json);
+  } catch (_) {
+    throw new Error('trusted recipient evidence snapshot invalid');
+  }
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
+      || String(snapshot.organization_domain || '').toLowerCase() !== String(evidence.organization_domain).toLowerCase()
+      || normalizeEmail(snapshot.recipient_email) !== normalized.email
+      || String(snapshot.source_url || '') !== normalized.sourceUrl) {
+    throw new Error('trusted recipient evidence snapshot binding invalid');
+  }
+  return { recipient: normalized, evidence, snapshot };
+}
+
+function validateStoredRecipient(db, version) {
+  return checkedRecipientEvidence(db, {
+    workItemId: version.work_item_id,
+    evidenceId: version.recipient_evidence_id,
+    recipient: {
     email: version.recipient_email,
     sourceUrl: version.recipient_source_url,
     verifiedAt: version.recipient_verified_at,
     kind: 'public_company'
+    }
   });
 }
 
-function ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion) {
+function activeOwnedWorkItem(db, workItemId, actorUserId) {
   const actor = db.prepare('SELECT id, status FROM users WHERE id = ?').get(actorUserId);
   if (!actor || actor.status !== 'active') throw new Error('actor is not active');
   const item = db.prepare('SELECT * FROM matrix_work_items WHERE id = ?').get(workItemId);
   if (!item || item.owner_user_id !== actorUserId) throw new Error('not authorized');
   if (item.stage === 'suppressed' || item.stream_state === 'suppressed') throw new Error('work item is suppressed');
+  return item;
+}
+
+function ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion) {
+  const item = activeOwnedWorkItem(db, workItemId, actorUserId);
   if (item.version !== expectedWorkVersion) throw new Error('stale work version');
   return item;
 }
 
-function replay(db, idempotencyKey, actorUserId) {
+function replay(db, { idempotencyKey, actorUserId, workItemId, action, fingerprint }) {
   const event = db.prepare('SELECT * FROM matrix_stream_events WHERE idempotency_key = ?').get(idempotencyKey);
   if (!event) return null;
-  if (event.actor_user_id !== actorUserId) throw new Error('not authorized');
+  activeOwnedWorkItem(db, workItemId, actorUserId);
+  if (event.actor_user_id !== actorUserId || event.work_item_id !== workItemId
+      || event.action !== action || event.request_fingerprint !== fingerprint) {
+    throw new Error('idempotency request fingerprint or scope mismatch');
+  }
   const after = JSON.parse(event.after_json || '{}');
   const version = versionById(db, after.version_id || event.version_id);
-  if (!version) throw new Error('recorded version not found');
+  if (!version || version.work_item_id !== workItemId) throw new Error('recorded version scope mismatch');
+  validateStoredRecipient(db, version);
   return version;
 }
 
-function addEvent(db, { workItemId, versionId, actorUserId, action, idempotencyKey, contentHash: hash, before, after, at }) {
+function addEvent(db, { workItemId, versionId, actorUserId, action, idempotencyKey, fingerprint, contentHash: hash, before, after, at }) {
   db.prepare(`
     INSERT INTO matrix_stream_events (
       work_item_id, version_id, actor_user_id, action, idempotency_key,
-      content_hash, before_json, after_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      request_fingerprint, content_hash, before_json, after_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    workItemId, versionId, actorUserId, action, idempotencyKey, hash,
+    workItemId, versionId, actorUserId, action, idempotencyKey, fingerprint, hash,
     JSON.stringify(before || {}), JSON.stringify(after || {}), at
   );
 }
@@ -119,16 +184,24 @@ function createInitialVersion(db, input = {}) {
   const workItemId = positiveInteger(input.workItemId, 'work item id');
   const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
   const idempotencyKey = requiredKey(input.idempotencyKey);
+  const normalizedRecipient = validateRecipient(input.recipient);
+  const subject = requiredText(input.subject, 'subject');
+  const bodyEn = requiredText(input.bodyEn, 'English body');
+  const bodyCn = requiredText(input.bodyCn, 'Chinese body');
+  const strategySummary = String(input.strategySummary || '').trim();
+  const sourceSnapshotInput = input.sourceSnapshot && typeof input.sourceSnapshot === 'object' && !Array.isArray(input.sourceSnapshot)
+    ? input.sourceSnapshot : {};
+  const fingerprint = requestFingerprint({
+    action: 'created', actorUserId, workItemId, expectedWorkVersion,
+    recipient: normalizedRecipient, subject, bodyEn, bodyCn, strategySummary, sourceSnapshot: sourceSnapshotInput
+  });
   const transaction = db.transaction(() => {
-    const previous = replay(db, idempotencyKey, actorUserId);
+    const previous = replay(db, { idempotencyKey, actorUserId, workItemId, action: 'created', fingerprint });
     if (previous) return previous;
     ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
-    const recipient = validateRecipient(input.recipient);
-    const subject = requiredText(input.subject, 'subject');
-    const bodyEn = requiredText(input.bodyEn, 'English body');
-    const bodyCn = requiredText(input.bodyCn, 'Chinese body');
-    const sourceSnapshot = input.sourceSnapshot && typeof input.sourceSnapshot === 'object' && !Array.isArray(input.sourceSnapshot)
-      ? input.sourceSnapshot : {};
+    const evidenceBinding = checkedRecipientEvidence(db, { workItemId, recipient: normalizedRecipient });
+    const recipient = evidenceBinding.recipient;
+    const sourceSnapshot = evidenceBinding.snapshot;
     const hash = contentHash({
       recipientEmail: recipient.email,
       recipientSourceUrl: recipient.sourceUrl,
@@ -139,13 +212,13 @@ function createInitialVersion(db, input = {}) {
     const at = timestamp();
     const inserted = db.prepare(`
       INSERT INTO matrix_stream_versions (
-        work_item_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
+        work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
         subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
         status, created_by, created_at, updated_at
-      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
     `).run(
-      workItemId, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
-      subject, bodyEn, bodyCn, String(input.strategySummary || '').trim(), JSON.stringify(sourceSnapshot),
+      workItemId, evidenceBinding.evidence.id, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
+      subject, bodyEn, bodyCn, strategySummary, JSON.stringify(sourceSnapshot),
       hash, actorUserId, at, at
     );
     const versionId = Number(inserted.lastInsertRowid);
@@ -158,7 +231,7 @@ function createInitialVersion(db, input = {}) {
     if (updated.changes !== 1) throw new Error('stale work version');
     const result = versionById(db, versionId);
     addEvent(db, {
-      workItemId, versionId, actorUserId, action: 'created', idempotencyKey,
+      workItemId, versionId, actorUserId, action: 'created', idempotencyKey, fingerprint,
       contentHash: hash, before: {}, after: { version_id: versionId, revision: 1, status: result.status }, at
     });
     return result;
@@ -174,15 +247,25 @@ function approveVersion(db, input = {}) {
   const idempotencyKey = requiredKey(input.idempotencyKey);
   const expectedContentHash = String(input.expectedContentHash || '').trim();
   if (!expectedContentHash) throw new Error('expected content hash required');
+  const fingerprint = requestFingerprint({
+    action: 'approved', actorUserId, workItemId, versionId, expectedWorkVersion, expectedContentHash
+  });
   const transaction = db.transaction(() => {
-    const previous = replay(db, idempotencyKey, actorUserId);
+    const previous = replay(db, { idempotencyKey, actorUserId, workItemId, action: 'approved', fingerprint });
     if (previous) return previous;
     ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
     const version = versionById(db, versionId);
     if (!version || version.work_item_id !== workItemId) throw new Error('version not found');
     if (version.status !== 'draft') throw new Error('version is not a draft');
-    if (version.content_hash !== expectedContentHash) throw new Error('content hash mismatch');
-    validateStoredRecipient(version);
+    const canonicalHash = contentHash({
+      recipientEmail: version.recipient_email,
+      recipientSourceUrl: version.recipient_source_url,
+      subject: version.subject,
+      bodyEn: version.body_en,
+      bodyCn: version.body_cn
+    });
+    if (version.content_hash !== canonicalHash || expectedContentHash !== canonicalHash) throw new Error('content hash mismatch');
+    validateStoredRecipient(db, version);
     const at = timestamp();
     const changed = db.prepare(`
       UPDATE matrix_stream_versions
@@ -199,7 +282,7 @@ function approveVersion(db, input = {}) {
     if (updated.changes !== 1) throw new Error('stale work version');
     const result = versionById(db, versionId);
     addEvent(db, {
-      workItemId, versionId, actorUserId, action: 'approved', idempotencyKey,
+      workItemId, versionId, actorUserId, action: 'approved', idempotencyKey, fingerprint,
       contentHash: result.content_hash, before: { status: version.status },
       after: { version_id: versionId, revision: result.revision, status: result.status }, at
     });
@@ -214,17 +297,20 @@ function reviseVersion(db, input = {}) {
   const baseVersionId = positiveInteger(input.baseVersionId, 'base version id');
   const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
   const idempotencyKey = requiredKey(input.idempotencyKey);
+  const subject = requiredText(input.subject, 'subject');
+  const bodyEn = requiredText(input.bodyEn, 'English body');
+  const bodyCn = requiredText(input.bodyCn, 'Chinese body');
+  const fingerprint = requestFingerprint({
+    action: 'revised', actorUserId, workItemId, baseVersionId, expectedWorkVersion, subject, bodyEn, bodyCn
+  });
   const transaction = db.transaction(() => {
-    const previous = replay(db, idempotencyKey, actorUserId);
+    const previous = replay(db, { idempotencyKey, actorUserId, workItemId, action: 'revised', fingerprint });
     if (previous) return previous;
     ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
     const base = versionById(db, baseVersionId);
     if (!base || base.work_item_id !== workItemId) throw new Error('base version not found');
     if (!['draft', 'approved'].includes(base.status)) throw new Error('base version cannot be revised');
-    validateStoredRecipient(base);
-    const subject = requiredText(input.subject, 'subject');
-    const bodyEn = requiredText(input.bodyEn, 'English body');
-    const bodyCn = requiredText(input.bodyCn, 'Chinese body');
+    validateStoredRecipient(db, base);
     const hash = contentHash({
       recipientEmail: base.recipient_email,
       recipientSourceUrl: base.recipient_source_url,
@@ -242,12 +328,12 @@ function reviseVersion(db, input = {}) {
     `).run(at, baseVersionId);
     const inserted = db.prepare(`
       INSERT INTO matrix_stream_versions (
-        work_item_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
+        work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
         subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
         status, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
     `).run(
-      workItemId, nextRevision, base.recipient_email, base.recipient_source_url, base.recipient_verified_at,
+      workItemId, base.recipient_evidence_id, nextRevision, base.recipient_email, base.recipient_source_url, base.recipient_verified_at,
       subject, bodyEn, bodyCn, base.strategy_summary, base.source_snapshot_json, hash, actorUserId, at, at
     );
     const versionId = Number(inserted.lastInsertRowid);
@@ -260,7 +346,7 @@ function reviseVersion(db, input = {}) {
     if (updated.changes !== 1) throw new Error('stale work version');
     const result = versionById(db, versionId);
     addEvent(db, {
-      workItemId, versionId, actorUserId, action: 'revised', idempotencyKey,
+      workItemId, versionId, actorUserId, action: 'revised', idempotencyKey, fingerprint,
       contentHash: hash, before: { version_id: base.id, revision: base.revision, status: base.status },
       after: { version_id: versionId, revision: result.revision, status: result.status }, at
     });

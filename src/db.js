@@ -858,10 +858,27 @@ function initDb() {
       FOREIGN KEY(actor_user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL,
+      organization_domain TEXT NOT NULL,
+      recipient_email TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      verified_at TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked')),
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(work_item_id, recipient_email, source_url, verified_at),
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
       crm_draft_id INTEGER,
+      recipient_evidence_id INTEGER,
       revision INTEGER NOT NULL,
       recipient_email TEXT NOT NULL,
       recipient_source_url TEXT NOT NULL,
@@ -914,6 +931,7 @@ function initDb() {
       card_event_id TEXT NOT NULL DEFAULT '',
       action TEXT NOT NULL,
       idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL DEFAULT '',
       content_hash TEXT NOT NULL DEFAULT '',
       before_json TEXT NOT NULL DEFAULT '{}',
       after_json TEXT NOT NULL DEFAULT '{}',
@@ -952,6 +970,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
 
@@ -979,46 +998,31 @@ function initDb() {
       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
     END;
 
-    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;
-    CREATE TRIGGER trg_matrix_stream_versions_approved_content_immutable
-    BEFORE UPDATE ON matrix_stream_versions
-    WHEN OLD.status IN ('approved', 'superseded') AND (
-      NEW.work_item_id IS NOT OLD.work_item_id OR
-      NEW.crm_draft_id IS NOT OLD.crm_draft_id OR
-      NEW.revision IS NOT OLD.revision OR
-      NEW.recipient_email IS NOT OLD.recipient_email OR
-      NEW.recipient_source_url IS NOT OLD.recipient_source_url OR
-      NEW.recipient_verified_at IS NOT OLD.recipient_verified_at OR
-      NEW.subject IS NOT OLD.subject OR
-      NEW.body_en IS NOT OLD.body_en OR
-      NEW.body_cn IS NOT OLD.body_cn OR
-      NEW.strategy_summary IS NOT OLD.strategy_summary OR
-      NEW.source_snapshot_json IS NOT OLD.source_snapshot_json OR
-      NEW.content_hash IS NOT OLD.content_hash OR
-      NEW.quality_score IS NOT OLD.quality_score OR
-      NEW.quality_json IS NOT OLD.quality_json OR
-      NEW.created_by IS NOT OLD.created_by OR
-      NEW.approved_by IS NOT OLD.approved_by OR
-      NEW.approved_at IS NOT OLD.approved_at OR
-      NEW.created_at IS NOT OLD.created_at
-    )
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_identity_immutable
+    BEFORE UPDATE ON matrix_stream_recipient_evidence
+    WHEN NEW.work_item_id IS NOT OLD.work_item_id
+      OR NEW.organization_domain IS NOT OLD.organization_domain
+      OR NEW.recipient_email IS NOT OLD.recipient_email
+      OR NEW.source_url IS NOT OLD.source_url
+      OR NEW.verified_at IS NOT OLD.verified_at
+      OR NEW.snapshot_json IS NOT OLD.snapshot_json
+      OR NEW.created_by IS NOT OLD.created_by
+      OR NEW.created_at IS NOT OLD.created_at
     BEGIN
-      SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
+      SELECT RAISE(ABORT, 'matrix_stream_recipient_evidence identity is immutable');
     END;
 
-    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approved_no_delete
-    BEFORE DELETE ON matrix_stream_versions
-    WHEN OLD.status IN ('approved', 'superseded')
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_no_delete
+    BEFORE DELETE ON matrix_stream_recipient_evidence
     BEGIN
-      SELECT RAISE(ABORT, 'approved matrix_stream_versions evidence is immutable');
+      SELECT RAISE(ABORT, 'matrix_stream_recipient_evidence is immutable');
     END;
 
-    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approval_lifecycle
-    BEFORE UPDATE OF status ON matrix_stream_versions
-    WHEN (OLD.status = 'approved' AND NEW.status NOT IN ('approved', 'superseded'))
-      OR (OLD.status = 'superseded' AND NEW.status != 'superseded')
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_status_lifecycle
+    BEFORE UPDATE OF status ON matrix_stream_recipient_evidence
+    WHEN OLD.status = 'revoked' AND NEW.status != 'revoked'
     BEGIN
-      SELECT RAISE(ABORT, 'matrix_stream_versions approval lifecycle is irreversible');
+      SELECT RAISE(ABORT, 'matrix_stream_recipient_evidence lifecycle is irreversible');
     END;
   `);
 
@@ -1029,6 +1033,68 @@ function initDb() {
   const matrixWorkItemColumns = new Set(db.prepare('PRAGMA table_info(matrix_work_items)').all().map(column => column.name));
   if (!matrixWorkItemColumns.has('stream_state')) db.exec("ALTER TABLE matrix_work_items ADD COLUMN stream_state TEXT NOT NULL DEFAULT 'selected'");
   if (!matrixWorkItemColumns.has('current_stream_version_id')) db.exec('ALTER TABLE matrix_work_items ADD COLUMN current_stream_version_id INTEGER');
+
+  const matrixStreamVersionColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(column => column.name));
+  if (!matrixStreamVersionColumns.has('recipient_evidence_id')) db.exec('ALTER TABLE matrix_stream_versions ADD COLUMN recipient_evidence_id INTEGER');
+
+  db.exec(`
+    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;
+    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_no_delete;
+    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_content_immutable;
+    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_no_delete;
+    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approval_metadata;
+    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approval_lifecycle;
+
+    CREATE TRIGGER trg_matrix_stream_versions_content_immutable
+    BEFORE UPDATE ON matrix_stream_versions
+    WHEN NEW.work_item_id IS NOT OLD.work_item_id
+      OR NEW.crm_draft_id IS NOT OLD.crm_draft_id
+      OR NEW.recipient_evidence_id IS NOT OLD.recipient_evidence_id
+      OR NEW.revision IS NOT OLD.revision
+      OR NEW.recipient_email IS NOT OLD.recipient_email
+      OR NEW.recipient_source_url IS NOT OLD.recipient_source_url
+      OR NEW.recipient_verified_at IS NOT OLD.recipient_verified_at
+      OR NEW.subject IS NOT OLD.subject
+      OR NEW.body_en IS NOT OLD.body_en
+      OR NEW.body_cn IS NOT OLD.body_cn
+      OR NEW.strategy_summary IS NOT OLD.strategy_summary
+      OR NEW.source_snapshot_json IS NOT OLD.source_snapshot_json
+      OR NEW.content_hash IS NOT OLD.content_hash
+      OR NEW.quality_score IS NOT OLD.quality_score
+      OR NEW.quality_json IS NOT OLD.quality_json
+      OR NEW.created_by IS NOT OLD.created_by
+      OR NEW.created_at IS NOT OLD.created_at
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_versions content is immutable');
+    END;
+
+    CREATE TRIGGER trg_matrix_stream_versions_no_delete
+    BEFORE DELETE ON matrix_stream_versions
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_versions is immutable');
+    END;
+
+    CREATE TRIGGER trg_matrix_stream_versions_approval_metadata
+    BEFORE UPDATE OF approved_by, approved_at ON matrix_stream_versions
+    WHEN (NEW.approved_by IS NOT OLD.approved_by OR NEW.approved_at IS NOT OLD.approved_at)
+      AND NOT (OLD.status = 'draft' AND NEW.status = 'approved'
+        AND OLD.approved_by IS NULL AND OLD.approved_at IS NULL
+        AND NEW.approved_by IS NOT NULL AND NEW.approved_at IS NOT NULL)
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_versions approval metadata lifecycle violation');
+    END;
+
+    CREATE TRIGGER trg_matrix_stream_versions_approval_lifecycle
+    BEFORE UPDATE OF status ON matrix_stream_versions
+    WHEN (OLD.status = 'approved' AND NEW.status NOT IN ('approved', 'superseded'))
+      OR (OLD.status = 'superseded' AND NEW.status != 'superseded')
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_versions approval lifecycle is irreversible');
+    END;
+  `);
+
+  const matrixStreamEventColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_events)').all().map(column => column.name));
+  if (!matrixStreamEventColumns.has('request_fingerprint')) db.exec("ALTER TABLE matrix_stream_events ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''");
 
   const matrixReplyDraftColumns = new Set(db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(column => column.name));
   if (!matrixReplyDraftColumns.has('matrix_work_item_id')) db.exec('ALTER TABLE crm_reply_drafts ADD COLUMN matrix_work_item_id INTEGER');

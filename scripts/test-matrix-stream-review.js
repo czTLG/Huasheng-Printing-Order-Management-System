@@ -56,7 +56,7 @@ try {
     console.log = originalConsoleLog;
   }
 
-  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events']) {
+  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events', 'matrix_stream_recipient_evidence']) {
     assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
   }
 
@@ -66,6 +66,8 @@ try {
 
   const draftColumns = db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(row => row.name);
   assert(draftColumns.includes('matrix_work_item_id'));
+  const versionColumns = db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(row => row.name);
+  assert(versionColumns.includes('recipient_evidence_id'));
 
   const indexColumns = indexName => db.prepare(`PRAGMA index_info(${indexName})`).all().map(row => row.name);
   assert.deepStrictEqual(indexColumns('idx_matrix_stream_versions_work_revision'), ['work_item_id', 'revision']);
@@ -78,6 +80,12 @@ try {
     VALUES ('matrix_stream_review_guard', 'unused', 'super_admin', 'active', ?)
   `).run(now).lastInsertRowid);
   const review = require('../src/services/matrixStreamReview');
+  const insertRecipientEvidence = ({ workItemId, domain, email, sourceUrl, verifiedAt, snapshot = {} }) => Number(db.prepare(`
+    INSERT INTO matrix_stream_recipient_evidence (
+      work_item_id, organization_domain, recipient_email, source_url,
+      verified_at, snapshot_json, status, created_by, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+  `).run(workItemId, domain, email, sourceUrl, verifiedAt, JSON.stringify(snapshot), userId, now).lastInsertRowid);
   assert.throws(
     () => review.validateRecipient({ email: 'guessed@person.test', sourceUrl: '', verifiedAt: '' }, new Date('2026-07-17T00:00:00Z')),
     /source/i
@@ -86,6 +94,51 @@ try {
     INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
     VALUES (900000, ?, ?, ?)
   `).run(userId, now, now).lastInsertRowid);
+  insertRecipientEvidence({
+    workItemId: reviewWorkItemId,
+    domain: 'alpha.test',
+    email: 'sales@alpha.test',
+    sourceUrl: 'https://alpha.test/contact',
+    verifiedAt: '2026-07-16T00:00:00.000Z',
+    snapshot: {
+      organization_domain: 'alpha.test',
+      recipient_email: 'sales@alpha.test',
+      source_url: 'https://alpha.test/contact',
+      pages: ['https://alpha.test/contact', 'https://alpha.test/products']
+    }
+  });
+  const unverifiedWorkItemId = Number(db.prepare(`
+    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+    VALUES (899998, ?, ?, ?)
+  `).run(userId, now, now).lastInsertRowid);
+  insertRecipientEvidence({
+    workItemId: unverifiedWorkItemId,
+    domain: 'alpha.test',
+    email: 'guessed@person.test',
+    sourceUrl: 'https://unrelated.test/contact',
+    verifiedAt: '2026-07-16T00:00:00.000Z',
+    snapshot: {
+      organization_domain: 'alpha.test',
+      recipient_email: 'guessed@person.test',
+      source_url: 'https://unrelated.test/contact'
+    }
+  });
+  assert.throws(() => review.createInitialVersion(db, {
+    actorUserId: userId,
+    workItemId: unverifiedWorkItemId,
+    expectedWorkVersion: 1,
+    recipient: {
+      email: 'guessed@person.test',
+      sourceUrl: 'https://unrelated.test/contact',
+      verifiedAt: '2026-07-16T00:00:00Z',
+      kind: 'public_company'
+    },
+    subject: 'Unsafe self-attested recipient',
+    bodyEn: 'Hello',
+    bodyCn: '您好',
+    sourceSnapshot: { url: 'https://unrelated.test/contact' },
+    idempotencyKey: 'unverified-create'
+  }), /evidence|binding/i);
   const v1 = review.createInitialVersion(db, {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -153,6 +206,28 @@ try {
     }).revise({ current: v1, instruction: '增加资质' }),
     /unsupported qualification/i
   );
+  for (const priceClaim of ['99美元', '99元', '美元99']) {
+    await assert.rejects(
+      () => createMatrixStreamText({
+        callJson: async () => ({
+          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: `建议价格为${priceClaim}。`
+        })
+      }).revise({ current: v1, instruction: '增加中文价格' }),
+      /unsupported price/i,
+      `${priceClaim} must require evidence`
+    );
+  }
+  for (const qualificationClaim of ['欧盟认证', 'ISO 22000认证', '食品级资质']) {
+    await assert.rejects(
+      () => createMatrixStreamText({
+        callJson: async () => ({
+          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: `该产品具备${qualificationClaim}。`
+        })
+      }).revise({ current: v1, instruction: '增加中文资质' }),
+      /unsupported qualification/i,
+      `${qualificationClaim} must require evidence`
+    );
+  }
   const translated = await createMatrixStreamText({
     callJson: async () => ({
       translation_cn: '请提供报价。',
@@ -177,6 +252,18 @@ try {
     INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
     VALUES (899999, ?, ?, ?)
   `).run(userId, now, now).lastInsertRowid);
+  const staleEvidenceId = insertRecipientEvidence({
+    workItemId: staleEvidenceWorkItemId,
+    domain: 'stale.test',
+    email: 'public@stale.test',
+    sourceUrl: 'https://stale.test/contact',
+    verifiedAt: '2026-07-16T00:00:00.000Z',
+    snapshot: {
+      organization_domain: 'stale.test',
+      recipient_email: 'public@stale.test',
+      source_url: 'https://stale.test/contact'
+    }
+  });
   const staleEvidenceDraft = review.createInitialVersion(db, {
     actorUserId: userId,
     workItemId: staleEvidenceWorkItemId,
@@ -193,8 +280,7 @@ try {
     sourceSnapshot: { url: 'https://stale.test/contact' },
     idempotencyKey: 'stale-evidence-create'
   });
-  db.prepare('UPDATE matrix_stream_versions SET recipient_verified_at = ? WHERE id = ?')
-    .run('2020-01-01T00:00:00.000Z', staleEvidenceDraft.id);
+  db.prepare("UPDATE matrix_stream_recipient_evidence SET status = 'revoked' WHERE id = ?").run(staleEvidenceId);
   assert.throws(() => review.approveVersion(db, {
     actorUserId: userId,
     workItemId: staleEvidenceWorkItemId,
@@ -202,7 +288,53 @@ try {
     expectedWorkVersion: 2,
     expectedContentHash: staleEvidenceDraft.content_hash,
     idempotencyKey: 'stale-evidence-approve'
-  }), /stale/i);
+  }), /evidence|binding/i);
+  const tamperedWorkItemId = Number(db.prepare(`
+    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+    VALUES (899997, ?, ?, ?)
+  `).run(userId, now, now).lastInsertRowid);
+  insertRecipientEvidence({
+    workItemId: tamperedWorkItemId,
+    domain: 'tamper.test',
+    email: 'public@tamper.test',
+    sourceUrl: 'https://tamper.test/contact',
+    verifiedAt: '2026-07-16T00:00:00.000Z',
+    snapshot: {
+      organization_domain: 'tamper.test',
+      recipient_email: 'public@tamper.test',
+      source_url: 'https://tamper.test/contact'
+    }
+  });
+  const tamperedDraft = review.createInitialVersion(db, {
+    actorUserId: userId,
+    workItemId: tamperedWorkItemId,
+    expectedWorkVersion: 1,
+    recipient: {
+      email: 'public@tamper.test',
+      sourceUrl: 'https://tamper.test/contact',
+      verifiedAt: '2026-07-16T00:00:00Z',
+      kind: 'public_company'
+    },
+    subject: 'Canonical approval hash',
+    bodyEn: 'Original English body',
+    bodyCn: '原始中文正文',
+    idempotencyKey: 'tampered-create'
+  });
+  db.exec('DROP TRIGGER IF EXISTS trg_matrix_stream_versions_content_immutable');
+  try {
+    db.prepare('UPDATE matrix_stream_versions SET body_en = ? WHERE id = ?')
+      .run('Tampered body without a new hash', tamperedDraft.id);
+    assert.throws(() => review.approveVersion(db, {
+      actorUserId: userId,
+      workItemId: tamperedWorkItemId,
+      versionId: tamperedDraft.id,
+      expectedWorkVersion: 2,
+      expectedContentHash: tamperedDraft.content_hash,
+      idempotencyKey: 'tampered-approve'
+    }), /content hash/i);
+  } finally {
+    database.initDb();
+  }
   const approved = review.approveVersion(db, {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -224,20 +356,91 @@ try {
   });
   assert.strictEqual(v2.revision, 2);
   assert.strictEqual(review.getVersion(db, { actorUserId: userId, versionId: v1.id }).status, 'superseded');
-  assert.strictEqual(review.approveVersion(db, {
+  const approveReplayInput = {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
     versionId: v1.id,
-    expectedWorkVersion: 1,
-    expectedContentHash: 'intentionally-stale',
+    expectedWorkVersion: 2,
+    expectedContentHash: v1.content_hash,
     idempotencyKey: 'approve-1'
-  }).id, v1.id);
-  assert.strictEqual(review.createInitialVersion(db, {
+  };
+  assert.strictEqual(review.approveVersion(db, approveReplayInput).id, v1.id);
+  const createReplayInput = {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
     expectedWorkVersion: 1,
+    recipient: {
+      email: 'sales@alpha.test',
+      sourceUrl: 'https://alpha.test/contact',
+      verifiedAt: '2026-07-16T00:00:00Z',
+      kind: 'public_company'
+    },
+    subject: 'A focused proposal for Alpha',
+    bodyEn: 'Dear Alpha team,\nPlease confirm your current requirements.\nBest regards',
+    bodyCn: '您好，请确认当前需求。',
+    strategySummary: '公开产品页显示匹配品类',
+    sourceSnapshot: { url: 'https://alpha.test/products' },
     idempotencyKey: 'version-create-1'
-  }).id, v1.id);
+  };
+  assert.strictEqual(review.createInitialVersion(db, createReplayInput).id, v1.id);
+  assert.throws(() => review.approveVersion(db, {
+    ...approveReplayInput,
+    expectedContentHash: 'changed-hash'
+  }), /idempotency|fingerprint|scope/i);
+  assert.throws(() => review.approveVersion(db, {
+    ...approveReplayInput,
+    expectedWorkVersion: 3
+  }), /idempotency|fingerprint|scope/i);
+  assert.throws(() => review.approveVersion(db, {
+    ...approveReplayInput,
+    versionId: v2.id
+  }), /idempotency|fingerprint|scope/i);
+  assert.throws(() => review.createInitialVersion(db, {
+    ...createReplayInput,
+    workItemId: unverifiedWorkItemId
+  }), /idempotency|fingerprint|scope|authorized/i);
+  assert.throws(() => review.reviseVersion(db, {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    baseVersionId: v1.id,
+    expectedWorkVersion: 3,
+    subject: v1.subject,
+    bodyEn: v1.body_en,
+    bodyCn: v1.body_cn,
+    idempotencyKey: 'approve-1'
+  }), /idempotency|fingerprint|scope/i);
+  db.prepare("UPDATE matrix_work_items SET stage = 'suppressed', stream_state = 'suppressed' WHERE id = ?").run(reviewWorkItemId);
+  assert.throws(() => review.approveVersion(db, approveReplayInput), /suppressed/i);
+  db.prepare("UPDATE matrix_work_items SET stage = 'draft_pending', stream_state = 'draft_pending' WHERE id = ?").run(reviewWorkItemId);
+  db.prepare("UPDATE users SET status = 'inactive' WHERE id = ?").run(userId);
+  assert.throws(() => review.approveVersion(db, approveReplayInput), /active/i);
+  db.prepare("UPDATE users SET status = 'active' WHERE id = ?").run(userId);
+  const replacementOwnerId = Number(db.prepare(`
+    INSERT INTO users (username, password, role, status, created_at)
+    VALUES ('matrix_stream_replacement_owner', 'unused', 'super_admin', 'active', ?)
+  `).run(now).lastInsertRowid);
+  db.prepare('UPDATE matrix_work_items SET owner_user_id = ? WHERE id = ?').run(replacementOwnerId, reviewWorkItemId);
+  assert.throws(() => review.approveVersion(db, approveReplayInput), /authorized/i);
+  db.prepare('UPDATE matrix_work_items SET owner_user_id = ? WHERE id = ?').run(userId, reviewWorkItemId);
+  const reviseReplayInput = {
+    actorUserId: userId,
+    workItemId: reviewWorkItemId,
+    baseVersionId: v1.id,
+    expectedWorkVersion: 3,
+    subject: v1.subject,
+    bodyEn: `${v1.body_en}\nPlease share annual volume.`,
+    bodyCn: `${v1.body_cn}\n请提供年用量。`,
+    idempotencyKey: 'revise-1'
+  };
+  assert.strictEqual(review.reviseVersion(db, reviseReplayInput).id, v2.id);
+  assert.throws(() => review.reviseVersion(db, {
+    ...reviseReplayInput,
+    bodyEn: `${reviseReplayInput.bodyEn}\nChanged replay content.`
+  }), /idempotency|fingerprint|scope/i);
+  assert.throws(() => review.reviseVersion(db, {
+    ...reviseReplayInput,
+    baseVersionId: v2.id
+  }), /idempotency|fingerprint|scope/i);
   assert.throws(() => review.reviseVersion(db, {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -275,6 +478,19 @@ try {
     idempotencyKey: 'revise-concurrent-winner'
   });
   assert.strictEqual(v3.revision, 3);
+  assert.throws(
+    () => db.prepare('UPDATE matrix_stream_versions SET subject = ? WHERE id = ?').run('Forbidden in-place edit', v3.id),
+    /immutable/i
+  );
+  assert.throws(
+    () => db.prepare('DELETE FROM matrix_stream_versions WHERE id = ?').run(v3.id),
+    /immutable/i
+  );
+  assert.throws(
+    () => db.prepare('UPDATE matrix_stream_recipient_evidence SET source_url = ? WHERE work_item_id = ?')
+      .run('https://other.test/contact', reviewWorkItemId),
+    /immutable/i
+  );
   assert.throws(() => review.reviseVersion(db, {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -379,6 +595,7 @@ try {
     () => insertJob.run(workItemId, approvedVersionId, 'job-key-2', 'approved-hash', 'message-1', userId, now, now),
     /UNIQUE constraint failed: matrix_stream_jobs.message_id/
   );
+  console.log('matrix stream review tests passed');
 } finally {
   if (db?.open) db.close();
   fs.rmSync(root, { recursive: true, force: true });
