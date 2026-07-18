@@ -556,6 +556,13 @@ async function retryInboundTranslation(db, input = {}) {
   if (!row) throw new Error('reply notification not found');
   if (!activeOwnerBinding(db, actorUserId, bindingId, row.work_item_id)) throw new Error('translation retry not authorized');
   if (row.kind !== 'reply' || row.stream_state !== 'replied') throw new Error('reply notification is not retry eligible');
+  if (!['inflight', 'delivered', 'manual_review'].includes(row.delivery_state)) throw new Error('reply notification is not delivery eligible for retry');
+  const existingReady = db.prepare(`
+    SELECT id FROM matrix_stream_notification_spool
+    WHERE inbound_message_id = ? AND generation > ? AND translation_status = 'ready'
+    ORDER BY generation DESC LIMIT 1
+  `).get(row.inbound_message_id, row.generation);
+  if (existingReady) return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
   if (row.translation_status === 'ready') {
     return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
   }
@@ -576,21 +583,34 @@ async function retryInboundTranslation(db, input = {}) {
     `).get(notificationId);
     if (!current || !activeOwnerBinding(db, actorUserId, bindingId, current.work_item_id)) throw new Error('translation retry not authorized');
     if (current.kind !== 'reply' || current.stream_state !== 'replied') throw new Error('reply notification is not retry eligible');
+    if (!['inflight', 'delivered', 'manual_review'].includes(current.delivery_state)) throw new Error('reply notification is not delivery eligible for retry');
+    const readyGeneration = db.prepare(`
+      SELECT id FROM matrix_stream_notification_spool
+      WHERE inbound_message_id = ? AND generation > ? AND translation_status = 'ready'
+      ORDER BY generation DESC LIMIT 1
+    `).get(current.inbound_message_id, current.generation);
+    if (readyGeneration) {
+      return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
+    }
     if (current.translation_status === 'ready') {
       return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
     }
     const value = translation.value;
+    const generation = Number(db.prepare(`
+      SELECT COALESCE(MAX(generation), 0) + 1 AS generation
+      FROM matrix_stream_notification_spool WHERE inbound_message_id = ?
+    `).get(current.inbound_message_id).generation);
     db.prepare(`
-      UPDATE matrix_stream_notification_spool
-      SET translation_status = 'ready', translation_cn = ?, requirements_cn = ?,
-          suggested_subject = ?, suggested_body_en = ?, suggested_body_cn = ?, retry_available = 0,
-          notification_key = ?, delivery_state = 'pending', owner_token = '', lease_expires_at = '',
-          attempt_count = 0, receipt_id = '', delivered_at = NULL, last_error_class = '',
-          finalized_token = '', finalized_state = ''
-      WHERE id = ? AND translation_status = 'pending'
-    `).run(safePreview(value.translation_cn, 800), safePreview(value.requirements_cn, 500),
+      INSERT INTO matrix_stream_notification_spool (
+        inbound_message_id, work_item_id, job_id, kind, original_preview,
+        translation_status, translation_cn, requirements_cn, suggested_subject,
+        suggested_body_en, suggested_body_cn, work_item_state, retry_available,
+        notification_key, delivery_state, generation, supersedes_notification_id, created_at
+      ) VALUES (?, ?, ?, 'reply', ?, 'ready', ?, ?, ?, ?, ?, 'replied', 0, ?, 'pending', ?, ?, ?)
+    `).run(current.inbound_message_id, current.work_item_id, current.job_id, current.original_preview,
+      safePreview(value.translation_cn, 800), safePreview(value.requirements_cn, 500),
       safePreview(value.suggested_subject, 200), safePreview(value.suggested_body_en, 1200),
-      safePreview(value.suggested_body_cn, 1200), crypto.randomUUID(), notificationId);
+      safePreview(value.suggested_body_cn, 1200), crypto.randomUUID(), generation, current.id, context.iso);
     db.prepare(`
       INSERT INTO matrix_stream_events (
         work_item_id, job_id, actor_user_id, action, idempotency_key,
@@ -598,7 +618,7 @@ async function retryInboundTranslation(db, input = {}) {
       ) VALUES (?, ?, ?, 'inbound_translation_ready', ?,
         '{"translation_status":"pending"}', '{"translation_status":"ready"}', '', ?)
     `).run(current.work_item_id, current.job_id, actorUserId,
-      internalEventKey(db, `inbound-translation-ready:${notificationId}`, context.iso), context.iso);
+      internalEventKey(db, `inbound-translation-ready:${current.inbound_message_id}`, context.iso), context.iso);
     return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
   });
   return transaction.immediate();

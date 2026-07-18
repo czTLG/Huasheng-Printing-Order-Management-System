@@ -45,6 +45,18 @@ function readJson(file) {
   catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
 }
 
+function readProcessIdentity(pid = process.pid, readFile = fs.readFileSync) {
+  const processId = Number(pid);
+  if (!Number.isInteger(processId) || processId < 1) throw new Error('valid process id required');
+  const bootId = String(readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  const stat = String(readFile(`/proc/${processId}/stat`, 'utf8')).trim();
+  const close = stat.lastIndexOf(')');
+  const fields = close >= 0 ? stat.slice(close + 1).trim().split(/\s+/) : [];
+  const startTime = String(fields[19] || '').trim();
+  if (!/^[0-9a-f-]{8,}$/i.test(bootId) || !/^\d+$/.test(startTime)) throw new Error('process identity unavailable');
+  return { pid: processId, boot_id: bootId, start_time: startTime };
+}
+
 function deliveryId(date, chatId) {
   const day = String(date || '');
   const chat = String(chatId || '').trim();
@@ -229,7 +241,8 @@ function replyNotificationCard(notification) {
 async function claimAndQueueReply({
   client, ownerOpenId, chatId,
   spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH,
-  lockPath = `${spoolPath}.lock`, lockStaleMs = 300000
+  lockPath = `${spoolPath}.lock`, lockStaleMs = 300000,
+  identityReader = readProcessIdentity
 }) {
   if (!client || typeof client.claimNotification !== 'function' || !ownerOpenId || !chatId) throw new Error('reply watcher binding required');
   let lockFd;
@@ -237,7 +250,7 @@ async function claimAndQueueReply({
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         lockFd = fs.openSync(lockPath, 'wx', 0o600);
-        fs.writeFileSync(lockFd, `${JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() })}\n`);
+        fs.writeFileSync(lockFd, `${JSON.stringify({ ...identityReader(process.pid), created_at: new Date().toISOString() })}\n`);
         fs.fsyncSync(lockFd);
         break;
       } catch (error) {
@@ -246,12 +259,12 @@ async function claimAndQueueReply({
         if (attempt === 0 && age > Math.max(1000, Number(lockStaleMs || 300000))) {
           let owner = null;
           try { owner = readJson(lockPath); } catch (_) {}
-          if (Number.isInteger(owner?.pid) && owner.pid > 0) {
-            try {
-              process.kill(owner.pid, 0);
+          if (Number.isInteger(owner?.pid) && owner.pid > 0 && owner.boot_id && owner.start_time) {
+            let current = null;
+            try { current = identityReader(owner.pid); } catch (_) {}
+            if (current && current.pid === owner.pid
+                && current.boot_id === owner.boot_id && current.start_time === owner.start_time) {
               return { status: 'busy' };
-            } catch (ownerError) {
-              if (ownerError?.code !== 'ESRCH') return { status: 'busy' };
             }
           }
           try { fs.unlinkSync(lockPath); } catch (unlinkError) { if (unlinkError?.code !== 'ENOENT') throw unlinkError; }
@@ -342,4 +355,4 @@ if (require.main === module) main().catch(error => {
   process.exit(1);
 });
 
-module.exports = { runDue, reminderCard, replyNotificationCard, claimAndQueueReply, shanghaiParts, queueReminder, deliveryId };
+module.exports = { runDue, reminderCard, replyNotificationCard, claimAndQueueReply, readProcessIdentity, shanghaiParts, queueReminder, deliveryId };

@@ -208,6 +208,11 @@ async function testReplyNotificationCardAndDraftAction() {
   registered.dispose();
 
   assert.strictEqual(typeof watcher.claimAndQueueReply, 'function');
+  assert.strictEqual(typeof watcher.readProcessIdentity, 'function');
+  const actualIdentity = watcher.readProcessIdentity();
+  assert.strictEqual(actualIdentity.pid, process.pid);
+  assert.match(actualIdentity.boot_id, /^[0-9a-f-]{8,}$/i);
+  assert.match(actualIdentity.start_time, /^\d+$/);
   assert.strictEqual(typeof extension.deliverQueuedReply, 'function');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reply-spool-'));
   const spoolPath = path.join(root, 'pending.json');
@@ -248,13 +253,28 @@ async function testReplyNotificationCardAndDraftAction() {
     assert.strictEqual(claimCalls, 1, 'watcher without the filesystem lock must not call claim API');
     assert.strictEqual(fs.existsSync(lockPath), false, 'relay lock must be cleaned');
     fs.unlinkSync(spoolPath);
-    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, created_at: '2020-01-01T00:00:00Z' })}\n`, { mode: 0o600, flag: 'wx' });
+    const liveIdentity = { pid: process.pid, boot_id: 'boot-a', start_time: '100' };
+    fs.writeFileSync(lockPath, `${JSON.stringify({ ...liveIdentity, created_at: '2020-01-01T00:00:00Z' })}\n`, { mode: 0o600, flag: 'wx' });
     fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
     assert.deepStrictEqual(await watcher.claimAndQueueReply({
       client: { claimNotification: async () => { throw new Error('live lock must prevent claim'); } },
-      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000
+      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000,
+      identityReader: () => liveIdentity
     }), { status: 'busy' });
     fs.unlinkSync(lockPath);
+    for (const [recorded, current, label] of [
+      [liveIdentity, { ...liveIdentity, start_time: '101' }, 'reused pid'],
+      [liveIdentity, { ...liveIdentity, boot_id: 'boot-b' }, 'new boot']
+    ]) {
+      fs.writeFileSync(lockPath, `${JSON.stringify({ ...recorded, created_at: '2020-01-01T00:00:00Z' })}\n`, { mode: 0o600, flag: 'wx' });
+      fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+      assert.deepStrictEqual(await watcher.claimAndQueueReply({
+        client: { claimNotification: async () => ({ notification: null }) },
+        ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000,
+        identityReader: () => current
+      }), { status: 'empty' }, `${label} lock must be recoverable`);
+      assert.strictEqual(fs.existsSync(lockPath), false);
+    }
     fs.writeFileSync(lockPath, 'stale', { mode: 0o600, flag: 'wx' });
     fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
     assert.deepStrictEqual(await watcher.claimAndQueueReply({
