@@ -27,6 +27,18 @@ assert.strictEqual(typeof verifier.validateComposeConfig, 'function');
 assert.strictEqual(typeof verifier.approvedCapabilitySource, 'function');
 assert.strictEqual(typeof verifier.validateRuntimeManifest, 'function');
 assert.strictEqual(typeof verifier.runtimeManifest, 'function');
+const envExample = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8').split(/\r?\n/);
+for (const line of [
+  'MATRIX_STREAM_SEND_ENABLED=0', 'MATRIX_RECIPIENT_MAX_AGE_DAYS=180',
+  'MATRIX_MESSAGE_ID_DOMAIN=', 'MATRIX_TEXT_PROVIDER=mock', 'MATRIX_DKIM_SELECTOR=',
+  'MATRIX_DAILY_ACCEPTED_LIMIT=5', 'MATRIX_DOMAIN_COOLING_DAYS=90',
+  'SMTP_HOST=', 'SMTP_PORT=465', 'SMTP_SECURE=true', 'SMTP_USER=', 'SMTP_PASS=', 'SMTP_FROM='
+]) assert.ok(envExample.includes(line), `.env.example missing safe Task 7 name/default: ${line}`);
+const catalog = fs.readFileSync(path.join(__dirname, '..', 'docs/matrix-stream-catalog-2026-07-16.md'), 'utf8');
+for (const marker of [
+  'matrixStreamReview.js', 'matrixStreamDelivery.js', '两次确认',
+  'MATRIX_STREAM_SEND_ENABLED=0', 'bot 运行面', 'delivery_enabled: false'
+]) assert.ok(catalog.includes(marker), `Task 7 catalog missing ${marker}`);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-verifier-input-'));
 try {
   const temporary = path.join(root, 'temporary');
@@ -82,20 +94,48 @@ try {
     'dgram-send.cjs': "require('node:dgram').createSocket('udp4').send('x', 53, 'outside.invalid');\n",
     'websocket.js': "new WebSocket('wss://outside.invalid/socket');\n",
     'event-source.js': "new EventSource('https://outside.invalid/events');\n",
-    'exec-curl.cjs': "require('node:child_process').exec('curl https://outside.invalid/data');\n"
+    'exec-curl.cjs': "require('node:child_process').exec('curl https://outside.invalid/data');\n",
+    'unreviewed-transport.cjs': "require('nodemailer').createTransport({ host: input.smtpHost }).sendMail({ to: input.to });\n",
+    'bot-client-transport.js': `${fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js'), 'utf8')}\ntransport.sendMail({ to: input.to });\n`,
+    'bot-extension-transport.cjs': `${fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs'), 'utf8')}\ntransport.sendMail({ to: input.to });\n`,
+    'bot-watcher-transport.js': `${fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js'), 'utf8')}\ntransport.sendMail({ to: input.to });\n`
   };
   for (const [name, source] of Object.entries(rejectedCapabilities)) {
     fs.writeFileSync(path.join(runtimeRoot, 'nested', name), source);
   }
   const surface = verifier.runtimeSurfaceFiles([runtimeRoot]);
-  assert.strictEqual(surface.length, 13);
+  assert.strictEqual(surface.length, 1 + Object.keys(rejectedCapabilities).length);
   assert.deepStrictEqual(
     verifier.outboundAdapterFiles(surface).map(file => path.basename(file)).sort(),
     Object.keys(rejectedCapabilities).sort()
   );
+  const deliverySource = fs.readFileSync(path.join(__dirname, '..', 'src/services/matrixStreamDelivery.js'), 'utf8');
+  for (const guard of [
+    'capabilities.matrixSend',
+    'version.content_hash !== input.expectedContentHash',
+    "state = 'ambiguous'",
+    'recipient_source_url'
+  ]) assert.ok(deliverySource.includes(guard), `reviewed delivery source missing ${guard}`);
+  assert.ok(!deliverySource.includes('attachments:'), 'reviewed delivery source must not add attachments');
+  assert.strictEqual(verifier.approvedCapabilitySource('delivery', deliverySource), true);
+  for (const [label, maliciousSource] of [
+    ['caller recipient', deliverySource.replace('to: version.recipient_email', 'to: input.to')],
+    ['caller subject', deliverySource.replace('subject: version.subject', 'subject: input.subject')],
+    ['caller smtp host', deliverySource.replace('from,\n        to:', 'from,\n        smtpHost: input.smtpHost,\n        to:')],
+    ['caller callback', deliverySource.replace('text: version.body_en', 'text: version.body_en,\n        callbackUrl: input.callbackUrl')],
+    ['automatic retry', deliverySource.replace('const classified = classifyError(error);', 'if (input.retry) return deliver(prepared, input);\n      const classified = classifyError(error);')]
+  ]) {
+    assert.notStrictEqual(maliciousSource, deliverySource, `${label} mutation fixture must alter delivery source`);
+    assert.strictEqual(verifier.approvedCapabilitySource('delivery', maliciousSource), false, `${label} mutation must be rejected`);
+  }
   assert.deepStrictEqual(verifier.outboundAdapterFiles(verifier.runtimeSurfaceFiles()), [], 'reviewed client/supervisor capabilities must be the only production exceptions');
   const productionFiles = verifier.runtimeSurfaceFiles();
   const productionManifest = verifier.runtimeManifest();
+  for (const service of [
+    'matrixStreamReview.js', 'matrixStreamText.js', 'matrixStreamGate.js',
+    'matrixStreamReadiness.js', 'matrixStreamFollowup.js', 'matrixStreamDelivery.js',
+    'matrixStreamCorrelation.js'
+  ]) assert.ok(Object.keys(productionManifest).includes(`src/services/${service}`), `runtime manifest missing ${service}`);
   assert.strictEqual(verifier.validateRuntimeManifest({ files: productionFiles }), true);
   assert.ok(Object.keys(productionManifest).every(file => !/(?:^|\/)tests?\//.test(file) && !/(?:^|\/)test-/.test(file)));
   assert.throws(() => verifier.validateRuntimeManifest({ files: productionFiles.slice(1) }), /runtime manifest.*(?:missing|set)/i);
