@@ -361,10 +361,10 @@ function createMatrixStreamDelivery({
         INSERT INTO matrix_stream_jobs (
           work_item_id, version_id, idempotency_key, content_hash, message_id, state,
           attempt_count, error_class, redacted_diagnostic, created_by, owner_token,
-          lease_expires_at, recipient_domain, reservation_day, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, '', '', ?, ?, ?, ?, ?, ?, ?)
+          lease_expires_at, recipient_domain, sender_email, reservation_day, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, '', '', ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(input.workItemId, input.versionId, input.idempotencyKey, input.expectedContentHash,
-        placeholder, input.actorUserId, ownerToken, leaseExpiresAt, recipientDomain,
+        placeholder, input.actorUserId, ownerToken, leaseExpiresAt, recipientDomain, from,
         shanghaiDay(context.ms), context.iso, context.iso);
       const jobId = Number(inserted.lastInsertRowid);
       const messageId = `<matrix-stream-${jobId}-${input.expectedContentHash.slice(0, 20)}@${domain}>`;

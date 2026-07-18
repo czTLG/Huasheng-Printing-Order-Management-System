@@ -624,6 +624,17 @@ function reviewState(workItemId) {
         return deliveryImpl(input);
       }
     };
+    const replyDraftCalls = [];
+    const injectedCorrelationService = {
+      startReplyDraft(_db, input) {
+        replyDraftCalls.push(input);
+        return { notification_id: input.notificationId, work_item_id: workItemId, state: 'draft_pending' };
+      },
+      async retryInboundTranslation(_db, input) {
+        replyDraftCalls.push({ retry: true, ...input });
+        return { notification_id: input.notificationId, translation_status: 'ready', retry_available: false };
+      }
+    };
     const injectedApp = express();
     injectedApp.use(express.json());
     injectedApp.use('/api/matrix', createMatrixBridgeAuth({ db: injectedDb, bridgeToken }));
@@ -633,6 +644,7 @@ function reviewState(workItemId) {
       candidateDbPath,
       reviewService: injectedReviewService,
       deliveryService: injectedDeliveryService,
+      correlationService: injectedCorrelationService,
       textService: injectedTextService,
       claimOptions
     }));
@@ -686,6 +698,30 @@ function reviewState(workItemId) {
         assert.strictEqual(rejected.status, 400, `${field}: ${JSON.stringify(rejected.body)}`);
       }
       assert.strictEqual(deliveryCalls.length, 2, 'unknown send fields must be rejected before delivery service');
+
+      const replyDraft = await request('/api/matrix/notifications/41/reply-draft', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: {}
+      });
+      assert.deepStrictEqual(replyDraft, {
+        status: 200,
+        body: { notification_id: 41, work_item_id: workItemId, state: 'draft_pending' }
+      });
+      assert.strictEqual(replyDraftCalls.length, 1);
+      assert.strictEqual(replyDraftCalls[0].actorUserId, 103);
+      assert.strictEqual(replyDraftCalls[0].notificationId, 41);
+      const rejectedReplyDraft = await request('/api/matrix/notifications/41/reply-draft', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { send: true }
+      });
+      assert.strictEqual(rejectedReplyDraft.status, 400);
+      assert.strictEqual(replyDraftCalls.length, 1, 'reply draft route must reject delivery-like fields');
+      const retriedTranslation = await request('/api/matrix/notifications/42/retry-translation', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: {}
+      });
+      assert.deepStrictEqual(retriedTranslation, {
+        status: 200,
+        body: { notification_id: 42, translation_status: 'ready', retry_available: false }
+      });
+      assert.strictEqual(replyDraftCalls.at(-1).retry, true);
 
       const reviseBody = {
         expected_work_version: 3,

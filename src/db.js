@@ -917,6 +917,7 @@ function initDb() {
       owner_token TEXT NOT NULL DEFAULT '',
       lease_expires_at TEXT NOT NULL DEFAULT '',
       recipient_domain TEXT NOT NULL DEFAULT '',
+      sender_email TEXT NOT NULL DEFAULT '',
       reservation_day TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -1026,6 +1027,42 @@ function initDb() {
       FOREIGN KEY(originating_job_id) REFERENCES matrix_stream_jobs(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_stream_inbound_links (
+      inbound_message_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL CHECK(status IN ('matched','needs_review','unmatched')),
+      kind TEXT NOT NULL DEFAULT '',
+      work_item_id INTEGER,
+      job_id INTEGER,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_stream_notification_spool (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      inbound_message_id TEXT NOT NULL UNIQUE,
+      work_item_id INTEGER NOT NULL,
+      job_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('reply','refusal')),
+      original_preview TEXT NOT NULL,
+      translation_status TEXT NOT NULL CHECK(translation_status IN ('ready','pending')),
+      translation_cn TEXT NOT NULL DEFAULT '',
+      requirements_cn TEXT NOT NULL DEFAULT '',
+      suggested_subject TEXT NOT NULL DEFAULT '',
+      suggested_body_en TEXT NOT NULL DEFAULT '',
+      suggested_body_cn TEXT NOT NULL DEFAULT '',
+      work_item_state TEXT NOT NULL,
+      retry_available INTEGER NOT NULL DEFAULT 0 CHECK(retry_available IN (0,1)),
+      reply_draft_id INTEGER,
+      delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','claimed','delivered')),
+      created_at TEXT NOT NULL,
+      delivered_at TEXT,
+      FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id),
+      FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
@@ -1036,6 +1073,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_api_requests_scope ON matrix_stream_api_requests(actor_user_id, work_item_id, action);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_api_claims_lease ON matrix_stream_api_claims(lease_expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_reply_checks_due ON matrix_stream_reply_checks(state, due_at);
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_notification_spool_state ON matrix_stream_notification_spool(delivery_state, id);
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
     BEFORE UPDATE ON matrix_selection_events
@@ -1155,6 +1193,7 @@ function initDb() {
   if (!matrixStreamJobColumns.has('owner_token')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''");
   if (!matrixStreamJobColumns.has('lease_expires_at')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''");
   if (!matrixStreamJobColumns.has('recipient_domain')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN recipient_domain TEXT NOT NULL DEFAULT ''");
+  if (!matrixStreamJobColumns.has('sender_email')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN sender_email TEXT NOT NULL DEFAULT ''");
   if (!matrixStreamJobColumns.has('reservation_day')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN reservation_day TEXT NOT NULL DEFAULT ''");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_stream_jobs_active_domain_reservation
@@ -1225,6 +1264,9 @@ function initDb() {
 
   const matrixReplyDraftColumns = new Set(db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(column => column.name));
   if (!matrixReplyDraftColumns.has('matrix_work_item_id')) db.exec('ALTER TABLE crm_reply_drafts ADD COLUMN matrix_work_item_id INTEGER');
+
+  const matrixNotificationColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_notification_spool)').all().map(column => column.name));
+  if (!matrixNotificationColumns.has('reply_draft_id')) db.exec('ALTER TABLE matrix_stream_notification_spool ADD COLUMN reply_draft_id INTEGER');
 
   db.prepare(`
     UPDATE matrix_sessions
