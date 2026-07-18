@@ -273,4 +273,4 @@ function createMatrixStreamText({ callJson = callJsonProvider } = {}) {
   };
 }
 
-module.exports = { createMatrixStreamText };
+module.exports = { createMatrixStreamText, isNonAssertionRequest, splitSentences, normalizedSentence };
