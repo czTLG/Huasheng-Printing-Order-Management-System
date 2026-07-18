@@ -93,6 +93,28 @@ SenderFactVersion = {
   supersedes_id: String|null, superseded_by_id: String|null
 }
 
+SenderFactProvider = {
+  generate({
+    channel: 'email'|'whatsapp',
+    requested_fields: ['subject','body_en','body_cn','strategy_cn']|['whatsapp_en','whatsapp_cn'],
+    candidate_fact_block: CandidateFactBlock,
+    sender_fact_version: SenderFactVersion,
+    recipient_evidence_id: Integer,
+    policy_version: String
+  })
+  // -> an object containing exactly requested_fields; no extra/null fields
+}
+
+AtlasDraft = {
+  subject: String|null, body_en: String|null, body_cn: String|null,
+  strategy_cn: String|null, whatsapp_en: String|null, whatsapp_cn: String|null,
+  channel_generation: {
+    email: 'generated'|'unavailable'|'provider_failed',
+    whatsapp: 'generated'|'unavailable'|'provider_failed'
+  },
+  claim_bindings: [ClaimBinding]
+}
+
 ChannelAvailability = {
   email: { available: Boolean, reason_code: ChannelReason, recipient_evidence_id: Integer|null, policy_version: String },
   whatsapp: { available: Boolean, reason_code: ChannelReason, recipient_evidence_id: Integer|null, policy_version: String }
@@ -140,24 +162,79 @@ AtlasRunSummary = {
 }
 ```
 
-`SenderFactVersion.status` is derived from append-only events `created → approved → revoked|superseded`; only an approved version whose latest event is `approved` is accepted by draft creation. `draft` has all approval/revocation/superseded fields null. `approved` has `approved_by/approved_at` and null revocation/superseded fields. `revoked` preserves approval, requires `revoked_by/revoked_at/revocation_reason`, and has null `superseded_by_id`. `superseded` preserves approval, requires `superseded_by_id`, and has null revocation fields. Creating a successor and superseding its approved predecessor is one transaction. Reusing an idempotency key with the same canonical input returns the same version/event; different input is `SENDER_FACT_IDEMPOTENCY_CONFLICT`.
+```sql
+-- Immutable approved-sender content in the management database.
+CREATE TABLE matrix_sender_fact_versions (
+  version_id TEXT PRIMARY KEY,
+  version_no INTEGER NOT NULL UNIQUE CHECK(version_no > 0),
+  content_hash TEXT NOT NULL UNIQUE CHECK(
+    length(content_hash) = 71 AND
+    substr(content_hash, 1, 7) = 'sha256:' AND
+    substr(content_hash, 8) NOT GLOB '*[^0-9a-f]*'
+  ),
+  facts_json TEXT NOT NULL CHECK(json_valid(facts_json) AND json_type(facts_json) = 'array'),
+  site_resource_json TEXT NOT NULL CHECK(json_valid(site_resource_json) AND json_type(site_resource_json) = 'object'),
+  source_evidence_ids_json TEXT NOT NULL CHECK(json_valid(source_evidence_ids_json) AND json_type(source_evidence_ids_json) = 'array'),
+  created_by INTEGER NOT NULL,
+  supersedes_id TEXT REFERENCES matrix_sender_fact_versions(version_id),
+  created_at TEXT NOT NULL
+);
 
-Unavailable channel output is `null`, never fabricated or requested from the provider. `available=true` requires `reason_code='eligible'` and a current evidence ID; every unavailable reason requires `available=false`, with evidence nullable only for `missing_recipient|channel_not_requested`. Email-only, WhatsApp-only, and neither-available states are valid independently. `allowed_formats` is derived, never caller-supplied: email adds `email_en` and `strategy_cn`; WhatsApp adds `whatsapp_en`; output order is always email, Chinese explanation, WhatsApp.
+-- One durable idempotency record per external lifecycle command. command_id is
+-- an injected opaque ULID. payload_hash is SHA-256 over RFC-8785 canonical
+-- command input excluding idempotency_key, command_id, and now.
+CREATE TABLE matrix_sender_fact_commands (
+  command_id TEXT PRIMARY KEY,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  command_type TEXT NOT NULL CHECK(command_type IN ('create','approve','revoke','approve_and_supersede')),
+  payload_hash TEXT NOT NULL CHECK(length(payload_hash) = 71 AND substr(payload_hash, 1, 7) = 'sha256:' AND substr(payload_hash, 8) NOT GLOB '*[^0-9a-f]*'),
+  result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json) = 'object'),
+  created_at TEXT NOT NULL
+);
+
+-- Lifecycle source of truth. UPDATE/DELETE are denied by triggers.
+CREATE TABLE matrix_sender_fact_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_key TEXT NOT NULL UNIQUE,
+  command_id TEXT NOT NULL REFERENCES matrix_sender_fact_commands(command_id),
+  command_event_index INTEGER NOT NULL CHECK(command_event_index BETWEEN 1 AND 2),
+  version_id TEXT NOT NULL REFERENCES matrix_sender_fact_versions(version_id),
+  event_version INTEGER NOT NULL CHECK(event_version > 0),
+  event_type TEXT NOT NULL CHECK(event_type IN ('created','approved','revoked','superseded')),
+  expected_content_hash TEXT NOT NULL,
+  actor_user_id INTEGER NOT NULL,
+  related_version_id TEXT REFERENCES matrix_sender_fact_versions(version_id),
+  reason TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(version_id, event_version),
+  UNIQUE(command_id, command_event_index)
+);
+```
+
+`SenderFactVersion.status` is derived from append-only events `created → approved → revoked|superseded`; only an approved version whose latest event is `approved` is accepted by draft creation. `draft` has all approval/revocation/superseded fields null. `approved` has `approved_by/approved_at` and null revocation/superseded fields. `revoked` preserves approval, requires `revoked_by/revoked_at/revocation_reason`, and has null `superseded_by_id`. `superseded` preserves approval, requires `superseded_by_id`, and has null revocation fields. Creating a successor and superseding its approved predecessor is one command transaction.
+
+The only lifecycle commands are `createSenderFactVersion(input) -> SenderFactVersion`, `approveSenderFactVersion({ versionId, expectedContentHash, actorUserId, idempotencyKey, now }) -> SenderFactVersion`, `revokeSenderFactVersion({ versionId, expectedContentHash, reason, actorUserId, idempotencyKey, now }) -> SenderFactVersion`, and `approveAndSupersedeSenderFactVersion({ successorVersionId, expectedSuccessorHash, predecessorVersionId, expectedPredecessorHash, actorUserId, idempotencyKey, now }) -> { successor, predecessor }`. Create inserts immutable content plus event version 1 `created`. Approve requires latest `created`; revoke requires latest `approved`; approve-and-supersede requires a draft successor whose `supersedes_id` is the approved predecessor.
+
+Every command computes `payload_hash`, looks up `matrix_sender_fact_commands.idempotency_key`, and runs one `IMMEDIATE` transaction. A new command inserts its `command_id`, all content/events, and final `result_json` before commit. Event keys are derived, never caller-supplied: `event_key = command_id + ':' + command_event_index`. Create/approve/revoke produce index `1`; approve-and-supersede produces exactly index `1` successor `approved` and index `2` predecessor `superseded`, both carrying the same `command_id`, with reciprocal `related_version_id`. Reusing the same idempotency key and identical payload hash returns the stored result without new rows; for approve-and-supersede this returns the same stored `{ successor, predecessor }`. The same key with a different payload hash or command type is `SENDER_FACT_IDEMPOTENCY_CONFLICT`. Any validation, event insert, result serialization, or second-event failure rolls back the command row and both events, leaving both versions unchanged. Terminal versions cannot transition. Event `reason` is null except revoke, where it is non-empty; `related_version_id` is null except both sides of supersession. Direct UPDATE/DELETE of content, commands, or events fails.
+
+Unavailable channel output is `null`, never fabricated or requested from the provider. `available=true` requires `reason_code='eligible'` and a current evidence ID; every unavailable reason requires `available=false`, with evidence nullable only for `missing_recipient|channel_not_requested`. Email-only, WhatsApp-only, and neither-available states are valid independently. The draft service makes one provider call per available channel with the exact field tuple above; failure/null/extra/missing fields mark only that channel `provider_failed` and null only its outputs. Unavailable channels make zero provider calls. If neither channel is generated the packet stays `text_pending`; one generated channel may proceed independently. `allowed_formats` is derived, never caller-supplied: generated email adds `email_en` and `strategy_cn`; generated WhatsApp adds `whatsapp_en`; output order is always email, Chinese explanation, WhatsApp.
 
 Server rendering is exact: `email_en` is `EMAIL EN\nSubject: <subject>\n\n<body_en>`; `strategy_cn` is `中文说明\n策略：<strategy_cn>\n\n中文译文：\n<body_cn>`; `whatsapp_en` is `WHATSAPP EN\n<whatsapp_en>`. `strategy_cn` is internal analysis, is not a customer-facing claim, and therefore has no `ClaimBinding`; a separate deterministic validator rejects any unsupported customer claim before packet review. The group receipt contains identifiers/formats/record path only and never customer text.
+
+`AtlasReviewedPacket.content_hash` is `sha256:<hex>` over UTF-8 RFC-8785 canonical JSON containing exactly `organization_id`, `candidate_fact_version`, `sender_fact_version_id`, `channel_availability`, `subject`, `body_en`, `body_cn`, `strategy_cn`, `whatsapp_en`, `whatsapp_cn`, `claim_bindings`, `score_version`, and numeric-ascending `evidence_ids`. It excludes packet IDs, the hash itself, review timestamps/actors, and materialization state. `packet_version_id` is an opaque ULID created once by injected `idFactory` at successful review; the reviewed packet and private-copy-source row are inserted atomically and never updated.
 
 ```sql
 CREATE TABLE atlas_private_copy_sources (
   source_version_id TEXT PRIMARY KEY,
   packet_id INTEGER NOT NULL UNIQUE REFERENCES atlas_packets(id),
-  content_hash TEXT NOT NULL CHECK(content_hash GLOB 'sha256:[0-9a-f]*' AND length(content_hash) = 71),
+  content_hash TEXT NOT NULL CHECK(length(content_hash) = 71 AND substr(content_hash, 1, 7) = 'sha256:' AND substr(content_hash, 8) NOT GLOB '*[^0-9a-f]*'),
   allowed_formats_json TEXT NOT NULL CHECK(json_valid(allowed_formats_json) AND json_type(allowed_formats_json) = 'array'),
   review_event_id INTEGER NOT NULL UNIQUE REFERENCES atlas_events(id),
   created_at TEXT NOT NULL
 );
 ```
 
-`atlas_private_copy_sources` is append-only with UPDATE/DELETE denial triggers. `createAtlasPrivateCopyRepository({ readonlyAtlasDb })` sets `query_only=ON` and exposes only `load({ sourceType, sourceVersionId })`. It accepts `atlas_reviewed_packet` only, joins the reviewed `atlas_packets` row, parses `AtlasReviewedPacket`, recomputes its canonical content hash, re-derives allowed formats from stored channel availability, and returns `PrivateCopyRenderBundle`. Hash/format/review mismatch fails closed. Card, callback, and outbox callers may provide only source type/version; text, hash, formats, packet JSON, recipient, and target are rejected.
+`atlas_private_copy_sources` is append-only with UPDATE/DELETE denial triggers. `createAtlasPrivateCopyRepository({ readonlyAtlasDb })` first sets `foreign_keys=ON` and `query_only=ON`, then exposes only `load({ sourceType, sourceVersionId })`. It accepts `atlas_reviewed_packet` only, joins the reviewed `atlas_packets` row, parses `AtlasReviewedPacket`, recomputes its canonical content hash, re-derives allowed formats from stored channel availability plus `channel_generation`, renders the exact sections, and returns `PrivateCopyRenderBundle`. Missing row, hash/format/review mismatch, malformed JSON, unavailable format, and non-readonly DB fail closed. Card, callback, and outbox callers may provide only source type/version; text, hash, formats, packet JSON, recipient, and target are rejected.
 
 ---
 
@@ -254,9 +331,11 @@ Add these exact paused definitions to the config; `.example` is fixture-only and
 ]
 ```
 
+Registry time semantics are exact: `validateSourceDefinition` may register an expired definition only when `status='paused'`; it returns `policy_current:false`. `authorizeFetch` checks status and policy on every call and returns `SOURCE_PAUSED` for paused definitions and `SOURCE_POLICY_EXPIRED` for an expired active definition, before DNS/network work. A `.example` origin can never transition to active. Changing status, origin, paths, review/expiry, adapter, or coverage note requires a new reviewed definition and checksum; activation requires `robots_reviewed_at <= now < policy_expires_at`, a non-`.example` HTTPS origin, and the separately recorded reviewer.
+
 - [ ] Write RED fixtures proving market data creates tasks only; government/exhibition rows retain locators; official HTML/PDF, RX, and PX facts retain coverage caveats, relationship direction, and source locators; personal/private fields never appear. Assert the exact registry definition → adapter mapping and refuse an unknown/mismatched adapter code or content type.
 - [ ] Add static RED assertions that adapters import no fetch, DNS, browser, credentials, child process, or transport.
-- [ ] Extend strict registry validation with exact `adapter_code` enum and required `coverage_note`. Registration stores `policy_checksum='sha256:'+sha256(RFC-8785 canonical definition excluding the checksum)` and the append-only before/after event; tests recompute it and prove any field change changes the checksum.
+- [ ] Extend strict registry validation with the exact paused-expired rule, `adapter_code` enum, and required `coverage_note`. Registration stores `policy_checksum='sha256:'+sha256(RFC-8785 canonical definition excluding the checksum)` and the append-only before/after event; tests recompute it and prove any field change changes the checksum. RED must prove both fixture definitions register as paused/policy-current-false, authorize zero fetches, reject active `.example`, and require a future reviewed expiry plus new checksum for a real activation.
 - [ ] Write RED PDF cases for `PDF_ENCRYPTED`, `PDF_MALFORMED`, `PDF_OVERSIZE`, `PDF_PAGE_LIMIT`, `PDF_TEXT_LIMIT`, and `PDF_TIMEOUT`; the injected parser receives only the bounded buffer/options and has no network/process capability. Any selected package must be exact-pinned with version, license, integrity checksum, and lockfile review while preserving this interface.
 - [ ] Run `node scripts/test-matrix-atlas-adapters.js`; expect missing modules.
 - [ ] Implement `selectAtlasAdapter`, bounded `parsePublicPdf`, deterministic parse-only adapters, and exact fact/discovery schemas. Paused fixture sources authorize zero scanner fetches.
@@ -314,38 +393,47 @@ rankRecommendations(rows) {
 **Files:** create `src/services/matrixSenderFacts.js`, `src/services/matrixAtlasDraft.js`, `src/services/matrixAtlasDraftGate.js`, `scripts/test-matrix-sender-facts.js`, `scripts/test-matrix-atlas-draft.js`, `scripts/test-matrix-atlas-draft-gate.js`; modify `src/db.js` for immutable sender facts.
 
 ```js
-createSenderFactVersion({ facts, siteResource, sourceEvidenceIds, actorUserId, idempotencyKey })
-approveSenderFactVersion({ versionId, expectedContentHash, actorUserId, idempotencyKey })
+createSenderFactVersion({ facts, siteResource, sourceEvidenceIds, supersedesId, actorUserId, idempotencyKey, now })
+approveSenderFactVersion({ versionId, expectedContentHash, actorUserId, idempotencyKey, now })
+revokeSenderFactVersion({ versionId, expectedContentHash, reason, actorUserId, idempotencyKey, now })
+approveAndSupersedeSenderFactVersion({ successorVersionId, expectedSuccessorHash, predecessorVersionId, expectedPredecessorHash, actorUserId, idempotencyKey, now })
 createAtlasDraft({ candidateFactBlock, senderFactVersion, channelAvailability, textProvider })
-// -> { subject, body_en, body_cn, strategy_cn, whatsapp_en, whatsapp_cn, claim_bindings }
+// -> AtlasDraft
 scoreAtlasDraft({ draft, candidateFactBlock, senderFactVersion, recipientEvidence, now })
-// -> { score, passed, components, hardFailures, revisionSuggestions }
+// -> { score, passed, channelResults: { email, whatsapp }, components, hardFailures, revisionSuggestions }
 ```
 
-- [ ] Write RED immutable `SenderFactVersion` tests for authoritative website evidence, owner approval/revocation/supersession, exact sender `Gavin`, approved site resource, and unapproved/superseded fact rejection.
+- [ ] Write RED schema/hash vectors for RFC-8785 canonical input, sorted fact/evidence arrays, all status/null combinations, immutable content/command/event denial triggers, exact event versions, injected `command_id`, derived `command_id:index` event keys, one-event command rows, same-input command replay, changed-payload/command-type conflict, stale hash, invalid transition, exact sender `Gavin`, and authoritative approved site evidence.
+- [ ] Write RED lifecycle tests for create→approve, create→approve→revoke, and atomic draft-successor approval + approved-predecessor supersession. For approve-and-supersede assert one shared command row, exactly two events with the same `command_id` and indexes `1/2`, reciprocal related IDs, and one stored two-result JSON. Replay the same key/hash and require the identical `{ successor, predecessor }` with unchanged row counts; reuse the key with either payload changed and require `SENDER_FACT_IDEMPOTENCY_CONFLICT`. Inject failure before the second event and before result serialization; require rollback of command/both events and unchanged versions. Also prove direct supersession, terminal transition, wrong predecessor, and unapproved/superseded/revoked draft use fail.
 - [ ] Write RED word-boundary tests using the exact `--SIGNATURE--` delimiter and Unicode whitespace word counter: English 89/131 fail and 90/130 pass; WhatsApp 44/81 fails and 45/80 passes; CRLF/bullets/URLs are deterministic; Chinese must be a complete semantic pair.
 - [ ] Write RED hard failures for unsupported price, certification, performance, delivery, volume, supplier/China claim, person/role, recipient, or website. Email requires current public organizational-email provenance; WhatsApp copy requires current public organizational-number provenance and allowed channel policy; a contact page is neither.
+- [ ] Write the exact independent-channel RED matrix: email-only makes one four-field email call and nulls WhatsApp; WhatsApp-only makes one two-field WhatsApp call and nulls email/Chinese fields; neither makes zero calls and stays `text_pending`; stale/policy-denied/suppressed channels make zero calls; one channel provider failure does not erase the other; missing/null/extra provider fields fail only that channel. Assert derived `allowed_formats` for every row.
 - [ ] Write RED quality tests for sourced customer observation, one approved concise Huasheng fact, relevant hypothesis, one/two questions, low-friction CTA, truthful signature, and same-domain link.
 - [ ] Prove missing numeric size does not fail when a strong evidenced product-family observation exists.
-- [ ] Implement exact provider JSON limited to `subject/body_en/body_cn/strategy_cn/whatsapp_en/whatsapp_cn`; deterministic code creates `ClaimBinding` rows. `strategy_cn` is internal only and cannot add customer-facing claims. Apply independent `ChannelAvailability`: unavailable output is null and cannot block an available channel. Add safe component-specific revision suggestions; pass threshold ≥80 with zero hard failure.
-- [ ] Run both tests; expect PASS.
+- [ ] Implement the exact immutable content/command/event tables and four lifecycle commands. Centralize command handling as `runSenderFactCommand({ commandType, idempotencyKey, payload, now, execute })`: compute payload hash, replay stored `result_json` only on exact key/type/hash match, otherwise run command row + one/two derived events + result serialization in one `IMMEDIATE` transaction. Hydrate `SenderFactVersion` from immutable content plus latest events and enforce the canonical hash/null/state rules.
+- [ ] Implement per-channel `SenderFactProvider.generate` calls with exact requested/returned fields; deterministic code creates `ClaimBinding` rows. `strategy_cn` is internal only and cannot add customer-facing claims. Score/gate channels independently, keep unavailable/failed output null, derive formats from successfully generated channels, and add safe component-specific revision suggestions; a channel passes at ≥80 with zero channel hard failure.
+- [ ] Run all three focused tests: `node scripts/test-matrix-sender-facts.js`, `node scripts/test-matrix-atlas-draft.js`, and `node scripts/test-matrix-atlas-draft-gate.js`; expect PASS.
 - [ ] Commit `feat: generate evidence-bound atlas drafts`.
 
 ### Task 8: Packet Guard and Compatibility Handoff
 
-**Files:** create `src/services/matrixAtlasPlan.js`, `scripts/test-matrix-atlas-plan.js`; modify `src/lib/cacheIndexView.js`.
+**Files:** create `src/services/matrixAtlasPlan.js`, `src/services/matrixAtlasPrivateCopyRepository.js`, `scripts/test-matrix-atlas-plan.js`, `scripts/test-matrix-atlas-private-copy-repository.js`; modify `src/lib/matrixAtlasDb.js`, `src/lib/cacheIndexView.js`.
 
 ```js
 buildPacket(db, organizationId, { draftService, asOf })
 reviewPacket(db, { packetId, actorUserId, decision, idempotencyKey })
 materializePacket(atlasDb, cacheDb, packetId)
+createAtlasPrivateCopyRepository({ readonlyAtlasDb }).load({ sourceType, sourceVersionId })
+// -> PrivateCopyRenderBundle
 ```
 
-- [ ] Write RED tests for unsupported claim, text pending, low score, conflicting lane, unreviewed packet, replay, normalized-domain update, and no CRM/delivery write.
+- [ ] Write RED tests for unsupported claim, text pending, low score, conflicting lane, unreviewed packet, replay, normalized-domain update, and no CRM/delivery write. Assert the exact packet hash vector, injected ULID stability, atomic reviewed-packet/private-source insert, append-only denial triggers, and derived successful-channel formats.
+- [ ] Write RED repository tests for query-only enforcement, exact source type/version, server-side packet load, hash recomputation, format re-derivation, exact three renderers/group receipt, email-only/WhatsApp-only output, malformed JSON, missing/unreviewed packet, hash/format mismatch, and rejection of caller text/hash/formats/recipient/target.
 - [ ] Run plan/cache tests; expect missing service/fields.
-- [ ] Implement evidence/fact/score/draft packet and reviewed-only materialization; WhatsApp remains manual copy with no send action.
-- [ ] Materialize the canonical `AtlasReviewedPacket` and `PrivateCopySource`. Operations Task 4 must execute after this task, accept only `source_type='atlas_reviewed_packet'`, reload the packet/hash server-side, omit unavailable formats, and prove `EMAIL EN`, `中文说明`, and eligible `WHATSAPP EN` delivery to the server-derived clicking operator with compact group receipt and zero sent-state mutation.
+- [ ] Implement evidence/fact/score/draft packet, exact canonical hash, reviewed-only materialization, `atlas_private_copy_sources` migration/triggers, and the narrow read-only repository. WhatsApp remains manual copy with no send action.
+- [ ] Materialize the canonical `AtlasReviewedPacket` and `PrivateCopySource` atomically. Operations Task 4 consumes `createAtlasPrivateCopyRepository` through a management-only `MATRIX_ATLAS_DB_PATH` opened mode-`0600`, read-only/query-only; bot runtime receives neither the path nor DB. It accepts only `source_type='atlas_reviewed_packet'`, reloads server-side, omits unavailable/failed formats, and rejects callback content.
 - [ ] Run packet and strict recommendation tests; expect ≤5 and full provenance.
+- [ ] Run `node scripts/test-matrix-atlas-private-copy-repository.js`; expect PASS.
 - [ ] Commit `feat: hand off matrix atlas packets`.
 
 ### Task 9: Human Gold Standard and Adoption Gate
@@ -385,7 +473,13 @@ effectiveBudgets({ requested, backlog, oldestPendingDays, policyVersion })
 - [ ] Run every Atlas test, cache/Matrix verifier, syntax, and diff checks.
 - [ ] Commit `test: gate matrix atlas rollout`.
 
-## Final Atlas/Draft Verification
+## Execution Wave and Acceptance Order
+
+1. Implement Atlas Tasks 1–11 and run the Atlas-local verification below. Operations code is not required for this local gate.
+2. After Task 8's reviewed packet/repository commit exists, implement Operations Task 4. Its management application opens `MATRIX_ATLAS_DB_PATH` read-only/mode-`0600`, injects `createAtlasPrivateCopyRepository({readonlyAtlasDb})` into the outbox source resolver, and never exposes that DB/path to the bot or caller.
+3. Run the combined Atlas→Operations verification. Program acceptance is blocked until private delivery reaches the server-derived clicking operator, the group receives only the compact receipt, unavailable/failed formats are omitted, replay is idempotent, and sent-state mutation remains zero.
+
+## Atlas-Local Verification
 
 ```bash
 node scripts/test-matrix-atlas-db.js
@@ -400,10 +494,10 @@ node scripts/test-matrix-atlas-draft.js
 node scripts/test-matrix-atlas-draft-gate.js
 node scripts/test-matrix-sender-facts.js
 node scripts/test-matrix-atlas-plan.js
+node scripts/test-matrix-atlas-private-copy-repository.js
 node scripts/test-matrix-atlas-gold-review.js
 node scripts/test-matrix-atlas-runner.js
 node scripts/test-cache-index-view.js
-node scripts/test-matrix-copy-outbox.js
 node scripts/test-matrix-api.js
 node scripts/test-matrix-stream-review.js
 node scripts/test-matrix-stream-gates.js
@@ -414,6 +508,26 @@ MATRIX_STREAM_DB_PATH=/home/admin/work/packaging-system/data/matrix-stream.db np
 npm --prefix frontend-next run lint
 npm --prefix frontend-next run build
 node scripts/run-ui-e2e.js
+git diff --check
+```
+
+## Combined Atlas→Operations Verification
+
+Run only after Operations Task 4 is implemented:
+
+```bash
+node scripts/test-matrix-sender-facts.js
+node scripts/test-matrix-atlas-draft.js
+node scripts/test-matrix-atlas-draft-gate.js
+node scripts/test-matrix-atlas-plan.js
+node scripts/test-matrix-atlas-private-copy-repository.js
+node scripts/test-matrix-copy-outbox.js
+node scripts/test-matrix-api.js
+node scripts/test-matrix-stream-review.js
+node scripts/test-matrix-stream-gates.js
+node .runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js
+node .runtime/vm_debug_ci/workspace/tests/test-matrix-supervisor-watch.js
+MATRIX_STREAM_DB_PATH=/home/admin/work/packaging-system/data/matrix-stream.db npm run verify:matrix-readonly-selection
 git diff --check
 ```
 
