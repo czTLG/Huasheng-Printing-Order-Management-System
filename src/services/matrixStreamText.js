@@ -26,7 +26,7 @@ function extractUrls(value) {
 
 const PRICE_SEMANTIC = /(?:价格|报价|单价|售价|费用|收费|免费|成本|\b(?:price|quote|rate|fee|cost|free)\b)/i;
 const QUALIFICATION_SEMANTIC = /(?:认证|证书|资质|许可证|许可|审核|认可|批准|合规|标准|规范|要求|\b(?:certified|certificate|certification|license[ds]?|permit(?:ted)?|audit(?:ed)?|approved|recognized|compliant|compliance|standard|requirement)\b)/i;
-const CHINESE_REQUEST = /^(?:(?:请|烦请)(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)|(?:能否|可以|可否)(?:请)?(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)|(?:是否有|您是否有|贵司是否有|贵司是否(?:可以|能够|提供)))(.*)$/i;
+const CHINESE_REQUEST = /^(?:请问|(?:请|烦请)(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)(?:您|贵司)?|(?:能否|可以|可否)(?:请)?(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)(?:您|贵司)?|(?:是否有|您是否有|贵司是否有|贵司是否(?:可以|能够|提供)))(.*)$/i;
 const ENGLISH_REQUEST = /^(?:(?:(?:could|would|can) you)(?: please)? (?:provide|confirm|quote|tell|share|send)|please (?:provide|confirm|quote|tell|share|send)|what (?:is|are))(?:\s+|$)(.*)$/i;
 const CHINESE_ASSERTION = /(?:是|为|已|拥有|通过|获得|获|无需|免收费|免费|符合|满足|达到|具备|持有|取得|认可|批准|备案|单价请询价)/i;
 const ENGLISH_ASSERTION = /\b(?:is|are|our price|we are|we have|have|has|approved|certified|recognized|compliant|free|no[ -]?fee|note)\b|\b(?:price|quote|rate|fee|cost)\s+(?:is|are)\b/i;
@@ -57,9 +57,23 @@ function sensitiveKinds(sentence) {
 function isNonAssertionRequest(sentence) {
   const text = normalizedSyntaxSentence(sentence);
   const chinese = text.match(CHINESE_REQUEST);
-  if (chinese) return !CHINESE_ASSERTION.test(chinese[1]);
+  if (chinese) {
+    const remainder = chinese[1];
+    if (/[:：]/u.test(remainder) || /(?:我们(?:的)?|我方|本公司|本司)/u.test(remainder)) return false;
+    const optionQuestion = /是否/u.test(remainder) || /(?:偏好|选择|采用|使用)[^。！？?]{0,40}还是/u.test(remainder);
+    if (optionQuestion) return true;
+    const suppliedProperty = /(?:材料|表面|封口|颜色|透明|不透明|拉链|魔术贴|阀|袋型)/u.test(remainder);
+    if (/(?:确认|说明)/u.test(text) && suppliedProperty) return false;
+    return !CHINESE_ASSERTION.test(remainder);
+  }
   const english = text.match(ENGLISH_REQUEST);
-  return Boolean(english && !ENGLISH_ASSERTION.test(english[1]));
+  if (!english) return false;
+  const remainder = english[1];
+  if (/[:：]/u.test(remainder) || /\b(?:our|ours|we)\b/i.test(remainder)) return false;
+  if (/\bwhether\b/i.test(remainder)) return true;
+  const suppliedProperty = /\b(?:material|finish|surface|closure|color|colour|transparent|opaque|zipper|velcro|valve|pouch)\b/i.test(remainder);
+  if (/\bconfirm\b/i.test(text) && suppliedProperty) return false;
+  return !ENGLISH_ASSERTION.test(remainder);
 }
 
 function assertionText(value) {

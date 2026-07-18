@@ -48,33 +48,44 @@ function unsupportedClaims(input) {
   return [...new Set(output.filter(claim => !supported.includes(claim)).map(claim => claim.split(':', 1)[0]))];
 }
 
-function productToken(value) {
-  return compact(value).replace(/pouches/g, 'pouch').replace(/bags/g, 'bag');
-}
-
 function claimKeys(values, evidence = null) {
   const keys = [];
   for (const value of values) {
     for (const raw of splitSentences(value)) {
       if (isNonAssertionRequest(raw)) continue;
-      const statement = normalizeTextNumbers(raw).replace(/[。.!?！？]+$/u, '').trim();
-      const matched = Object.entries(CLAIM_SEMANTICS).filter(([, semantic]) => semantic.test(statement)).map(([type]) => type);
-      const intent = /^(?:we (?:would like|want) to discuss)\b/i.test(raw) || /(?:希望|想要)(?:沟通|了解)/u.test(raw);
-      const products = evidence ? [evidence.entryProduct, ...(Array.isArray(evidence.products) ? evidence.products : [])]
-        .map(productToken).filter(Boolean) : [];
-      const statementFacts = [extractOntologyFacts(statement, 'en'), extractOntologyFacts(statement, 'cn')];
-      const evidenceText = evidence ? [evidence.entryProduct, ...(Array.isArray(evidence.products) ? evidence.products : [])].join('\n') : '';
-      const evidenceFacts = [extractOntologyFacts(evidenceText, 'en'), extractOntologyFacts(evidenceText, 'cn')];
-      const ontologyOverlap = statementFacts.some(facts => Object.entries(facts).some(([role, values]) => {
-        const supported = new Set(evidenceFacts.flatMap(item => item[role] || []));
-        return values.some(value => supported.has(value));
-      }));
-      const mentionsEvidenceProduct = products.some(product => productToken(statement).includes(product)) || ontologyOverlap;
-      if (intent && matched.every(type => type === 'unsupported_performance') && mentionsEvidenceProduct) continue;
-      for (const type of matched) keys.push(`${type}:${compact(statement)}`);
+      for (const clause of claimClauses(raw)) {
+        const statement = normalizeTextNumbers(clause).replace(/[。.!?！？,，;；]+$/u, '').trim();
+        const semanticText = semanticClaimText(clause, evidence);
+        for (const [type, semantic] of Object.entries(CLAIM_SEMANTICS)) {
+          if (semantic.test(semanticText)) keys.push(`${type}:${compact(statement)}`);
+        }
+      }
     }
   }
   return [...new Set(keys)];
+}
+
+function claimClauses(raw) {
+  return String(raw).split(/(?<=[,，;；])\s*|\s+(?:and|but)\s+(?=(?:our\b|the\b|price\b|delivery\b|lead[ -]?time\b|we\b))/iu)
+    .map(clause => clause.trim()).filter(Boolean);
+}
+
+function semanticClaimText(clause, evidence) {
+  const statement = normalized(clause);
+  if (!evidence || !(/^(?:we (?:would like|want) to discuss)\b/i.test(statement) || /(?:希望|想要)(?:沟通|了解)/u.test(statement))) return statement;
+  const evidenceText = [evidence.entryProduct, ...(Array.isArray(evidence.products) ? evidence.products : [])].join('\n');
+  const statementFacts = [extractOntologyFacts(statement, 'en'), extractOntologyFacts(statement, 'cn')];
+  const evidenceFacts = [extractOntologyFacts(evidenceText, 'en'), extractOntologyFacts(evidenceText, 'cn')];
+  const evidenceBacked = statementFacts.some(facts => Object.entries(facts).some(([role, values]) => {
+    const supported = new Set(evidenceFacts.flatMap(item => item[role] || []));
+    return values.some(value => supported.has(value));
+  }));
+  if (!evidenceBacked) return statement;
+  return statement
+    .replace(/\bhigh[ -]barrier\b/giu, ' ')
+    .replace(/\bvalve\s+pouches?\b/giu, ' ')
+    .replace(/高阻隔/gu, ' ')
+    .replace(/带阀袋/gu, ' ');
 }
 
 const EN_NUMBERS = Object.freeze({ zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 });
@@ -179,25 +190,22 @@ function bilingualFacts(text, language, evidenceMode = false) {
   const date = isoDate(value); if (date) add('date', date);
   if (evidenceMode) {
     for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(kg|g|公斤|克)\b/giu)) add('weight', canonicalUnit(match[1], match[2]));
-    for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(microns?|um|μm|微米|mm|毫米)\b/giu)) add('thickness', canonicalUnit(match[1], match[2]));
-    for (const match of value.matchAll(/\b(\d+(?:\.\d+)?)\s*(cm|厘米|mm|毫米)\b/giu)) add('size_dimension', canonicalUnit(match[1], match[2]));
   }
   for (const [role, items] of Object.entries(extractOntologyFacts(value, language))) for (const item of items) add(role, item);
   return Object.fromEntries(Object.entries(facts).map(([role, items]) => [role, [...items].sort()]));
 }
 
 function alignedFacts(bodyEn, bodyCn) {
-  const en = bilingualFacts(bodyEn, 'en');
-  const cn = bilingualFacts(bodyCn, 'cn');
+  const asserted = value => splitSentences(value).filter(sentence => !isNonAssertionRequest(sentence)).join('\n');
+  const en = bilingualFacts(asserted(bodyEn), 'en');
+  const cn = bilingualFacts(asserted(bodyCn), 'cn');
   const roles = new Set([...Object.keys(en), ...Object.keys(cn)]);
   const conflicts = [...roles].filter(role => JSON.stringify(en[role] || []) !== JSON.stringify(cn[role] || []));
   return { aligned: conflicts.length === 0, conflicts };
 }
 
 function unsupportedProductFacts(bodyEn, bodyCn, evidence) {
-  const safeQuestion = sentence => isNonAssertionRequest(sentence)
-    || (/\?$|？$/u.test(sentence) && /^(?:could|would|can|please|what|请|烦请|能否|可以|可否)/iu.test(sentence.trim()));
-  const asserted = value => splitSentences(value).filter(sentence => !safeQuestion(sentence)).join('\n');
+  const asserted = value => splitSentences(value).filter(sentence => !isNonAssertionRequest(sentence)).join('\n');
   const bodyFacts = [bilingualFacts(asserted(bodyEn), 'en'), bilingualFacts(asserted(bodyCn), 'cn')];
   const evidenceText = [
     ...(Array.isArray(evidence.products) ? evidence.products : []),
@@ -213,10 +221,8 @@ function unsupportedProductFacts(bodyEn, bodyCn, evidence) {
 }
 
 function hasUnknownProductFact(bodyEn, bodyCn) {
-  const safeQuestion = sentence => isNonAssertionRequest(sentence)
-    || (/\?$|？$/u.test(sentence) && /^(?:could|would|can|please|what|请|烦请|能否|可以|可否)/iu.test(sentence.trim()));
   return [[bodyEn, 'en'], [bodyCn, 'cn']].some(([body, language]) => splitSentences(body).some(sentence => {
-    if (safeQuestion(sentence)) return false;
+    if (isNonAssertionRequest(sentence)) return false;
     const property = language === 'en'
       ? /\b(?:material|finish|surface|closure|color|colour|transparen|opaque|zipper|velcro|valve|pouch)\b/i.test(sentence)
       : /(?:材料|表面|封口|颜色|透明|不透明|拉链|魔术贴|阀|袋型)/u.test(sentence);
@@ -225,11 +231,15 @@ function hasUnknownProductFact(bodyEn, bodyCn) {
 }
 
 function questionIntents(text, language) {
-  const questions = normalized(text).split(/(?<=[?？])/u).filter(part => /[?？]/u.test(part));
+  const questions = splitSentences(text).filter(part => /[?？]$/u.test(part));
   const intents = new Set();
   for (const question of questions) {
     for (const [name, en, cn] of QUESTION_INTENTS) if ((language === 'en' ? en : cn).test(question)) intents.add(name);
-    if (Object.keys(extractOntologyFacts(question, language)).length) intents.add('product_fact');
+    if (isNonAssertionRequest(question)) {
+      for (const [role, values] of Object.entries(extractOntologyFacts(question, language))) {
+        for (const value of values) intents.add(`option:${role}:${value}`);
+      }
+    }
   }
   return { count: questions.length, intents: [...intents].sort() };
 }
@@ -281,8 +291,8 @@ function scoreDraft(input = {}) {
   const entryMatch = expectedEntryConcepts.length > 0
     && expectedEntryConcepts.every(value => enConcepts.includes(value) && cnConcepts.includes(value));
   const entryPoints = entryMatch ? MAXIMUMS.entry_value : 0;
-  const enQuestions = questionIntents(bodyEn, 'en');
-  const cnQuestions = questionIntents(bodyCn, 'cn');
+  const enQuestions = questionIntents(input.bodyEn, 'en');
+  const cnQuestions = questionIntents(input.bodyCn, 'cn');
   const questionMatch = enQuestions.count >= 1 && enQuestions.count <= 3 && cnQuestions.count >= 1 && cnQuestions.count <= 3
     && enQuestions.intents.length > 0 && JSON.stringify(enQuestions.intents) === JSON.stringify(cnQuestions.intents);
   const questionPoints = questionMatch ? MAXIMUMS.questions : 0;
@@ -291,7 +301,7 @@ function scoreDraft(input = {}) {
     && (expectedSpecs.some(value => numericSpecs(subject).includes(value)) || categories.some(value => includesPhrase(subject, value)))
     ? MAXIMUMS.subject : 0;
   const bilingualMatch = productMatch && entryMatch && questionMatch
-    && alignedFacts(bodyEn, bodyCn).aligned;
+    && alignedFacts(input.bodyEn, input.bodyCn).aligned;
   const bilingualPoints = bilingualMatch ? MAXIMUMS.bilingual_consistency : 0;
   const readabilityPoints = bodyEn.length >= 80 && bodyEn.length <= 1200 && bodyCn.length >= 30 && bodyCn.length <= 800
     && String(input.bodyEn || '').split(/\r?\n/).filter(line => line.trim()).length >= 2
@@ -315,7 +325,7 @@ function scoreDraft(input = {}) {
   };
   const score = Object.values(components).reduce((sum, value) => sum + value.points, 0);
   const hardFailures = unsupportedClaims(input);
-  const factAlignment = alignedFacts(bodyEn, bodyCn);
+  const factAlignment = alignedFacts(input.bodyEn, input.bodyCn);
   if (!factAlignment.aligned) hardFailures.push('bilingual_key_fact_conflict');
   if (unsupportedProductFacts(input.bodyEn, input.bodyCn, evidence)) hardFailures.push('unsupported_product_fact');
   if (hasUnknownProductFact(input.bodyEn, input.bodyCn)) hardFailures.push('unknown_product_fact');

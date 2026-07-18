@@ -2,7 +2,7 @@
 
 const ONTOLOGY = Object.freeze({
   material: [
-    ['pet', /\bpet\b/i, /(?:PET|聚酯)/iu], ['pe', /\bpe\b/i, /(?:PE|聚乙烯)/iu],
+    ['pet', /\bpet\b/i, /(?:PET(?![A-Z])|聚酯)/iu], ['pe', /\bpe\b/i, /(?:PE(?![A-Z])|聚乙烯)/iu],
     ['nylon', /\b(?:pa|ny|nylon)\b/i, /(?:PA|NY|尼龙)/iu], ['evoh', /\bevoh\b/i, /EVOH/iu],
     ['aluminum', /\b(?:al|aluminum\s*foil)\b/i, /(?:AL|铝箔)/iu], ['vmpet', /\bvmpet\b/i, /VMPET/iu],
     ['cpp', /\bcpp\b/i, /CPP/iu]
@@ -31,7 +31,7 @@ function extractOntologyFacts(text, language) {
     for (const [name, en, cn] of entries) if ((language === 'en' ? en : cn).test(value)) add(role, name);
   }
   const absentZipper = language === 'en' ? /\b(?:no|without)\s+zipper\b/i.test(value) : /(?:无|不带|没有)拉链/u.test(value);
-  const presentZipper = language === 'en' ? /\b(?:has?|with)\s+(?:a\s+)?zipper\b/i.test(value) : /(?:带有?|有)拉链/u.test(value);
+  const presentZipper = language === 'en' ? /\b(?:has?|with)\s+(?:a\s+)?zipper\b|\buse(?:s|d|ing)?\b[^.!?]{0,40}\bzipper\b/i.test(value) : /(?:带有?|有)拉链|使用[^。！？?]{0,30}拉链/u.test(value);
   if (absentZipper) add('zipper', 'absent'); else if (presentZipper) add('zipper', 'present');
   const absentValve = language === 'en' ? /\b(?:no|without)\s+valve\b/i.test(value) : /(?:无|不带|没有)阀/u.test(value);
   const presentValve = language === 'en' ? /\b(?:has?|with)\s+(?:a\s+)?valve\b|valve\s+pouch/i.test(value) : /(?:带有?|有)阀|带阀袋/u.test(value);
