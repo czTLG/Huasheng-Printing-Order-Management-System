@@ -153,6 +153,35 @@ function failInboxJob(openId, jobId, input) {
   return call(openId, `/inbox/jobs/${positiveId(jobId, 'inbox job id')}/fail`, { method: 'POST', body });
 }
 
+function createVersion(openId, workItemId, input) {
+  const body = { ...exactObject(input, new Set(['expected_work_version', 'idempotency_key']), 'version') };
+  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
+  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions`, { method: 'POST', body });
+}
+
+function reviseVersion(openId, workItemId, input) {
+  const body = { ...exactObject(input, new Set(['expected_work_version', 'base_version_id', 'revision_instruction', 'idempotency_key']), 'revision') };
+  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
+  body.base_version_id = positiveId(body.base_version_id, 'base version id');
+  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions`, { method: 'POST', body });
+}
+
+function approveVersion(openId, workItemId, versionId, input) {
+  const body = { ...exactObject(input, new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']), 'approval') };
+  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
+  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}/approve`, { method: 'POST', body });
+}
+
+function versionPreview(openId, workItemId, versionId) {
+  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}/preview`);
+}
+
+function confirmSend(openId, workItemId, versionId, input) {
+  const body = { ...exactObject(input, new Set(['expected_work_version', 'expected_content_hash', 'chat_id', 'card_event_id', 'idempotency_key']), 'send confirmation') };
+  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
+  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}/send`, { method: 'POST', body });
+}
+
 function startReplyDraft(openId, notificationId) {
   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/reply-draft`, { method: 'POST', body: {} });
 }
@@ -185,5 +214,6 @@ module.exports = {
   selectCandidate, workItems, claimInboxJob, inboxWorkbench, contextSearch,
   contextResolve, contextRecord, ackInboxJob, failInboxJob, startReplyDraft,
   retryTranslation, claimNotification, ackNotification, nackNotification,
-  notificationStatus
+  notificationStatus, createVersion, reviseVersion, approveVersion,
+  versionPreview, confirmSend
 };
