@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const { parse: parseDomain } = require('tldts');
+const { scoreDraft } = require('./matrixStreamGate');
 
 function positiveInteger(value, name) {
   const number = Number(value);
@@ -27,6 +28,27 @@ function contentHash(value) {
 
 function requestFingerprint(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function versionQuality({ subject, bodyEn, bodyCn, recipient, sourceSnapshot, now }) {
+  const nestedEvidence = sourceSnapshot?.evidence && typeof sourceSnapshot.evidence === 'object'
+    && !Array.isArray(sourceSnapshot.evidence) ? sourceSnapshot.evidence : {};
+  return scoreDraft({
+    subject,
+    bodyEn,
+    bodyCn,
+    recipient,
+    evidence: { ...(sourceSnapshot || {}), ...nestedEvidence },
+    now
+  });
 }
 
 function validateRecipient(input, nowValue = new Date()) {
@@ -223,16 +245,18 @@ function createInitialVersion(db, input = {}) {
       bodyCn
     });
     const at = timestamp();
+    const quality = versionQuality({ subject, bodyEn, bodyCn, recipient, sourceSnapshot, now: at });
+    const qualityJson = canonicalJson(quality);
     const inserted = db.prepare(`
       INSERT INTO matrix_stream_versions (
         work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
         subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
-        status, created_by, created_at, updated_at
-      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+        quality_score, quality_json, status, created_by, created_at, updated_at
+      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
     `).run(
       workItemId, evidenceBinding.evidence.id, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
       subject, bodyEn, bodyCn, strategySummary, JSON.stringify(sourceSnapshot),
-      hash, actorUserId, at, at
+      hash, quality.score, qualityJson, actorUserId, at, at
     );
     const versionId = Number(inserted.lastInsertRowid);
     const updated = db.prepare(`
@@ -332,6 +356,21 @@ function reviseVersion(db, input = {}) {
       bodyCn
     });
     const at = timestamp();
+    let sourceSnapshot;
+    try { sourceSnapshot = JSON.parse(base.source_snapshot_json); } catch (_) { throw new Error('stored source snapshot invalid'); }
+    const quality = versionQuality({
+      subject,
+      bodyEn,
+      bodyCn,
+      recipient: {
+        email: base.recipient_email,
+        sourceUrl: base.recipient_source_url,
+        verifiedAt: base.recipient_verified_at
+      },
+      sourceSnapshot,
+      now: at
+    });
+    const qualityJson = canonicalJson(quality);
     const nextRevision = Number(db.prepare(
       'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM matrix_stream_versions WHERE work_item_id = ?'
     ).get(workItemId).revision);
@@ -343,11 +382,12 @@ function reviseVersion(db, input = {}) {
       INSERT INTO matrix_stream_versions (
         work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
         subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
-        status, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+        quality_score, quality_json, status, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
     `).run(
       workItemId, base.recipient_evidence_id, nextRevision, base.recipient_email, base.recipient_source_url, base.recipient_verified_at,
-      subject, bodyEn, bodyCn, base.strategy_summary, base.source_snapshot_json, hash, actorUserId, at, at
+      subject, bodyEn, bodyCn, base.strategy_summary, base.source_snapshot_json, hash,
+      quality.score, qualityJson, actorUserId, at, at
     );
     const versionId = Number(inserted.lastInsertRowid);
     const updated = db.prepare(`
@@ -380,11 +420,39 @@ function getVersion(db, input = {}) {
   return version;
 }
 
+function finalPreview(db, input = {}) {
+  const version = getVersion(db, input);
+  if (!version) return null;
+  let quality;
+  try { quality = JSON.parse(version.quality_json); } catch (_) { quality = null; }
+  const reasons = [];
+  if (version.status !== 'approved') reasons.push('version_not_approved');
+  if (!quality || version.quality_score !== quality.score) reasons.push('quality_record_invalid');
+  if (version.quality_score < 80) reasons.push('quality_score_below_80');
+  if (Array.isArray(quality?.hardFailures)) reasons.push(...quality.hardFailures);
+  return {
+    version,
+    quality,
+    allowed: reasons.length === 0,
+    reasons: [...new Set(reasons)]
+  };
+}
+
+function confirmFinalGate(db, input = {}) {
+  const preview = finalPreview(db, input);
+  if (!preview) throw new Error('version not found');
+  if (!preview.allowed) throw new Error(`quality final gate blocked: ${preview.reasons.join(',')}`);
+  return preview;
+}
+
 module.exports = {
   contentHash,
   createInitialVersion,
   reviseVersion,
   approveVersion,
   getVersion,
+  finalPreview,
+  confirmFinalGate,
+  canonicalJson,
   validateRecipient
 };
