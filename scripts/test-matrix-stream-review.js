@@ -400,7 +400,9 @@ try {
   }
   for (const sentenceLevelClaim of [
     '价格免费。', '本项目无需费用。', '产品已获Sedex认可。',
-    '产品获得Acme批准。', '材料达到Acme规范。', '是否已通过Sedex审核？'
+    '产品获得Acme批准。', '材料达到Acme规范。', '是否已通过Sedex审核？',
+    '价格是99？', '价格为99美元？', 'The price is USD 99?', '单价请询价？',
+    'Please note our price is USD 99.', 'Please confirm it is USD 99.'
   ]) {
     await assert.rejects(
       () => createMatrixStreamText({
@@ -424,7 +426,11 @@ try {
     });
     assert.strictEqual(acceptedSentence.body_cn, sentenceLevelEvidence);
   }
-  for (const allowedQuestion of ['请提供报价。', '您是否有Sedex认证？', 'Could you quote this item?', 'What is the price?']) {
+  for (const allowedQuestion of [
+    '请提供报价。', '烦请告知报价。', '能否提供报价？', '可否确认费用？',
+    '是否有Sedex认证？', '贵司是否有Sedex认证？', 'Could you quote this item?',
+    'Please provide a quote.', 'What is the price?'
+  ]) {
     const acceptedQuestion = await createMatrixStreamText({
       callJson: async () => ({
         subject: 'Question only', body_en: 'Hello Alpha team.', body_cn: allowedQuestion
