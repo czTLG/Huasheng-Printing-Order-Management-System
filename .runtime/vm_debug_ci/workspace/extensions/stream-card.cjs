@@ -11,6 +11,8 @@ const SESSION_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
+const REPLY_SPOOL_PATH = '/workspace/store/matrix-reply-pending.json';
+const REPLY_INFLIGHT_PATH = '/workspace/store/matrix-reply-inflight.json';
 const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
 const COUNTRY_NAMES_CN = Object.freeze({
   US: '美国', VN: '越南', TH: '泰国', MY: '马来西亚', ID: '印度尼西亚', PH: '菲律宾',
@@ -98,6 +100,48 @@ async function deliverQueuedReminder({
   }
   removeInflight(inflightPath);
   return { status: 'delivered', id: inflight.id };
+}
+
+function validateReplyRecord(record, expectedChatId) {
+  const keys = Object.keys(record || {}).sort();
+  const expected = ['card', 'chat_id', 'claim_token', 'id', 'notification_key', 'version'];
+  if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new Error('invalid reply notification record fields');
+  if (record.version !== 1 || !Number.isInteger(record.id) || record.id < 1
+      || !/^[0-9a-f-]{36}$/i.test(record.notification_key)
+      || !/^[0-9a-f-]{36}$/i.test(record.claim_token)
+      || String(record.chat_id) !== String(expectedChatId || '')) throw new Error('invalid reply notification record binding');
+  if (!record.card || typeof record.card !== 'object' || Array.isArray(record.card)) throw new Error('invalid reply notification card');
+  return record;
+}
+
+async function deliverQueuedReply({
+  client, openId = process.env.MATRIX_OWNER_OPEN_ID,
+  spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH,
+  expectedChatId = process.env.STREAM_CHAT_ID, channel, sendManagedCard
+}) {
+  const existingInflight = readOptionalJson(inflightPath);
+  if (existingInflight) {
+    const record = validateReplyRecord(existingInflight, expectedChatId);
+    await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome: 'ambiguous' });
+    fs.unlinkSync(inflightPath);
+    return { status: 'manual_review', id: record.id };
+  }
+  const queued = readOptionalJson(spoolPath);
+  if (!queued) return false;
+  const record = validateReplyRecord(queued, expectedChatId);
+  fs.renameSync(spoolPath, inflightPath);
+  try {
+    const sent = await sendManagedCard(channel, record.chat_id, record.card, '', false, 'chat_id', record.notification_key);
+    const receiptId = String(sent?.messageId || record.notification_key);
+    await client.ackNotification(openId, record.id, { claim_token: record.claim_token, receipt_id: receiptId });
+    fs.unlinkSync(inflightPath);
+    return { status: 'delivered', id: record.id };
+  } catch (error) {
+    const outcome = error?.definiteDeliveryFailure === true ? 'failed' : 'ambiguous';
+    await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome });
+    fs.unlinkSync(inflightPath);
+    return { status: outcome === 'failed' ? 'retry_pending' : 'manual_review', id: record.id };
+  }
 }
 
 function clip(value, maximum = 90) {
@@ -395,6 +439,13 @@ function register(context) {
       if (result?.status === 'ambiguous') {
         logReminder(`[stream-card] reminder delivery ambiguous: ${result.id}; manual reconciliation required`);
       }
+      await deliverQueuedReply({
+        client, openId: process.env.MATRIX_OWNER_OPEN_ID,
+        channel, sendManagedCard,
+        spoolPath: context.replySpoolPath || REPLY_SPOOL_PATH,
+        inflightPath: context.replyInflightPath || REPLY_INFLIGHT_PATH,
+        expectedChatId: process.env.STREAM_CHAT_ID
+      });
     } catch (error) {
       logReminder(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}`);
     } finally {
@@ -807,4 +858,4 @@ function register(context) {
   };
 }
 
-module.exports = { register, deliverQueuedReminder, parseQuickChoice, authoritativeContextBlock };
+module.exports = { register, deliverQueuedReminder, deliverQueuedReply, parseQuickChoice, authoritativeContextBlock };

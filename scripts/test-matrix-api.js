@@ -633,6 +633,18 @@ function reviewState(workItemId) {
       async retryInboundTranslation(_db, input) {
         replyDraftCalls.push({ retry: true, ...input });
         return { notification_id: input.notificationId, translation_status: 'ready', retry_available: false };
+      },
+      claimNotification(_db, input) {
+        replyDraftCalls.push({ claim: true, ...input });
+        return { id: 51, notification_key: '00000000-0000-4000-8000-000000000051', claim_token: '00000000-0000-4000-8000-000000000052', delivery_state: 'inflight', work_item_id: workItemId, job_id: 71, kind: 'reply', original_preview: 'Hello', translation_status: 'pending', translation_cn: '', requirements_cn: '', work_item_state: 'replied', attempt_count: 1 };
+      },
+      ackNotification(_db, input) {
+        replyDraftCalls.push({ ack: true, ...input });
+        return { notification_id: input.notificationId, delivery_state: 'delivered' };
+      },
+      nackNotification(_db, input) {
+        replyDraftCalls.push({ nack: true, ...input });
+        return { notification_id: input.notificationId, delivery_state: input.outcome === 'ambiguous' ? 'manual_review' : 'pending' };
       }
     };
     const injectedApp = express();
@@ -722,6 +734,26 @@ function reviewState(workItemId) {
         body: { notification_id: 42, translation_status: 'ready', retry_available: false }
       });
       assert.strictEqual(replyDraftCalls.at(-1).retry, true);
+      const claimedNotification = await request('/api/matrix/notifications/claim', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: {}
+      });
+      assert.strictEqual(claimedNotification.status, 200);
+      assert.strictEqual(claimedNotification.body.notification.id, 51);
+      assert.strictEqual(replyDraftCalls.at(-1).bindingId, 1);
+      const ackedNotification = await request('/api/matrix/notifications/51/ack', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { claim_token: '00000000-0000-4000-8000-000000000052', receipt_id: 'message-51' }
+      });
+      assert.deepStrictEqual(ackedNotification, { status: 200, body: { notification_id: 51, delivery_state: 'delivered' } });
+      const nackedNotification = await request('/api/matrix/notifications/51/nack', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { claim_token: '00000000-0000-4000-8000-000000000052', outcome: 'ambiguous' }
+      });
+      assert.deepStrictEqual(nackedNotification, { status: 200, body: { notification_id: 51, delivery_state: 'manual_review' } });
+      const rejectedClaim = await request('/api/matrix/notifications/claim', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { limit: 2 }
+      });
+      assert.strictEqual(rejectedClaim.status, 400);
 
       const reviseBody = {
         expected_work_version: 3,

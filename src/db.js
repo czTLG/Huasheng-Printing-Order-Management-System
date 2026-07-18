@@ -1053,6 +1053,12 @@ function initDb() {
       FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_stream_internal_event_keys (
+      logical_key TEXT PRIMARY KEY,
+      event_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_api_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       actor_user_id INTEGER NOT NULL,
@@ -1128,6 +1134,7 @@ function initDb() {
 
     CREATE TABLE IF NOT EXISTS matrix_stream_inbound_links (
       inbound_message_id TEXT PRIMARY KEY,
+      email_message_row_id INTEGER,
       status TEXT NOT NULL CHECK(status IN ('matched','needs_review','unmatched')),
       kind TEXT NOT NULL DEFAULT '',
       work_item_id INTEGER,
@@ -1153,7 +1160,13 @@ function initDb() {
       work_item_state TEXT NOT NULL,
       retry_available INTEGER NOT NULL DEFAULT 0 CHECK(retry_available IN (0,1)),
       reply_draft_id INTEGER,
-      delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','claimed','delivered')),
+      notification_key TEXT NOT NULL UNIQUE,
+      delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','inflight','delivered','manual_review')),
+      owner_token TEXT NOT NULL DEFAULT '',
+      lease_expires_at TEXT NOT NULL DEFAULT '',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      receipt_id TEXT NOT NULL DEFAULT '',
+      last_error_class TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       delivered_at TEXT,
       FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
@@ -1366,6 +1379,60 @@ function initDb() {
 
   const matrixNotificationColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_notification_spool)').all().map(column => column.name));
   if (!matrixNotificationColumns.has('reply_draft_id')) db.exec('ALTER TABLE matrix_stream_notification_spool ADD COLUMN reply_draft_id INTEGER');
+
+  const matrixInboundLinkColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_inbound_links)').all().map(column => column.name));
+  if (!matrixInboundLinkColumns.has('email_message_row_id')) db.exec('ALTER TABLE matrix_stream_inbound_links ADD COLUMN email_message_row_id INTEGER');
+
+  const notificationSql = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='matrix_stream_notification_spool'").get()?.sql || '');
+  if (/\bclaimed\b/.test(notificationSql) || !/\bmanual_review\b/.test(notificationSql)) {
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.exec(`
+        ALTER TABLE matrix_stream_notification_spool RENAME TO matrix_stream_notification_spool_legacy;
+        CREATE TABLE matrix_stream_notification_spool (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          inbound_message_id TEXT NOT NULL UNIQUE,
+          work_item_id INTEGER NOT NULL,
+          job_id INTEGER NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('reply','refusal')),
+          original_preview TEXT NOT NULL,
+          translation_status TEXT NOT NULL CHECK(translation_status IN ('ready','pending')),
+          translation_cn TEXT NOT NULL DEFAULT '', requirements_cn TEXT NOT NULL DEFAULT '',
+          suggested_subject TEXT NOT NULL DEFAULT '', suggested_body_en TEXT NOT NULL DEFAULT '', suggested_body_cn TEXT NOT NULL DEFAULT '',
+          work_item_state TEXT NOT NULL, retry_available INTEGER NOT NULL DEFAULT 0 CHECK(retry_available IN (0,1)),
+          reply_draft_id INTEGER, notification_key TEXT NOT NULL UNIQUE,
+          delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','inflight','delivered','manual_review')),
+          owner_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT NOT NULL DEFAULT '', attempt_count INTEGER NOT NULL DEFAULT 0,
+          receipt_id TEXT NOT NULL DEFAULT '', last_error_class TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL, delivered_at TEXT,
+          FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
+          FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id), FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id),
+          FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id)
+        );
+      `);
+      const legacyRows = db.prepare('SELECT * FROM matrix_stream_notification_spool_legacy ORDER BY id').all();
+      const insertMigrated = db.prepare(`
+        INSERT INTO matrix_stream_notification_spool (
+          id, inbound_message_id, work_item_id, job_id, kind, original_preview,
+          translation_status, translation_cn, requirements_cn, suggested_subject,
+          suggested_body_en, suggested_body_cn, work_item_state, retry_available,
+          reply_draft_id, notification_key, delivery_state, created_at, delivered_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const row of legacyRows) {
+        insertMigrated.run(row.id, row.inbound_message_id, row.work_item_id, row.job_id, row.kind,
+          row.original_preview, row.translation_status, row.translation_cn, row.requirements_cn,
+          row.suggested_subject, row.suggested_body_en, row.suggested_body_cn, row.work_item_state,
+          row.retry_available, row.reply_draft_id,
+          crypto.randomUUID(), row.delivery_state === 'delivered' ? 'delivered' : row.delivery_state === 'pending' ? 'pending' : 'manual_review',
+          row.created_at, row.delivered_at);
+      }
+      db.exec('DROP TABLE matrix_stream_notification_spool_legacy');
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_matrix_stream_notification_spool_state ON matrix_stream_notification_spool(delivery_state, id)');
 
   db.prepare(`
     UPDATE matrix_sessions

@@ -3,12 +3,16 @@
 const crypto = require('node:crypto');
 const { createMatrixStreamText } = require('./matrixStreamText');
 const { closeReplyCheck } = require('./matrixStreamFollowup');
+const { redactSensitiveText } = require('../lib/safeText');
 
 const TERMINAL_KINDS = new Set(['reply', 'bounce', 'refusal', 'unsubscribe', 'manual_stop']);
 const TRANSLATION_KEYS = [
   'translation_cn', 'requirements_cn', 'suggested_subject',
   'suggested_body_en', 'suggested_body_cn'
 ];
+const STATE_PRIORITY = new Map([
+  ['selected', 0], ['sent', 0], ['replied', 10], ['refused', 20], ['bounced', 30], ['suppressed', 100]
+]);
 
 function cleanToken(value) {
   return String(value == null ? '' : value).normalize('NFKC').trim();
@@ -56,6 +60,20 @@ function clockIso(clock) {
   return { ms: date.getTime(), iso: date.toISOString() };
 }
 
+function authoredText(value) {
+  const lines = String(value == null ? '' : value).replace(/\r\n?/g, '\n').split('\n');
+  const kept = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^(?:-{2,}\s*Original Message\s*-{2,}|_{5,}|On .+ wrote:|From:\s|Sent:\s|Subject:\s|发件人[:：]|发送时间[:：]|主题[:：])/i.test(trimmed)) break;
+    if (/^--\s*$/.test(line) && kept.some(item => item.trim())) break;
+    if (kept.some(item => item.trim()) && /^(?:best regards|kind regards|regards|sincerely)[,!]?$/i.test(trimmed)) break;
+    if (kept.some(item => item.trim()) && /^(?:to unsubscribe|unsubscribe here|manage (?:email )?preferences|取消订阅|退订链接)/i.test(trimmed)) break;
+    if (!/^\s*>/.test(line)) kept.push(line);
+  }
+  return kept.join('\n').trim();
+}
+
 function classifyKind(message) {
   const explicit = cleanToken(message.event_kind || message.kind).toLowerCase();
   if (explicit) {
@@ -63,7 +81,7 @@ function classifyKind(message) {
     return explicit;
   }
   const subject = cleanToken(message.subject);
-  const body = cleanToken(message.cleaned_text || message.text_body);
+  const body = authoredText(message.cleaned_text || message.text_body);
   const sender = emailAddresses(message.from_email)[0] || '';
   const source = `${subject}\n${body}`;
   if (/mailer-daemon|postmaster/i.test(sender)
@@ -74,11 +92,10 @@ function classifyKind(message) {
 }
 
 function safePreview(value, maximum = 800) {
-  const redacted = cleanToken(value)
+  const redacted = redactSensitiveText(value)
+    .normalize('NFKC').trim()
     .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/\b(?:password|passwd|secret|api[_ -]?key|access[_ -]?token|smtp[_ -]?(?:pass|password))\s*[:=]\s*\S+/gi, '$1=[redacted]')
-    .replace(/\b(?:internal[_ -]?(?:formula|cost)|private[_ -]?formula)\s*[:=]\s*\S+/gi, '$1=[redacted]');
+    .replace(/\s+/g, ' ');
   return [...redacted].slice(0, maximum).join('');
 }
 
@@ -90,11 +107,7 @@ function linkResult(row) {
   return { status: row.status };
 }
 
-function exactCandidates(db, message) {
-  const ids = [...new Set([
-    ...headerMessageIds(message.in_reply_to),
-    ...headerMessageIds(message.references_header)
-  ])];
+function candidatesForMessageIds(db, ids) {
   if (!ids.length) return [];
   const placeholders = ids.map(() => '?').join(',');
   return db.prepare(`
@@ -104,6 +117,12 @@ function exactCandidates(db, message) {
     WHERE j.state = 'accepted' AND LOWER(j.message_id) IN (${placeholders})
     ORDER BY j.id DESC
   `).all(...ids);
+}
+
+function exactCandidates(db, message) {
+  const direct = candidatesForMessageIds(db, headerMessageIds(message.in_reply_to));
+  if (direct.length) return direct;
+  return candidatesForMessageIds(db, headerMessageIds(message.references_header));
 }
 
 function fallbackCandidates(db, message, context) {
@@ -123,8 +142,155 @@ function fallbackCandidates(db, message, context) {
     .filter(row => normalizedSubject(row.subject) === subject);
 }
 
-function eventKey(action, messageId) {
-  return `inbound-${action}-${crypto.createHash('sha256').update(messageId).digest('hex')}`;
+function internalEventKey(db, logicalKey, createdAt) {
+  const logical = String(logicalKey || '').trim();
+  if (!logical) throw new Error('internal event logical key required');
+  const existing = db.prepare('SELECT event_key FROM matrix_stream_internal_event_keys WHERE logical_key = ?').get(logical);
+  if (existing) return existing.event_key;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const eventKey = `mx-internal-${crypto.randomUUID()}`;
+    if (db.prepare('SELECT 1 FROM matrix_stream_events WHERE idempotency_key = ?').get(eventKey)) continue;
+    try {
+      db.prepare(`
+        INSERT INTO matrix_stream_internal_event_keys (logical_key, event_key, created_at)
+        VALUES (?, ?, ?)
+      `).run(logical, eventKey, createdAt);
+      return eventKey;
+    } catch (error) {
+      if (!/UNIQUE/.test(String(error?.message || ''))) throw error;
+      const raced = db.prepare('SELECT event_key FROM matrix_stream_internal_event_keys WHERE logical_key = ?').get(logical);
+      if (raced) return raced.event_key;
+    }
+  }
+  throw new Error('internal event key reservation failed');
+}
+
+function activeOwnerBinding(db, actorUserId, bindingId, workItemId) {
+  return db.prepare(`
+    SELECT 1
+    FROM matrix_actor_bindings b
+    JOIN users u ON u.id = b.user_id
+    JOIN matrix_work_items w ON w.id = ? AND w.owner_user_id = u.id
+    WHERE b.id = ? AND b.user_id = ? AND b.status = 'active' AND u.status = 'active'
+  `).get(workItemId, bindingId, actorUserId);
+}
+
+function requiredClaimInput(input) {
+  return {
+    actorUserId: positiveInteger(input.actorUserId, 'actor user id'),
+    bindingId: positiveInteger(input.bindingId, 'actor binding id')
+  };
+}
+
+function activeActorBinding(db, actorUserId, bindingId) {
+  return db.prepare(`
+    SELECT 1 FROM matrix_actor_bindings b
+    JOIN users u ON u.id = b.user_id
+    WHERE b.id = ? AND b.user_id = ? AND b.status = 'active' AND u.status = 'active'
+  `).get(bindingId, actorUserId);
+}
+
+function claimProjection(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    notification_key: row.notification_key,
+    claim_token: row.owner_token,
+    delivery_state: row.delivery_state,
+    work_item_id: row.work_item_id,
+    job_id: row.job_id,
+    kind: row.kind,
+    original_preview: row.original_preview,
+    translation_status: row.translation_status,
+    translation_cn: row.translation_cn,
+    requirements_cn: row.requirements_cn,
+    work_item_state: row.work_item_state,
+    attempt_count: row.attempt_count
+  };
+}
+
+function claimNotification(db, input = {}) {
+  const identity = requiredClaimInput(input);
+  if (!activeActorBinding(db, identity.actorUserId, identity.bindingId)) throw new Error('notification claim not authorized');
+  const context = clockIso(input.clock);
+  const leaseMs = Math.min(300000, Math.max(1000, Number(input.leaseMs || 30000)));
+  const transaction = db.transaction(() => {
+    const expired = db.prepare(`
+      SELECT n.id FROM matrix_stream_notification_spool n
+      JOIN matrix_work_items w ON w.id = n.work_item_id
+      WHERE n.delivery_state = 'inflight' AND n.lease_expires_at <= ? AND w.owner_user_id = ?
+    `).all(context.iso, identity.actorUserId);
+    for (const row of expired) {
+      db.prepare(`
+        UPDATE matrix_stream_notification_spool
+        SET delivery_state = 'manual_review', owner_token = '', lease_expires_at = '', last_error_class = 'claim_expired'
+        WHERE id = ? AND delivery_state = 'inflight' AND lease_expires_at <= ?
+      `).run(row.id, context.iso);
+    }
+    const row = db.prepare(`
+      SELECT n.* FROM matrix_stream_notification_spool n
+      JOIN matrix_work_items w ON w.id = n.work_item_id
+      JOIN matrix_actor_bindings b ON b.user_id = w.owner_user_id
+      JOIN users u ON u.id = w.owner_user_id
+      WHERE n.delivery_state = 'pending' AND n.kind = 'reply'
+        AND w.owner_user_id = ? AND b.id = ? AND b.status = 'active' AND u.status = 'active'
+      ORDER BY n.id LIMIT 1
+    `).get(identity.actorUserId, identity.bindingId);
+    if (!row) return null;
+    const token = crypto.randomUUID();
+    const leaseExpiresAt = new Date(context.ms + leaseMs).toISOString();
+    const changed = db.prepare(`
+      UPDATE matrix_stream_notification_spool
+      SET delivery_state = 'inflight', owner_token = ?, lease_expires_at = ?, attempt_count = attempt_count + 1
+      WHERE id = ? AND delivery_state = 'pending'
+    `).run(token, leaseExpiresAt, row.id);
+    if (changed.changes !== 1) return null;
+    return claimProjection(db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE id = ?').get(row.id));
+  });
+  return transaction.immediate();
+}
+
+function claimedRow(db, input) {
+  const identity = requiredClaimInput(input);
+  const notificationId = positiveInteger(input.notificationId, 'notification id');
+  const claimToken = String(input.claimToken || '').trim();
+  if (!/^[0-9a-f-]{36}$/i.test(claimToken)) throw new Error('valid notification claim token required');
+  const row = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE id = ?').get(notificationId);
+  if (!row || !activeOwnerBinding(db, identity.actorUserId, identity.bindingId, row.work_item_id)) throw new Error('notification claim not authorized');
+  if (row.delivery_state !== 'inflight' || row.owner_token !== claimToken) throw new Error('notification claim mismatch');
+  return { identity, row, notificationId, claimToken };
+}
+
+function ackNotification(db, input = {}) {
+  const context = clockIso(input.clock);
+  const receiptId = String(input.receiptId || '').trim();
+  if (!receiptId || receiptId.length > 256 || /[\r\n\0]/.test(receiptId)) throw new Error('valid notification receipt required');
+  const transaction = db.transaction(() => {
+    const claim = claimedRow(db, input);
+    db.prepare(`
+      UPDATE matrix_stream_notification_spool
+      SET delivery_state = 'delivered', receipt_id = ?, delivered_at = ?, owner_token = '', lease_expires_at = '', last_error_class = ''
+      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ?
+    `).run(receiptId, context.iso, claim.notificationId, claim.claimToken);
+    return { notification_id: claim.notificationId, delivery_state: 'delivered' };
+  });
+  return transaction.immediate();
+}
+
+function nackNotification(db, input = {}) {
+  const outcome = String(input.outcome || '').trim();
+  if (!['failed', 'ambiguous'].includes(outcome)) throw new Error('valid notification outcome required');
+  const transaction = db.transaction(() => {
+    const claim = claimedRow(db, input);
+    const nextState = outcome === 'failed' && claim.row.attempt_count < 3 ? 'pending' : 'manual_review';
+    db.prepare(`
+      UPDATE matrix_stream_notification_spool
+      SET delivery_state = ?, owner_token = '', lease_expires_at = '', last_error_class = ?
+      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ?
+    `).run(nextState, outcome === 'failed' ? 'explicit_failure' : 'ambiguous_delivery', claim.notificationId, claim.claimToken);
+    return { notification_id: claim.notificationId, delivery_state: nextState };
+  });
+  return transaction.immediate();
 }
 
 async function translationFor(message, options) {
@@ -152,8 +318,17 @@ function insertReviewEvent(db, messageId, candidates, context) {
       work_item_id, version_id, job_id, action, idempotency_key,
       before_json, after_json, diagnostic, created_at
     ) VALUES (?, ?, NULL, 'inbound_needs_review', ?, ?, ?, 'ambiguous_correlation', ?)
-  `).run(first.work_item_id, first.version_id, eventKey('review', messageId),
+  `).run(first.work_item_id, first.version_id, internalEventKey(db, `inbound-review:${messageId}`, context.iso),
     '{}', JSON.stringify({ candidate_job_ids: candidates.map(row => row.id) }), context.iso);
+}
+
+function durableEmailRowId(db, message, messageId) {
+  const supplied = Number(message.email_row_id);
+  if (Number.isInteger(supplied) && supplied > 0) {
+    const row = db.prepare('SELECT id, message_id FROM email_messages WHERE id = ?').get(supplied);
+    if (row && normalizeMessageId(row.message_id) === messageId) return row.id;
+  }
+  return db.prepare('SELECT id FROM email_messages WHERE LOWER(message_id) = ? LIMIT 1').get(messageId)?.id || null;
 }
 
 async function correlateInbound(db, emailMessage = {}, options = {}) {
@@ -164,6 +339,7 @@ async function correlateInbound(db, emailMessage = {}, options = {}) {
   if (prior) return linkResult(prior);
 
   const context = clockIso(options.clock);
+  const emailMessageRowId = durableEmailRowId(db, emailMessage, messageId);
   const exact = exactCandidates(db, emailMessage);
   const candidates = exact.length ? exact : fallbackCandidates(db, emailMessage, context);
   if (candidates.length !== 1) {
@@ -173,9 +349,9 @@ async function correlateInbound(db, emailMessage = {}, options = {}) {
       if (replay) return linkResult(replay);
       if (status === 'needs_review') insertReviewEvent(db, messageId, candidates, context);
       db.prepare(`
-        INSERT INTO matrix_stream_inbound_links (inbound_message_id, status, kind, work_item_id, job_id, created_at)
-        VALUES (?, ?, '', NULL, NULL, ?)
-      `).run(messageId, status, context.iso);
+        INSERT INTO matrix_stream_inbound_links (inbound_message_id, email_message_row_id, status, kind, work_item_id, job_id, created_at)
+        VALUES (?, ?, ?, '', NULL, NULL, ?)
+      `).run(messageId, emailMessageRowId, status, context.iso);
       return { status };
     });
     return transaction.immediate();
@@ -183,7 +359,8 @@ async function correlateInbound(db, emailMessage = {}, options = {}) {
 
   const job = candidates[0];
   const kind = classifyKind(emailMessage);
-  const translation = ['reply', 'refusal'].includes(kind)
+  const preTranslationState = db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(job.work_item_id)?.stream_state;
+  const translation = kind === 'reply' && (STATE_PRIORITY.get(preTranslationState) || 0) <= (STATE_PRIORITY.get('replied') || 0)
     ? await translationFor(emailMessage, options)
     : { status: 'pending' };
   const state = ({ reply: 'replied', bounce: 'bounced', refusal: 'refused', unsubscribe: 'suppressed', manual_stop: 'suppressed' })[kind];
@@ -193,23 +370,26 @@ async function correlateInbound(db, emailMessage = {}, options = {}) {
     const before = db.prepare('SELECT stream_state, version FROM matrix_work_items WHERE id = ?').get(job.work_item_id);
     if (!before) throw new Error('correlated work item missing');
     closeReplyCheck(db, { jobId: job.id, reason: kind === 'reply' ? 'reply' : kind, closedAt: context.iso });
+    const nextState = (STATE_PRIORITY.get(state) || 0) >= (STATE_PRIORITY.get(before.stream_state) || 0) ? state : before.stream_state;
     db.prepare(`
-      UPDATE matrix_work_items SET stream_state = ?, version = version + 1, updated_at = ? WHERE id = ?
-    `).run(state, context.iso, job.work_item_id);
+      UPDATE matrix_work_items
+      SET stream_state = ?, stage = CASE WHEN ? = 'suppressed' THEN 'suppressed' ELSE stage END,
+          version = version + 1, updated_at = ? WHERE id = ?
+    `).run(nextState, nextState, context.iso, job.work_item_id);
     db.prepare(`
-      INSERT INTO matrix_stream_inbound_links (inbound_message_id, status, kind, work_item_id, job_id, created_at)
-      VALUES (?, 'matched', ?, ?, ?, ?)
-    `).run(messageId, kind, job.work_item_id, job.id, context.iso);
+      INSERT INTO matrix_stream_inbound_links (inbound_message_id, email_message_row_id, status, kind, work_item_id, job_id, created_at)
+      VALUES (?, ?, 'matched', ?, ?, ?, ?)
+    `).run(messageId, emailMessageRowId, kind, job.work_item_id, job.id, context.iso);
     db.prepare(`
       INSERT INTO matrix_stream_events (
         work_item_id, version_id, job_id, action, idempotency_key,
         before_json, after_json, diagnostic, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)
     `).run(job.work_item_id, job.version_id, job.id, `inbound_${kind}`,
-      eventKey(kind, messageId), JSON.stringify({ stream_state: before.stream_state }),
-      JSON.stringify({ stream_state: state, inbound_message_id: messageId }), context.iso);
+      internalEventKey(db, `inbound-${kind}:${messageId}`, context.iso), JSON.stringify({ stream_state: before.stream_state }),
+      JSON.stringify({ stream_state: nextState, inbound_message_id: messageId, observed_kind: kind }), context.iso);
 
-    if (['reply', 'refusal'].includes(kind)) {
+    if (kind === 'reply' && nextState === 'replied') {
       const ready = translation.status === 'ready';
       const value = ready ? translation.value : {};
       db.prepare(`
@@ -217,8 +397,8 @@ async function correlateInbound(db, emailMessage = {}, options = {}) {
           inbound_message_id, work_item_id, job_id, kind, original_preview,
           translation_status, translation_cn, requirements_cn, suggested_subject,
           suggested_body_en, suggested_body_cn, work_item_state, retry_available,
-          delivery_state, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+          notification_key, delivery_state, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       `).run(messageId, job.work_item_id, job.id, kind,
         safePreview(emailMessage.cleaned_text || emailMessage.text_body, 800),
         ready ? 'ready' : 'pending',
@@ -227,7 +407,7 @@ async function correlateInbound(db, emailMessage = {}, options = {}) {
         ready ? safePreview(value.suggested_subject, 200) : '',
         ready ? safePreview(value.suggested_body_en, 1200) : '',
         ready ? safePreview(value.suggested_body_cn, 1200) : '',
-        state, ready ? 0 : 1, context.iso);
+        nextState, ready ? 0 : 1, crypto.randomUUID(), context.iso);
     }
     return { status: 'matched', workItemId: job.work_item_id, jobId: job.id, kind };
   });
@@ -243,6 +423,7 @@ function positiveInteger(value, label) {
 function startReplyDraft(db, input = {}) {
   if (!db || typeof db.prepare !== 'function') throw new Error('correlation database required');
   const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
+  const bindingId = positiveInteger(input.bindingId, 'actor binding id');
   const notificationId = positiveInteger(input.notificationId, 'notification id');
   const context = clockIso(input.clock);
   const transaction = db.transaction(() => {
@@ -256,8 +437,8 @@ function startReplyDraft(db, input = {}) {
       WHERE n.id = ?
     `).get(notificationId);
     if (!row) throw new Error('reply notification not found');
-    const actor = db.prepare('SELECT id FROM users WHERE id = ? AND status = ?').get(actorUserId, 'active');
-    if (!actor || row.owner_user_id !== actorUserId) throw new Error('reply draft not authorized');
+    if (!activeOwnerBinding(db, actorUserId, bindingId, row.work_item_id)) throw new Error('reply draft not authorized');
+    if (row.kind !== 'reply' || row.stream_state !== 'replied') throw new Error('reply notification is not draft eligible');
     if (row.translation_status !== 'ready') throw new Error('reply draft translation pending');
     const result = { notification_id: notificationId, work_item_id: row.work_item_id, state: 'draft_pending' };
     if (row.reply_draft_id) {
@@ -290,7 +471,7 @@ function startReplyDraft(db, input = {}) {
         before_json, after_json, diagnostic, created_at
       ) VALUES (?, ?, ?, ?, 'reply_draft_started', ?, ?, ?, '', ?)
     `).run(row.work_item_id, row.version_id, row.job_id, actorUserId,
-      `reply-draft-notification-${notificationId}`,
+      internalEventKey(db, `reply-draft:${notificationId}`, context.iso),
       JSON.stringify({ stage: row.stage, stream_state: row.stream_state }),
       JSON.stringify({ stage: 'draft_pending', stream_state: row.stream_state, reply_draft_id: replyDraftId }),
       context.iso);
@@ -304,19 +485,25 @@ async function retryInboundTranslation(db, input = {}) {
   const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
   const notificationId = positiveInteger(input.notificationId, 'notification id');
   const context = clockIso(input.clock);
+  const bindingId = positiveInteger(input.bindingId, 'actor binding id');
   const row = db.prepare(`
-    SELECT n.*, w.owner_user_id
+    SELECT n.*, w.owner_user_id, l.email_message_row_id, e.cleaned_text, e.text_body
     FROM matrix_stream_notification_spool n
     JOIN matrix_work_items w ON w.id = n.work_item_id
+    JOIN matrix_stream_inbound_links l ON l.inbound_message_id = n.inbound_message_id
+    LEFT JOIN email_messages e ON e.id = l.email_message_row_id
     WHERE n.id = ?
   `).get(notificationId);
-  const actor = db.prepare('SELECT id FROM users WHERE id = ? AND status = ?').get(actorUserId, 'active');
   if (!row) throw new Error('reply notification not found');
-  if (!actor || row.owner_user_id !== actorUserId) throw new Error('translation retry not authorized');
+  if (!activeOwnerBinding(db, actorUserId, bindingId, row.work_item_id)) throw new Error('translation retry not authorized');
   if (row.translation_status === 'ready') {
     return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
   }
-  const translation = await translationFor({ cleaned_text: row.original_preview }, input);
+  const authoritativeText = String(row.cleaned_text || row.text_body || '').trim();
+  if (!row.email_message_row_id || !authoritativeText) {
+    return { notification_id: notificationId, translation_status: 'pending', retry_available: true };
+  }
+  const translation = await translationFor({ cleaned_text: authoritativeText }, input);
   if (translation.status !== 'ready') {
     return { notification_id: notificationId, translation_status: 'pending', retry_available: true };
   }
@@ -327,7 +514,7 @@ async function retryInboundTranslation(db, input = {}) {
       JOIN matrix_work_items w ON w.id = n.work_item_id
       WHERE n.id = ?
     `).get(notificationId);
-    if (!current || current.owner_user_id !== actorUserId) throw new Error('translation retry not authorized');
+    if (!current || !activeOwnerBinding(db, actorUserId, bindingId, current.work_item_id)) throw new Error('translation retry not authorized');
     if (current.translation_status === 'ready') {
       return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
     }
@@ -347,7 +534,7 @@ async function retryInboundTranslation(db, input = {}) {
       ) VALUES (?, ?, ?, 'inbound_translation_ready', ?,
         '{"translation_status":"pending"}', '{"translation_status":"ready"}', '', ?)
     `).run(current.work_item_id, current.job_id, actorUserId,
-      `inbound-translation-ready-${notificationId}`, context.iso);
+      internalEventKey(db, `inbound-translation-ready:${notificationId}`, context.iso), context.iso);
     return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
   });
   return transaction.immediate();
@@ -357,6 +544,9 @@ module.exports = {
   correlateInbound,
   startReplyDraft,
   retryInboundTranslation,
+  claimNotification,
+  ackNotification,
+  nackNotification,
   classifyKind,
   normalizedSubject,
   normalizeMessageId,

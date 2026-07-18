@@ -89,8 +89,6 @@ function closeReplyCheck(db, input = {}) {
         WHERE id = ? AND state = 'active'
       `).run(reason, closedAt, row.id);
       syncWorkItemDue(db, row.work_item_id, closedAt);
-    } else if (row.terminal_reason !== reason) {
-      throw new Error('reply check already closed with another terminal reason');
     }
     return db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE id = ?').get(row.id);
   });

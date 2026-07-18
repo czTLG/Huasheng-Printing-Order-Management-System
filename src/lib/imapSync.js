@@ -316,7 +316,7 @@ async function importAndCorrelateEmailMessage(mailbox, folder, rawMessage, {
   const imported = upsertEmailMessage(mailbox, folder, rawMessage);
   if (imported.normalized.direction !== 'inbound') return { imported, correlation: null, correlation_error: null };
   try {
-    const correlation = await correlate(database, imported.normalized, correlationOptions);
+    const correlation = await correlate(database, { ...imported.normalized, email_row_id: imported.id }, correlationOptions);
     return { imported, correlation, correlation_error: null };
   } catch (_) {
     return {
