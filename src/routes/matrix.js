@@ -963,6 +963,19 @@ function createMatrixRouter({
     } catch (error) { sendReviewError(res, error); }
   });
 
+  router.post('/notifications/:id/status', (req, res) => {
+    try {
+      const body = rejectUnknown(req.body, new Set(['claim_token']), 'body');
+      const identity = reviewIdentity(req);
+      if (!correlationService || typeof correlationService.notificationStatus !== 'function') throw new Error('notification status service unavailable');
+      res.json(correlationService.notificationStatus(db, {
+        actorUserId: identity.actorUserId, bindingId: identity.bindingId,
+        notificationId: positiveInteger(req.params.id, 'notification id'),
+        claimToken: body.claim_token, clock
+      }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
   router.post('/work-items/:id/versions', async (req, res) => {
     let heldClaimToken = null;
     let heldClaimKey = '';

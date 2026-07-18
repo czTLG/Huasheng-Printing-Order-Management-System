@@ -175,9 +175,15 @@ function nackNotification(openId, notificationId, input) {
   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/nack`, { method: 'POST', body });
 }
 
+function notificationStatus(openId, notificationId, input) {
+  const body = exactObject(input, new Set(['claim_token']), 'notification status');
+  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/status`, { method: 'POST', body });
+}
+
 module.exports = {
   facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
   selectCandidate, workItems, claimInboxJob, inboxWorkbench, contextSearch,
   contextResolve, contextRecord, ackInboxJob, failInboxJob, startReplyDraft,
-  retryTranslation, claimNotification, ackNotification, nackNotification
+  retryTranslation, claimNotification, ackNotification, nackNotification,
+  notificationStatus
 };

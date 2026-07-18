@@ -12,7 +12,7 @@ process.env.DB_PATH = path.join(root, 'app.db');
 const { db, initDb } = require('../src/db');
 const {
   correlateInbound, startReplyDraft, retryInboundTranslation,
-  claimNotification, ackNotification, nackNotification,
+  claimNotification, ackNotification, nackNotification, notificationStatus,
   classifyKind, safePreview
 } = require('../src/services/matrixStreamCorrelation');
 const { importAndCorrelateEmailMessage, upsertEmailMessage } = require('../src/lib/imapSync');
@@ -125,6 +125,17 @@ async function main() {
       '-----BEGIN PRIVATE KEY-----\nPRIVATE-BODY\n-----END PRIVATE KEY-----'
     ].join('\n')).includes(secret), `safe preview leaked ${secret}`);
   }
+  for (const sensitive of [
+    'cost+margin', 'resin+conversion', 'very secret', 'topsecret',
+    'internal formula', 'private cost'
+  ]) {
+    assert.ok(!safePreview([
+      'internal formula=cost+margin',
+      'private cost: resin+conversion',
+      'note: password = very secret',
+      'credentials password: topsecret'
+    ].join('\n')).toLowerCase().includes(sensitive), `safe preview leaked ${sensitive}`);
+  }
 
   const claimed = claimNotification(db, {
     actorUserId: exactJob.userId, bindingId: exactJob.bindingId,
@@ -148,6 +159,14 @@ async function main() {
     actorUserId: exactJob.userId, bindingId: exactJob.bindingId, notificationId: spool.id,
     claimToken: claimed.claim_token, receiptId: 'receipt-1', clock: () => new Date(NOW)
   }), { notification_id: spool.id, delivery_state: 'delivered' });
+  assert.deepStrictEqual(ackNotification(db, {
+    actorUserId: exactJob.userId, bindingId: exactJob.bindingId, notificationId: spool.id,
+    claimToken: claimed.claim_token, receiptId: 'receipt-1', clock: () => new Date(NOW)
+  }), { notification_id: spool.id, delivery_state: 'delivered' }, 'ack replay must be stable');
+  assert.deepStrictEqual(notificationStatus(db, {
+    actorUserId: exactJob.userId, bindingId: exactJob.bindingId, notificationId: spool.id,
+    claimToken: claimed.claim_token, clock: () => new Date(NOW)
+  }), { notification_id: spool.id, delivery_state: 'delivered', can_deliver: false });
   assert.strictEqual(claimNotification(db2, {
     actorUserId: exactJob.userId, bindingId: exactJob.bindingId,
     clock: () => new Date('2026-07-18T02:00:02.000Z'), leaseMs: 1000
@@ -204,6 +223,14 @@ async function main() {
   assert.strictEqual(pending.translation_cn, '');
   assert.strictEqual(pending.requirements_cn, '');
   assert.strictEqual(pending.retry_available, 1);
+  const pendingClaim = claimNotification(db, {
+    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId, clock: () => new Date(NOW)
+  });
+  ackNotification(db, {
+    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId,
+    notificationId: pending.id, claimToken: pendingClaim.claim_token,
+    receiptId: 'pending-card', clock: () => new Date(NOW)
+  });
   assert.throws(
     () => startReplyDraft(db, { actorUserId: 8102, bindingId: fallbackJob.bindingId, notificationId: pending.id, clock: () => new Date(NOW) }),
     /translation pending/i
@@ -229,11 +256,17 @@ async function main() {
   });
   assert.deepStrictEqual(retryResult, { notification_id: pending.id, translation_status: 'ready', retry_available: false });
   assert.deepStrictEqual(db.prepare(`
-    SELECT translation_status, translation_cn, requirements_cn, retry_available
+    SELECT translation_status, translation_cn, requirements_cn, retry_available, delivery_state
     FROM matrix_stream_notification_spool WHERE id = ?
   `).get(pending.id), {
-    translation_status: 'ready', translation_cn: '您好。', requirements_cn: '待确认具体需求', retry_available: 0
+    translation_status: 'ready', translation_cn: '您好。', requirements_cn: '待确认具体需求', retry_available: 0,
+    delivery_state: 'pending'
   });
+  const readyClaim = claimNotification(db, {
+    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId, clock: () => new Date(NOW)
+  });
+  assert.strictEqual(readyClaim.id, pending.id);
+  assert.strictEqual(readyClaim.translation_status, 'ready', 'successful retry must queue one ready card');
 
   const direct = seedAccepted(10, { recipient: 'direct@header.test', subject: 'Direct parent' });
   const older = seedAccepted(11, { recipient: 'older@header.test', subject: 'Older parent' });
@@ -270,6 +303,17 @@ async function main() {
     subject: `Re: ${evolving.subject}`, cleaned_text: 'Please unsubscribe me.'
   }, { clock: () => new Date('2026-07-18T02:01:00.000Z') })).kind, 'unsubscribe');
   assert.strictEqual(db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(evolving.workItemId).stream_state, 'suppressed');
+  assert.deepStrictEqual(db.prepare('SELECT delivery_state, last_error_class FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<state-reply@test>'), {
+    delivery_state: 'manual_review', last_error_class: 'terminal_cancelled'
+  }, 'higher-priority terminal event must retire a stale reply card');
+  assert.strictEqual(claimNotification(db, {
+    actorUserId: evolving.userId, bindingId: evolving.bindingId, clock: () => new Date(NOW)
+  }), null);
+  await assert.rejects(() => retryInboundTranslation(db, {
+    actorUserId: evolving.userId, bindingId: evolving.bindingId,
+    notificationId: db.prepare('SELECT id FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<state-reply@test>').id,
+    clock: () => new Date(NOW), translateInbound: async () => { throw new Error('must not translate'); }
+  }), /eligible|state/i);
   assert.strictEqual(db.prepare('SELECT terminal_reason FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(evolving.jobId).terminal_reason, 'reply', 'reply check closes exactly once');
   assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE job_id = ? AND action IN ('inbound_reply','inbound_unsubscribe')").get(evolving.jobId).count, 2);
   await correlateInbound(db, {
@@ -324,11 +368,52 @@ async function main() {
     clock: () => new Date(NOW), leaseMs: 1000
   });
   assert.ok(crashClaim);
+  assert.deepStrictEqual(ackNotification(db, {
+    actorUserId: crashDelivery.userId, bindingId: crashDelivery.bindingId,
+    notificationId: crashClaim.id, claimToken: crashClaim.claim_token,
+    receiptId: 'too-late', clock: () => new Date('2026-07-18T02:00:02.000Z')
+  }), { notification_id: crashClaim.id, delivery_state: 'manual_review' }, 'expired ack must fail closed');
   assert.strictEqual(claimNotification(db, {
     actorUserId: crashDelivery.userId, bindingId: crashDelivery.bindingId,
     clock: () => new Date('2026-07-18T02:00:02.000Z'), leaseMs: 1000
   }), null, 'expired inflight delivery must not be automatically resent');
   assert.strictEqual(db.prepare('SELECT delivery_state FROM matrix_stream_notification_spool WHERE id = ?').get(crashClaim.id).delivery_state, 'manual_review');
+
+  const scavengedDelivery = seedAccepted(16, { recipient: 'notify@scavenge.test', subject: 'Notification scavenger' });
+  await correlateInbound(db, {
+    message_id: '<notify-scavenge@test>', in_reply_to: scavengedDelivery.messageId,
+    from_email: scavengedDelivery.recipient, to_emails: scavengedDelivery.sender,
+    subject: `Re: ${scavengedDelivery.subject}`, cleaned_text: 'Reply before lease scavenging'
+  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
+  const scavengedClaim = claimNotification(db, {
+    actorUserId: scavengedDelivery.userId, bindingId: scavengedDelivery.bindingId,
+    clock: () => new Date(NOW), leaseMs: 1000
+  });
+  const db3 = new Database(process.env.DB_PATH);
+  db3.pragma('foreign_keys = ON');
+  assert.strictEqual(claimNotification(db3, {
+    actorUserId: scavengedDelivery.userId, bindingId: scavengedDelivery.bindingId,
+    clock: () => new Date('2026-07-18T02:00:02.000Z'), leaseMs: 1000
+  }), null);
+  assert.deepStrictEqual(nackNotification(db, {
+    actorUserId: scavengedDelivery.userId, bindingId: scavengedDelivery.bindingId,
+    notificationId: scavengedClaim.id, claimToken: scavengedClaim.claim_token,
+    outcome: 'ambiguous', clock: () => new Date('2026-07-18T02:00:02.000Z')
+  }), { notification_id: scavengedClaim.id, delivery_state: 'manual_review' }, 'scavenger-first finalize must replay safely');
+  db3.close();
+
+  const redactedDelivery = seedAccepted(17, { recipient: 'notify@redact.test', subject: 'Notification redaction' });
+  await correlateInbound(db, {
+    message_id: '<notify-redact@test>', in_reply_to: redactedDelivery.messageId,
+    from_email: redactedDelivery.recipient, to_emails: redactedDelivery.sender,
+    subject: `Re: ${redactedDelivery.subject}`,
+    cleaned_text: 'Public reply line\ninternal formula=cost+margin\nnote: password = very secret'
+  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
+  const redactedSpool = db.prepare('SELECT original_preview FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<notify-redact@test>');
+  assert.ok(redactedSpool.original_preview.includes('Public reply line'));
+  for (const excluded of ['internal formula', 'cost+margin', 'password', 'very secret']) {
+    assert.ok(!redactedSpool.original_preview.toLowerCase().includes(excluded), `spool leaked ${excluded}`);
+  }
 
   const authRetry = seedAccepted(15, { recipient: 'retry@auth.test', subject: 'Authorization retry' });
   const authText = 'Authoritative retry body';
