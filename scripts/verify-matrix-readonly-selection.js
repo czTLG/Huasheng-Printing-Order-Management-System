@@ -36,6 +36,13 @@ const RUNTIME_SURFACE_ROOTS = [
   'src/lib/cacheIndexView.js',
   'src/lib/packetGate.js',
   'src/routes/matrix.js',
+  'src/services/matrixStreamReview.js',
+  'src/services/matrixStreamText.js',
+  'src/services/matrixStreamGate.js',
+  'src/services/matrixStreamReadiness.js',
+  'src/services/matrixStreamFollowup.js',
+  'src/services/matrixStreamDelivery.js',
+  'src/services/matrixStreamCorrelation.js',
   'scripts/matrix-bind-actor.js'
 ].map(file => path.join(ROOT, file));
 // Reviewed production-only surface. Tests and verifier sources are deliberately excluded.
@@ -44,15 +51,22 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
   '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '7b96a2d0c442c2ea401c267d84781ab6ebcb8cacdb6c4132ece7e69365f79a23',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': 'deb2fbcac9d5472060b8a55fbb3d5c52471a6a0e29f6cb46243c373b5e1a49f2',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '7a710d2a3496438a8abece178d5d1a92f8e10fb36dbff54212032fca5f5b76ba',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '8d4983a0ecc2a3a08aa395af62c55534226b60102e81f4b87ea15b97a70184f4',
-  'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
-  'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '92e503d37b1f88c62a667da2c1d8db3e07e205250ade2979455677773ce5a0f9',
+  'src/db.js': '56e60d8384b77ea8538aa745cd62123ffe1f4b7a9211004cb776d21e17faaa9f',
+  'src/server.js': 'e930988256872f2ba9d41eb04ac9f514ae890639cac24a658f989a30f181dc69',
   'src/lib/cacheIndexView.js': '5c5b80179791338abff72dfebca842175b7ab189999576824a3b74c7a572bb3f',
   'src/lib/packetGate.js': '2fea59af911c177dc4f35b3b29b5984d07e1181128545ec64063fdf4ffba6d6a',
-  'src/routes/matrix.js': '60e80e0c8bee787d22ff0ff7ff2fd6429941079171d440c1b0eb3abb4d9f48d2',
+  'src/routes/matrix.js': '871da8f61b4a2cb66dea4ca59fce25e82327892b904bffff4852d289dbc06bca',
+  'src/services/matrixStreamReview.js': 'bf6da9b52f48658aef5f67a49c087950c166d11715474a7782c248c521677c85',
+  'src/services/matrixStreamText.js': '7dfefdbc3ba37888bf0736b36c792ec64afc54651dbaa1efeb1f2e7ca2c68658',
+  'src/services/matrixStreamGate.js': '86f99c2672ae6d58ccb5a35aa5cab7b1b4ffa6b3b7132b091a856469cb678c57',
+  'src/services/matrixStreamReadiness.js': '6440a41bb789263528451153081462d339c602222af74cbb87abce0eb7187b7b',
+  'src/services/matrixStreamFollowup.js': 'bd4e6721b12d7b75323bb0ef23d21c7ea117c7c26b39ba6042a4d237950a5c01',
+  'src/services/matrixStreamDelivery.js': 'dc27f55dcc73093c50d7f6fbf28a5a1b17f20378d9e24065aa706b71d15653ea',
+  'src/services/matrixStreamCorrelation.js': '6e0a3ebf457f05629b8886afa5f98c32c7abe0f07a1bbed6f6ec7c07479b0877',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
 };
 
@@ -62,8 +76,21 @@ function repositoryContract() {
     'MATRIX_STREAM_DB_PATH=./data/matrix-stream.db',
     'MATRIX_BRIDGE_TOKEN=',
     'MATRIX_DELIVERY_ENABLED=0',
+    'MATRIX_STREAM_SEND_ENABLED=0',
+    'MATRIX_RECIPIENT_MAX_AGE_DAYS=180',
+    'MATRIX_MESSAGE_ID_DOMAIN=',
+    'MATRIX_TEXT_PROVIDER=mock',
+    'MATRIX_DKIM_SELECTOR=',
+    'MATRIX_DAILY_ACCEPTED_LIMIT=5',
+    'MATRIX_DOMAIN_COOLING_DAYS=90',
     'MATRIX_RECOMMEND_HOUR=9',
-    'MATRIX_RECOMMEND_MINUTE=0'
+    'MATRIX_RECOMMEND_MINUTE=0',
+    'SMTP_HOST=',
+    'SMTP_PORT=465',
+    'SMTP_SECURE=true',
+    'SMTP_USER=',
+    'SMTP_PASS=',
+    'SMTP_FROM='
   ]) assert.ok(env.split(/\r?\n/).includes(line), `.env.example missing ${line}`);
 
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -75,8 +102,13 @@ function repositoryContract() {
     '/api/matrix', 'matrix-bind-actor.js', '开发客户', '1,500',
     '来源分离', '不存在外发适配器', 'MATRIX_DELIVERY_ENABLED=0',
     'MATRIX_VERIFY_FIXTURE=1', 'fail closed',
-    '桌面端', '移动端', 'mx.quick', 'vm_debug_ci_pre_'
+    '桌面端', '移动端', 'mx.quick', 'vm_debug_ci_pre_',
+    'matrixStreamReview.js', 'matrixStreamDelivery.js', '两次确认',
+    'MATRIX_STREAM_SEND_ENABLED=0', 'bot 运行面', 'delivery_enabled: false'
   ]) assert.ok(catalog.includes(marker), `catalog missing ${marker}`);
+
+  const server = fs.readFileSync(path.join(ROOT, 'src/server.js'), 'utf8');
+  assert.ok(!server.includes('createMatrixStreamDelivery'), 'production delivery must remain unwired while MATRIX_STREAM_SEND_ENABLED=0');
 }
 
 function createCandidateFixture(root) {
@@ -289,8 +321,9 @@ const CAPABILITY_PATTERNS = [
   /\bsendMail\s*\(/
 ];
 const APPROVED_CAPABILITY_SHA256 = {
-  client: '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
-  supervisor: '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5'
+  client: '7a710d2a3496438a8abece178d5d1a92f8e10fb36dbff54212032fca5f5b76ba',
+  supervisor: '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
+  delivery: 'dc27f55dcc73093c50d7f6fbf28a5a1b17f20378d9e24065aa706b71d15653ea'
 };
 
 function approvedCapabilitySource(kind, sourceValue) {
@@ -324,17 +357,31 @@ function approvedCapabilitySource(kind, sourceValue) {
       !CAPABILITY_PATTERNS.slice(1, 6).some(pattern => pattern.test(source)) &&
       !CAPABILITY_PATTERNS.slice(7).some(pattern => pattern.test(source));
   }
+  if (kind === 'delivery') {
+    return source.includes('capabilities.matrixSend') &&
+      source.includes('version.content_hash !== input.expectedContentHash') &&
+      source.includes("state = 'ambiguous'") &&
+      source.includes('recipient_source_url') &&
+      source.includes('await transport.sendMail({') &&
+      (source.match(/await transport\.sendMail\s*\(/g) || []).length === 1 &&
+      !source.includes('attachments:') &&
+      !/\binput\.(?:to|subject|smtpHost|callbackUrl|retry)\b/.test(source) &&
+      !/\b(?:nodemailer|SMTP_[A-Z0-9_]*)\b/.test(source) &&
+      !CAPABILITY_PATTERNS.slice(0, 8).some(pattern => pattern.test(source));
+  }
   return false;
 }
 
 function outboundAdapterFiles(files = runtimeSurfaceFiles()) {
   const clientPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js');
   const supervisorPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js');
+  const deliveryPath = path.join(ROOT, 'src/services/matrixStreamDelivery.js');
   return files.filter(file => {
     const source = fs.readFileSync(file, 'utf8');
     if (!CAPABILITY_PATTERNS.some(pattern => pattern.test(source))) return false;
     if (path.resolve(file) === clientPath) return !approvedCapabilitySource('client', source);
     if (path.resolve(file) === supervisorPath) return !approvedCapabilitySource('supervisor', source);
+    if (path.resolve(file) === deliveryPath) return !approvedCapabilitySource('delivery', source);
     return true;
   });
 }

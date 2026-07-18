@@ -150,7 +150,8 @@ function freshReplayAuthorization(db, input) {
   if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
   let permissions;
   try { permissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { permissions = null; }
-  if (!normalizePermissions(row.role, permissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
+  const capabilities = normalizePermissions(row.role, permissions).capabilities;
+  if (!capabilities.matrixSend) throw new Error('explicit matrixSend capability required');
   if (!row.work_item_id || row.owner_user_id !== input.actorUserId) throw new Error('delivery not authorized');
 }
 
@@ -169,7 +170,8 @@ function freshDeliveryGate(db, input, context) {
   if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
   let permissions;
   try { permissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { permissions = null; }
-  if (!normalizePermissions(row.role, permissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
+  const capabilities = normalizePermissions(row.role, permissions).capabilities;
+  if (!capabilities.matrixSend) throw new Error('explicit matrixSend capability required');
   if (!row.work_item_id || row.owner_user_id !== input.actorUserId) throw new Error('delivery not authorized');
   if (row.stage === 'suppressed' || row.stream_state === 'suppressed') throw new Error('work item is suppressed');
   if (row.work_item_version !== input.expectedWorkVersion) throw new Error('stale work version');
@@ -177,6 +179,7 @@ function freshDeliveryGate(db, input, context) {
 
   const version = db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ? AND work_item_id = ?').get(input.versionId, input.workItemId);
   if (!version || version.status !== 'approved' || !version.approved_by || !version.approved_at) throw new Error('persisted approved version required');
+  if (version.content_hash !== input.expectedContentHash) throw new Error('content hash mismatch');
   const canonicalHash = review.contentHash({
     recipientEmail: version.recipient_email,
     recipientSourceUrl: version.recipient_source_url,
@@ -404,11 +407,17 @@ function createMatrixStreamDelivery({
       }
       const finalState = ownsActiveLease ? state : 'ambiguous';
       const finalErrorClass = ownsActiveLease ? errorClass : 'expired_send_lease';
-      const changed = db.prepare(`
-        UPDATE matrix_stream_jobs
-        SET state = ?, error_class = ?, redacted_diagnostic = ?, updated_at = ?
-        WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
-      `).run(finalState, finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at);
+      const changed = ownsActiveLease
+        ? db.prepare(`
+          UPDATE matrix_stream_jobs
+          SET state = ?, error_class = ?, redacted_diagnostic = ?, updated_at = ?
+          WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
+        `).run(finalState, finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at)
+        : db.prepare(`
+          UPDATE matrix_stream_jobs
+          SET state = 'ambiguous', error_class = ?, redacted_diagnostic = ?, updated_at = ?
+          WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
+        `).run(finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at);
       if (changed.changes !== 1) {
         current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
         if (current && current.state !== 'sending') return resultFor(db, current);
