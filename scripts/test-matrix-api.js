@@ -5,10 +5,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const express = require('express');
 const Database = require('better-sqlite3');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { createMatrixBridgeAuth } = require('../src/routes/matrix');
+const { createMatrixBridgeAuth, createMatrixRouter } = require('../src/routes/matrix');
+const matrixReviewService = require('../src/services/matrixStreamReview');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-api-'));
 const appDbPath = path.join(root, 'app.db');
@@ -157,7 +159,7 @@ async function request(route, options = {}) {
   if (options.serviceToken !== undefined) headers['x-matrix-bridge-token'] = options.serviceToken;
   if (options.openId !== undefined) headers['x-feishu-open-id'] = options.openId;
   if (options.body !== undefined) headers['content-type'] = 'application/json';
-  const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+  const response = await fetch(`http://127.0.0.1:${options.port || port}${route}`, {
     method: options.method || 'GET',
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body)
@@ -182,6 +184,7 @@ function reviewState(workItemId) {
   try {
     return {
       evidence: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_recipient_evidence').get().count,
+      apiRequests: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_api_requests').get().count,
       versions: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count,
       events: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_events').get().count,
       jobs: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_jobs').get().count,
@@ -507,6 +510,10 @@ function reviewState(workItemId) {
     assert.strictEqual(createdVersion.body.work_item_version, 2);
     assert.ok(createdVersion.body.quality_score >= 80);
     assert.strictEqual(JSON.parse(createdVersion.body.quality_json).passed, true);
+    mutateCandidate(db => {
+      db.prepare("UPDATE cache_records SET public_email='', contact_url='' WHERE id=1").run();
+      db.prepare('DELETE FROM cache_evidence WHERE record_id=1').run();
+    });
     const createdReplayState = reviewState(workItemId);
     const createdReplay = await request(versionRoute, {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
@@ -515,15 +522,30 @@ function reviewState(workItemId) {
     assert.strictEqual(createdReplay.status, 200, JSON.stringify(createdReplay.body));
     assert.strictEqual(createdReplay.body.id, createdVersion.body.id);
     assert.deepStrictEqual(reviewState(workItemId), createdReplayState, 'create replay must not write');
+    await assertFailedWithoutReviewWrite('create replay request mismatch', 409, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, idempotency_key: 'draft-api-1' }
+    }));
+    await assertFailedWithoutReviewWrite('new create key revalidates drifted candidate', 400, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, idempotency_key: 'draft-api-drifted-candidate' }
+    }));
+    mutateCandidate(db => {
+      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+    });
 
     await assertFailedWithoutReviewWrite('unknown revision field', 400, () => request(versionRoute, {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
       body: { expected_work_version: 2, base_version_id: createdVersion.body.id, revision_instruction: '更简洁', subject: 'client supplied', idempotency_key: 'bad-revision-field' }
     }));
-    await assertFailedWithoutReviewWrite('bounded text provider unavailable', 503, () => request(versionRoute, {
+    const unavailableRevision = await assertFailedWithoutReviewWrite('bounded text provider unavailable', 503, () => request(versionRoute, {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
       body: { expected_work_version: 2, base_version_id: createdVersion.body.id, revision_instruction: '语气更简洁，询问年用量', idempotency_key: 'revision-provider-unavailable' }
     }));
+    assert.deepStrictEqual(unavailableRevision.body, {
+      error: { code: 'text_provider_unavailable', message: 'Text revision service is unavailable.' }
+    });
 
     const approveRoute = `${versionRoute}/${createdVersion.body.id}/approve`;
     await assertFailedWithoutReviewWrite('stale approval work version', 409, () => request(approveRoute, {
@@ -554,6 +576,10 @@ function reviewState(workItemId) {
     assert.strictEqual(approvedReplay.status, 200, JSON.stringify(approvedReplay.body));
     assert.strictEqual(approvedReplay.body.id, approvedVersion.body.id);
     assert.deepStrictEqual(reviewState(workItemId), approvedReplayState, 'approval replay must not write');
+    await assertFailedWithoutReviewWrite('approval replay hash mismatch', 409, () => request(approveRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 2, expected_content_hash: 'f'.repeat(64), idempotency_key: 'approve-api-1' }
+    }));
 
     const preview = await request(`${versionRoute}/${createdVersion.body.id}/preview`, {
       serviceToken: bridgeToken, openId: 'ou-service'
@@ -572,15 +598,217 @@ function reviewState(workItemId) {
     }));
 
     await stopServer();
+    const injectedPort = port + 1000;
+    const injectedDb = new Database(appDbPath);
+    const injectedReviewService = { ...matrixReviewService };
+    let providerCalls = 0;
+    let providerImpl = async ({ current }) => ({
+      subject: current.subject,
+      body_en: current.body_en,
+      body_cn: current.body_cn
+    });
+    const injectedTextService = {
+      revise(input) {
+        providerCalls += 1;
+        return providerImpl(input);
+      }
+    };
+    const injectedApp = express();
+    injectedApp.use(express.json());
+    injectedApp.use('/api/matrix', createMatrixBridgeAuth({ db: injectedDb, bridgeToken }));
+    injectedApp.use('/api/matrix', createMatrixRouter({
+      db: injectedDb,
+      audit: () => undefined,
+      candidateDbPath,
+      reviewService: injectedReviewService,
+      textService: injectedTextService
+    }));
+    const injectedServer = await new Promise((resolve, reject) => {
+      const server = injectedApp.listen(injectedPort, '127.0.0.1', () => resolve(server));
+      server.once('error', reject);
+    });
+    try {
+      const reviseBody = {
+        expected_work_version: 3,
+        base_version_id: createdVersion.body.id,
+        revision_instruction: '保持证据边界并缩短措辞',
+        idempotency_key: 'revision-api-success-1'
+      };
+      const revisedVersion = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: reviseBody
+      });
+      assert.strictEqual(revisedVersion.status, 201, JSON.stringify(revisedVersion.body));
+      assert.strictEqual(revisedVersion.body.revision, 2);
+      assert.strictEqual(providerCalls, 1);
+      const historicalReplayState = reviewState(workItemId);
+      const historicalCreateReplay = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
+      });
+      assert.strictEqual(historicalCreateReplay.status, 200, JSON.stringify(historicalCreateReplay.body));
+      assert.strictEqual(historicalCreateReplay.body.status, 'draft');
+      assert.strictEqual(historicalCreateReplay.body.current_status, 'superseded');
+      assert.strictEqual(historicalCreateReplay.body.work_item_version, 2);
+      assert.strictEqual(historicalCreateReplay.body.current_work_item_version, 4);
+      const historicalApprovalReplay = await request(approveRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'approve-api-1' }
+      });
+      assert.strictEqual(historicalApprovalReplay.status, 200, JSON.stringify(historicalApprovalReplay.body));
+      assert.strictEqual(historicalApprovalReplay.body.status, 'approved');
+      assert.strictEqual(historicalApprovalReplay.body.current_status, 'superseded');
+      assert.strictEqual(historicalApprovalReplay.body.work_item_version, 3);
+      assert.strictEqual(historicalApprovalReplay.body.current_work_item_version, 4);
+      assert.deepStrictEqual(reviewState(workItemId), historicalReplayState, 'historical replay must return snapshots without writing');
+      const revisedReplayState = reviewState(workItemId);
+      const revisedReplay = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: reviseBody
+      });
+      assert.strictEqual(revisedReplay.status, 200, JSON.stringify(revisedReplay.body));
+      assert.strictEqual(revisedReplay.body.id, revisedVersion.body.id);
+      assert.strictEqual(providerCalls, 1, 'exact revision replay must not call provider again');
+      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'revision replay must not write');
+
+      const changedInstruction = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...reviseBody, revision_instruction: '不同指令' }
+      });
+      assert.strictEqual(changedInstruction.status, 409, JSON.stringify(changedInstruction.body));
+      assert.strictEqual(providerCalls, 1, 'idempotency mismatch must precede provider');
+      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'revision mismatch must not write');
+      const changedScope = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...reviseBody, base_version_id: revisedVersion.body.id }
+      });
+      assert.strictEqual(changedScope.status, 409, JSON.stringify(changedScope.body));
+      assert.strictEqual(providerCalls, 1, 'idempotency scope mismatch must precede provider');
+      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'revision scope mismatch must not write');
+
+      const staleNewRevision = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...reviseBody, idempotency_key: 'revision-api-stale-new-key' }
+      });
+      assert.strictEqual(staleNewRevision.status, 409, JSON.stringify(staleNewRevision.body));
+      assert.strictEqual(providerCalls, 1, 'new stale revision must fail before provider');
+      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'new stale revision must not write');
+
+      const bindingEntered = {};
+      bindingEntered.promise = new Promise(resolve => { bindingEntered.resolve = resolve; });
+      const bindingRelease = {};
+      bindingRelease.promise = new Promise(resolve => { bindingRelease.resolve = resolve; });
+      providerImpl = async ({ current }) => {
+        bindingEntered.resolve();
+        await bindingRelease.promise;
+        return { subject: current.subject, body_en: current.body_en, body_cn: current.body_cn };
+      };
+      const bindingRaceState = reviewState(workItemId);
+      const bindingRaceRequest = request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: {
+          expected_work_version: 4,
+          base_version_id: revisedVersion.body.id,
+          revision_instruction: 'binding race',
+          idempotency_key: 'revision-binding-race'
+        }
+      });
+      await bindingEntered.promise;
+      mutateApp(db => db.prepare("UPDATE matrix_actor_bindings SET status='revoked', revoked_at='2026-07-18T00:00:00Z' WHERE feishu_open_id='ou-service'").run());
+      bindingRelease.resolve();
+      const bindingRace = await bindingRaceRequest;
+      assert.strictEqual(bindingRace.status, 403, JSON.stringify(bindingRace.body));
+      assert.deepStrictEqual(reviewState(workItemId), bindingRaceState, 'binding revocation during provider wait must write nothing');
+      mutateApp(db => db.prepare("UPDATE matrix_actor_bindings SET status='active', revoked_at=NULL WHERE feishu_open_id='ou-service'").run());
+
+      const capabilityEntered = {};
+      capabilityEntered.promise = new Promise(resolve => { capabilityEntered.resolve = resolve; });
+      const capabilityRelease = {};
+      capabilityRelease.promise = new Promise(resolve => { capabilityRelease.resolve = resolve; });
+      providerImpl = async ({ current }) => {
+        capabilityEntered.resolve();
+        await capabilityRelease.promise;
+        return { subject: current.subject, body_en: current.body_en, body_cn: current.body_cn };
+      };
+      const capabilityRaceState = reviewState(workItemId);
+      const capabilityRaceRequest = request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: {
+          expected_work_version: 4,
+          base_version_id: revisedVersion.body.id,
+          revision_instruction: 'capability race',
+          idempotency_key: 'revision-capability-race'
+        }
+      });
+      await capabilityEntered.promise;
+      mutateApp(db => db.prepare('UPDATE users SET permissions_json=? WHERE id=103').run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: false } })));
+      capabilityRelease.resolve();
+      const capabilityRace = await capabilityRaceRequest;
+      assert.strictEqual(capabilityRace.status, 403, JSON.stringify(capabilityRace.body));
+      assert.deepStrictEqual(reviewState(workItemId), capabilityRaceState, 'capability revocation during provider wait must write nothing');
+      mutateApp(db => db.prepare('UPDATE users SET permissions_json=? WHERE id=103').run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: true } })));
+
+      const rawDiagnostic = 'upstream SECRET_TOKEN=abc /srv/private/provider.js SELECT * FROM users SQLITE_BUSY';
+      providerImpl = async () => { throw new Error(rawDiagnostic); };
+      const providerFailureState = reviewState(workItemId);
+      const providerFailure = await request(versionRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: {
+          expected_work_version: 4,
+          base_version_id: revisedVersion.body.id,
+          revision_instruction: 'provider failure',
+          idempotency_key: 'revision-provider-raw-failure'
+        }
+      });
+      assert.strictEqual(providerFailure.status, 503, JSON.stringify(providerFailure.body));
+      assert.deepStrictEqual(providerFailure.body, {
+        error: { code: 'text_provider_failure', message: 'Text revision service is temporarily unavailable.' }
+      });
+      assert.ok(!JSON.stringify(providerFailure.body).includes(rawDiagnostic));
+      assert.ok(!/SECRET_TOKEN|\/srv\/private|SELECT \*|SQLITE_BUSY/.test(JSON.stringify(providerFailure.body)));
+      assert.deepStrictEqual(reviewState(workItemId), providerFailureState, 'provider failure must write nothing');
+
+      const originalApproveVersion = injectedReviewService.approveVersion;
+      injectedReviewService.approveVersion = () => { throw new Error('SQLITE_CONSTRAINT at /srv/private/app.db SMTP_PASS=hunter2'); };
+      const internalFailureState = reviewState(workItemId);
+      const internalFailure = await request(`${versionRoute}/${revisedVersion.body.id}/approve`, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: {
+          expected_work_version: 4,
+          expected_content_hash: revisedVersion.body.content_hash,
+          idempotency_key: 'approve-internal-failure'
+        }
+      });
+      assert.strictEqual(internalFailure.status, 500, JSON.stringify(internalFailure.body));
+      assert.deepStrictEqual(internalFailure.body, {
+        error: { code: 'internal_error', message: 'Review request could not be completed.' }
+      });
+      assert.ok(!/SQLITE|\/srv\/private|SMTP_PASS|hunter2/.test(JSON.stringify(internalFailure.body)));
+      assert.deepStrictEqual(reviewState(workItemId), internalFailureState, 'internal failure must write nothing');
+      injectedReviewService.approveVersion = originalApproveVersion;
+    } finally {
+      await new Promise(resolve => injectedServer.close(resolve));
+      injectedDb.close();
+    }
+
     const inspect = new Database(appDbPath, { readonly: true });
     try {
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM matrix_selection_events WHERE idempotency_key = 'api-event-001'").get().n, 1);
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
+      assert.deepStrictEqual(
+        inspect.prepare('SELECT action FROM matrix_stream_api_requests ORDER BY id').all().map(row => row.action),
+        ['create', 'approve', 'revise']
+      );
       const persistedSession = JSON.stringify(inspect.prepare('SELECT snapshot_key, candidate_ids_json, filters_json FROM matrix_sessions WHERE id = ?').get(createdSession.body.id));
       assert.ok(!persistedSession.includes('Alpha Foods'));
       assert.ok(!persistedSession.includes('team@alpha.test'));
     } finally {
       inspect.close();
+    }
+    const immutableApiDb = new Database(appDbPath);
+    try {
+      assert.throws(() => immutableApiDb.prepare("UPDATE matrix_stream_api_requests SET action='approve' WHERE action='create'").run(), /immutable/);
+      assert.throws(() => immutableApiDb.prepare('DELETE FROM matrix_stream_api_requests').run(), /immutable/);
+    } finally {
+      immutableApiDb.close();
     }
 
     const cliEnv = { ...process.env, DB_PATH: appDbPath };

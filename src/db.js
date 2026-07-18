@@ -1038,6 +1038,21 @@ function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_stream_api_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id INTEGER NOT NULL,
+      work_item_id INTEGER NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('create','revise','approve')),
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      version_id INTEGER NOT NULL,
+      response_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(actor_user_id) REFERENCES users(id),
+      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+      FOREIGN KEY(version_id) REFERENCES matrix_stream_versions(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_sender_checks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       sender_domain TEXT NOT NULL,
@@ -1088,6 +1103,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_stream_api_requests_scope ON matrix_stream_api_requests(actor_user_id, work_item_id, action);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_reply_checks_due ON matrix_stream_reply_checks(state, due_at);
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
@@ -1112,6 +1128,18 @@ function initDb() {
     BEFORE DELETE ON matrix_stream_events
     BEGIN
       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_api_requests_no_update
+    BEFORE UPDATE ON matrix_stream_api_requests
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_api_requests is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_api_requests_no_delete
+    BEFORE DELETE ON matrix_stream_api_requests
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_api_requests is immutable');
     END;
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_identity_immutable

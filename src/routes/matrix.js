@@ -116,7 +116,7 @@ function requireMatrixRole(req, res, next) {
 
 function errorStatus(error) {
   const message = String(error?.message || 'request failed');
-  if (/stale (?:work )?version|session rehydration incomplete/.test(message)) return 409;
+  if (/stale (?:work )?version|session rehydration incomplete|idempotency request conflict/.test(message)) return 409;
   if (/not authorized|actor binding|required binding|service binding|inactive|revoked|matrixSend capability/.test(message)) return 403;
   if (/text_provider_unavailable/.test(message)) return 503;
   if (/not found/.test(message)) return 404;
@@ -279,18 +279,57 @@ function productionBacklogItems() {
   } catch (_) { return []; }
 }
 
+function reviewFailure(code) {
+  const error = new Error(code);
+  error.matrixReviewCode = code;
+  return error;
+}
+
+function reviewErrorDescriptor(error) {
+  const message = String(error?.message || '');
+  const explicit = error?.matrixReviewCode;
+  if (explicit === 'text_provider_unavailable' || /text_provider_unavailable/.test(message)) {
+    return { status: 503, code: 'text_provider_unavailable', message: 'Text revision service is unavailable.' };
+  }
+  if (explicit === 'text_provider_failure') {
+    return { status: 503, code: 'text_provider_failure', message: 'Text revision service is temporarily unavailable.' };
+  }
+  if (/idempotency request conflict/.test(message)) {
+    return { status: 409, code: 'idempotency_conflict', message: 'Idempotency key conflicts with another request.' };
+  }
+  if (/stale (?:work )?version|session rehydration incomplete/.test(message)) {
+    return { status: 409, code: 'stale_review_state', message: 'Review state is stale.' };
+  }
+  if (/not authorized|actor binding|required binding|service binding|inactive|revoked|matrixSend capability|administrator role/.test(message)) {
+    return { status: 403, code: 'review_forbidden', message: 'Review action is not authorized.' };
+  }
+  if (/not found/.test(message)) {
+    return { status: 404, code: 'review_not_found', message: 'Review resource was not found.' };
+  }
+  if (/must|required|invalid|unknown|cannot|suppressed|mismatch|conflict|eligible|unsupported|contact form|quality gate/.test(message)) {
+    return { status: 400, code: 'invalid_review_request', message: 'Invalid review request.' };
+  }
+  return { status: 500, code: 'internal_error', message: 'Review request could not be completed.' };
+}
+
+function sendReviewError(res, error) {
+  const descriptor = reviewErrorDescriptor(error);
+  if (descriptor.status >= 500) console.warn(`[matrix-review] ${descriptor.code}`);
+  return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
+}
+
 function createMatrixRouter({
   db,
   audit,
   candidateDbPath = process.env.MATRIX_STREAM_DB_PATH,
   clock,
   reviewService = require('../services/matrixStreamReview'),
-  deliveryService
+  deliveryService,
+  textService = createMatrixStreamText()
 } = {}) {
   const router = express.Router();
   const view = createCacheIndexView({ dbPath: candidateDbPath });
   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
-  const textService = createMatrixStreamText();
   void deliveryService;
 
   router.use(requireMatrixRole);
@@ -458,6 +497,71 @@ function createMatrixRouter({
     if (!active) throw new Error('active actor binding required');
     const permissions = normalizePermissions(req.user.role, req.user.permissions);
     if (!permissions.capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
+  }
+
+  function reviewIdentity(req) {
+    if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+    return {
+      actorUserId: positiveInteger(req.user?.id, 'actor user id'),
+      bindingId: positiveInteger(req.matrixBinding.id, 'binding id'),
+      openId: String(req.matrixBinding.feishuOpenId || '').trim()
+    };
+  }
+
+  function freshReviewAuthorization(identity, workItemId, expectedVersion) {
+    const row = db.prepare(`
+      SELECT b.id AS binding_id, b.feishu_open_id, b.status AS binding_status,
+             u.id AS actor_user_id, u.role, u.status AS actor_status, u.permissions_json,
+             w.id AS work_item_id, w.candidate_id, w.owner_user_id, w.stage, w.stream_state, w.version
+      FROM matrix_actor_bindings b
+      JOIN users u ON u.id = b.user_id
+      LEFT JOIN matrix_work_items w ON w.id = ?
+      WHERE b.id = ? AND b.user_id = ? AND b.feishu_open_id = ?
+    `).get(workItemId, identity.bindingId, identity.actorUserId, identity.openId);
+    if (!row || row.binding_status !== 'active' || row.actor_status !== 'active') throw new Error('active actor binding required');
+    if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
+    let storedPermissions;
+    try { storedPermissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { storedPermissions = null; }
+    if (!normalizePermissions(row.role, storedPermissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
+    if (!row.work_item_id) throw new Error('work item not found');
+    if (row.owner_user_id !== identity.actorUserId) throw new Error('not authorized');
+    if (row.stage === 'suppressed' || row.stream_state === 'suppressed') throw new Error('work item is suppressed');
+    if (expectedVersion !== undefined && row.version !== expectedVersion) throw new Error('stale work version');
+    return row;
+  }
+
+  function apiRequestFingerprint(value) {
+    return crypto.createHash('sha256').update(reviewService.canonicalJson(value)).digest('hex');
+  }
+
+  function apiReplay({ identity, workItemId, action, idempotencyKey, fingerprint }) {
+    const lookup = db.transaction(() => {
+      const row = db.prepare('SELECT * FROM matrix_stream_api_requests WHERE idempotency_key = ?').get(idempotencyKey);
+      if (!row) return null;
+      const authorization = freshReviewAuthorization(identity, workItemId);
+      if (row.actor_user_id !== identity.actorUserId || row.work_item_id !== workItemId
+          || row.action !== action || row.request_fingerprint !== fingerprint) {
+        throw new Error('idempotency request conflict');
+      }
+      let response;
+      try { response = JSON.parse(row.response_json); } catch (_) { throw new Error('stored API response invalid'); }
+      const version = db.prepare('SELECT status FROM matrix_stream_versions WHERE id = ? AND work_item_id = ?').get(row.version_id, workItemId);
+      if (!version) throw new Error('recorded version not found');
+      return { ...response, current_status: version.status, current_work_item_version: authorization.version };
+    });
+    return lookup.immediate();
+  }
+
+  function recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId, response }) {
+    db.prepare(`
+      INSERT INTO matrix_stream_api_requests (
+        actor_user_id, work_item_id, action, idempotency_key, request_fingerprint,
+        version_id, response_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      identity.actorUserId, workItemId, action, idempotencyKey, fingerprint,
+      versionId, JSON.stringify(response), new Date().toISOString()
+    );
   }
 
   function ownedReviewItem(workItemId, actorUserId, expectedVersion) {
@@ -651,8 +755,8 @@ function createMatrixRouter({
 
   router.post('/work-items/:id/versions', async (req, res) => {
     try {
-      requireReviewAccess(req);
       const body = rejectUnknown(req.body, VERSION_FIELDS, 'body');
+      const identity = reviewIdentity(req);
       const workItemId = positiveInteger(req.params.id, 'work item id');
       const expectedWorkVersion = positiveInteger(body.expected_work_version, 'expected work version');
       const idempotencyKey = String(body.idempotency_key || '').trim();
@@ -660,37 +764,60 @@ function createMatrixRouter({
       const hasBase = body.base_version_id !== undefined;
       const hasInstruction = body.revision_instruction !== undefined;
       if (hasBase !== hasInstruction) throw new Error('base version and revision instruction must be supplied together');
-      ownedReviewItem(workItemId, req.user.id);
+      const action = hasBase ? 'revise' : 'create';
+      const baseVersionId = hasBase ? positiveInteger(body.base_version_id, 'base version id') : null;
+      const instruction = hasInstruction ? String(body.revision_instruction || '').trim() : '';
+      if (hasInstruction && !instruction) throw new Error('revision instruction required');
+      const fingerprint = apiRequestFingerprint({
+        action,
+        actorUserId: identity.actorUserId,
+        workItemId,
+        expectedWorkVersion,
+        ...(hasBase ? { baseVersionId, instruction } : {})
+      });
+      const replay = apiReplay({ identity, workItemId, action, idempotencyKey, fingerprint });
+      if (replay) return res.status(200).json(replay);
 
       if (hasBase) {
-        ownedReviewItem(workItemId, req.user.id, expectedWorkVersion);
-        const baseVersionId = positiveInteger(body.base_version_id, 'base version id');
-        const instruction = String(body.revision_instruction || '').trim();
-        if (!instruction) throw new Error('revision instruction required');
-        const current = reviewService.getVersion(db, { actorUserId: req.user.id, versionId: baseVersionId });
+        db.transaction(() => freshReviewAuthorization(identity, workItemId, expectedWorkVersion)).immediate();
+        const current = reviewService.getVersion(db, { actorUserId: identity.actorUserId, versionId: baseVersionId });
         if (!current || current.work_item_id !== workItemId) throw new Error('base version not found');
         let sourceSnapshot;
         try { sourceSnapshot = JSON.parse(current.source_snapshot_json); } catch (_) { throw new Error('stored source snapshot invalid'); }
-        const generated = await textService.revise({ current, instruction, sourceSnapshot });
-        if (generated?.ok === false) throw new Error(generated.reason || 'text provider failed');
-        const revised = reviewService.reviseVersion(db, {
-          actorUserId: req.user.id,
-          workItemId,
-          baseVersionId,
-          expectedWorkVersion,
-          subject: generated.subject,
-          bodyEn: generated.body_en,
-          bodyCn: generated.body_cn,
-          idempotencyKey
+        let generated;
+        try {
+          generated = await textService.revise({ current, instruction, sourceSnapshot });
+        } catch (_) {
+          throw reviewFailure('text_provider_failure');
+        }
+        if (generated?.ok === false) {
+          throw reviewFailure(generated.reason === 'text_provider_unavailable' ? 'text_provider_unavailable' : 'text_provider_failure');
+        }
+        const revise = db.transaction(() => {
+          freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+          const revised = reviewService.reviseVersion(db, {
+            actorUserId: identity.actorUserId,
+            workItemId,
+            baseVersionId,
+            expectedWorkVersion,
+            subject: generated.subject,
+            bodyEn: generated.body_en,
+            bodyCn: generated.body_cn,
+            idempotencyKey
+          });
+          const response = withWorkVersion(revised);
+          recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId: revised.id, response });
+          return response;
         });
-        return res.status(201).json(withWorkVersion(revised));
+        return res.status(201).json(revise.immediate());
       }
 
-      const item = ownedReviewItem(workItemId, req.user.id);
+      const item = db.transaction(() => freshReviewAuthorization(identity, workItemId, expectedWorkVersion)).immediate();
       const detail = view.detail(item.candidate_id, { revealContacts: true });
       if (!detail) throw new Error('candidate not found');
       const draft = candidateDraft(detail);
       const create = db.transaction(() => {
+        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
         db.prepare(`
           INSERT OR IGNORE INTO matrix_stream_recipient_evidence (
             work_item_id, organization_domain, recipient_email, source_url, verified_at,
@@ -698,11 +825,11 @@ function createMatrixRouter({
           ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
         `).run(
           workItemId, draft.organizationDomain, draft.recipient.email, draft.recipient.sourceUrl,
-          draft.recipient.verifiedAt, JSON.stringify(draft.sourceSnapshot), req.user.id,
+          draft.recipient.verifiedAt, JSON.stringify(draft.sourceSnapshot), identity.actorUserId,
           typeof clock === 'function' ? new Date(clock()).toISOString() : new Date().toISOString()
         );
         const version = reviewService.createInitialVersion(db, {
-          actorUserId: req.user.id,
+          actorUserId: identity.actorUserId,
           workItemId,
           expectedWorkVersion,
           recipient: draft.recipient,
@@ -716,31 +843,47 @@ function createMatrixRouter({
         let quality;
         try { quality = JSON.parse(version.quality_json); } catch (_) { quality = null; }
         if (!quality?.passed) throw new Error('initial draft quality gate blocked');
-        return version;
+        const response = withWorkVersion(version);
+        recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId: version.id, response });
+        return response;
       });
       const created = create.immediate();
-      return res.status(created.current_status ? 200 : 201).json(withWorkVersion(created));
-    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+      return res.status(201).json(created);
+    } catch (error) { sendReviewError(res, error); }
   });
 
   router.post('/work-items/:id/versions/:versionId/approve', (req, res) => {
     try {
-      requireReviewAccess(req);
       const body = rejectUnknown(req.body, APPROVAL_FIELDS, 'body');
+      const identity = reviewIdentity(req);
       const workItemId = positiveInteger(req.params.id, 'work item id');
       const versionId = positiveInteger(req.params.versionId, 'version id');
       const expectedWorkVersion = positiveInteger(body.expected_work_version, 'expected work version');
-      ownedReviewItem(workItemId, req.user.id);
-      const approved = reviewService.approveVersion(db, {
-        actorUserId: req.user.id,
-        workItemId,
-        versionId,
-        expectedWorkVersion,
-        expectedContentHash: String(body.expected_content_hash || '').trim(),
-        idempotencyKey: String(body.idempotency_key || '').trim()
+      const expectedContentHash = String(body.expected_content_hash || '').trim();
+      const idempotencyKey = String(body.idempotency_key || '').trim();
+      if (!idempotencyKey) throw new Error('idempotency key required');
+      const fingerprint = apiRequestFingerprint({
+        action: 'approve', actorUserId: identity.actorUserId, workItemId, versionId,
+        expectedWorkVersion, expectedContentHash
       });
-      res.json(withWorkVersion(approved));
-    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+      const replay = apiReplay({ identity, workItemId, action: 'approve', idempotencyKey, fingerprint });
+      if (replay) return res.json(replay);
+      const approve = db.transaction(() => {
+        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
+        const approved = reviewService.approveVersion(db, {
+          actorUserId: identity.actorUserId,
+          workItemId,
+          versionId,
+          expectedWorkVersion,
+          expectedContentHash,
+          idempotencyKey
+        });
+        const response = withWorkVersion(approved);
+        recordApiRequest({ identity, workItemId, action: 'approve', idempotencyKey, fingerprint, versionId: approved.id, response });
+        return response;
+      });
+      res.json(approve.immediate());
+    } catch (error) { sendReviewError(res, error); }
   });
 
   router.get('/work-items/:id/versions/:versionId/preview', (req, res) => {
@@ -753,7 +896,7 @@ function createMatrixRouter({
       const preview = reviewService.finalPreview(db, { actorUserId: req.user.id, versionId });
       if (!preview || preview.version.work_item_id !== item.id) throw new Error('version not found');
       res.json({ ...preview, work_item_version: item.version });
-    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+    } catch (error) { sendReviewError(res, error); }
   });
 
   return router;
