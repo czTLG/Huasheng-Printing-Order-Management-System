@@ -85,8 +85,11 @@ async function run() {
   await waitForApi(baseUrl);
 
   const watcher = spawn(process.execPath, ['/workspace/scripts/matrix-watch.js'], { stdio: 'inherit', env: process.env });
+  const supervisor = process.env.MATRIX_SUPERVISOR_ENABLED === '1'
+    ? spawn(process.execPath, ['/workspace/scripts/matrix-supervisor-watch.js'], { stdio: 'inherit', env: process.env })
+    : null;
   const bridge = spawn('feishu-codex-bridge', ['run', '--bot', 'stream-node'], { stdio: 'inherit', env: process.env });
-  const children = [watcher, bridge];
+  const children = [watcher, bridge, ...(supervisor ? [supervisor] : [])];
   writeState(statePath, { watcherPid: watcher.pid, bridgePid: bridge.pid, startedAt: new Date().toISOString() });
 
   let stopping = false;
@@ -111,6 +114,7 @@ async function run() {
   watcher.once('exit', (code, signal) => stop(code && code > 0 ? code : 1, `watcher exited (${code ?? signal ?? 'unknown'})`));
   bridge.once('exit', (code, signal) => stop(code && code > 0 ? code : 1, `bridge exited (${code ?? signal ?? 'unknown'})`));
   watcher.once('error', error => stop(1, `watcher failed: ${error.message}`));
+  if (supervisor) supervisor.once('error', error => stop(1, `supervisor failed: ${error.message}`));
   bridge.once('error', error => stop(1, `bridge failed: ${error.message}`));
   process.once('SIGTERM', () => stop(0, 'received SIGTERM'));
   process.once('SIGINT', () => stop(0, 'received SIGINT'));

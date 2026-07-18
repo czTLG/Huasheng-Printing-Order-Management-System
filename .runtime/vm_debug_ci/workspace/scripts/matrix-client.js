@@ -34,7 +34,7 @@ function target(pathname, query) {
   return url;
 }
 
-async function call(openId, pathname, { method = 'GET', query, body } = {}) {
+async function call(openId, pathname, { method = 'GET', query, body, chatId } = {}) {
   const token = String(process.env.MATRIX_BRIDGE_TOKEN || '');
   if (!token) throw new Error('MATRIX_BRIDGE_TOKEN is required');
   const url = target(pathname, query);
@@ -43,6 +43,7 @@ async function call(openId, pathname, { method = 'GET', query, body } = {}) {
     'x-matrix-bridge-token': token,
     'x-feishu-open-id': operatorId(openId)
   };
+  if (chatId) headers['x-feishu-chat-id'] = String(chatId);
   if (body !== undefined) headers['content-type'] = 'application/json';
   const response = await fetch(url, {
     method,
@@ -171,9 +172,30 @@ function notificationStatus(openId, notificationId, input) {
   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/status`, { method: 'POST', body });
 }
 
+function coreTasks(openId, chatId, filters = {}) {
+  const query = exactObject(filters, new Set(['channel', 'state', 'due_before', 'limit', 'cursor']), 'core task filters');
+  return call(openId, '/core/tasks', { query, chatId });
+}
+
+function prepareCoreDigests(openId, chatId, input) {
+  const body = exactObject(input, new Set(['now', 'idempotencyKey']), 'digest preparation');
+  return call(openId, '/core/tasks/digests/prepare', { method: 'POST', body, chatId });
+}
+
+function appendLedgerEvent(openId, chatId, input) {
+  const body = exactObject(input, new Set(['conversationId','platformNamespace','immutableChatId','immutableRootThreadId','immutableRootMessageId','idempotencyKey','eventKind','direction','channel','threadId','platformMessageId','editVersion','cardEventId','normalizedText','attachmentRefs','bindings','occurredAt','source']), 'ledger event');
+  return call(openId, '/ledger/events', { method: 'POST', body, chatId });
+}
+
+function preparePrivateCopy(openId, chatId, input) {
+  const body = exactObject(input, new Set(['cardEventId','receivedChatId','sourceType','sourceVersionId','formats','idempotencyKey']), 'private copy');
+  return call(openId, '/copy/prepare', { method: 'POST', body, chatId });
+}
+
 module.exports = {
   facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
   selectCandidate, workItems, createVersion, reviseVersion, approveVersion, versionPreview, confirmSend,
   startReplyDraft, retryTranslation,
-  claimNotification, ackNotification, nackNotification, notificationStatus
+  claimNotification, ackNotification, nackNotification, notificationStatus,
+  coreTasks, prepareCoreDigests, appendLedgerEvent, preparePrivateCopy
 };
