@@ -118,3 +118,34 @@ git diff --check
 ```
 
 Observed result: all focused, syntax, shared database, API, and whitespace checks completed with exit 0.
+
+## Independent Review R3 Fix
+
+### RED
+
+The R3 tests were added before production changes and produced both expected failures:
+
+- an accepted legal-ID key matching text in the visible replacement marker remained in serialized evidence;
+- a confirmed Unicode multi-word alias failed under the suffix-inferred non-domain ASCII rule.
+
+### GREEN
+
+- Redacted substrings now use one private-use sentinel containing no visible text or digest. Every canonical evidence serialization is scanned for all raw, canonical, case, and normalization forms before review forwarding, fingerprinting, or persistence.
+- Marker-overlap tests cover accepted keys matching the prior marker wording, digest wording, and a full digest-shaped key in both property names and nested values.
+- Namespace policy is an explicit fixed mapping: `organization_domain` uses IDNA domain canonicalization; `legal_id` uses a bounded ASCII identifier policy; `lei` uses a 20-character ASCII policy; `organization_alias` uses normalized Unicode text with collapsed whitespace.
+- Exact methods are validated against the declared namespace policy. Unknown namespaces, suffix-only domain names, and method-policy mismatches are rejected without inferring behavior from namespace spelling.
+- Existing public method signatures remain unchanged, and link/resolve use the same explicit policy mapping.
+
+R3 verification commands:
+
+```text
+node scripts/test-matrix-identity.js
+node --check src/services/matrixIdentity.js
+node --check scripts/test-matrix-identity.js
+node scripts/test-matrix-stream-review.js
+node scripts/test-matrix-stream-gates.js
+node scripts/test-matrix-api.js
+git diff --check
+```
+
+Observed result: all focused, syntax, shared database, API, and whitespace checks completed with exit 0.

@@ -51,17 +51,18 @@ function link(overrides = {}) {
 
 assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='matrix_entity_links'").get(), 'matrix_entity_links missing');
 
-for (const [index, matchMethod] of [
-  'exact_domain',
-  'verified_email_domain',
-  'legal_id',
-  'lei',
-  'confirmed_alias'
+for (const [index, policyCase] of [
+  { matchMethod: 'exact_domain', namespace: 'organization_domain', externalKey: 'Exact-Key-0' },
+  { matchMethod: 'verified_email_domain', namespace: 'organization_domain', externalKey: 'Exact-Key-1' },
+  { matchMethod: 'legal_id', namespace: 'legal_id', externalKey: 'Exact-Key-2' },
+  { matchMethod: 'lei', namespace: 'lei', externalKey: '529900T8BM49AURSDO55' },
+  { matchMethod: 'confirmed_alias', namespace: 'organization_alias', externalKey: 'Exact-Key-4' }
 ].entries()) {
+  const { matchMethod, namespace, externalKey } = policyCase;
   const result = link({
     entityId: `allow-${index}`,
-    namespace: `allow_${index}`,
-    externalKey: `Exact-Key-${index}`,
+    namespace,
+    externalKey,
     matchMethod,
     evidence: { source: 'confirmed_source', verified: matchMethod === 'verified_email_domain' }
   });
@@ -69,7 +70,7 @@ for (const [index, matchMethod] of [
   assert.strictEqual(result.matchMethod, matchMethod);
   assert.match(result.externalKeyHash, /^[a-f0-9]{64}$/);
   assert.deepStrictEqual(
-    identity.resolve({ namespace: `ALLOW_${index}`, externalKey: ` exact-key-${index} ` }).map(item => item.entityId),
+    identity.resolve({ namespace: namespace.toUpperCase(), externalKey: ` ${externalKey.toLowerCase()} ` }).map(item => item.entityId),
     [`allow-${index}`]
   );
 }
@@ -308,19 +309,83 @@ assert.deepStrictEqual(
   'composed and decomposed domains must share one canonical key'
 );
 
+for (const [index, markerOverlapKey] of [
+  'external-key',
+  'sha256',
+  crypto.createHash('sha256').update('marker-overlap').digest('hex')
+].entries()) {
+  const overlapLink = link({
+    entityId: `marker-overlap-${index}`,
+    namespace: 'legal_id',
+    externalKey: markerOverlapKey,
+    matchMethod: 'legal_id',
+    evidence: {
+      source: 'registry',
+      [markerOverlapKey]: markerOverlapKey,
+      nested: { observed: `prefix:${markerOverlapKey}:suffix` }
+    },
+    idempotencyKey: `marker-overlap-${index}`
+  });
+  const overlapStored = db.prepare('SELECT evidence_json FROM matrix_entity_links WHERE id = ?').get(overlapLink.id);
+  assert.ok(
+    !overlapStored.evidence_json.toLowerCase().includes(markerOverlapKey.toLowerCase()),
+    'opaque redaction token must not contain accepted raw, canonical, marker-text, or hash-overlap keys'
+  );
+}
+
+const aliasRawKey = '\u534e\u76db   \u5305\u88c5';
+const aliasLink = link({
+  entityId: 'unicode-multiword-alias',
+  namespace: 'organization_alias',
+  externalKey: aliasRawKey,
+  matchMethod: 'confirmed_alias',
+  evidence: {
+    source: 'registry',
+    observed: '\u534e\u76db \u5305\u88c5',
+    [aliasRawKey]: 'confirmed'
+  },
+  idempotencyKey: 'unicode-multiword-alias-1'
+});
+const aliasStored = db.prepare('SELECT evidence_json FROM matrix_entity_links WHERE id = ?').get(aliasLink.id);
+assert.ok(!aliasStored.evidence_json.includes('\u534e\u76db'), 'Unicode alias must be redacted without leaking its words');
+assert.deepStrictEqual(
+  identity.resolve({ namespace: 'organization_alias', externalKey: '\u534e\u76db \u5305\u88c5' }).map(item => item.entityId),
+  ['unicode-multiword-alias'],
+  'Unicode multi-word aliases must share a safe canonical key'
+);
+
 assert.throws(() => link({
-  entityId: 'unsafe-nondomain-key',
+  entityId: 'unsafe-legal-id',
   namespace: 'legal_id',
   externalKey: '\u7f16\u53f7-1',
   matchMethod: 'legal_id',
-  idempotencyKey: 'unsafe-nondomain-key-1'
-}), /external key must use canonical visible ASCII/i, 'non-domain namespaces must enforce the ASCII canonical-key policy');
+  idempotencyKey: 'unsafe-legal-id-1'
+}), /legal id must use canonical visible ASCII/i, 'legal IDs must enforce their explicit ASCII policy');
+
+assert.throws(() => link({
+  entityId: 'undeclared-domain-namespace',
+  namespace: 'company_web',
+  externalKey: 'example.com',
+  matchMethod: 'exact_domain',
+  idempotencyKey: 'undeclared-domain-namespace-1'
+}), /namespace key policy not declared/i, 'domain behavior must require an explicitly mapped namespace');
+assert.throws(() => link({
+  entityId: 'suffix-must-not-select-policy',
+  namespace: 'marketing_domain',
+  externalKey: 'example.com',
+  matchMethod: 'exact_domain',
+  idempotencyKey: 'suffix-must-not-select-policy-1'
+}), /namespace key policy not declared/i, 'a domain suffix must not select canonical policy');
+assert.throws(() => link({
+  entityId: 'method-policy-mismatch',
+  namespace: 'organization_alias',
+  externalKey: 'example.com',
+  matchMethod: 'exact_domain',
+  idempotencyKey: 'method-policy-mismatch-1'
+}), /match method incompatible with namespace key policy/i, 'match methods must agree with the explicit namespace policy');
 
 const collisionRawKey = 'collision.example';
-const collisionHash = crypto.createHash('sha256')
-  .update(`organization_domain\0${collisionRawKey}`)
-  .digest('hex');
-const collisionMarker = `[external-key-sha256:${collisionHash}]`;
+const collisionMarker = '\ue000';
 assert.throws(() => link({
   entityId: 'redaction-key-collision',
   externalKey: collisionRawKey,
