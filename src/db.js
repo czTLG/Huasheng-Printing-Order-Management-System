@@ -1078,9 +1078,10 @@ function initDb() {
       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
     END;
 
-    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approved_content_immutable
+    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;
+    CREATE TRIGGER trg_matrix_stream_versions_approved_content_immutable
     BEFORE UPDATE ON matrix_stream_versions
-    WHEN OLD.status = 'approved' AND (
+    WHEN OLD.status IN ('approved', 'superseded') AND (
       NEW.work_item_id IS NOT OLD.work_item_id OR
       NEW.crm_draft_id IS NOT OLD.crm_draft_id OR
       NEW.revision IS NOT OLD.revision OR
@@ -1096,10 +1097,27 @@ function initDb() {
       NEW.quality_score IS NOT OLD.quality_score OR
       NEW.quality_json IS NOT OLD.quality_json OR
       NEW.created_by IS NOT OLD.created_by OR
+      NEW.approved_by IS NOT OLD.approved_by OR
+      NEW.approved_at IS NOT OLD.approved_at OR
       NEW.created_at IS NOT OLD.created_at
     )
     BEGIN
       SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approved_no_delete
+    BEFORE DELETE ON matrix_stream_versions
+    WHEN OLD.status IN ('approved', 'superseded')
+    BEGIN
+      SELECT RAISE(ABORT, 'approved matrix_stream_versions evidence is immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approval_lifecycle
+    BEFORE UPDATE OF status ON matrix_stream_versions
+    WHEN (OLD.status = 'approved' AND NEW.status NOT IN ('approved', 'superseded'))
+      OR (OLD.status = 'superseded' AND NEW.status != 'superseded')
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_stream_versions approval lifecycle is irreversible');
     END;
   `);
 
