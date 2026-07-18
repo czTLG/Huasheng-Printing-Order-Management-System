@@ -74,6 +74,14 @@ DONE_WITH_CONCERNS
 - Canonical values RED: equivalent units and dates compared as source tokens. GREEN: weights normalize to grams, dimensions/thickness to millimetres, percentages to numeric values, and full English/Chinese dates to ISO. `100 micron = 0.1毫米`, `0.25kg = 250克`, `10cm = 100毫米`, and `July 20, 2026 = 2026年7月20日` stay aligned while real value differences fail.
 - Regression matrix: all earlier quality, identity, readiness, policy, follow-up, provenance, exact-claim, textual-number, and replay tests remain green together with table-driven ontology and six-category variants.
 
+## R5 review repair
+
+- Mixed intent RED: `We would like to discuss our guaranteed delivery and price is USD 0.05` bypassed both categories. GREEN: intent handling no longer skips the sentence. Only a performance-category product discussion whose entity is matched to evidence products/entry-product through normalized tokens or the shared ontology is exempt; any price, delivery, or other sensitive category in the same sentence remains exact-evidence gated.
+- Role regression RED: lead time, general quantity, Velcro/wire-tie closure, and transparent/opaque conflicts could score full consistency. GREEN: the shared fact parser restores lead-time and quantity roles and expands closure/transparency mutual groups. Values use the same number normalization and role comparison as historical annual-volume, size, thickness, weight, percentage, date, material, finish, color, function, and bag-type facts.
+- Safe question RED: fact-seeking PET/zipper and matte/glossy questions were treated as asserted unsupported products. GREEN: validated question sentences are removed before asserted-product evidence checks while their ontology facts contribute a matching `product_fact` question intent in both languages.
+- Evidence RED: bare reviewed values aligned bilingually but still produced `unsupported_product_fact`. GREEN: draft and evidence share the same parser; evidence mode maps bare canonical weights, thicknesses, sizes, percentages, and dates to roles. The equivalent-unit fixture now asserts score/component values, empty hard failures, and `passed=true`; a real unit/date mismatch asserts zero consistency and hard failure.
+- Unknown-fact RED: an unmapped `magnetic closure` could retain a full pass. GREEN: non-question product-property assertions with an unmapped material/finish/closure/color/transparency/function/bag entity fail closed as `unknown_product_fact`, without classifying ordinary grammar as a product attribute.
+
 ## Concerns
 
 - Similar-name matching is deliberately narrow and deterministic. Names outside the normalized legal-suffix equivalence require an explicit alias from the reviewed candidate context; aliases only produce `possible_duplicate_review`.
