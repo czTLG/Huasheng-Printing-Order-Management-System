@@ -1,0 +1,88 @@
+# Task 1 Report: Exact Identity Crosswalk
+
+## Result
+
+- Status: DONE_WITH_CONCERNS
+- Commit: `bea4f4d` (`feat: add matrix identity crosswalk`)
+
+## RED
+
+Command:
+
+```text
+node scripts/test-matrix-identity.js
+```
+
+Observed result: exit 1. Node raised `MODULE_NOT_FOUND` for `../src/services/matrixIdentity`, which was the expected missing-module failure before production implementation.
+
+## GREEN
+
+Commands:
+
+```text
+node scripts/test-matrix-identity.js
+node --check src/services/matrixIdentity.js
+node --check scripts/test-matrix-identity.js
+git diff --check -- src/db.js src/services/matrixIdentity.js scripts/test-matrix-identity.js scripts/fixtures/matrix-core/entity-crosswalk.json
+```
+
+Observed result: exit 0. The focused test printed `PASS matrix identity exact crosswalk`; both syntax checks and the scoped whitespace check completed without errors.
+
+## Coverage
+
+- All five allowlisted exact methods link automatically.
+- Caller-defined methods, approximate name/address candidates, and unverified email-domain evidence create one injected review task and do not create links.
+- External identity keys are normalized and stored only as SHA-256 hashes.
+- Identical idempotent replay is stable; a changed request using the same key fails.
+- Link/evidence rows reject update and delete operations.
+- Fixture resolves Atlas candidate, CRM record, public email and WhatsApp identities, inquiry, and order through one confirmed organization link, making the complete resolved set available to suppression/revocation consumers.
+
+## Modified Files in Commit
+
+- `src/services/matrixIdentity.js`
+- `src/db.js`
+- `scripts/test-matrix-identity.js`
+- `scripts/fixtures/matrix-core/entity-crosswalk.json`
+
+## Self-review
+
+- Checked the table constraint against the exact five-method allowlist.
+- Checked that no raw external-key column or value is persisted.
+- Checked that review behavior uses only the injected `taskSupervisor.createReviewTask` stub contract and imports no later-task implementation.
+- Checked the commit file list; the pre-existing modified plan file was neither edited for this task nor staged.
+
+## Concerns
+
+- The injected task supervisor owns durable idempotency for ambiguous review tasks; Task 1 supplies the idempotency key but intentionally does not implement the later supervisor persistence layer.
+- The worktree already contained an unrelated modification to `docs/superpowers/plans/2026-07-18-matrix-supervisor-atlas-draft.md`; it remains uncommitted and untouched by this task.
+
+## Independent Review Fix
+
+### RED
+
+The focused test was extended before production changes. The observed failures were:
+
+- ambiguous candidate payloads exposed a raw external key through an untyped nested object;
+- identical ambiguous replay returned a second injected task result instead of the original result;
+- with logical-link alias reservation removed, reusing the fresh alias key for a different payload did not raise the expected idempotency conflict.
+
+### GREEN
+
+- Evidence redaction now covers recursive object keys as well as values, and ambiguous candidates are projected into a bounded typed schema before fingerprinting or forwarding.
+- `matrix_identity_commands` owns fingerprints and results for Task 1 commands. Review commands reserve their key, call the injected stub, and persist its result in one transaction; identical replay reads the stored result and changed payload reuse conflicts.
+- Exact-link commands reserve both original keys and fresh keys accepted for an existing logical link in the same transaction as link lookup/creation.
+- Existing link command keys are backfilled from immutable link rows when the database initializes.
+
+Verification commands:
+
+```text
+node scripts/test-matrix-identity.js
+node --check src/services/matrixIdentity.js
+node --check scripts/test-matrix-identity.js
+node scripts/test-matrix-stream-review.js
+node scripts/test-matrix-stream-gates.js
+node scripts/test-matrix-api.js
+git diff --check
+```
+
+Observed result: all commands completed with exit 0. The API baseline initially encountered sandbox `EPERM` while binding its local test port; the approved out-of-sandbox rerun completed successfully.

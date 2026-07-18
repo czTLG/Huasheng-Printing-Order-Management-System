@@ -874,6 +874,20 @@ function initDb() {
       FOREIGN KEY(actor_user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_identity_commands (
+      idempotency_key TEXT PRIMARY KEY,
+      request_fingerprint TEXT NOT NULL,
+      outcome_kind TEXT NOT NULL CHECK(outcome_kind IN ('linked','review')),
+      link_id INTEGER,
+      result_json TEXT,
+      created_at TEXT NOT NULL,
+      CHECK(
+        (outcome_kind = 'linked' AND link_id IS NOT NULL AND result_json IS NULL)
+        OR (outcome_kind = 'review' AND link_id IS NULL)
+      ),
+      FOREIGN KEY(link_id) REFERENCES matrix_entity_links(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,
@@ -1103,6 +1117,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_entity_links_lookup ON matrix_entity_links(namespace, external_key_hash);
     CREATE INDEX IF NOT EXISTS idx_matrix_entity_links_entity ON matrix_entity_links(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_identity_commands_link ON matrix_identity_commands(link_id);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
@@ -1135,6 +1150,12 @@ function initDb() {
     BEGIN
       SELECT RAISE(ABORT, 'matrix_entity_links evidence is immutable');
     END;
+
+    INSERT OR IGNORE INTO matrix_identity_commands (
+      idempotency_key, request_fingerprint, outcome_kind, link_id, result_json, created_at
+    )
+    SELECT idempotency_key, request_fingerprint, 'linked', id, NULL, created_at
+    FROM matrix_entity_links;
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_update
     BEFORE UPDATE ON matrix_stream_events

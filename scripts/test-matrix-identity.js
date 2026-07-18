@@ -75,9 +75,16 @@ for (const [index, matchMethod] of [
 }
 
 const beforeAmbiguous = db.prepare('SELECT COUNT(*) AS count FROM matrix_entity_links').get().count;
+const ambiguousRawKey = 'Do-Not-Forward-This-Key.Example';
 const ambiguous = identity.proposeAmbiguous({
   candidates: [
-    { method: 'caller_scored_match', entityType: 'crm_customer', entityId: 'candidate-1' },
+    {
+      method: 'caller_scored_match',
+      entityType: 'crm_customer',
+      entityId: 'candidate-1',
+      externalKey: ambiguousRawKey,
+      metadata: { [ambiguousRawKey]: ambiguousRawKey }
+    },
     { method: 'approximate_name', entityType: 'crm_customer', entityId: 'candidate-2' },
     { method: 'approximate_address', entityType: 'crm_customer', entityId: 'candidate-3' },
     { method: 'unverified_email', entityType: 'crm_customer', entityId: 'candidate-4' }
@@ -89,7 +96,35 @@ const ambiguous = identity.proposeAmbiguous({
 assert.strictEqual(ambiguous.status, 'review_required');
 assert.strictEqual(reviewCalls.length, 1, 'all ambiguous candidates must produce one review task');
 assert.strictEqual(reviewCalls[0].candidates.length, 4);
+assert.ok(!JSON.stringify(reviewCalls[0]).toLowerCase().includes(ambiguousRawKey.toLowerCase()), 'ambiguous review must not forward raw external keys');
 assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_entity_links').get().count, beforeAmbiguous, 'ambiguous candidates must never merge');
+
+const ambiguousReplay = identity.proposeAmbiguous({
+  candidates: [
+    {
+      method: 'caller_scored_match',
+      entityType: 'crm_customer',
+      entityId: 'candidate-1',
+      externalKey: ambiguousRawKey,
+      metadata: { [ambiguousRawKey]: ambiguousRawKey }
+    },
+    { method: 'approximate_name', entityType: 'crm_customer', entityId: 'candidate-2' },
+    { method: 'approximate_address', entityType: 'crm_customer', entityId: 'candidate-3' },
+    { method: 'unverified_email', entityType: 'crm_customer', entityId: 'candidate-4' }
+  ],
+  sourceEventId: 'source-event-1',
+  actorUserId,
+  idempotencyKey: 'review-ambiguous-1'
+});
+assert.deepStrictEqual(ambiguousReplay, ambiguous, 'identical ambiguous replay must return the original result');
+assert.strictEqual(reviewCalls.length, 1, 'identical ambiguous replay must not call the injected stub twice');
+assert.throws(() => identity.proposeAmbiguous({
+  candidates: [{ method: 'approximate_name', entityType: 'crm_customer', entityId: 'changed-candidate' }],
+  sourceEventId: 'source-event-1',
+  actorUserId,
+  idempotencyKey: 'review-ambiguous-1'
+}), /idempotency conflict/i);
+assert.strictEqual(reviewCalls.length, 1, 'conflicting ambiguous replay must not call the injected stub');
 
 const invalidMethod = link({
   entityId: 'invalid-method',
@@ -100,6 +135,21 @@ const invalidMethod = link({
 assert.strictEqual(invalidMethod.status, 'review_required');
 assert.strictEqual(reviewCalls.length, 2);
 assert.strictEqual(identity.resolve({ namespace: 'organization_domain', externalKey: 'similar-name' }).length, 0);
+const invalidMethodReplay = link({
+  entityId: 'invalid-method',
+  externalKey: 'similar-name',
+  matchMethod: 'caller_supplied_score',
+  idempotencyKey: 'invalid-method-1'
+});
+assert.deepStrictEqual(invalidMethodReplay, invalidMethod, 'identical rejected-link replay must return the original review result');
+assert.strictEqual(reviewCalls.length, 2, 'identical rejected-link replay must not call the injected stub twice');
+assert.throws(() => link({
+  entityId: 'changed-invalid-method',
+  externalKey: 'similar-name',
+  matchMethod: 'caller_supplied_score',
+  idempotencyKey: 'invalid-method-1'
+}), /idempotency conflict/i);
+assert.strictEqual(reviewCalls.length, 2, 'conflicting rejected-link replay must not call the injected stub');
 
 const unverified = link({
   entityId: 'unverified-email',
@@ -132,7 +182,11 @@ const rawKey = 'Never-Store-This-Key.Example';
 const immutable = link({
   entityId: 'immutable-evidence',
   externalKey: rawKey,
-  evidence: { source: 'registry', recordId: 'registry-44' },
+  evidence: {
+    source: 'registry',
+    recordId: 'registry-44',
+    nested: { [rawKey]: { note: rawKey, deeper: { [rawKey.toUpperCase()]: rawKey } } }
+  },
   idempotencyKey: 'immutable-link-1'
 });
 const stored = db.prepare('SELECT * FROM matrix_entity_links WHERE id = ?').get(immutable.id);
@@ -144,7 +198,11 @@ assert.throws(() => db.prepare('DELETE FROM matrix_entity_links WHERE id=?').run
 const replay = link({
   entityId: 'immutable-evidence',
   externalKey: rawKey,
-  evidence: { source: 'registry', recordId: 'registry-44' },
+  evidence: {
+    source: 'registry',
+    recordId: 'registry-44',
+    nested: { [rawKey]: { note: rawKey, deeper: { [rawKey.toUpperCase()]: rawKey } } }
+  },
   idempotencyKey: 'immutable-link-1'
 });
 assert.deepStrictEqual(replay, immutable, 'identical idempotent replay must be stable');
@@ -154,6 +212,36 @@ assert.throws(() => link({
   evidence: { source: 'registry', recordId: 'registry-44' },
   idempotencyKey: 'immutable-link-1'
 }), /idempotency conflict/i);
+
+const aliasReplay = link({
+  entityId: 'immutable-evidence',
+  externalKey: rawKey,
+  evidence: {
+    source: 'registry',
+    recordId: 'registry-44',
+    nested: { [rawKey]: { note: rawKey, deeper: { [rawKey.toUpperCase()]: rawKey } } }
+  },
+  idempotencyKey: 'immutable-link-alias-1'
+});
+assert.deepStrictEqual(aliasReplay, immutable, 'a fresh key for the identical logical link must replay the existing result');
+assert.throws(() => link({
+  entityId: 'alias-key-must-be-reserved',
+  externalKey: 'different.example',
+  evidence: { source: 'registry', recordId: 'registry-45' },
+  idempotencyKey: 'immutable-link-alias-1'
+}), /idempotency conflict/i, 'the fresh logical-link replay key must be reserved');
+assert.strictEqual(
+  db.prepare('SELECT COUNT(*) AS count FROM matrix_identity_commands WHERE idempotency_key = ?').get('immutable-link-alias-1').count,
+  1,
+  'logical-link replay must atomically persist the fresh idempotency key'
+);
+
+assert.throws(() => link({
+  entityId: 'review-key-cannot-cross-command',
+  externalKey: 'different.example',
+  matchMethod: 'exact_domain',
+  idempotencyKey: 'review-ambiguous-1'
+}), /idempotency conflict/i, 'review idempotency keys must not be reusable by exact-link commands');
 
 db.close();
 fs.rmSync(root, { recursive: true, force: true });

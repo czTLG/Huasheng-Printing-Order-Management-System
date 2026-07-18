@@ -44,11 +44,38 @@ function externalKeyHash(namespace, externalKey) {
 function redactExternalKey(value, externalKey, hash) {
   if (Array.isArray(value)) return value.map(item => redactExternalKey(item, externalKey, hash));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactExternalKey(item, externalKey, hash)]));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      redactExternalKey(key, externalKey, hash),
+      redactExternalKey(item, externalKey, hash)
+    ]));
   }
   if (typeof value !== 'string') return value;
   const escaped = externalKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return value.replace(new RegExp(escaped, 'gi'), `[external-key-sha256:${hash}]`);
+}
+
+function reviewCandidate(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('candidate object required');
+  const candidate = {
+    entityType: requiredToken(value.entityType, 'candidate entity type', 100),
+    entityId: requiredToken(value.entityId, 'candidate entity id')
+  };
+  for (const [key, maximum] of [
+    ['method', 100],
+    ['namespace', 100],
+    ['proposedMethod', 100],
+    ['reason', 100]
+  ]) {
+    if (value[key] !== undefined && value[key] !== null && value[key] !== '') {
+      candidate[key] = requiredToken(value[key], `candidate ${key}`, maximum);
+    }
+  }
+  if (value.externalKeyHash !== undefined && value.externalKeyHash !== null && value.externalKeyHash !== '') {
+    const hash = requiredToken(value.externalKeyHash, 'candidate external key hash', 64).toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('candidate external key hash invalid');
+    candidate.externalKeyHash = hash;
+  }
+  return candidate;
 }
 
 function evidenceObject(value) {
@@ -82,39 +109,82 @@ function rowResult(row) {
 function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } = {}) {
   if (!db || typeof db.prepare !== 'function') throw new Error('db required');
 
-  function proposeAmbiguous(input = {}) {
+  function createReview({ candidates, sourceEventId, actorUserId, idempotencyKey, fingerprintPayload }) {
     if (!taskSupervisor || typeof taskSupervisor.createReviewTask !== 'function') {
       throw new Error('taskSupervisor.createReviewTask required');
     }
-    const candidates = Array.isArray(input.candidates) ? input.candidates : [];
     if (!candidates.length) throw new Error('candidates required');
+    const fingerprint = sha256(canonicalJson(fingerprintPayload));
+    return db.transaction(() => {
+      const replay = db.prepare('SELECT * FROM matrix_identity_commands WHERE idempotency_key = ?').get(idempotencyKey);
+      if (replay) {
+        if (replay.request_fingerprint !== fingerprint || replay.outcome_kind !== 'review') {
+          throw new Error('matrix identity idempotency conflict');
+        }
+        if (!replay.result_json) throw new Error('matrix identity review result incomplete');
+        return JSON.parse(replay.result_json);
+      }
+      const createdAt = nowIso(clock);
+      db.prepare(`
+        INSERT INTO matrix_identity_commands (
+          idempotency_key, request_fingerprint, outcome_kind, link_id, result_json, created_at
+        ) VALUES (?, ?, 'review', NULL, NULL, ?)
+      `).run(idempotencyKey, fingerprint, createdAt);
+      const result = taskSupervisor.createReviewTask({
+        kind: 'matrix_identity_review',
+        candidates,
+        sourceEventId,
+        actorUserId,
+        idempotencyKey,
+        createdAt
+      });
+      const resultJson = JSON.stringify(result);
+      if (resultJson === undefined) throw new Error('taskSupervisor.createReviewTask must return JSON data');
+      db.prepare('UPDATE matrix_identity_commands SET result_json = ? WHERE idempotency_key = ?')
+        .run(resultJson, idempotencyKey);
+      return JSON.parse(resultJson);
+    })();
+  }
+
+  function proposeAmbiguous(input = {}) {
+    const candidates = Array.isArray(input.candidates) ? input.candidates.map(reviewCandidate) : [];
     const sourceEventId = requiredToken(input.sourceEventId, 'source event id');
     const idempotencyKey = requiredToken(input.idempotencyKey, 'idempotency key');
     const actorUserId = Number(input.actorUserId);
     if (!Number.isInteger(actorUserId) || actorUserId <= 0) throw new Error('actor user id required');
-    return taskSupervisor.createReviewTask({
-      kind: 'matrix_identity_review',
-      candidates: structuredClone(candidates),
+    return createReview({
+      candidates,
       sourceEventId,
       actorUserId,
       idempotencyKey,
-      createdAt: nowIso(clock)
+      fingerprintPayload: { command: 'ambiguous_review', candidates, sourceEventId, actorUserId }
     });
   }
 
-  function reviewExact(input, namespace, keyHash, reason) {
-    return proposeAmbiguous({
-      candidates: [{
+  function reviewExact(input, namespace, keyHash, safeEvidence, reason) {
+    const candidates = [reviewCandidate({
         entityType: String(input.entityType ?? ''),
         entityId: String(input.entityId ?? ''),
         namespace,
         externalKeyHash: keyHash,
         proposedMethod: String(input.matchMethod ?? ''),
         reason
-      }],
-      sourceEventId: input.idempotencyKey,
-      actorUserId: input.actorUserId,
-      idempotencyKey: input.idempotencyKey
+    })];
+    const sourceEventId = requiredToken(input.idempotencyKey, 'source event id');
+    const idempotencyKey = requiredToken(input.idempotencyKey, 'idempotency key');
+    const actorUserId = Number(input.actorUserId);
+    return createReview({
+      candidates,
+      sourceEventId,
+      actorUserId,
+      idempotencyKey,
+      fingerprintPayload: {
+        command: 'exact_link_review',
+        candidates,
+        evidence: safeEvidence,
+        sourceEventId,
+        actorUserId
+      }
     });
   }
 
@@ -128,16 +198,16 @@ function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } =
     const actorUserId = Number(input.actorUserId);
     const idempotencyKey = requiredToken(input.idempotencyKey, 'idempotency key');
     if (!Number.isInteger(actorUserId) || actorUserId <= 0) throw new Error('actor user id required');
+    const evidence = evidenceObject(input.evidence);
+    const safeEvidence = redactExternalKey(structuredClone(evidence), externalKey, keyHash);
 
     if (!EXACT_METHODS.has(matchMethod)) {
-      return reviewExact(input, namespace, keyHash, 'method_not_allowlisted');
+      return reviewExact(input, namespace, keyHash, safeEvidence, 'method_not_allowlisted');
     }
-    const evidence = evidenceObject(input.evidence);
     if (matchMethod === 'verified_email_domain' && evidence.verified !== true && evidence.emailVerified !== true) {
-      return reviewExact(input, namespace, keyHash, 'email_domain_not_verified');
+      return reviewExact(input, namespace, keyHash, safeEvidence, 'email_domain_not_verified');
     }
 
-    const safeEvidence = redactExternalKey(structuredClone(evidence), externalKey, keyHash);
     const evidenceJson = canonicalJson(safeEvidence);
     const fingerprint = sha256(canonicalJson({
       entityType, entityId, namespace, externalKeyHash: keyHash, matchMethod,
@@ -145,10 +215,14 @@ function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } =
     }));
 
     return db.transaction(() => {
-      const replay = db.prepare('SELECT * FROM matrix_entity_links WHERE idempotency_key = ?').get(idempotencyKey);
+      const replay = db.prepare('SELECT * FROM matrix_identity_commands WHERE idempotency_key = ?').get(idempotencyKey);
       if (replay) {
-        if (replay.request_fingerprint !== fingerprint) throw new Error('matrix identity idempotency conflict');
-        return rowResult(replay);
+        if (replay.request_fingerprint !== fingerprint || replay.outcome_kind !== 'linked') {
+          throw new Error('matrix identity idempotency conflict');
+        }
+        const linked = db.prepare('SELECT * FROM matrix_entity_links WHERE id = ?').get(replay.link_id);
+        if (!linked) throw new Error('matrix identity replay link missing');
+        return rowResult(linked);
       }
       const existing = db.prepare(`
         SELECT * FROM matrix_entity_links
@@ -158,6 +232,11 @@ function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } =
         if (existing.match_method !== matchMethod || existing.evidence_json !== evidenceJson || existing.actor_user_id !== actorUserId) {
           throw new Error('matrix identity link conflict');
         }
+        db.prepare(`
+          INSERT INTO matrix_identity_commands (
+            idempotency_key, request_fingerprint, outcome_kind, link_id, result_json, created_at
+          ) VALUES (?, ?, 'linked', ?, NULL, ?)
+        `).run(idempotencyKey, fingerprint, existing.id, nowIso(clock));
         return rowResult(existing);
       }
       const createdAt = nowIso(clock);
@@ -168,6 +247,11 @@ function createMatrixIdentity({ db, clock = () => new Date(), taskSupervisor } =
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(entityType, entityId, namespace, keyHash, matchMethod, evidenceJson,
         actorUserId, idempotencyKey, fingerprint, createdAt);
+      db.prepare(`
+        INSERT INTO matrix_identity_commands (
+          idempotency_key, request_fingerprint, outcome_kind, link_id, result_json, created_at
+        ) VALUES (?, ?, 'linked', ?, NULL, ?)
+      `).run(idempotencyKey, fingerprint, info.lastInsertRowid, createdAt);
       return rowResult(db.prepare('SELECT * FROM matrix_entity_links WHERE id = ?').get(info.lastInsertRowid));
     })();
   }
