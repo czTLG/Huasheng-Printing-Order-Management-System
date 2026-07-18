@@ -25,6 +25,12 @@ const base = {
   now: '2026-07-18T00:00:00Z'
 };
 
+function assertAllComponentsMax(result, label) {
+  for (const [name, value] of Object.entries(result.components)) {
+    assert.strictEqual(value.points, value.maximum, `${label}:${name}`);
+  }
+}
+
 const good = scoreDraft(base);
 assert.strictEqual(good.score, 100);
 assert.strictEqual(good.passed, true);
@@ -191,7 +197,7 @@ const canonicalUnits = scoreDraft({
   ...base,
   bodyEn: `${base.bodyEn}\nThickness is 100 micron, sample weight is 0.25kg, size is 10cm, target is 50%, date is July 20, 2026.`,
   bodyCn: `${base.bodyCn}\n厚度为0.1毫米，样品重量为250克，尺寸为100毫米，目标为50%，日期为2026年7月20日。`,
-  evidence: { ...base.evidence, supportedClaims: ['100 micron', '0.1毫米', '0.25kg', '250克', '10cm', '100毫米', '50%', 'July 20, 2026', '2026年7月20日'] }
+  evidence: { ...base.evidence, supportedClaims: ['Thickness is 100 micron', '厚度为0.1毫米', '0.25kg', '250克', 'Size is 10cm', '尺寸为100毫米', '50%', 'July 20, 2026', '2026年7月20日'] }
 });
 assert.strictEqual(canonicalUnits.components.bilingual_consistency.points, 10);
 assert.ok(!canonicalUnits.hardFailures.includes('bilingual_key_fact_conflict'));
@@ -206,6 +212,44 @@ const mixedIntent = scoreDraft({
 assert.strictEqual(mixedIntent.passed, false);
 assert.ok(mixedIntent.hardFailures.includes('unsupported_delivery'));
 assert.ok(mixedIntent.hardFailures.includes('unsupported_price'));
+
+const performanceWrappedByIntent = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nWe would like to discuss guaranteed barrier performance of our high-barrier valve pouch.`,
+  evidence: { ...base.evidence, supportedClaims: [] }
+});
+assert.strictEqual(performanceWrappedByIntent.score, 100);
+assert.strictEqual(performanceWrappedByIntent.passed, false);
+assertAllComponentsMax(performanceWrappedByIntent, 'performanceWrappedByIntent');
+assert.deepStrictEqual(performanceWrappedByIntent.hardFailures, ['unsupported_performance']);
+
+for (const [field, claim, expectedFailure, counterpart] of [
+  ['bodyEn', 'We would like to discuss high-barrier FDA-certified valve pouches.', 'unsupported_certification'],
+  ['bodyEn', 'We would like to discuss high-barrier guaranteed performance valve pouches.', 'unsupported_performance'],
+  ['bodyEn', 'We would like to discuss high-barrier price USD 0.05 valve pouches.', 'unsupported_price'],
+  ['bodyEn', 'We would like to discuss high-barrier guaranteed delivery valve pouches.', 'unsupported_delivery'],
+  ['bodyEn', 'We would like to discuss high-barrier lead time 7 days valve pouches.', 'unsupported_lead_time', '交期为7天。'],
+  ['bodyCn', '希望沟通高阻隔FDA认证带阀袋。', 'unsupported_certification'],
+  ['bodyCn', '希望沟通高阻隔保证性能带阀袋。', 'unsupported_performance'],
+  ['bodyCn', '希望沟通高阻隔价格USD 0.05带阀袋。', 'unsupported_price'],
+  ['bodyCn', '希望沟通高阻隔保证交付带阀袋。', 'unsupported_delivery'],
+  ['bodyCn', '希望沟通高阻隔交期为7天带阀袋。', 'unsupported_lead_time', 'Lead time is 7 days.']
+]) {
+  const otherField = field === 'bodyEn' ? 'bodyCn' : 'bodyEn';
+  const result = scoreDraft({
+    ...base,
+    [field]: `${base[field]}\n${claim}`,
+    [otherField]: `${base[otherField]}${counterpart ? `\n${counterpart}` : ''}`,
+    evidence: {
+      ...base.evidence,
+      supportedClaims: expectedFailure === 'unsupported_lead_time' ? ['Lead time: 7 days', '交期：7天'] : []
+    }
+  });
+  assert.strictEqual(result.score, 100, claim);
+  assert.strictEqual(result.passed, false, claim);
+  assertAllComponentsMax(result, claim);
+  assert.deepStrictEqual(result.hardFailures, [expectedFailure], claim);
+}
 
 for (const [enFact, cnFact] of [
   ['Lead time is 2 weeks.', '交期为3周。'],
@@ -224,9 +268,21 @@ for (const [enQuestion, cnQuestion] of [
   ['Could you share whether you prefer matte or glossy finish?', '请告知贵司偏好哑光还是亮光？']
 ]) {
   const result = scoreDraft({ ...base, bodyEn: `${base.bodyEn}\n${enQuestion}`, bodyCn: `${base.bodyCn}\n${cnQuestion}` });
-  assert.ok(!result.hardFailures.includes('unsupported_product_fact'));
-  assert.ok(result.components.questions.points > 0);
+  assert.strictEqual(result.score, 100, `${enQuestion}/${cnQuestion}`);
+  assert.strictEqual(result.passed, true, `${enQuestion}/${cnQuestion}`);
+  assert.deepStrictEqual(result.hardFailures, [], `${enQuestion}/${cnQuestion}`);
+  assertAllComponentsMax(result, `${enQuestion}/${cnQuestion}`);
 }
+
+const genuineUnknownOptionQuestion = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nCould you confirm whether magnetic closure is available?`,
+  bodyCn: `${base.bodyCn}\n请确认磁吸封口是否可选？`
+});
+assert.strictEqual(genuineUnknownOptionQuestion.score, 100);
+assert.strictEqual(genuineUnknownOptionQuestion.passed, true);
+assertAllComponentsMax(genuineUnknownOptionQuestion, 'genuineUnknownOptionQuestion');
+assert.deepStrictEqual(genuineUnknownOptionQuestion.hardFailures, []);
 
 const unitConflict = scoreDraft({
   ...base,
@@ -246,6 +302,41 @@ const unknownProductFact = scoreDraft({
 });
 assert.strictEqual(unknownProductFact.passed, false);
 assert.ok(unknownProductFact.hardFailures.includes('unknown_product_fact'));
+
+for (const [enFact, cnFact] of [
+  ['Could you confirm our closure is magnetic?', '请确认我们的封口为磁吸式？'],
+  ['Could you confirm our closure: magnetic?', '请确认我们的封口：磁吸式？'],
+  ['Could you confirm our closure uses magnetic technology?', '请确认我们的封口采用磁吸技术？'],
+  ['Closure is magnetic.', '封口为磁吸式。']
+]) {
+  const result = scoreDraft({
+    ...base,
+    bodyEn: `${base.bodyEn}\n${enFact}`,
+    bodyCn: `${base.bodyCn}\n${cnFact}`,
+    evidence: { ...base.evidence, supportedClaims: ['magnetic closure', '磁吸封口'] }
+  });
+  assert.strictEqual(result.score, 100, `${enFact}/${cnFact}`);
+  assert.strictEqual(result.passed, false, `${enFact}/${cnFact}`);
+  assertAllComponentsMax(result, `${enFact}/${cnFact}`);
+  assert.deepStrictEqual(result.hardFailures, ['unknown_product_fact'], `${enFact}/${cnFact}`);
+}
+
+for (const [enFact, cnFact, supportedClaims] of [
+  ['Thickness is 100mm.', '厚度为100毫米。', ['Size is 100mm.', '尺寸为100毫米。']],
+  ['Size is 100mm.', '尺寸为100毫米。', ['Thickness is 100mm.', '厚度为100毫米。']],
+  ['Thickness is 100mm.', '厚度为100毫米。', ['100mm', '100毫米']]
+]) {
+  const result = scoreDraft({
+    ...base,
+    bodyEn: `${base.bodyEn}\n${enFact}`,
+    bodyCn: `${base.bodyCn}\n${cnFact}`,
+    evidence: { ...base.evidence, supportedClaims }
+  });
+  assert.strictEqual(result.score, 100, `${enFact}/${supportedClaims.join('/')}`);
+  assert.strictEqual(result.passed, false, `${enFact}/${supportedClaims.join('/')}`);
+  assertAllComponentsMax(result, `${enFact}/${supportedClaims.join('/')}`);
+  assert.deepStrictEqual(result.hardFailures, ['unsupported_product_fact'], `${enFact}/${supportedClaims.join('/')}`);
+}
 
 const { evaluateInitialContact } = require('../src/services/matrixStreamGate');
 const db = new Database(':memory:');
