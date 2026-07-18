@@ -15,6 +15,12 @@ const { createMatrixConversationLedger } = require('../services/matrixConversati
 const { createMatrixLedgerRouter } = require('./matrixLedger');
 const { createMatrixKnowledgeLedger } = require('../services/matrixKnowledgeLedger');
 const { createMatrixItemVersionOutbox } = require('../services/matrixItemVersionOutbox');
+const { createMatrixFreightBasis } = require('../services/matrixFreightBasis');
+const { createMatrixFreightRouter } = require('./matrixFreight');
+const { createMatrixQuote } = require('../services/matrixQuote');
+const { createMatrixQuoteRouter } = require('./matrixQuote');
+const { createMatrixCopyOutbox } = require('../services/matrixCopyOutbox');
+const { createMatrixCopyRouter } = require('./matrixCopy');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -231,6 +237,12 @@ function createMatrixRouter({
     const conversationLedger = createMatrixConversationLedger({ db, clock: coreClock });
     const knowledgeLedger = createMatrixKnowledgeLedger({ db, clock: coreClock, taskSupervisor: tasks });
     router.use('/ledger', createMatrixLedgerRouter({ db, conversationLedger, knowledgeLedger }));
+    const freight = createMatrixFreightBasis({ db, clock: coreClock });
+    router.use('/freight', createMatrixFreightRouter({ freight }));
+    const quote = createMatrixQuote({ db, clock: coreClock });
+    router.use('/quotes', createMatrixQuoteRouter({ quote }));
+    const copy = createMatrixCopyOutbox({ db, clock: coreClock, quoteService: quote });
+    router.use('/copy', createMatrixCopyRouter({ copy }));
   } else {
     router.use('/core', (_req, res) => res.status(503).json({ error: { code: 'supervisor_disabled', message: 'Matrix supervisor is disabled.' } }));
   }

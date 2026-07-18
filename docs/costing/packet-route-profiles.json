@@ -1,0 +1,9 @@
+{
+  "schema_version": "matrix-route-profile-v1",
+  "ledger_updated_on": "2026-07-13",
+  "profiles": [
+    {"id":"shenzhen_lcl_historical_warehouse","label_cn":"深圳仓历史散货起运参考","origin_port":"Shenzhen","origin_port_cn":"深圳","shipping_mode":"LCL","evidence_class":"historical_basis","fixed_charges_yuan":{"trucking":2000,"declaration":320,"local_port":1200,"operation":200},"unresolved_assumptions":["缺少体积/箱规，暂按历史深圳仓散货起运费用模型估算","历史费用有效期和当前仓库收费待货代复核","仓库入仓费的计费单位尚未确认"],"source":"packet-route-ledger:LCL-origin-reference"},
+    {"id":"shenzhen_shekou_40hq_reference","label_cn":"潮汕至深圳蛇口40HQ参考","origin_port":"Shenzhen Shekou","origin_port_cn":"深圳蛇口","shipping_mode":"40HQ","evidence_class":"historical_basis","fixed_charges_yuan":{"trucking":3100,"declaration":250,"local_port":3000,"operation":400},"trucking_surcharge":{"threshold_kg":20000,"yuan_per_excess_ton":50},"unresolved_assumptions":["拖车超重费的重量口径待货代确认","local未含的码头费、港杂、提单费和港建费金额待确认","历史费用有效期待货代复核"],"source":"packet-route-ledger:shenzhen-shekou-large-container"},
+    {"id":"shantou_guangao_40hq_historical","label_cn":"汕头广澳40HQ历史参考","origin_port":"Shantou Guangao","origin_port_cn":"汕头广澳","shipping_mode":"40HQ","evidence_class":"historical_basis","fixed_charges_yuan":{"trucking":850,"declaration":250,"local_port":3000,"operation":400},"unresolved_assumptions":["该路线为历史参考，拖车和港口费用当前有效性待货代复核","local未含项目的当前金额待确认"],"source":"packet-route-ledger:other-historical-origin-reference"}
+  ]
+}

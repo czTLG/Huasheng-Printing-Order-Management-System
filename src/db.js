@@ -1200,6 +1200,81 @@ function initDb() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS matrix_freight_bases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      inquiry_id INTEGER NOT NULL,
+      item_ids_json TEXT NOT NULL,
+      profile_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('historical_basis','current_confirmed','expired','superseded')),
+      destination_json TEXT NOT NULL,
+      trade_term TEXT NOT NULL,
+      weight_volume_basis_json TEXT NOT NULL,
+      projection_json TEXT NOT NULL,
+      content_hash TEXT NOT NULL UNIQUE,
+      source_quote_id INTEGER,
+      valid_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(inquiry_id) REFERENCES inquiries(id),
+      FOREIGN KEY(source_quote_id) REFERENCES freight_quotes(id)
+    );
+    CREATE TABLE IF NOT EXISTS matrix_freight_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      basis_id INTEGER NOT NULL,
+      inquiry_id INTEGER NOT NULL,
+      item_ids_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_review' CHECK(status IN ('pending_review','current_confirmed','expired','superseded')),
+      source_quote_id INTEGER,
+      actor_user_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(basis_id) REFERENCES matrix_freight_bases(id),
+      FOREIGN KEY(source_quote_id) REFERENCES freight_quotes(id),
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS matrix_freight_commands (
+      idempotency_key TEXT PRIMARY KEY,
+      request_fingerprint TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS matrix_quotes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quote_number TEXT NOT NULL UNIQUE,
+      organization_id INTEGER NOT NULL,
+      inquiry_id INTEGER NOT NULL,
+      current_version INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(organization_id) REFERENCES customers(id),
+      FOREIGN KEY(inquiry_id) REFERENCES inquiries(id),
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS matrix_quote_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quote_id INTEGER NOT NULL,
+      version INTEGER NOT NULL,
+      contact_id TEXT NOT NULL,
+      currency TEXT NOT NULL,
+      trade_term TEXT NOT NULL,
+      customer_content_json TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(quote_id,version),
+      FOREIGN KEY(quote_id) REFERENCES matrix_quotes(id),
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS matrix_quote_item_bindings (quote_version_id INTEGER NOT NULL,item_id INTEGER NOT NULL,PRIMARY KEY(quote_version_id,item_id),FOREIGN KEY(quote_version_id) REFERENCES matrix_quote_versions(id),FOREIGN KEY(item_id) REFERENCES matrix_inquiry_items(id));
+    CREATE TABLE IF NOT EXISTS matrix_quote_snapshot_bindings (quote_version_id INTEGER NOT NULL,snapshot_id INTEGER NOT NULL,PRIMARY KEY(quote_version_id,snapshot_id),FOREIGN KEY(quote_version_id) REFERENCES matrix_quote_versions(id),FOREIGN KEY(snapshot_id) REFERENCES cost_snapshots(id));
+    CREATE TABLE IF NOT EXISTS matrix_quote_reviews (id INTEGER PRIMARY KEY AUTOINCREMENT,quote_version_id INTEGER NOT NULL,decision TEXT NOT NULL CHECK(decision IN ('approved','rejected')),expected_content_hash TEXT NOT NULL,actor_user_id INTEGER NOT NULL,idempotency_key TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL,FOREIGN KEY(quote_version_id) REFERENCES matrix_quote_versions(id));
+    CREATE TABLE IF NOT EXISTS matrix_quote_commands (idempotency_key TEXT PRIMARY KEY,request_fingerprint TEXT NOT NULL,result_json TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS matrix_copy_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,actor_user_id INTEGER NOT NULL,binding_id INTEGER NOT NULL,card_event_id TEXT NOT NULL,received_chat_id TEXT NOT NULL,
+      source_type TEXT NOT NULL CHECK(source_type IN ('atlas_reviewed_packet','matrix_quote_version','matrix_freight_review')),source_version_id INTEGER NOT NULL,formats_json TEXT NOT NULL,payload_json TEXT NOT NULL,content_hash TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','claimed','authorized','delivered','manual_review')),owner_token TEXT NOT NULL DEFAULT '',claim_token TEXT NOT NULL DEFAULT '',lease_expires_at TEXT NOT NULL DEFAULT '',nonce_hash TEXT NOT NULL DEFAULT '',nonce_consumed_at TEXT,platform_message_id TEXT NOT NULL DEFAULT '',attempt_count INTEGER NOT NULL DEFAULT 0,last_outcome TEXT NOT NULL DEFAULT '',idempotency_key TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+      FOREIGN KEY(actor_user_id) REFERENCES users(id),FOREIGN KEY(binding_id) REFERENCES matrix_actor_bindings(id)
+    );
 
     CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1445,6 +1520,9 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_knowledge_rules_active ON matrix_knowledge_rules(state, scope, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_knowledge_attention_item ON matrix_knowledge_attention(item_id, state, id);
     CREATE INDEX IF NOT EXISTS idx_matrix_item_version_events_claim ON matrix_item_version_events(state, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_freight_bases_inquiry ON matrix_freight_bases(inquiry_id, status, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_quote_versions_quote ON matrix_quote_versions(quote_id,version DESC);
+    CREATE INDEX IF NOT EXISTS idx_matrix_copy_outbox_claim ON matrix_copy_outbox(state,id);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
@@ -1561,6 +1639,10 @@ function initDb() {
     CREATE TRIGGER IF NOT EXISTS trg_matrix_conversation_events_no_delete
     BEFORE DELETE ON matrix_conversation_events
     BEGIN SELECT RAISE(ABORT, 'matrix_conversation_events is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_quote_versions_no_update BEFORE UPDATE ON matrix_quote_versions BEGIN SELECT RAISE(ABORT,'matrix_quote_versions is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_quote_versions_no_delete BEFORE DELETE ON matrix_quote_versions BEGIN SELECT RAISE(ABORT,'matrix_quote_versions is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_quote_reviews_no_update BEFORE UPDATE ON matrix_quote_reviews BEGIN SELECT RAISE(ABORT,'matrix_quote_reviews is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_quote_reviews_no_delete BEFORE DELETE ON matrix_quote_reviews BEGIN SELECT RAISE(ABORT,'matrix_quote_reviews is append-only'); END;
 
     INSERT OR IGNORE INTO matrix_identity_commands (
       idempotency_key, request_fingerprint, outcome_kind, link_id, result_json, created_at
