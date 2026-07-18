@@ -16,7 +16,9 @@ function defaultPermissionsByRole(role = 'ai_sales') {
 function normalizePermissions(role = 'ai_sales', permissions) {
   const defaults = defaultPermissionsByRole(role);
   if (!permissions || typeof permissions !== 'object') return defaults;
-  if (permissions.all) return { all: true };
+  const allowedForRole = role === 'super_admin' || role === 'foreign_trade_crm_admin';
+  const requested = permissions?.capabilities?.matrixSend === true;
+  if (permissions.all) return { all: true, capabilities: { matrixSend: allowedForRole && requested } };
 
   const baseModules = {};
   MODULE_KEYS.forEach((key) => {
@@ -29,6 +31,7 @@ function normalizePermissions(role = 'ai_sales', permissions) {
     modules: mergedModules,
     ordersStages: uniq(Array.isArray(permissions.ordersStages) ? permissions.ordersStages : (defaults.ordersStages || [])),
     boardStages: uniq(Array.isArray(permissions.boardStages) ? permissions.boardStages : (defaults.boardStages || [])),
+    capabilities: { matrixSend: allowedForRole && requested },
   };
 }
 
