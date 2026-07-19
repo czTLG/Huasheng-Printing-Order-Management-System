@@ -9,6 +9,22 @@ const { ORIGINAL_SHA256, patchFile, sha256 } = require('../.runtime/vm_debug_ci/
 
 const VERSION = '0.6.9';
 
+function removeTreeAfterChildExit(target, attempts = 40) {
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  let lastError;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== 'ENOTEMPTY') throw error;
+      Atomics.wait(sleeper, 0, 0, 50);
+    }
+  }
+  throw lastError;
+}
+
 function resolveArtifactSource({ env = process.env, candidates } = {}) {
   const configured = String(env.MATRIX_BRIDGE_ARTIFACT_DIR || '').trim();
   if (configured) {
@@ -142,7 +158,7 @@ try {
   assert.match(childEvidence, /MATRIX_ARTIFACT_REGISTRATION_SENTINEL/);
   console.log('bridge 0.6.9 artifact compatibility tests passed');
 } finally {
-  fs.rmSync(root, { recursive: true, force: true });
+  removeTreeAfterChildExit(root);
 }
 }
 

@@ -262,13 +262,15 @@ function freshDeliveryGate(db, input, context) {
 }
 
 function createMatrixStreamDelivery({
-  db, transport, clock = () => new Date(), fromAddress, messageIdDomain, dkimSelector,
+  db, transport, clock = () => new Date(), fromAddress, replyToAddress = fromAddress, messageIdDomain, dkimSelector,
   leaseMs = 30000, waitMs = 20000, pollMs = 25
 } = {}) {
   if (!db || typeof db.prepare !== 'function' || !transport || typeof transport.sendMail !== 'function' || typeof clock !== 'function') {
     throw new Error('delivery dependencies required');
   }
   const from = plainAddress(fromAddress, 'from address');
+  const replyTo = plainAddress(replyToAddress, 'reply-to address');
+  if (replyTo !== from) throw new Error('sender and reply-to mismatch');
   const domain = validHostname(messageIdDomain, 'message id domain');
   const selector = validSelector(dkimSelector);
   if (from.split('@')[1] !== domain) throw new Error('sender and message id domain mismatch');
@@ -467,6 +469,7 @@ function createMatrixStreamDelivery({
     try {
       response = await transport.sendMail({
         from,
+        replyTo,
         to: version.recipient_email,
         subject: version.subject,
         text: version.body_en,

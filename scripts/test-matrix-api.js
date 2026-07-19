@@ -587,7 +587,10 @@ function reviewState(workItemId) {
       serviceToken: bridgeToken, openId: 'ou-service'
     });
     assert.strictEqual(preview.status, 200, JSON.stringify(preview.body));
-    assert.strictEqual(preview.body.allowed, true);
+    assert.strictEqual(preview.body.allowed, false);
+    for (const gate of ['duplicate', 'cooling', 'quota', 'readiness', 'policy']) {
+      assert.deepStrictEqual(preview.body[gate], { ok: false, reasons: ['preview_gate_unavailable'] });
+    }
     assert.strictEqual(preview.body.version.id, createdVersion.body.id);
     assert.strictEqual(preview.body.version.recipient_email, 'team@alpha.test');
     assert.strictEqual(preview.body.version.subject, createdVersion.body.subject);

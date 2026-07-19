@@ -9,6 +9,7 @@ const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REVISION_TTL_MS = 10 * 60 * 1000;
+const UNMENTIONED_FOLLOWUP_TTL_MS = 2 * 60 * 1000;
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
@@ -456,6 +457,20 @@ function gateProjection(value) {
   return { state: 'unknown', reasons: [] };
 }
 
+function finalConfirmationValue(preview, retry = 0) {
+  const version = preview?.version || {};
+  const requiredGates = [preview?.duplicate, preview?.cooling, preview?.quota, preview?.readiness, preview?.policy];
+  const gatesPassed = requiredGates.every(value => gateProjection(value).state === 'passed');
+  const topLevelReasons = strictReasonProjection(preview);
+  const confirmAllowed = preview?.allowed === true && gatesPassed && topLevelReasons.valid && topLevelReasons.reasons.length === 0;
+  if (!confirmAllowed) return null;
+  const cardEventId = `mx-card-${actionKey('confirm-card', version.work_item_id, version.id, version.content_hash, retry).slice(0, 24)}`;
+  return versionAction({ ...version, work_item_version: preview.work_item_version }, 'mx.confirm', {
+    d: cardEventId,
+    r: Number(retry || 0)
+  });
+}
+
 function renderFinalPreview(preview, cardHelpers, retry = 0) {
   const { card, md, note, actions, button } = cardHelpers;
   const version = preview?.version || {};
@@ -470,10 +485,9 @@ function renderFinalPreview(preview, cardHelpers, retry = 0) {
     if (projection.state === 'blocked') return `${label}：阻断 ${clip(projection.reasons.join(',') || '未提供明确原因', 130)}`;
     return `${label}：通过`;
   };
-  const requiredGates = [preview?.duplicate, preview?.cooling, preview?.quota, preview?.readiness, preview?.policy];
-  const gatesPassed = requiredGates.every(value => gateProjection(value).state === 'passed');
   const topLevelReasons = strictReasonProjection(preview);
-  const confirmAllowed = preview?.allowed === true && gatesPassed && topLevelReasons.valid && topLevelReasons.reasons.length === 0;
+  const confirmationValue = finalConfirmationValue(preview, retry);
+  const confirmAllowed = Boolean(confirmationValue);
   const elements = [
     md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${Number(quality.score ?? version.quality_score ?? 0)}/100`),
     md(`**质量组成**\n${components.length ? components.join('\n') : '暂无组成明细'}\n${reasonList(quality).length ? `硬性原因：${clip(reasonList(quality).join(','), 130)}` : ''}`),
@@ -489,8 +503,7 @@ function renderFinalPreview(preview, cardHelpers, retry = 0) {
     ].join('\n'))
   ];
   if (confirmAllowed) {
-    const cardEventId = `mx-card-${actionKey('confirm-card', version.work_item_id, version.id, version.content_hash, retry).slice(0, 24)}`;
-    elements.push(actions([button('确认发送', versionAction({ ...version, work_item_version: preview.work_item_version }, 'mx.confirm', { d: cardEventId, r: Number(retry || 0) }), 'primary')]));
+    elements.push(actions([button('确认发送', confirmationValue, 'primary')]));
     elements.push(note('第二次确认将提交当前不可变版本；重复点击使用同一幂等键。'));
   } else {
     elements.push(note('当前门禁未全部明确通过，未提供确认发送操作，也不会提交发送。'));
@@ -551,6 +564,8 @@ function register(context) {
   const sessions = new Map();
   const selectionEvents = new Map();
   const revisionContexts = new Map();
+  const sendConfirmationContexts = new Map();
+  const unmentionedFollowups = new Map();
   const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
   const clearReminderPoll = context.clearReminderPoll || (timer => clearInterval(timer));
   const logReminder = context.logReminder || (message => process.stderr.write(`${message}\n`));
@@ -853,13 +868,17 @@ function register(context) {
 
   async function deferReviewAction({ evt, value }) {
     reviewActionValue(evt, value);
-    revisionContexts.delete(sessionKey(evt.chatId, evt.operator.openId, evt.threadId));
+    const key = sessionKey(evt.chatId, evt.operator.openId, evt.threadId);
+    revisionContexts.delete(key);
+    sendConfirmationContexts.delete(key);
     await sendForEvent(evt, infoCard(cardHelpers, '已暂不处理；尚未发送。需要时可从进行中项目重新打开。'));
   }
 
   async function reviseAction({ evt, value }) {
     const binding = reviewActionValue(evt, value);
-    revisionContexts.set(sessionKey(evt.chatId, binding.openId, evt.threadId), {
+    const key = sessionKey(evt.chatId, binding.openId, evt.threadId);
+    sendConfirmationContexts.delete(key);
+    revisionContexts.set(key, {
       ...binding,
       expiresAt: clockMillis() + REVISION_TTL_MS
     });
@@ -871,12 +890,18 @@ function register(context) {
 
   async function approveAction({ evt, value }) {
     const binding = reviewActionValue(evt, value);
-    revisionContexts.delete(sessionKey(evt.chatId, binding.openId, evt.threadId));
+    const key = sessionKey(evt.chatId, binding.openId, evt.threadId);
+    revisionContexts.delete(key);
     if (typeof client.approveVersion !== 'function') throw new Error('approval service unavailable');
     const version = await client.approveVersion(binding.openId, binding.workItemId, binding.versionId, {
       expected_work_version: binding.expectedWorkVersion,
       expected_content_hash: binding.contentHash,
       idempotency_key: actionKey('approve', binding.openId, binding.workItemId, binding.versionId, binding.expectedWorkVersion, binding.contentHash)
+    });
+    sendConfirmationContexts.set(key, {
+      stage: 'approved',
+      value: versionAction(version, 'mx.preview'),
+      expiresAt: clockMillis() + REVISION_TTL_MS
     });
     await sendForEvent(evt, renderApproved(version, cardHelpers));
   }
@@ -885,7 +910,15 @@ function register(context) {
     const binding = reviewActionValue(evt, value);
     if (typeof client.versionPreview !== 'function') throw new Error('preview service unavailable');
     const preview = await client.versionPreview(binding.openId, binding.workItemId, binding.versionId);
-    await sendForEvent(evt, renderFinalPreview(preview, cardHelpers, Number(value?.r || 0)));
+    const retry = Number(value?.r || 0);
+    const confirmationValue = finalConfirmationValue(preview, retry);
+    const key = sessionKey(evt.chatId, binding.openId, evt.threadId);
+    if (confirmationValue) {
+      sendConfirmationContexts.set(key, { stage: 'previewed', value: confirmationValue, expiresAt: clockMillis() + REVISION_TTL_MS });
+    } else {
+      sendConfirmationContexts.delete(key);
+    }
+    await sendForEvent(evt, renderFinalPreview(preview, cardHelpers, retry));
   }
 
   async function confirmAction({ evt, value }) {
@@ -993,6 +1026,18 @@ function register(context) {
       if (disposed) return;
       disposed = true;
       clearReminderPoll(reminderTimer);
+      unmentionedFollowups.clear();
+      sendConfirmationContexts.clear();
+    },
+    async shouldHandleUnmentioned({ msg }) {
+      if (msg?.mentionedBot || msg?.mentionAll) return false;
+      const mentions = Array.isArray(msg?.mentions) ? msg.mentions : [];
+      if (mentions.some(mention => mention && mention.isBot !== true)) return false;
+      const key = sessionKey(msg?.chatId, msg?.senderId, msg?.threadId);
+      const expiresAt = unmentionedFollowups.get(key);
+      if (!Number.isFinite(expiresAt)) return false;
+      unmentionedFollowups.delete(key);
+      return Boolean(String(msg?.content || '').trim()) && expiresAt > clockMillis();
     },
     async onMessage({ msg }) {
       const text = String(msg?.content || '').trim();
@@ -1022,6 +1067,24 @@ function register(context) {
           await sendManagedCard(channel, msg.chatId, renderVersionReview(version, cardHelpers), msg.messageId, Boolean(msg.threadId));
           return true;
         }
+      }
+      if (/^(?:确认发送|你?直接发送给[他她]|发送给[他她])[！!。.]?$/u.test(text)) {
+        const context = sendConfirmationContexts.get(revisionKey);
+        if (!context || context.expiresAt <= clockMillis()) {
+          sendConfirmationContexts.delete(revisionKey);
+          await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '当前没有绑定到本会话的最终预览，尚未发送。请先审阅并确认采用当前草稿。'), msg.messageId, Boolean(msg.threadId));
+          return true;
+        }
+        const evt = {
+          operator: { openId: String(msg.senderId || '').trim() },
+          chatId: msg.chatId,
+          threadId: msg.threadId || '',
+          messageId: msg.messageId
+        };
+        if (context.stage === 'approved') await previewAction({ evt, value: context.value });
+        else if (context.stage === 'previewed') await confirmAction({ evt, value: context.value });
+        else throw new Error('invalid send confirmation context');
+        return true;
       }
       if (text === '开发客户') {
         await start(msg);
@@ -1104,6 +1167,9 @@ function register(context) {
         } catch (error) {
           logReminder(`[stream-card] authoritative context unavailable: ${error?.message || 'unknown error'}`);
         }
+      }
+      if (msg?.mentionedBot && String(msg?.chatId || '').trim() && String(msg?.senderId || '').trim()) {
+        unmentionedFollowups.set(revisionKey, clockMillis() + UNMENTIONED_FOLLOWUP_TTL_MS);
       }
       return false;
     }

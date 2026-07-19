@@ -29,7 +29,7 @@ assert.strictEqual(typeof verifier.validateRuntimeManifest, 'function');
 assert.strictEqual(typeof verifier.runtimeManifest, 'function');
 const envExample = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8').split(/\r?\n/);
 for (const line of [
-  'MATRIX_STREAM_SEND_ENABLED=0', 'MATRIX_RECIPIENT_MAX_AGE_DAYS=180',
+  'MATRIX_STREAM_SEND_ENABLED=0', 'MATRIX_RELAY_ENABLED=0', 'MATRIX_RECIPIENT_MAX_AGE_DAYS=180',
   'MATRIX_MESSAGE_ID_DOMAIN=', 'MATRIX_TEXT_PROVIDER=mock', 'MATRIX_DKIM_SELECTOR=',
   'MATRIX_DAILY_ACCEPTED_LIMIT=5', 'MATRIX_DOMAIN_COOLING_DAYS=90',
   'SMTP_HOST=', 'SMTP_PORT=465', 'SMTP_SECURE=true', 'SMTP_USER=', 'SMTP_PASS=', 'SMTP_FROM='
@@ -37,7 +37,7 @@ for (const line of [
 const catalog = fs.readFileSync(path.join(__dirname, '..', 'docs/matrix-stream-catalog-2026-07-16.md'), 'utf8');
 for (const marker of [
   'matrixStreamReview.js', 'matrixStreamDelivery.js', '两次确认',
-  'MATRIX_STREAM_SEND_ENABLED=0', 'bot 运行面', 'delivery_enabled: false'
+  'MATRIX_STREAM_SEND_ENABLED=0', 'MATRIX_RELAY_ENABLED=0', 'bot 运行面', 'delivery_enabled: false'
 ]) assert.ok(catalog.includes(marker), `Task 7 catalog missing ${marker}`);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-verifier-input-'));
 try {
@@ -121,7 +121,7 @@ try {
   for (const [label, maliciousSource] of [
     ['caller recipient', deliverySource.replace('to: version.recipient_email', 'to: input.to')],
     ['caller subject', deliverySource.replace('subject: version.subject', 'subject: input.subject')],
-    ['caller smtp host', deliverySource.replace('from,\n        to:', 'from,\n        smtpHost: input.smtpHost,\n        to:')],
+    ['caller smtp host', deliverySource.replace('from,\n        replyTo,\n        to:', 'from,\n        replyTo,\n        smtpHost: input.smtpHost,\n        to:')],
     ['caller callback', deliverySource.replace('text: version.body_en', 'text: version.body_en,\n        callbackUrl: input.callbackUrl')],
     ['automatic retry', deliverySource.replace('const classified = classifyError(error);', 'if (input.retry) return deliver(prepared, input);\n      const classified = classifyError(error);')]
   ]) {
@@ -134,7 +134,7 @@ try {
   for (const service of [
     'matrixStreamReview.js', 'matrixStreamText.js', 'matrixStreamGate.js',
     'matrixStreamReadiness.js', 'matrixStreamFollowup.js', 'matrixStreamDelivery.js',
-    'matrixStreamCorrelation.js'
+    'matrixRelayFactory.js', 'matrixStreamPreview.js', 'matrixStreamCorrelation.js'
   ]) assert.ok(Object.keys(productionManifest).includes(`src/services/${service}`), `runtime manifest missing ${service}`);
   assert.strictEqual(verifier.validateRuntimeManifest({ files: productionFiles }), true);
   assert.ok(Object.keys(productionManifest).every(file => !/(?:^|\/)tests?\//.test(file) && !/(?:^|\/)test-/.test(file)));

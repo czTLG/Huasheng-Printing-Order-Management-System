@@ -138,8 +138,9 @@ function confirmationInput(fixture, key) {
     const result = await service.confirm(input);
     assert.strictEqual(result.state, 'accepted');
     assert.strictEqual(accepted.length, 1);
-    assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['from', 'headers', 'messageId', 'subject', 'text', 'to'].sort());
+    assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['from', 'headers', 'messageId', 'replyTo', 'subject', 'text', 'to'].sort());
     assert.strictEqual(accepted[0].from, 'sales@sender.test');
+    assert.strictEqual(accepted[0].replyTo, 'sales@sender.test');
     assert.strictEqual(accepted[0].to, 'sales@alpha.test');
     assert.strictEqual(accepted[0].subject, fixture.version.subject);
     assert.strictEqual(accepted[0].text, fixture.approvedBody);

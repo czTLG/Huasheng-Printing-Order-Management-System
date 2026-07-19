@@ -216,6 +216,45 @@ async function testImageConfirmationReportsReadFailure() {
   registered.dispose();
 }
 
+async function testOneShotUnmentionedFollowupWindow() {
+  let now = Date.parse('2026-07-19T13:27:00.000Z');
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: () => undefined }, card: helpers(), client: {},
+    now: () => now,
+    scheduleReminderPoll: () => ({ unref() {} }), clearReminderPoll: () => undefined,
+    sendManagedCard: async () => undefined
+  });
+  const anchor = {
+    content: '记录一下BOPP镀铝膜的参数', chatId: 'chat-knowledge', senderId: 'ou-owner',
+    mentionedBot: true, mentions: []
+  };
+  assert.strictEqual(await registered.onMessage({ msg: anchor, project: {} }), false);
+  assert.strictEqual(await registered.shouldHandleUnmentioned({
+    msg: { content: '目前单价36元/公斤 现阶段都是出口产品在用', chatId: 'chat-knowledge', senderId: 'ou-other', mentionedBot: false, mentions: [] },
+    project: {}
+  }), false, 'another sender must not inherit the mention');
+  assert.strictEqual(await registered.shouldHandleUnmentioned({
+    msg: { content: '目前单价36元/公斤 现阶段都是出口产品在用', chatId: 'chat-knowledge', senderId: 'ou-owner', mentionedBot: false, mentions: [] },
+    project: {}
+  }), true, 'same-sender immediate continuation should pass exactly once');
+  assert.strictEqual(await registered.shouldHandleUnmentioned({
+    msg: { content: '有bug', chatId: 'chat-knowledge', senderId: 'ou-owner', mentionedBot: false, mentions: [] },
+    project: {}
+  }), false, 'the continuation window must be consumed');
+
+  await registered.onMessage({ msg: anchor, project: {} });
+  assert.strictEqual(await registered.shouldHandleUnmentioned({
+    msg: { content: '转给某同事', chatId: 'chat-knowledge', senderId: 'ou-owner', mentionedBot: false, mentions: [{ isBot: false }] },
+    project: {}
+  }), false, 'messages mentioning another person must not be captured');
+  now += 2 * 60 * 1000 + 1;
+  assert.strictEqual(await registered.shouldHandleUnmentioned({
+    msg: { content: '过期补充', chatId: 'chat-knowledge', senderId: 'ou-owner', mentionedBot: false, mentions: [] },
+    project: {}
+  }), false, 'expired continuations must fail closed');
+  registered.dispose();
+}
+
 async function testTwoConfirmationReviewFlow() {
   let now = Date.parse('2026-07-17T00:00:00.000Z');
   const handlers = new Map();
@@ -337,18 +376,24 @@ async function testTwoConfirmationReviewFlow() {
   assert.ok(visibleText(sent.at(-1)).includes('尚未发送'));
   assert.ok(visibleText(sent.at(-1)).includes('sales@alpha.test'));
   assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 0, 'approval must never send');
-  await handlers.get('mx.preview')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.preview').value });
+  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '你直接发送给他' } }), true);
+  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 0, 'first natural confirmation must only open final preview');
   const finalCard = sent.at(-1);
   assert.ok(visibleText(finalCard).includes('质量评分'));
   assert.ok(buttons(finalCard).some(item => item.value?.a === 'mx.confirm'));
   assert.ok([...visibleText(finalCard)].length <= 1500);
   const confirmValue = buttons(finalCard).find(item => item.value?.a === 'mx.confirm').value;
+  assert.strictEqual(await registered.onMessage({ msg: { ...msg, senderId: 'ou-other', content: '确认发送' } }), true);
+  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 0, 'another operator must never inherit a final preview');
+  assert.match(visibleText(sent.at(-1)), /没有.*最终预览|尚未发送/);
+  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '确认发送' } }), true);
+  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 1, 'second natural confirmation should submit the exact previewed version');
   await handlers.get('mx.confirm')({ evt, value: confirmValue });
   await handlers.get('mx.confirm')({ evt, value: confirmValue });
   assert.ok(visibleText(sent.at(-1)).includes('邮件服务器已接受'));
   const confirmations = clientCalls.filter(item => item[0] === 'confirmSend');
-  assert.strictEqual(confirmations.length, 2);
-  assert.strictEqual(confirmations[0][4].idempotency_key, confirmations[1][4].idempotency_key);
+  assert.strictEqual(confirmations.length, 3);
+  assert.ok(confirmations.every(item => item[4].idempotency_key === confirmations[0][4].idempotency_key));
   assert.ok(!visibleText(sent.at(-1)).includes('Message-ID'));
 
   deliveryState = 'failed';
@@ -372,7 +417,7 @@ async function testTwoConfirmationReviewFlow() {
     assert.ok(blockedText.includes(expected), `blocked preview missing ${expected}`);
   }
   assert.ok(!buttons(blocked).some(item => item.value?.a === 'mx.confirm'));
-  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 4);
+  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 5);
   assert.ok([...blockedText].length <= 1500);
 
   blockedPreview = false;
@@ -1279,6 +1324,7 @@ async function testRecommendationSnapshotTransitions() {
   await testAuthoritativeContextInjection();
   await testShortImageConfirmationUsesBoundContext();
   await testImageConfirmationReportsReadFailure();
+  await testOneShotUnmentionedFollowupWindow();
   await testTwoConfirmationReviewFlow();
   await testReadOnlyWatcher();
   await testReplyNotificationCardAndDraftAction();

@@ -6,8 +6,10 @@ const fs = require('fs');
 const path = require('path');
 
 const ORIGINAL_SHA256 = 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233';
-const PATCHED_SHA256 = '6e47c9074a4872f4fd748ccd1eb54ceeadc3ebcf5d167492ac034841d86115a9';
+const PATCHED_SHA256 = 'c1a896620916405c9aaadbac065c07fd4b17e9fd17f922b145f0e39047da1712';
 const MESSAGE_CALL = 'if (streamCardHandler?.onMessage && await streamCardHandler.onMessage({ msg, project })) return;';
+const NO_MENTION_FILTER_ORIGINAL = 'if (!msg.mentionedBot && !(project && shouldRespondWithoutMention(project, msg))) return;';
+const NO_MENTION_FILTER_PATCHED = 'if (!msg.mentionedBot && !(project && shouldRespondWithoutMention(project, msg)) && !(streamCardHandler?.shouldHandleUnmentioned && await streamCardHandler.shouldHandleUnmentioned({ msg, project }))) return;';
 const REGISTRATION_FIRST_LINE = 'const streamCardPath = process.env.STREAM_CARD_EXTENSION;';
 const LOADER_ANCHOR = 'var __defProp = Object.defineProperty;';
 const LOADER_LINE = 'import { createRequire as createStreamCardRequire } from "node:module";';
@@ -77,8 +79,9 @@ function patchSource(sourceValue) {
   const messageCount = occurrences(source, MESSAGE_CALL);
   const managedCount = occurrences(source, MANAGED_SIGNATURE_PATCHED);
   const disposeCount = occurrences(source, DISPOSE_LINE);
+  const followupCount = occurrences(source, NO_MENTION_FILTER_PATCHED);
   if (loaderCount || registrationCount || messageCount || managedCount || disposeCount) {
-    if (loaderCount !== 1 || registrationCount !== 1 || messageCount !== 1 || managedCount !== 1 || disposeCount !== 1) throw new Error('partial or repeated stream-card patch');
+    if (loaderCount !== 1 || registrationCount !== 1 || messageCount !== 1 || managedCount !== 1 || disposeCount !== 1 || followupCount !== 1) throw new Error('partial or repeated stream-card patch');
     exactPair(
       source,
       REGISTRATION_FIRST_LINE,
@@ -110,6 +113,7 @@ function patchSource(sourceValue) {
   const managedAnchor = exactFunctionStart(source, MANAGED_SIGNATURE_ORIGINAL, 'stampRenderToken(card2);', 'managed-card signature anchor');
   const shutdownAnchor = exactFunctionStart(source, 'async function shutdown() {', 'clearInterval(reaper);', 'shutdown anchor');
   if (occurrences(source, MANAGED_CREATE_ORIGINAL) !== 1) throw new Error('managed-card create anchor must appear exactly once');
+  if (occurrences(source, NO_MENTION_FILTER_ORIGINAL) !== 1) throw new Error('no-mention filter anchor must appear exactly once');
   if (occurrences(source, LOADER_ANCHOR) !== 1) throw new Error('loader anchor must appear exactly once');
   const retryAnchor = managedRetryAnchor(source, managedAnchor.index);
 
@@ -138,6 +142,7 @@ function patchSource(sourceValue) {
     { index: managedAnchor.index, before: managedAnchor.text, after: patchedManaged },
     { index: shutdownAnchor.index, before: shutdownAnchor.text, after: patchedShutdown },
     { index: source.indexOf(MANAGED_CREATE_ORIGINAL), before: MANAGED_CREATE_ORIGINAL, after: MANAGED_CREATE_PATCHED },
+    { index: source.indexOf(NO_MENTION_FILTER_ORIGINAL), before: NO_MENTION_FILTER_ORIGINAL, after: NO_MENTION_FILTER_PATCHED },
     { index: retryAnchor, before: '', after: `  ${MANAGED_SINGLE_ATTEMPT}\n` },
     { index: source.indexOf(LOADER_ANCHOR), before: '', after: `${LOADER_LINE}\n` }
   ].sort((left, right) => right.index - left.index);
@@ -145,7 +150,7 @@ function patchSource(sourceValue) {
   for (const replacement of replacements) {
     output = `${output.slice(0, replacement.index)}${replacement.after}${output.slice(replacement.index + replacement.before.length)}`;
   }
-  if (occurrences(output, LOADER_LINE) !== 1 || occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1 || occurrences(output, MANAGED_SIGNATURE_PATCHED) !== 1 || occurrences(output, MANAGED_CREATE_PATCHED) !== 1 || occurrences(output, MANAGED_UUID_VALIDATION) !== 1 || occurrences(output, MANAGED_SINGLE_ATTEMPT) !== 1 || occurrences(output, DISPOSE_LINE) !== 1) {
+  if (occurrences(output, LOADER_LINE) !== 1 || occurrences(output, REGISTRATION_FIRST_LINE) !== 1 || occurrences(output, MESSAGE_CALL) !== 1 || occurrences(output, NO_MENTION_FILTER_PATCHED) !== 1 || occurrences(output, MANAGED_SIGNATURE_PATCHED) !== 1 || occurrences(output, MANAGED_CREATE_PATCHED) !== 1 || occurrences(output, MANAGED_UUID_VALIDATION) !== 1 || occurrences(output, MANAGED_SINGLE_ATTEMPT) !== 1 || occurrences(output, DISPOSE_LINE) !== 1) {
     throw new Error('patch postcondition failed');
   }
   return output;

@@ -27,6 +27,7 @@ async function sendManagedCard(channel, to, card2, replyTo, replyInThread = fals
 }
 async function updateManagedCard() {}
 async function intake(msg, project) {
+  if (!msg.mentionedBot && !(project && shouldRespondWithoutMention(project, msg))) return;
   const text = msg.content.trim();
   const cmd = parseCommand(text);
   return cmd;
@@ -73,8 +74,10 @@ export default async function run(msg, project) {
   const button = () => {};
   const linkButton = () => {};
   const parseCommand = text => { project.events.push('generic:' + text); return text; };
+  const shouldRespondWithoutMention = () => false;
   const dispatcher = new CardDispatcher(channel, cfg);
   cliBridge?.register(dispatcher);
+  if (!msg.mentionedBot && !(project && shouldRespondWithoutMention(project, msg))) return;
   const text = msg.content.trim();
   const cmd = parseCommand(text);
   return cmd;
@@ -89,6 +92,7 @@ const registrationBlock = `const streamCardPath = process.env.STREAM_CARD_EXTENS
     card: { card, md, note, hr, actions, button, linkButton }
   });`;
 const messageLine = 'if (streamCardHandler?.onMessage && await streamCardHandler.onMessage({ msg, project })) return;';
+const followupLine = 'if (!msg.mentionedBot && !(project && shouldRespondWithoutMention(project, msg)) && !(streamCardHandler?.shouldHandleUnmentioned && await streamCardHandler.shouldHandleUnmentioned({ msg, project }))) return;';
 const loaderLine = 'import { createRequire as createStreamCardRequire } from "node:module";';
 const managedSignature = 'async function sendManagedCard(channel, to, card2, replyTo, replyInThread = false, receiveIdType = "chat_id", messageUuid) {';
 const managedCreateData = 'data: { receive_id: to, msg_type: "interactive", content, ...messageUuid ? { uuid: messageUuid } : {} }';
@@ -104,7 +108,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-patch-'));
 (async () => {
 try {
   assert.strictEqual(ORIGINAL_SHA256, 'b8016fbab2d60bc4da32b45f48564aec76059b184f943df1c1f0a4a1a1e32233');
-  assert.strictEqual(PATCHED_SHA256, '6e47c9074a4872f4fd748ccd1eb54ceeadc3ebcf5d167492ac034841d86115a9');
+  assert.strictEqual(PATCHED_SHA256, 'c1a896620916405c9aaadbac065c07fd4b17e9fd17f922b145f0e39047da1712');
   assert.notStrictEqual(PATCHED_SHA256, ORIGINAL_SHA256);
   const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
   assert.ok(dockerfile.includes('npm install -g @openai/codex @modelzen/feishu-codex-bridge@0.6.9'));
@@ -133,10 +137,13 @@ try {
   assert.strictEqual(count(patched, disposeLine), 1);
   assert.strictEqual(count(patched, registrationBlock), 1);
   assert.strictEqual(count(patched, messageLine), 1);
+  assert.strictEqual(count(patched, followupLine), 1);
+  assert.ok(patched.indexOf(followupLine) < patched.indexOf(messageLine));
   assert.ok(patched.indexOf(messageLine) < patched.indexOf('const cmd = parseCommand(text);'));
   assert.strictEqual(patchSource(patched), patched);
   assert.strictEqual(count(patchSource(patched), registrationBlock), 1);
   assert.strictEqual(count(patchSource(patched), messageLine), 1);
+  assert.strictEqual(count(patchSource(patched), followupLine), 1);
 
   const extensionPath = path.join(tmp, 'extension.cjs');
   const behaviorPath = path.join(tmp, 'behavior.mjs');
@@ -147,10 +154,10 @@ try {
   try {
     const { default: run } = await import(pathToFileURL(behaviorPath).href);
     const unknownProject = { events: [] };
-    assert.strictEqual(await run({ content: 'unknown' }, unknownProject), 'unknown');
+    assert.strictEqual(await run({ content: 'unknown', mentionedBot: true }, unknownProject), 'unknown');
     assert.deepStrictEqual(unknownProject.events, ['extension:unknown', 'generic:unknown']);
     const handledProject = { events: [] };
-    assert.strictEqual(await run({ content: 'handled' }, handledProject), undefined);
+    assert.strictEqual(await run({ content: 'handled', mentionedBot: true }, handledProject), undefined);
     assert.deepStrictEqual(handledProject.events, ['extension:handled']);
   } finally {
     if (previousExtension === undefined) delete process.env.STREAM_CARD_EXTENSION;

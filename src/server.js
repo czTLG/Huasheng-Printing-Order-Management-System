@@ -16,6 +16,7 @@ const express = require('express');
 const compression = require('compression');
 const cron = require('node-cron');
 const path = require('path');
+const dns = require('node:dns').promises;
 const { initDb, db, audit } = require('./db');
 const { fakeAuth } = require('./middleware/auth');
 
@@ -36,6 +37,10 @@ const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant'
 const { createMatrixBridgeAuth, createMatrixRouter } = require('./routes/matrix');
 const { syncMailbox } = require('./lib/imapSync');
 const { createInboxScheduler } = require('./services/matrixInboxScheduler');
+const { createMatrixRelayFactory } = require('./services/matrixRelayFactory');
+const { createMatrixStreamDelivery } = require('./services/matrixStreamDelivery');
+const { createMatrixStreamReadiness } = require('./services/matrixStreamReadiness');
+const { createMatrixStreamPreview } = require('./services/matrixStreamPreview');
 
 initDb();
 
@@ -51,10 +56,42 @@ void inboxScheduler.start().catch(error => {
 });
 
 const matrixBridgeAuth = createMatrixBridgeAuth({ db });
+let matrixRelayFactory = null;
+let matrixDeliveryService = null;
+let matrixPreviewService = null;
+if (process.env.MATRIX_RELAY_ENABLED === '1') {
+  matrixRelayFactory = createMatrixRelayFactory({ env: process.env });
+  const matrixReadinessService = createMatrixStreamReadiness({
+    resolveTxt: dns.resolveTxt,
+    verifyTransport: async () => {
+      const result = await matrixRelayFactory.readiness();
+      return { tls: result.ready === true, smtp: result.ready === true };
+    }
+  });
+  matrixPreviewService = createMatrixStreamPreview({
+    db,
+    readinessService: matrixReadinessService,
+    senderDomain: process.env.MATRIX_MESSAGE_ID_DOMAIN || 'gdhspack.com',
+    dkimSelector: process.env.MATRIX_DKIM_SELECTOR
+  });
+  matrixDeliveryService = createMatrixStreamDelivery({
+    db,
+    transport: matrixRelayFactory.transport,
+    fromAddress: matrixRelayFactory.senderAddress,
+    replyToAddress: matrixRelayFactory.replyToAddress,
+    messageIdDomain: process.env.MATRIX_MESSAGE_ID_DOMAIN || 'gdhspack.com',
+    dkimSelector: process.env.MATRIX_DKIM_SELECTOR
+  });
+}
 let matrixRouter = null;
 function dispatchMatrix(req, res, next) {
   try {
-    if (!matrixRouter) matrixRouter = createMatrixRouter({ db, audit });
+    if (!matrixRouter) matrixRouter = createMatrixRouter({
+      db,
+      audit,
+      deliveryService: matrixDeliveryService,
+      previewService: matrixPreviewService
+    });
     return matrixRouter(req, res, next);
   } catch (error) {
     console.warn('[matrix] unavailable:', error?.message || error);

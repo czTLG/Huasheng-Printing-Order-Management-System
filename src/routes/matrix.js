@@ -358,6 +358,7 @@ function createMatrixRouter({
   clock,
   reviewService = require('../services/matrixStreamReview'),
   deliveryService,
+  previewService,
   correlationService = require('../services/matrixStreamCorrelation'),
   textService = createMatrixStreamText(),
   claimOptions = {}
@@ -1144,15 +1145,19 @@ function createMatrixRouter({
     }
   });
 
-  router.get('/work-items/:id/versions/:versionId/preview', (req, res) => {
+  router.get('/work-items/:id/versions/:versionId/preview', async (req, res) => {
     try {
       requireReviewAccess(req);
       rejectUnknown(req.query, new Set(), 'query');
       const workItemId = positiveInteger(req.params.id, 'work item id');
       const versionId = positiveInteger(req.params.versionId, 'version id');
       const item = ownedReviewItem(workItemId, req.user.id);
-      const preview = reviewService.finalPreview(db, { actorUserId: req.user.id, versionId });
-      if (!preview || preview.version.work_item_id !== item.id) throw new Error('version not found');
+      const basePreview = reviewService.finalPreview(db, { actorUserId: req.user.id, versionId });
+      if (!basePreview || basePreview.version.work_item_id !== item.id) throw new Error('version not found');
+      const unavailable = { ok: false, reasons: ['preview_gate_unavailable'] };
+      const preview = previewService && typeof previewService.project === 'function'
+        ? await previewService.project(basePreview)
+        : { ...basePreview, allowed: false, duplicate: unavailable, cooling: unavailable, quota: unavailable, readiness: unavailable, policy: unavailable };
       res.json({ ...preview, work_item_version: item.version });
     } catch (error) { sendReviewError(res, error); }
   });

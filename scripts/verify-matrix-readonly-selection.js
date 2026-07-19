@@ -18,6 +18,7 @@ const FOCUSED_TESTS = [
   'scripts/test-matrix-signal-import.js',
   'scripts/test-packet-gate.js',
   'scripts/test-matrix-api.js',
+  'scripts/test-matrix-stream-preview.js',
   '.runtime/vm_debug_ci/workspace/tests/test-bridge-patch.js',
   '.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js',
   '.runtime/vm_debug_ci/workspace/tests/test-runtime-supervisor.js',
@@ -54,7 +55,10 @@ const RUNTIME_SURFACE_ROOTS = [
   'src/services/matrixStreamReadiness.js',
   'src/services/matrixStreamFollowup.js',
   'src/services/matrixStreamDelivery.js',
+  'src/services/matrixRelayFactory.js',
+  'src/services/matrixStreamPreview.js',
   'src/services/matrixStreamCorrelation.js',
+  'deploy/systemd/packaging-system-relay.conf',
   'scripts/matrix-bind-actor.js'
 ].map(file => path.join(ROOT, file));
 // Reviewed production-only surface. Tests and verifier sources are deliberately excluded.
@@ -62,8 +66,8 @@ const RUNTIME_SURFACE_ROOTS = [
 const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
   '.runtime/vm_debug_ci/compose.yaml': '52e50645af6010d6a2507aa1b119427286d14d1a7cca9016e70cf860210b26bf',
-  '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': 'af056ed7af592c54520ebac752298551606ff451ccbc4fd1ac8975fbb013c04a',
+  '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': 'f69716c2edefb4756599d442454d03deb6881bdc309ebf1061d0a5a26161a5ae',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '6599718522570b203f6cc6d829da0c85d33451dc7b69c45af1d968cb82d36593',
   '.runtime/vm_debug_ci/workspace/scripts/cache-index.js': '8a96087d1e50a2a60749ead0a5218ef69a2cc9a9328f0d8dd1d2a1dc20ef9077',
   '.runtime/vm_debug_ci/workspace/scripts/cache-math.js': 'c3a61459c289295d10a3d01387368d3e2c9000194d105bcc840ab1b17d565716',
   '.runtime/vm_debug_ci/workspace/scripts/matrix-asset-context.js': '800332ee7ee5dbb39d0ef9b43ff56cce0f509f88743d05d4e54ea33d5f60881c',
@@ -77,7 +81,7 @@ const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/workspace/scripts/packet-route.js': '4bf8e3ec9d441a2eb73f7ffcc5e201866c6e374239268feac59616e2ed9c31d1',
   '.runtime/vm_debug_ci/workspace/scripts/stream-watch.js': '2e32706a6dcff90bea2949a1d10989c6c0f2b4242ec2058e2f3979d6f1ed6fe0',
   'src/db.js': 'd7cf02c912b1e008e59389d499ea121dba930c614af667d5d7de56a8393b7891',
-  'src/server.js': 'd6774e2929ae96f2142530229f8863b0296435dfaf90dc6629cd96e092c83986',
+  'src/server.js': 'dd017fabcb76589589913907f1178e8b8a47e33f96884a5f5e9ddbd0f1704db1',
   'src/lib/cacheIndexView.js': 'c2c314d2b50f315620f52ff2f633b78bfdb866898723e68c2bc744eeca978017',
   'src/lib/imapSync.js': '334ee32f5709b1ce573980940616cd7a012e72e3910393c8d6456de52fedcb59',
   'src/lib/matrixInboxStore.js': '606f0a55ca3a21fcb582ebe262ef84bb3849031a080e34c18db1dd323230b792',
@@ -90,7 +94,7 @@ const RUNTIME_MANIFEST = {
   'src/services/matrixThreadReview.js': 'b7b871a98cd65d081206a31fdb1dd41bb98b8a86c9e9b1ab6250df3f4ec58d4a',
   'src/services/matrixThreadReconcile.js': '4cbb5183c50614de9426f1d5124b12336e0ff8ca27b11e9f5ad1c9cded333dcc',
   'src/routes/crm.js': 'e1462f04cb57c8cc10c0f3ad08743ff4cebd4f6add08df99065bcd1929e052df',
-  'src/routes/matrix.js': 'bbcbecf1bf8142ab8b63decfdaae543087bc79a3b38110140ab0783e83d712bb',
+  'src/routes/matrix.js': '208c0cf33e34f95309a35a8deb26cd2d54e2bcedb9637126272939eaeec42ac1',
   'scripts/run-matrix-inbox-ai.js': 'a7c549ecc796af9bbb7cb1ae17ed1ed081d6dad3b3ba37f75dba5843576def38',
   'shared/matrix-inbox-ai.schema.json': 'c92a5b5cfcc7e2255ea6277b4b8ac1a013405fdf6c1bf2c336c7b12224f08ef6',
   'src/services/matrixStreamReview.js': 'bf6da9b52f48658aef5f67a49c087950c166d11715474a7782c248c521677c85',
@@ -98,9 +102,12 @@ const RUNTIME_MANIFEST = {
   'src/services/matrixStreamGate.js': '86f99c2672ae6d58ccb5a35aa5cab7b1b4ffa6b3b7132b091a856469cb678c57',
   'src/services/matrixStreamReadiness.js': '6440a41bb789263528451153081462d339c602222af74cbb87abce0eb7187b7b',
   'src/services/matrixStreamFollowup.js': 'bd4e6721b12d7b75323bb0ef23d21c7ea117c7c26b39ba6042a4d237950a5c01',
-  'src/services/matrixStreamDelivery.js': 'dc27f55dcc73093c50d7f6fbf28a5a1b17f20378d9e24065aa706b71d15653ea',
+  'src/services/matrixStreamDelivery.js': 'b2903c4047bd9356cc37d2ec6ca88d30379e2d1c690b8c15420215de833f4640',
+  'src/services/matrixRelayFactory.js': 'e1b009fc8c73ccaac3a9a1758a238d2df8e4d1373ad1b09e649020aff10d10e7',
+  'src/services/matrixStreamPreview.js': 'dc1ce43c146776131ae1db5dfe91c61247e854ca24c3ab2b4fa371b8942dcf0e',
   'src/services/matrixStreamCorrelation.js': '6e0a3ebf457f05629b8886afa5f98c32c7abe0f07a1bbed6f6ec7c07479b0877',
-  'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
+  'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c',
+  'deploy/systemd/packaging-system-relay.conf': '5091086e6698028688afc2366da45d5e214da9c1a0fdeb6901470de02f35fb49'
 };
 
 function repositoryContract() {
@@ -109,6 +116,7 @@ function repositoryContract() {
     'MATRIX_STREAM_DB_PATH=./data/matrix-stream.db',
     'MATRIX_BRIDGE_TOKEN=',
     'MATRIX_DELIVERY_ENABLED=0',
+    'MATRIX_RELAY_ENABLED=0',
     'MATRIX_STREAM_SEND_ENABLED=0',
     'MATRIX_RECIPIENT_MAX_AGE_DAYS=180',
     'MATRIX_MESSAGE_ID_DOMAIN=',
@@ -133,7 +141,7 @@ function repositoryContract() {
   const catalog = fs.readFileSync(catalogPath, 'utf8');
   for (const marker of [
     '/api/matrix', 'matrix-bind-actor.js', '开发客户', '1,500',
-    '来源分离', '不存在外发适配器', 'MATRIX_DELIVERY_ENABLED=0',
+    '来源分离', '不存在外发适配器', 'MATRIX_DELIVERY_ENABLED=0', 'MATRIX_RELAY_ENABLED=0',
     'MATRIX_VERIFY_FIXTURE=1', 'fail closed',
     '桌面端', '移动端', 'mx.quick', 'vm_debug_ci_pre_',
     'matrixStreamReview.js', 'matrixStreamDelivery.js', '两次确认',
@@ -141,7 +149,9 @@ function repositoryContract() {
   ]) assert.ok(catalog.includes(marker), `catalog missing ${marker}`);
 
   const server = fs.readFileSync(path.join(ROOT, 'src/server.js'), 'utf8');
-  assert.ok(!server.includes('createMatrixStreamDelivery'), 'production delivery must remain unwired while MATRIX_STREAM_SEND_ENABLED=0');
+  assert.ok(server.includes("process.env.MATRIX_RELAY_ENABLED === '1'"), 'production relay must require the exact reviewed enable flag');
+  assert.ok(server.includes('deliveryService: matrixDeliveryService'), 'delivery must be injected only through the main application router');
+  assert.ok(!server.includes('/etc/packaging-system/smtp.env'), 'server source must not read protected config directly');
 }
 
 function createCandidateFixture(root) {
@@ -358,7 +368,7 @@ const APPROVED_CAPABILITY_SHA256 = {
   supervisor: '02c49cdd5705ea4f6362eb2ff36e8eef29e8532dad1944616b13f745f0a88e5b',
   inbox: 'd505f1abe96093499f0ec1245c39fec9e04c32647d2961187192393825072d0f',
   operations: '2e32706a6dcff90bea2949a1d10989c6c0f2b4242ec2058e2f3979d6f1ed6fe0',
-  delivery: 'dc27f55dcc73093c50d7f6fbf28a5a1b17f20378d9e24065aa706b71d15653ea'
+  delivery: 'b2903c4047bd9356cc37d2ec6ca88d30379e2d1c690b8c15420215de833f4640'
 };
 
 function approvedCapabilitySource(kind, sourceValue) {

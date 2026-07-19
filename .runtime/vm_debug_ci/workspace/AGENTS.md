@@ -162,6 +162,7 @@ Keep current-order calculation separate from reusable knowledge capture.
 - `是`: append an event to `/workspace/store/node-events.jsonl`, then update
   `/workspace/store/node-state.json` with source ID, confirmer, confirmation
   time, scope, and whether the value is time-sensitive.
+- 知识保存成功后必须发送一条中文可见回执，明确已保存内容、适用范围和仍有的边界；不得停在工具调用或文件写入，也不得让用户通过沉默猜测是否成功。
 - `否`: keep it in the current case only and do not write either knowledge file.
 - No answer: leave the candidate pending; never treat silence as approval.
 - The save question never blocks or delays the current internal calculation.
