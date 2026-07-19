@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const defaultChoiceContext = require('../scripts/matrix-choice-context.js');
 const defaultAssetContext = require('../scripts/matrix-asset-context.js');
+const defaultDiagnosticsWatcher = require('../scripts/matrix-diagnostics-watch.js');
 
 const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.ledger_preview', 'mx.ledger_confirm', 'mx.reply_draft', 'mx.retry_translation', 'mx.thread_approve', 'mx.thread_preview', 'mx.thread_confirm'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
@@ -667,6 +668,7 @@ function register(context) {
   const { channel, dispatcher, sendManagedCard, card: cardHelpers } = context;
   const client = context.client || require('../scripts/matrix-client.js');
   const choiceContext = context.choiceContext || defaultChoiceContext;
+  const diagnosticsWatcher = context.diagnosticsWatcher || defaultDiagnosticsWatcher;
   const now = typeof context.now === 'function' ? context.now : () => Date.now();
   const assetContext = context.assetContext || defaultAssetContext.createStore({
     target: context.assetContextPath,
@@ -706,27 +708,43 @@ function register(context) {
     if (reminderPollActive) return;
     reminderPollActive = true;
     try {
-      const result = await deliverQueuedReminder({
-        channel, sendManagedCard,
-        spoolPath: context.reminderSpoolPath || REMINDER_SPOOL_PATH,
-        inflightPath: context.reminderInflightPath || REMINDER_INFLIGHT_PATH,
-        receiptPath: context.reminderReceiptPath || REMINDER_RECEIPT_PATH,
-        writeReceipt: context.writeReminderReceipt || writeReceiptAtomic,
-        removeInflight: context.removeReminderInflight || (file => fs.unlinkSync(file)),
-        onDelivered: ({ messageId, chatId }) => registerCandidateMessage(messageId, chatId)
-      });
-      if (result?.status === 'ambiguous') {
-        logReminder(`[stream-card] reminder delivery ambiguous: ${result.id}; manual reconciliation required`);
+      try {
+        const result = await deliverQueuedReminder({
+          channel, sendManagedCard,
+          spoolPath: context.reminderSpoolPath || REMINDER_SPOOL_PATH,
+          inflightPath: context.reminderInflightPath || REMINDER_INFLIGHT_PATH,
+          receiptPath: context.reminderReceiptPath || REMINDER_RECEIPT_PATH,
+          writeReceipt: context.writeReminderReceipt || writeReceiptAtomic,
+          removeInflight: context.removeReminderInflight || (file => fs.unlinkSync(file)),
+          onDelivered: ({ messageId, chatId }) => registerCandidateMessage(messageId, chatId)
+        });
+        if (result?.status === 'ambiguous') {
+          logReminder(`[stream-card] reminder delivery ambiguous: ${result.id}; manual reconciliation required`);
+        }
+        await deliverQueuedReply({
+          client, openId: process.env.MATRIX_OWNER_OPEN_ID,
+          channel, sendManagedCard,
+          spoolPath: context.replySpoolPath || REPLY_SPOOL_PATH,
+          inflightPath: context.replyInflightPath || REPLY_INFLIGHT_PATH,
+          expectedChatId: process.env.STREAM_CHAT_ID
+        });
+      } catch (error) {
+        logReminder(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}`);
       }
-      await deliverQueuedReply({
-        client, openId: process.env.MATRIX_OWNER_OPEN_ID,
-        channel, sendManagedCard,
-        spoolPath: context.replySpoolPath || REPLY_SPOOL_PATH,
-        inflightPath: context.replyInflightPath || REPLY_INFLIGHT_PATH,
-        expectedChatId: process.env.STREAM_CHAT_ID
-      });
-    } catch (error) {
-      logReminder(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}`);
+      try {
+        const diagnosticsResult = await diagnosticsWatcher.deliverNextAlert({
+          channel,
+          sendManagedCard,
+          appId: process.env.STREAM_APP_ID,
+          spoolRoot: context.diagnosticsSpoolRoot,
+          bridgeRoot: context.diagnosticsBridgeRoot
+        });
+        if (diagnosticsResult?.status === 'ambiguous') {
+          logReminder(`[stream-card] diagnostics delivery ambiguous: ${diagnosticsResult.id}; manual reconciliation required`);
+        }
+      } catch (error) {
+        logReminder(`[stream-card] diagnostics delivery failed: ${error?.message || 'unknown error'}`);
+      }
     } finally {
       reminderPollActive = false;
     }
