@@ -1,10 +1,10 @@
 [Unit]
-Description=Hourly Runtime Recovery Snapshot
+Description=Daily Runtime Recovery Snapshot
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=*-*-* 02:10:00
 Persistent=true
-RandomizedDelaySec=5m
+RandomizedDelaySec=10m
 Unit=runtime-backup.service
 
 [Install]

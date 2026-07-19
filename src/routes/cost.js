@@ -435,7 +435,8 @@ router.get('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales'), (req,
   const kind = String(req.query.kind || '').trim();
   if (!['case', 'history'].includes(kind)) return res.status(400).json({ error: 'kind 必须是 case/history' });
   const rows = db.prepare(`
-    SELECT id, user_name, kind, name, cost_type, input_json, result_json, created_at, updated_at
+    SELECT id, user_name, kind, name, cost_type, input_json, result_json,
+      order_id, work_order_id, created_at, updated_at
     FROM cost_snapshots
     WHERE user_name = ? AND kind = ?
     ORDER BY datetime(created_at) DESC
@@ -444,6 +445,8 @@ router.get('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales'), (req,
   res.json(rows.map(r => ({
     ...r,
     costType: r.cost_type,
+    orderId: Number(r.order_id || 0) || null,
+    workOrderId: Number(r.work_order_id || 0) || null,
     input: JSON.parse(r.input_json || '{}'),
     result: r.result_json ? JSON.parse(r.result_json) : null
   })));
@@ -456,9 +459,13 @@ router.post('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales', 'cost
   const input = req.body?.input || {};
   const result = req.body?.result ?? null;
   const crm = req.body?.crm || {};
+  const orderId = Number(req.body?.orderId || req.body?.order_id || 0) || null;
+  const workOrderId = Number(req.body?.workOrderId || req.body?.work_order_id || 0) || null;
   if (!['case', 'history'].includes(kind)) return res.status(400).json({ error: 'kind 必须是 case/history' });
   if (!costType) return res.status(400).json({ error: 'costType 必填' });
   if (kind === 'case' && !name) return res.status(400).json({ error: '样例名称必填' });
+  if (orderId && !db.prepare('SELECT id FROM orders WHERE id=?').get(orderId)) return res.status(404).json({ error: '关联订单不存在' });
+  if (workOrderId && !db.prepare('SELECT id FROM work_orders WHERE id=?').get(workOrderId)) return res.status(404).json({ error: '关联开单记录不存在' });
 
   const ts = now();
   const ret = db.prepare(`
@@ -466,9 +473,9 @@ router.post('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales', 'cost
       user_name, kind, name, cost_type, input_json, result_json,
       customer_id, inquiry_id, specification_id, costing_request_id,
       version_no, is_current, crm_quote_status, crm_notes,
-      created_at, updated_at
+      order_id, work_order_id, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.user.userName,
     kind,
@@ -484,9 +491,22 @@ router.post('/snapshots', allowRoles('super_admin', 'manager', 'ai_sales', 'cost
     crm.is_current === 0 || crm.is_current === false ? 0 : 1,
     String(crm.crm_quote_status || req.body?.crm_quote_status || ''),
     String(crm.crm_notes || req.body?.crm_notes || ''),
+    orderId,
+    workOrderId,
     ts,
     ts
   );
+
+  if (orderId || workOrderId) {
+    audit({
+      role: req.user.role,
+      userName: req.user.userName,
+      action: 'link_cost_snapshot_order',
+      resourceType: 'cost_snapshot',
+      resourceId: ret.lastInsertRowid,
+      detail: JSON.stringify({ order_id: orderId, work_order_id: workOrderId })
+    });
+  }
 
   if (Number(crm.costing_request_id || req.body?.costing_request_id || 0) > 0) {
     audit({

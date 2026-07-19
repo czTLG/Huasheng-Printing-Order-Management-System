@@ -15,6 +15,15 @@ const ROLLER_OPTIONS = ['55', '65', '75', '80', '90', '105'];
 const REF_COLOR_OPTIONS = ['按彩稿', '按打样膜', '按原膜样', '按样品袋'];
 const BAG_TYPE_OPTIONS = ['自立', '自立拉链', '单拉链', '八边封', '三边封', '背封', '侧边封袋', '四边封', '异形袋', '自动包'];
 
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('读取图片失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
 const DEFAULT_FORM = {
   wo_date: new Date().toISOString().split('T')[0],
   work_no: '',
@@ -121,6 +130,8 @@ export default function WorkOrders() {
   const [showEmailModal, setShowEmailModal] = useState<number | null>(null);
   const [exportOpenId, setExportOpenId] = useState<number | null>(null);
   const [exportAction, setExportAction] = useState('');
+  const [selectedWorkOrderIds, setSelectedWorkOrderIds] = useState<Set<number>>(new Set());
+  const [batchRunning, setBatchRunning] = useState(false);
 
   const currentUser = mockService.getUser();
 
@@ -181,6 +192,7 @@ export default function WorkOrders() {
     const { rows, total } = await mockService.getWorkOrders({ q: woSearch, page, pageSize });
     setWorkOrders(rows);
     setTotalWorkOrders(total);
+    setSelectedWorkOrderIds(new Set());
   };
 
   const fetchDrafts = async () => {
@@ -498,7 +510,9 @@ export default function WorkOrders() {
 
     setIsSubmitting(true);
     try {
-      const payload = buildPayload();
+      const payload: any = buildPayload();
+      if (formData.image_file) payload.imageDataUrl = await fileToDataUrl(formData.image_file);
+      else if (formData.image_url) payload.imageUrl = formData.image_url;
       const res = await mockService.createWorkOrder(payload);
       if (res.ok) {
         const msg = `开单成功：${res.workNo}${res.orderId ? '，已同步生成订单 #' + res.orderId : ''}`;
@@ -534,7 +548,10 @@ export default function WorkOrders() {
 
     setIsSubmitting(true);
     try {
-      const pdfBlob = await mockService.previewWorkOrderPdf(buildPayload());
+      const payload: any = buildPayload();
+      if (formData.image_file) payload.imageDataUrl = await fileToDataUrl(formData.image_file);
+      else if (formData.image_url) payload.imageUrl = formData.image_url;
+      const pdfBlob = await mockService.previewWorkOrderPdf(payload);
       const url = URL.createObjectURL(pdfBlob);
       const win = window.open(url, '_blank');
       if (!win) window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'warning', message: '浏览器拦截了弹窗，请允许弹窗后重试。' } }));
@@ -618,6 +635,42 @@ export default function WorkOrders() {
     }
   };
 
+  const handleBatchExportPdf = async () => {
+    const ids = [...selectedWorkOrderIds];
+    if (!ids.length || !confirm(`确认批量导出 ${ids.length} 条开单记录？`)) return;
+    setBatchRunning(true);
+    try {
+      for (const id of ids) {
+        const blob = await mockService.exportWorkOrder(id, 'pdf');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `work_order_${id}.pdf`; document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      }
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: `已导出 ${ids.length} 条开单记录` } }));
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '批量导出失败' } }));
+    } finally { setBatchRunning(false); }
+  };
+
+  const handleBatchSendEmail = async () => {
+    const rows = workOrders.filter(row => selectedWorkOrderIds.has(Number(row.id)));
+    if (!rows.length || !confirm(`确认批量发送 ${rows.length} 条开单邮件？`)) return;
+    setBatchRunning(true);
+    let sent = 0;
+    const skipped: string[] = [];
+    for (const row of rows) {
+      const p: any = row.process_requirements || {};
+      const to = String(p.mailTo || p.customerEmail || row.customer_email || '').trim();
+      if (!to) { skipped.push(row.work_no || String(row.id)); continue; }
+      try { await mockService.sendWorkOrderEmail(row.id, to, ''); sent += 1; }
+      catch { skipped.push(row.work_no || String(row.id)); }
+    }
+    setBatchRunning(false);
+    await fetchWorkOrders();
+    window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: skipped.length ? 'warning' : 'success', message: `批量邮件完成：成功 ${sent} 条${skipped.length ? `，跳过/失败 ${skipped.length} 条（${skipped.join('、')}）` : ''}` } }));
+  };
+
   const handleDeleteDraft = async (id: number) => {
     if (!confirm('确认删除这条预览未提交记录？')) return;
     try {
@@ -626,6 +679,59 @@ export default function WorkOrders() {
     } catch (err: any) {
       window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: '删除失败：' + err.message } }));
     }
+  };
+
+  const handlePreviewDraft = async (id: number) => {
+    try {
+      const blob = await mockService.previewDraftPdf(id);
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (!win) window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'warning', message: '浏览器拦截了弹窗，请允许弹窗后重试。' } }));
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '草稿预览失败' } }));
+    }
+  };
+
+  const draftPayloadAsWorkOrder = (payload: any): WorkOrder => {
+    const p = payload?.processRequirements || {};
+    const layer = (index: number) => ({
+      material: typeof p[`layer${index}`] === 'object' ? p[`layer${index}`]?.material : p[`layer${index}`] || '',
+      size: p[`l${index}Size`] || p[`layer${index}`]?.size || '',
+      weight: p[`l${index}Weight`] || p[`layer${index}`]?.weight || '',
+      unit: p[`layer${index}Unit`] || p[`layer${index}`]?.unit || 'kg',
+    });
+    return {
+      id: 0, work_no: '', salesperson_name: payload.salespersonName || '', customer_name: payload.customerName || '',
+      product_name: payload.productName || '', bag_type: payload.bagType || '', spec: payload.spec || '',
+      quantity: payload.quantity || '', delivery_date: payload.deliveryDate || '', roller: payload.roller || '',
+      remark: payload.remark || '',
+      process_requirements: { ...p, layer1: layer(1), layer2: layer(2), layer3: layer(3), layer4: layer(4) },
+    } as WorkOrder;
+  };
+
+  const handleImportDraft = async (id: number) => {
+    try {
+      const data = await mockService.getPreviewDraft(id);
+      handleCopyBilling(draftPayloadAsWorkOrder(data?.row?.payload_json || {}));
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '导入草稿失败' } }));
+    }
+  };
+
+  const handleSubmitDraft = async (id: number, previewAfter = false) => {
+    if (!confirm(previewAfter ? '确认提交该草稿并预览 PDF？' : '确认将该草稿正式提交开单？')) return;
+    setIsSubmitting(true);
+    try {
+      const data = await mockService.getPreviewDraft(id);
+      const result = await mockService.createWorkOrder(data?.row?.payload_json || {});
+      await mockService.deletePreviewDraft(id);
+      await Promise.all([fetchDrafts(), fetchWorkOrders()]);
+      if (previewAfter && result?.id) await handleExport(result.id, 'pdf');
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: `草稿已提交：${result?.workNo || ''}` } }));
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '草稿提交失败' } }));
+    } finally { setIsSubmitting(false); }
   };
 
   const handleCopyBilling = (wo: WorkOrder) => {
@@ -708,8 +814,8 @@ export default function WorkOrders() {
   );
 
   const ModuleBox = ({ children, bgColor, borderColor }: { children: React.ReactNode, bgColor: string, borderColor: string }) => (
-    <div className={cn("p-5 md:p-7 rounded-3xl mb-6 border shadow-sm transition-all hover:shadow-md", bgColor, borderColor)}>
-      <div className="grid grid-cols-24 gap-x-6 gap-y-5">
+    <div className={cn("p-3 sm:p-5 md:p-7 rounded-2xl md:rounded-3xl mb-4 md:mb-6 border shadow-sm transition-all hover:shadow-md", bgColor, borderColor)}>
+      <div className="grid grid-cols-24 gap-x-3 md:gap-x-6 gap-y-4 md:gap-y-5">
         {children}
       </div>
     </div>
@@ -720,8 +826,8 @@ export default function WorkOrders() {
 
   if (view === 'create') {
     return (
-      <div className="max-w-[1200px] mx-auto bg-slate-50 min-h-screen p-4 md:p-8 pb-32">
-        <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="space-y-6">
+      <div className="max-w-[1200px] mx-auto bg-slate-50 min-h-screen p-2 sm:p-4 md:p-8 pb-32">
+        <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="space-y-4 md:space-y-6">
 
           {/* Toolbar */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-4">
@@ -1220,9 +1326,9 @@ export default function WorkOrders() {
                   <option value="1">加急</option>
                 </select>
               </div>
-              <div className="flex flex-wrap gap-3 ml-auto">
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3 w-full sm:w-auto sm:ml-auto">
                 <button type="button" onClick={() => handleSubmit()} disabled={isSubmitting}
-                  className="h-12 px-8 bg-indigo-600 text-white rounded-2xl text-[14px] font-black shadow-lg shadow-indigo-200 hover:shadow-indigo-300 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-60">
+                  className="col-span-2 sm:col-span-1 h-12 px-5 sm:px-8 bg-indigo-600 text-white rounded-xl sm:rounded-2xl text-[14px] font-black shadow-lg shadow-indigo-200 hover:shadow-indigo-300 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60">
                   <Save className="w-5 h-5" />
                   提交开单
                 </button>
@@ -1279,17 +1385,17 @@ export default function WorkOrders() {
   // --- List View Component ---
   return (
     <div className="space-y-6 lg:p-6 p-2">
-      <div className="flex flex-col md:flex-row md:items-end justify-between px-2 gap-3 md:gap-4">
+      <div className="flex flex-col md:flex-row md:items-end justify-between px-1 sm:px-2 gap-3 md:gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-display font-bold text-slate-900 tracking-tight flex items-center gap-2 md:gap-3">
             开单管理作业
           </h1>
           <p className="text-slate-500 mt-1 font-medium text-xs md:text-sm">发起生产作业单、定义工艺参数标准并将制令分配下发</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 w-full md:w-auto">
           <button
             onClick={handleCreate}
-            className="flex items-center justify-center gap-2 px-6 h-12 bg-blue-600 text-white rounded-xl text-sm font-black shadow-md hover:bg-blue-700 transition-all uppercase tracking-widest"
+            className="flex items-center justify-center gap-2 px-4 sm:px-6 h-12 w-full md:w-auto bg-blue-600 text-white rounded-xl text-sm font-black shadow-md hover:bg-blue-700 transition-all uppercase tracking-widest"
           >
             <Plus className="w-5 h-5" />
             立即创建排产开单
@@ -1297,7 +1403,7 @@ export default function WorkOrders() {
         </div>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-3xl p-4 shadow-sm flex gap-4">
+      <div className="bg-white border border-slate-100 rounded-2xl md:rounded-3xl p-3 sm:p-4 shadow-sm flex flex-col sm:flex-row gap-2 sm:gap-4">
         <div className="flex-1 relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
@@ -1309,15 +1415,15 @@ export default function WorkOrders() {
           />
         </div>
         <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
-          className="h-12 px-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold outline-none focus:border-indigo-500">
+          className="h-12 px-3 bg-slate-50 border border-slate-100 rounded-xl sm:rounded-2xl text-sm font-bold outline-none focus:border-indigo-500">
           <option value="20">每页20条</option>
           <option value="50">每页50条</option>
           <option value="100">每页100条</option>
         </select>
-        <button onClick={() => { setPage(1); fetchWorkOrders(); }} className="h-12 px-4 bg-slate-100 text-slate-600 rounded-2xl text-sm font-black hover:bg-slate-200 transition-all">
+        <button onClick={() => { setPage(1); fetchWorkOrders(); }} className="h-12 px-4 bg-slate-100 text-slate-600 rounded-xl sm:rounded-2xl text-sm font-black hover:bg-slate-200 transition-all">
           搜索
         </button>
-        <button onClick={fetchWorkOrders} className="w-12 h-12 flex items-center justify-center bg-slate-100 text-slate-500 rounded-2xl hover:bg-slate-200 transition-all">
+        <button onClick={fetchWorkOrders} aria-label="刷新开单列表" className="w-full sm:w-12 h-12 flex items-center justify-center bg-slate-100 text-slate-500 rounded-xl sm:rounded-2xl hover:bg-slate-200 transition-all">
           <RefreshCw className="w-5 h-5" />
         </button>
       </div>
@@ -1340,8 +1446,11 @@ export default function WorkOrders() {
                   <div className="text-sm font-black text-slate-800 truncate">{draft.product_name || '未命名品名'}</div>
                   <div className="text-xs font-bold text-slate-500 mt-1">{draft.customer_name || '-'} | {draft.spec || '-'} | {draft.quantity || '-'}</div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={() => handleExport(draft.id, 'pdf')} className="h-9 px-3 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-white">预览 PDF</button>
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
+                  <button onClick={() => handleImportDraft(draft.id)} className="h-9 px-3 border border-cyan-200 rounded-xl text-xs font-bold text-cyan-700 hover:bg-white">导入表单</button>
+                  <button onClick={() => handleSubmitDraft(draft.id)} disabled={isSubmitting} className="h-9 px-3 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-700 hover:bg-white disabled:opacity-50">提交开单</button>
+                  <button onClick={() => handleSubmitDraft(draft.id, true)} disabled={isSubmitting} className="h-9 px-3 bg-indigo-600 text-white rounded-xl text-xs font-bold disabled:opacity-50">提交并预览</button>
+                  <button onClick={() => handlePreviewDraft(draft.id)} className="h-9 px-3 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-white">预览 PDF</button>
                   <button onClick={() => handleDeleteDraft(draft.id)} className="h-9 px-3 border border-rose-200 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50">删除</button>
                 </div>
               </div>
@@ -1351,10 +1460,19 @@ export default function WorkOrders() {
       </div>
 
       {/* Desktop Table View */}
+      {selectedWorkOrderIds.size > 0 && (
+        <div className="flex sticky bottom-3 z-20 items-center gap-2 sm:gap-3 bg-slate-900 text-white rounded-2xl px-3 sm:px-5 py-3 shadow-xl overflow-x-auto">
+          <b className="text-sm">已选择 {selectedWorkOrderIds.size} 项</b>
+          <button disabled={batchRunning} onClick={handleBatchExportPdf} className="h-9 px-3 bg-white/10 rounded-lg text-xs font-bold disabled:opacity-50">批量导出 PDF</button>
+          <button disabled={batchRunning} onClick={handleBatchSendEmail} className="h-9 px-3 bg-indigo-500 rounded-lg text-xs font-bold disabled:opacity-50">批量发送邮件</button>
+          <button onClick={() => setSelectedWorkOrderIds(new Set())} className="h-9 px-3 border border-white/20 rounded-lg text-xs font-bold">清空勾选</button>
+        </div>
+      )}
       <div className="hidden md:block overflow-x-auto bg-white rounded-[2rem] border border-slate-100 shadow-sm">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-100">
+              <th className="px-4 py-4"><input type="checkbox" checked={workOrders.length > 0 && workOrders.every(row => selectedWorkOrderIds.has(Number(row.id)))} onChange={e => setSelectedWorkOrderIds(e.target.checked ? new Set(workOrders.map(row => Number(row.id))) : new Set())} /></th>
               <th className="px-6 py-4 text-[11px] font-black text-slate-500 uppercase">制令号 / 日期</th>
               <th className="px-6 py-4 text-[11px] font-black text-slate-500 uppercase">业务 / 客户</th>
               <th className="px-6 py-4 text-[11px] font-black text-slate-500 uppercase">生产品名</th>
@@ -1366,7 +1484,7 @@ export default function WorkOrders() {
           <tbody className="divide-y divide-slate-100">
             {workOrders.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-6 py-16 text-center">
+                <td colSpan={7} className="px-6 py-16 text-center">
                   <FileText className="w-10 h-10 text-slate-300 mx-auto mb-3" />
                   <p className="text-slate-500 text-sm font-bold">没有数据记录</p>
                 </td>
@@ -1374,6 +1492,7 @@ export default function WorkOrders() {
             ) : (
               workOrders.map(wo => (
                 <tr key={wo.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-4 py-4"><input type="checkbox" checked={selectedWorkOrderIds.has(Number(wo.id))} onChange={e => setSelectedWorkOrderIds(prev => { const next = new Set(prev); if (e.target.checked) next.add(Number(wo.id)); else next.delete(Number(wo.id)); return next; })} /></td>
                   <td className="px-6 py-4">
                     <div className="text-sm font-black text-slate-900 font-mono tracking-tight">{wo.work_no}</div>
                     <div className="text-xs text-slate-400 font-bold mt-1">{new Date(wo.created_at).toLocaleDateString()}</div>
@@ -1476,7 +1595,7 @@ export default function WorkOrders() {
           workOrders.map(wo => (
             <div key={wo.id} className="bg-white border border-slate-100 rounded-2xl p-4 space-y-2">
               <div className="flex items-center justify-between">
-                <b className="text-sm text-slate-900">{wo.work_no || '-'}</b>
+                <label className="flex items-center gap-2 min-w-0"><input type="checkbox" className="w-5 h-5" checked={selectedWorkOrderIds.has(Number(wo.id))} onChange={e => setSelectedWorkOrderIds(prev => { const next = new Set(prev); if (e.target.checked) next.add(Number(wo.id)); else next.delete(Number(wo.id)); return next; })} /><b className="text-sm text-slate-900 truncate">{wo.work_no || '-'}</b></label>
                 <span className="text-[11px] text-slate-400">{new Date(wo.created_at).toLocaleDateString()}</span>
               </div>
               <div className="text-xs text-slate-500">
@@ -1517,9 +1636,9 @@ export default function WorkOrders() {
 
       <AnimatePresence>
         {showEmailModal !== null && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[120] flex items-end sm:items-center justify-center p-2 sm:p-4">
             <div className="absolute inset-0 bg-slate-900/50" onClick={() => setShowEmailModal(null)} />
-            <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="relative bg-white rounded-3xl border border-slate-200 shadow-xl p-6 w-full max-w-lg space-y-4">
+            <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="relative bg-white rounded-t-3xl sm:rounded-3xl border border-slate-200 shadow-xl p-4 sm:p-6 w-full max-w-lg max-h-[85dvh] overflow-y-auto space-y-4">
               <h3 className="text-lg font-black text-slate-900">发送开单邮件</h3>
               <input id="wo-mail-to" defaultValue={formData.mail_to_list.filter(e => e.trim()).join(';') || formData.customer_email || ''} placeholder="收件人邮箱，多个用分号分隔" className={FormLabelStyle} />
               <input id="wo-mail-cc" defaultValue="" placeholder="抄送邮箱" className={FormLabelStyle} />

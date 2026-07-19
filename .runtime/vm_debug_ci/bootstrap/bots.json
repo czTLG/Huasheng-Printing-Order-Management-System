@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "current": "cli_aade6ebe59f89bb7",
+  "bots": [
+    {
+      "name": "vm_debug_ci",
+      "appId": "cli_aade6ebe59f89bb7",
+      "tenant": "feishu",
+      "createdAt": 1783930000000,
+      "active": true
+    }
+  ]
+}

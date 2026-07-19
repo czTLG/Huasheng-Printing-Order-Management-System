@@ -1,0 +1,25 @@
+{
+  "accounts": {
+    "app": {
+      "id": "cli_aade6ebe59f89bb7",
+      "secret": {
+        "source": "exec",
+        "provider": "bridge",
+        "id": "app-cli_aade6ebe59f89bb7"
+      },
+      "tenant": "feishu"
+    }
+  },
+  "secrets": {
+    "providers": {
+      "bridge": {
+        "source": "exec",
+        "command": "/home/node/.feishu-codex-bridge/secrets-getter.sh",
+        "args": []
+      }
+    }
+  },
+  "preferences": {
+    "projectsRootDir": "/workspace"
+  }
+}

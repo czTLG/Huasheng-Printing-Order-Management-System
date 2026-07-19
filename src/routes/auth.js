@@ -7,6 +7,7 @@ const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';
 const loginAttempts = new Map(); // key: username/ip
+const sensitiveRequests = new Map();
 const AUTH_ADMIN_USERS = new Set(['chenyongjie', 'gavin']);
 
 function requireAuthAdmin(req, res, next) {
@@ -43,7 +44,25 @@ function clearAttempts(key) {
   loginAttempts.delete(key);
 }
 
-router.post('/register', (req, res) => {
+function limitSensitiveRequests(name, max, windowMs) {
+  return (req, res, next) => {
+    const key = `${name}@${req.ip || 'unknown'}`;
+    const ts = Date.now();
+    const current = sensitiveRequests.get(key);
+    if (!current || ts >= current.until) {
+      sensitiveRequests.set(key, { count: 1, until: ts + windowMs });
+      return next();
+    }
+    if (current.count >= max) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((current.until - ts) / 1000))));
+      return res.status(429).json({ error: '请求过于频繁，请稍后重试' });
+    }
+    current.count += 1;
+    return next();
+  };
+}
+
+router.post('/register', limitSensitiveRequests('register', 10, 10 * 60 * 1000), (req, res) => {
   const { username, password, fullName } = req.body || {};
   if (!username || !password || !fullName) return res.status(400).json({ error: '账号/密码/姓名 必填' });
   try {
@@ -161,6 +180,20 @@ router.post('/users/:id/permissions', requireAuthAdmin, (req, res) => {
   db.prepare('UPDATE users SET role=?, permissions_json=? WHERE id=?').run(role, JSON.stringify(permissions), id);
   audit({ role: req.user.role, userName: req.user.userName, action: 'edit_user_permissions', resourceType: 'user', resourceId: id, detail: JSON.stringify({ target: target.username, role, permissions }) });
   res.json({ ok: true });
+});
+
+router.post('/users/:id/reset-password', requireAuthAdmin, limitSensitiveRequests('reset-password', 20, 10 * 60 * 1000), (req, res) => {
+  const id = Number(req.params.id || 0);
+  const newPassword = String(req.body?.newPassword || '');
+  if (newPassword.length < 6) return res.status(400).json({ error: '新密码至少需要 6 位' });
+
+  const target = db.prepare('SELECT id, username FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: '用户不存在' });
+
+  const hash = bcrypt.hashSync(newPassword, 10);
+  db.prepare('UPDATE users SET password=? WHERE id=?').run(hash, id);
+  audit({ role: req.user.role, userName: req.user.userName, action: 'reset_user_password', resourceType: 'user', resourceId: id, detail: JSON.stringify({ target: target.username }) });
+  res.json({ ok: true, message: '密码已重置' });
 });
 
 router.delete('/users/:id', requireAuthAdmin, (req, res) => {

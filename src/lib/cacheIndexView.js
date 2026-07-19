@@ -167,8 +167,21 @@ function signalsForRecord(db, id) {
   return { supplier_signal: supplierSignal, strategy_signal: strategySignal };
 }
 
+function productUrlForRecord(db, id) {
+  const row = db.prepare(`
+    SELECT source_url
+    FROM cache_evidence
+    WHERE record_id = ? AND source_type = 'official_website'
+      AND trim(COALESCE(source_url, '')) <> ''
+    ORDER BY CASE WHEN lower(source_url) LIKE '%product%' THEN 0 ELSE 1 END,
+             observed_at DESC, id ASC
+    LIMIT 1
+  `).get(id);
+  return row?.source_url || '';
+}
+
 function enrichRecommendation(db, row) {
-  return { ...summary(row), ...signalsForRecord(db, row.id) };
+  return { ...summary(row), product_url: productUrlForRecord(db, row.id), ...signalsForRecord(db, row.id) };
 }
 
 function filterSql(filters = {}, baseWhere = BASE_WHERE) {
@@ -307,6 +320,7 @@ function detail(db, id, { revealContacts = false } = {}) {
   `).get(id) || null;
   return {
     ...summary(row, revealContacts),
+    product_url: productUrlForRecord(db, id),
     ...signalsForRecord(db, id),
     discovery,
     official_evidence: officialEvidence,

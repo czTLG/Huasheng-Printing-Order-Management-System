@@ -18,11 +18,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
   useEffect(() => {
     const savedUser = localStorage.getItem('savedUsername') || localStorage.getItem('lastUser');
-    const savedPassword = localStorage.getItem('savedPassword') || '';
     const remember = localStorage.getItem('rememberPwd');
+    localStorage.removeItem('savedPassword');
     if (savedUser) {
       setUsername(savedUser);
-      setPassword(savedPassword);
     } else {
       setUsername('admin');
       setPassword('');
@@ -38,7 +37,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       const user = await mockService.login(username.trim(), password);
       if (rememberMe) {
         localStorage.setItem('savedUsername', username.trim());
-        localStorage.setItem('savedPassword', password);
         localStorage.setItem('rememberPwd', '1');
       } else {
         localStorage.removeItem('savedUsername');
@@ -91,7 +89,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <div className="flex items-center justify-between pt-1 pb-2">
              <button type="button" onClick={() => setRememberMe(!rememberMe)} className="flex items-center gap-2 text-xs font-bold text-slate-600 hover:text-indigo-600 transition-colors">
                 {rememberMe ? <CheckSquare className="w-4 h-4 text-indigo-600" /> : <Square className="w-4 h-4 text-slate-400" />}
-                自动登录 / 记住密码
+                记住账号
              </button>
           </div>
 

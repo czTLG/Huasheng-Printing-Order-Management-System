@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import {
   Package,
   ClipboardList,
@@ -19,18 +19,20 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
-import Orders from './components/Orders';
-import WorkOrders from './components/WorkOrders';
-import Board from './components/Board';
-import Cost from './components/Cost';
-import Admin from './components/Admin';
-import Stats from './components/Stats';
-import CrmModule from './components/crm/CrmModule';
 import { mockService } from './lib/mockService';
 import { getVisibleModuleKeys, MODULE_KEYS } from './lib/permissions';
 import { User } from './types';
 
 import Login from './components/Login';
+
+// Keep the login shell small and load business modules only when selected.
+const Orders = lazy(() => import('./components/Orders'));
+const WorkOrders = lazy(() => import('./components/WorkOrders'));
+const Board = lazy(() => import('./components/Board'));
+const Cost = lazy(() => import('./components/Cost'));
+const Admin = lazy(() => import('./components/Admin'));
+const Stats = lazy(() => import('./components/Stats'));
+const CrmModule = lazy(() => import('./components/crm/CrmModule'));
 
 type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm';
 
@@ -63,6 +65,8 @@ const App: React.FC = () => {
       } else if (cached.role.startsWith('worker')) setActiveTab('board');
       else if (cached.role === 'ai_sales') setActiveTab('workorders');
     }
+    const token = localStorage.getItem('token');
+    if (!token) return;
     mockService.loadCurrentUser()
       .then(fresh => {
         if (!fresh?.username) return;
@@ -218,6 +222,12 @@ const App: React.FC = () => {
       default: return <Orders />;
     }
   };
+
+  const moduleFallback = (
+    <div className="min-h-[360px] bg-white border border-slate-200 rounded-lg flex items-center justify-center">
+      <div className="text-sm font-bold text-slate-500">正在加载模块…</div>
+    </div>
+  );
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans overflow-hidden">
@@ -458,7 +468,7 @@ const App: React.FC = () => {
                 transition={{ duration: 0.2 }}
                 className="h-full max-w-[1600px] mx-auto"
               >
-                {renderContent()}
+          <Suspense fallback={moduleFallback}>{renderContent()}</Suspense>
               </motion.div>
            </AnimatePresence>
         </div>

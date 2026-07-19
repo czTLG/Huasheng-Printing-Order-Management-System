@@ -4,10 +4,13 @@
   "description": "包装袋印刷厂智能生产管理系统（演示版后端）",
   "main": "src/server.js",
   "scripts": {
+    "test:ui-e2e": "node scripts/run-ui-e2e.js",
+    "test:production-smoke": "playwright test --config playwright.production.config.js",
     "start": "node src/server.js",
     "verify:matrix-readonly-selection": "node scripts/verify-matrix-readonly-selection.js",
     "baseline:verify": "node scripts/verify-baseline.js",
     "verify:smoke": "node scripts/smoke-test.js",
+    "test:admin-access": "node scripts/test-admin-access-regression.js",
     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
     "test:private-baseline": "node scripts/test-private-baseline.js",
     "runtime:audit": "node scripts/runtime-audit.js",
@@ -25,9 +28,12 @@
     "jimp": "^0.22.12",
     "jsonwebtoken": "^9.0.3",
     "mailparser": "^3.9.11",
-    "multer": "^2.1.1",
+    "multer": "^2.2.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.10.1",
     "pdfkit": "^0.17.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
   }
 }

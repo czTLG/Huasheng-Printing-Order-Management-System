@@ -107,6 +107,8 @@ export default function Cost() {
   const [renameCaseId, setRenameCaseId] = useState('');
   const [renameCaseName, setRenameCaseName] = useState('');
   const [showRename, setShowRename] = useState(false);
+  const [emailLogs, setEmailLogs] = useState<any[]>([]);
+  const [emailLogsLoading, setEmailLogsLoading] = useState(false);
 
   // Add material / standard roll panels
   const [showAddMat, setShowAddMat] = useState(false);
@@ -148,18 +150,43 @@ export default function Cost() {
   // === Load resources ===
   const loadResources = useCallback(async () => {
     try {
-      const [cases, history] = await Promise.all([
+      const [cases, history, materialPrices] = await Promise.all([
         mockService.getCostSnapshots('case'),
         mockService.getCostSnapshots('history'),
+        mockService.getMaterialPrices(),
       ]);
       setCaseItems(Array.isArray(cases) ? cases : []);
       setHistoryItems(Array.isArray(history) ? history : []);
+      const loadedMaterials: Record<string, { prop: number; price: number }> = {};
+      if (Array.isArray(materialPrices)) {
+        materialPrices.forEach((row: any) => {
+          const code = String(row?.code || '').trim().toUpperCase();
+          const prop = Number(row?.prop);
+          const price = Number(row?.price);
+          if (code && Number.isFinite(prop) && prop > 0 && Number.isFinite(price) && price > 0) {
+            loadedMaterials[code] = { prop, price };
+          }
+        });
+      }
+      setExtraMatDict(loadedMaterials);
     } catch (err: any) {
       setError(err?.message || '加载失败');
     }
   }, []);
 
   useEffect(() => { loadResources(); }, [loadResources]);
+
+  const loadEmailLogs = useCallback(async () => {
+    setEmailLogsLoading(true);
+    try {
+      const data = await mockService.getCostEmailLogs();
+      setEmailLogs(Array.isArray(data?.rows) ? data.rows : []);
+    } catch (err: any) {
+      setError(err?.message || '邮件记录加载失败');
+    } finally { setEmailLogsLoading(false); }
+  }, []);
+
+  useEffect(() => { loadEmailLogs(); }, [loadEmailLogs]);
 
   // === Field-level history hints ===
   const HINT_FIELDS = ['ba_chang', 'ba_kuang', 'ba_ce', 'ba_di', 'lldj', 'ba_zdf', 'jgf', 'zxyf', 'sh', 'lr', 'fqfy', 'yf', 'zt', 'btzt', 'roll_w', 'roll_l'];
@@ -386,14 +413,20 @@ export default function Cost() {
   };
 
   // === Add material ===
-  const addMaterial = () => {
+  const addMaterial = async () => {
     if (!newMatCode.trim()) return;
+    const code = newMatCode.trim().toUpperCase();
     const prop = Number(newMatProp || 0);
     const pr = Number(newMatPrice || 0);
     if (!prop || !pr) { setError('请填写新材料的比重和单价'); return; }
-    setExtraMatDict(prev => ({ ...prev, [newMatCode.trim()]: { prop, price: pr } }));
-    setShowAddMat(false); setNewMatCode(''); setNewMatProp(''); setNewMatPrice('');
-    showSuccess(`已添加材料: ${newMatCode.trim()}`);
+    try {
+      await mockService.saveMaterialPrice(code, prop, pr);
+      setExtraMatDict(prev => ({ ...prev, [code]: { prop, price: pr } }));
+      setShowAddMat(false); setNewMatCode(''); setNewMatProp(''); setNewMatPrice('');
+      showSuccess(`已保存材料: ${code}`);
+    } catch (err: any) {
+      setError(err?.message || '材料保存失败');
+    }
   };
 
   // === Add standard roll ===
@@ -420,9 +453,22 @@ export default function Cost() {
   const sendEmail = async () => {
     const to = prompt('收件人邮箱:');
     if (!to) return;
+    const cc = prompt('抄送邮箱（可留空）:') || '';
     const payload = buildPayload();
-    await mockService.sendCostEmail({ costType: payload.costType, input: payload.input, result: result || {}, to });
+    await mockService.sendCostEmail({ costType: payload.costType, input: payload.input, result: result || {}, to, cc });
     showSuccess('邮件已发送');
+    await loadEmailLogs();
+  };
+
+  const retryEmail = async (id: number) => {
+    try {
+      await mockService.retryCostEmail(id);
+      showSuccess('邮件重试发送成功');
+      await loadEmailLogs();
+    } catch (err: any) {
+      setError(err?.message || '邮件重试失败');
+      await loadEmailLogs();
+    }
   };
 
   // === Auto-summary display values ===
@@ -463,7 +509,7 @@ export default function Cost() {
   }
 
   return (
-    <div className="max-w-[1400px] mx-auto p-1 sm:p-3 md:p-6 space-y-1.5 md:space-y-2.5 bg-slate-50 min-h-screen">
+    <div className="max-w-[1400px] mx-auto p-2 sm:p-3 md:p-6 space-y-2 md:space-y-2.5 bg-slate-50 min-h-screen">
 
       {/* Success/Error toasts */}
       {successMsg && (
@@ -529,7 +575,7 @@ export default function Cost() {
       {showChangKuang && (
       <div className="bg-white p-1.5 sm:p-3 md:p-4 rounded-xl shadow-sm border border-slate-200">
         <h4 className="text-[12px] sm:text-[13px] font-black text-slate-700 mb-1">① 手填参数区 — 袋子尺寸</h4>
-        <div className="grid grid-cols-3 sm:grid-cols-4 gap-1 sm:gap-1.5 md:gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 md:gap-2">
           <Field label={isMaterialWeight ? '高/长（米）' : '高/长'} tip={isMaterialWeight ? '示例：0.20（m）' : '示例：20（cm）'} tipAsPlaceholder value={form.ba_chang} onChange={e => setF('ba_chang', e.target.value)} list="hint_ba_chang" />
           <Field label={isMaterialWeight ? '宽（米）' : '宽'} tip={isMaterialWeight ? '示例：0.12（m）' : '示例：12（cm）'} tipAsPlaceholder value={form.ba_kuang} onChange={e => setF('ba_kuang', e.target.value)} list="hint_ba_kuang" />
           {showBaCe ? (
@@ -656,7 +702,7 @@ export default function Cost() {
                 setArr('price', idx, String(info.price));
               }}
               className="px-1.5 py-0.5 text-[9px] sm:text-[10px] font-bold rounded border border-slate-200 bg-white text-slate-600 hover:bg-indigo-50 hover:border-indigo-300 transition-colors"
-            >{code}</button>
+            >{code} · 比重{info.prop} · ¥{info.price}</button>
           ))}
         </div>
       </div>
@@ -740,6 +786,32 @@ export default function Cost() {
           )}
         </div>
 
+        <div className="border-t border-slate-100 pt-3 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[11px] font-black text-slate-500 tracking-wider">邮件发送记录</div>
+            <button onClick={loadEmailLogs} disabled={emailLogsLoading} className="px-3 py-1.5 border border-slate-200 bg-white text-slate-600 text-[11px] font-bold rounded-md disabled:opacity-50">
+              <RefreshCw className="w-3.5 h-3.5 inline mr-1" />{emailLogsLoading ? '刷新中' : '刷新状态'}
+            </button>
+          </div>
+          {emailLogs.length === 0 ? <div className="text-xs text-slate-400">暂无邮件记录</div> : (
+            <div className="max-h-52 overflow-auto divide-y divide-slate-100 border border-slate-100 rounded-lg">
+              {emailLogs.map((log: any) => (
+                <div key={log.id} className="p-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-700 truncate">{log.to_list || '-'}{log.cc_list ? `｜抄送 ${log.cc_list}` : ''}</div>
+                    <div className="text-slate-400 mt-0.5">{log.cost_type || '-'}｜{log.created_at || '-'}</div>
+                    {log.error ? <div className="text-rose-600 mt-0.5 break-all">{log.error}</div> : null}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={cn('px-2 py-1 rounded font-black', log.status === 'sent' ? 'bg-emerald-50 text-emerald-700' : log.status === 'send_failed' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700')}>{log.status || 'pending'}</span>
+                    {log.status === 'send_failed' ? <button onClick={() => retryEmail(Number(log.id))} className="px-2 py-1 bg-rose-600 text-white rounded font-bold">重试</button> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Case management */}
         <div className="border-t border-slate-100 pt-3 space-y-2">
           <div className="text-[11px] font-black text-slate-500 tracking-wider">样例管理</div>
@@ -791,7 +863,7 @@ export default function Cost() {
               <option value="">选择历史</option>
               {historyItems.map((c: any) => (
                 <option key={c.id} value={String(c.id)}>
-                  {new Date(c.created_at || '').toLocaleString('zh-CN', { hour12: false })} — {TEMPLATES.find(t => t.id === c.costType)?.name || c.costType || ''} — {c.result?.finalQuote != null ? `¥${Number(c.result.finalQuote).toFixed(2)}` : '未计算'}
+                  {new Date(c.created_at || '').toLocaleString('zh-CN', { hour12: false })} — {TEMPLATES.find(t => t.id === c.costType)?.name || c.costType || ''} — {c.result?.finalQuote != null ? `¥${Number(c.result.finalQuote).toFixed(2)}` : '未计算'}{c.orderId ? ` — 订单#${c.orderId}` : ''}
                 </option>
               ))}
             </select>
@@ -853,7 +925,7 @@ function GuideText({ costType }: { costType: string }) {
   const text = guides[costType] || '';
   if (!text) return null;
   return (
-    <div className="mt-1.5 text-[9px] sm:text-[10px] text-slate-500 leading-relaxed border-t border-slate-100 pt-1.5">{text}</div>
+    <div className="mt-1.5 text-[11px] sm:text-[12px] text-slate-500 leading-relaxed border-t border-slate-100 pt-1.5">{text}</div>
   );
 }
 
@@ -862,14 +934,14 @@ function Field({ label, tip, value, onChange, required, placeholder, disabled, l
   required?: boolean; placeholder?: string; disabled?: boolean; list?: string; tipAsPlaceholder?: boolean;
 }) {
   return (
-    <div className="border border-slate-200 bg-slate-50 rounded-lg sm:rounded-xl p-1 sm:p-2 flex flex-col gap-0.5">
+    <div className="border border-slate-200 bg-slate-50 rounded-lg sm:rounded-xl p-2 flex flex-col gap-1">
       <div className="flex items-center gap-1">
-        <b className="text-[10px] sm:text-[11px] font-black text-slate-700">{label}</b>
+        <b className="text-[12px] sm:text-[12px] font-black text-slate-700">{label}</b>
         {required && <span className="text-rose-500 text-[8px] sm:text-[9px]">*</span>}
       </div>
       {!tipAsPlaceholder && tip && <span className="text-[8px] sm:text-[9px] text-slate-400 leading-tight">{tip}</span>}
       <input type="number" value={value} onChange={onChange} placeholder={tipAsPlaceholder ? (tip || placeholder || '0') : (placeholder || '0')} disabled={disabled} list={list}
-        className="w-full h-7 sm:h-8 px-1.5 sm:px-2.5 text-[12px] sm:text-[13px] font-bold text-slate-900 bg-white border border-slate-200 rounded-lg outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400 placeholder:text-slate-300" />
+        className="w-full h-10 px-2.5 text-[16px] sm:text-[14px] font-bold text-slate-900 bg-white border border-slate-200 rounded-lg outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400 placeholder:text-slate-300" />
     </div>
   );
 }
@@ -1132,6 +1204,32 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+const TRACE_VARIABLE_LABELS: Record<string, string> = {
+  z_chang: '展开长度', z_kuang: '展开宽度', z_mian: '展开面积', ba_ce: '侧边宽度',
+  areas: '各层计算面积', thick: '各层厚度', proportion: '各层材料比重', proth: '各层折合厚度',
+  dun: '各层重量分摊', layerCost: '各层材料成本', all_dun: '总重量', materialCost: '材料成本',
+  alljgf: '加工成本', zipperCost: '拉链费用', rescb: '利润前成本', freight: '运费分摊',
+  processCost: '加工成本', freightCost: '运费分摊', finalQuote: '最终报价',
+  front_len: '正面展开长度', front_wid: '正面展开宽度', front_area: '正面展开面积',
+  side_len: '侧边展开长度', side_wid: '侧边展开宽度', side_area: '侧边展开面积',
+  layerLengths: '各层展开长度', layerAreas: '各层展开面积', 'layerAreas(m²)': '各层展开面积（平方米）',
+  layerWeightTon: '各层重量（吨）', layerWeightKg: '各层重量（千克）',
+  irregular_has_bottom: '异形袋是否有底', costBeforeFreight: '运费前成本',
+  freightPerBag: '单袋运费', 'unitQuote(元/吨)': '每吨报价', bag_mode: '袋型模式',
+  allproRaw: '折合厚度中间值', allpro: '折合厚度', ratio: '各层材料比例',
+  clcb: '各层材料成本', sqmPerTon: '每吨平方数', baseCost: '基础成本',
+  costBeforeProfit: '利润前成本', rollAreaM2: '每卷面积（平方米）',
+  pricePerSqm: '每平方米价格', rollPrice: '每卷价格', rollWeightKg: '每卷重量（千克）',
+  totalWeightKg: '总重量（千克）', totalWeightG: '总重量（克）',
+  std_roll_length_m: '第一层标准卷长（米）', std_theory_bags: '理论出袋数',
+  std_net_bags: '折损后出袋数（93%）',
+};
+
+function traceVariableLabel(key: unknown) {
+  const normalized = String(key || '').trim();
+  return TRACE_VARIABLE_LABELS[normalized] || normalized.replace(/_/g, '·');
+}
+
 function TraceSection({ trace, show, toggle }: { trace: any; show: boolean; toggle: () => void }) {
   const steps = trace?.steps || [];
   if (!steps.length) return null;
@@ -1162,7 +1260,7 @@ function TraceSection({ trace, show, toggle }: { trace: any; show: boolean; togg
               {displaySteps.map((s: any, idx: number) => (
                 <tr key={idx}>
                   <td className="border border-slate-300 px-1 sm:px-2 py-0.5">{idx + 1}</td>
-                  <td className="border border-slate-300 px-1 sm:px-2 py-0.5 font-bold">{s.key || ''}</td>
+                  <td className="border border-slate-300 px-1 sm:px-2 py-0.5 font-bold">{traceVariableLabel(s.key)}</td>
                   <td className="border border-slate-300 px-1 sm:px-2 py-0.5 text-slate-500">{s.formula || ''}</td>
                   <td className="border border-slate-300 px-1 sm:px-2 py-0.5 break-all">{JSON.stringify(s.value)}</td>
                 </tr>

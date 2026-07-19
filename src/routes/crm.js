@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { db, now, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
 const { validateImapConfig, syncMailbox } = require('../lib/imapSync');
+const { getInboxHealth } = require('../services/matrixInboxScheduler');
 const { createSuggestionsFromEmail } = require('../lib/emailCrmParser');
 const { evaluateQuoteReadiness, normalizeCrmStage } = require('../lib/quoteReadiness');
 const { attachmentsFromJson, normalizeCrmAttachments, summarizeAttachments } = require('../lib/crmAttachments');
@@ -28,6 +29,12 @@ function roleAllowed(req, roles) {
 }
 
 router.use((req, res, next) => {
+  if (req.path === '/whatsapp/sync') {
+    return next();
+  }
+  if (req.path === '/messages' && req.whatsappSyncDebug) {
+    return next();
+  }
   const isCostingReadOrUpdate = req.path.startsWith('/costing-requests') || /\/costing-prefill$/.test(req.path);
   const isCreateCostingRequest = req.method === 'POST' && /^\/inquiries\/\d+\/costing-requests$/.test(req.path);
   const isFreightAccess = req.path.startsWith('/freight-quotes') || /^\/inquiries\/\d+\/freight-quotes$/.test(req.path);
@@ -2114,6 +2121,135 @@ router.post('/messages/:id/father-task', (req, res) => {
   }
 });
 
+router.post('/whatsapp/sync', (req, res) => {
+  try {
+    const expectedToken = text(process.env.WHATSAPP_SYNC_TOKEN);
+    if (!expectedToken) {
+      console.error('[crm:whatsapp_sync] WHATSAPP_SYNC_TOKEN is not configured');
+      return res.status(500).json({ ok: false, error: '同步令牌未配置' });
+    }
+    const authHeader = text(req.headers.authorization || req.headers.Authorization || '');
+    const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    if (!bearer || bearer !== expectedToken) {
+      console.warn('[crm:whatsapp_sync] unauthorized sync attempt');
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+
+    const body = req.body || {};
+    const customerName = text(body.customer);
+    let messageText = text(body.message);
+    const direction = normalizeWhatsappDirection(body.direction);
+    const sourceType = 'whatsapp';
+    const receivedAt = normalizeDateTimeText(body.time || body.synced_at || now());
+    const sourceMessageId = text(body.source_message_id || body.message_id);
+    const threadId = text(body.thread_id);
+    const senderContact = text(body.phone || body.sender_contact);
+    const senderName = customerName;
+    const receiverContact = text(body.receiver_contact || body.to_phone || '');
+    const attachmentsJson = Array.isArray(body.attachments) || (body.attachments && typeof body.attachments === 'object')
+      ? JSON.stringify(body.attachments)
+      : (text(body.attachments_json) || '[]');
+    const attachmentPreview = attachmentsFromJson(attachmentsJson, { source_type: sourceType }).attachments;
+    if (!messageText && attachmentPreview.length) {
+      messageText = attachmentPreview.some((item) => item.attachment_type === 'image')
+        ? '[图片消息]'
+        : attachmentPreview.some((item) => item.attachment_type === 'pdf')
+          ? '[PDF 文件]'
+          : '[文件消息]';
+    }
+    const rawPayloadJson = JSON.stringify(body);
+    const dedupeHash = whatsappDedupeHash(sourceType, customerName, direction, messageText, receivedAt);
+
+    if (!customerName) return res.status(400).json({ ok: false, error: 'customer 必填' });
+    if (!messageText) return res.status(400).json({ ok: false, error: 'message 或 attachments 必填' });
+    if (!direction) return res.status(400).json({ ok: false, error: 'direction 只能是 inbound / outbound / unknown' });
+
+    const tx = db.transaction(() => {
+      const existing = db.prepare('SELECT id, customer_id FROM crm_messages WHERE dedupe_hash = ?').get(dedupeHash);
+      if (existing) {
+        return { duplicated: true, existing };
+      }
+
+      const matchedCustomer = matchOrCreateWhatsappCustomer(body, receivedAt);
+      const customerId = Number(matchedCustomer.customerId || 0) || null;
+      const customer = customerId ? getCustomer(customerId) : null;
+      const insert = db.prepare(`
+        INSERT INTO crm_messages (
+          source_type, source_message_id, thread_id, customer_id, inquiry_id, direction, sender_name,
+          sender_contact, receiver_contact, message_text, attachments_json, raw_payload_json, received_at,
+          ai_status, dedupe_hash, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+      `).run(
+        sourceType,
+        sourceMessageId,
+        threadId,
+        customerId,
+        body.inquiry_id ? idParam(body.inquiry_id) || null : null,
+        direction,
+        senderName,
+        senderContact,
+        receiverContact,
+        messageText,
+        attachmentsJson,
+        rawPayloadJson,
+        receivedAt,
+        dedupeHash,
+        now(),
+        now()
+      );
+      const attachmentCount = insertCrmMessageAttachmentsFromJson(insert.lastInsertRowid, {
+        source_type: sourceType,
+        source_message_id: sourceMessageId,
+        thread_id: threadId,
+        customer_id: customerId,
+        inquiry_id: body.inquiry_id ? idParam(body.inquiry_id) || null : null
+      }, attachmentsJson);
+      if (customerId) {
+        db.prepare(`UPDATE customers SET last_contact_at = ?, source_channel = COALESCE(NULLIF(source_channel, ''), ?), updated_at = ? WHERE id = ?`)
+          .run(receivedAt, 'whatsapp', now(), customerId);
+      }
+      return {
+        duplicated: false,
+        message_id: insert.lastInsertRowid,
+        customer_id: customerId,
+        matched_by: matchedCustomer.matchedBy,
+        created_customer: matchedCustomer.created,
+        attachment_count: attachmentCount,
+        customer_name: customer?.display_name || customer?.company_name || customer?.name || customerName
+      };
+    });
+
+    const result = tx();
+    if (result.duplicated) {
+      return res.json({ ok: true, duplicated: true });
+    }
+    crmAudit(req, 'create_whatsapp_message', 'crm_message', result.message_id, {
+      source_type: sourceType,
+      customer_id: result.customer_id,
+      direction,
+      ai_status: 'pending',
+      attachment_count: result.attachment_count || 0,
+      dedupe_hash: dedupeHash,
+      created_customer: result.created_customer,
+      matched_by: result.matched_by
+    });
+    return res.json({
+      ok: true,
+      message_id: String(result.message_id),
+      customer_id: result.customer_id ? String(result.customer_id) : null,
+      duplicated: false
+    });
+  } catch (err) {
+    if (String(err?.message || '').includes('UNIQUE constraint failed: crm_messages.dedupe_hash')) {
+      console.warn('[crm:whatsapp_sync] duplicate hash suppressed', err?.message || err);
+      return res.json({ ok: true, duplicated: true });
+    }
+    console.error('[crm:whatsapp_sync] failed', err);
+    return res.status(500).json({ ok: false, error: 'WhatsApp 同步失败' });
+  }
+});
+
 const INQUIRY_FIELDS = [
   'inquiry_code', 'customer_id', 'inquiry_title', 'product_type', 'application', 'packaging_type',
   'status', 'priority', 'quantity', 'destination_country', 'destination_port', 'destination_address',
@@ -3568,6 +3704,19 @@ router.get('/audit-logs', (req, res) => {
     res.json({ ok: true, rows });
   } catch (err) {
     handleError(res, err, 'CRM 日志读取失败');
+  }
+});
+
+router.get('/email/inbox-health', (req, res) => {
+  try {
+    const validation = validateImapConfig();
+    const health = getInboxHealth(db, { configured: validation.ok, verified: false });
+    health.verified = validation.ok
+      && health.last_success_age_seconds !== null
+      && health.last_success_age_seconds <= 7 * 24 * 60 * 60;
+    res.json({ ok: true, ...health });
+  } catch (err) {
+    handleError(res, err, '收件观察状态读取失败');
   }
 });
 

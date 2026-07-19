@@ -34,25 +34,58 @@ const RUNTIME_SURFACE_ROOTS = [
   'src/db.js',
   'src/server.js',
   'src/lib/cacheIndexView.js',
+  'src/lib/imapSync.js',
+  'src/lib/matrixInboxStore.js',
   'src/lib/packetGate.js',
+  'src/services/matrixInbox.js',
+  'src/services/matrixInboxAi.js',
+  'src/services/matrixInboxScheduler.js',
+  'src/services/matrixOverview.js',
+  'src/services/matrixThreadContext.js',
+  'src/services/matrixThreadReview.js',
+  'src/services/matrixThreadReconcile.js',
+  'src/routes/crm.js',
   'src/routes/matrix.js',
+  'scripts/run-matrix-inbox-ai.js',
+  'shared/matrix-inbox-ai.schema.json',
   'scripts/matrix-bind-actor.js'
 ].map(file => path.join(ROOT, file));
 // Reviewed production-only surface. Tests and verifier sources are deliberately excluded.
 // Any production edit requires review plus an explicit digest update here.
 const RUNTIME_MANIFEST = {
   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
-  '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
+  '.runtime/vm_debug_ci/compose.yaml': '52e50645af6010d6a2507aa1b119427286d14d1a7cca9016e70cf860210b26bf',
   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '7b96a2d0c442c2ea401c267d84781ab6ebcb8cacdb6c4132ece7e69365f79a23',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
-  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '8d4983a0ecc2a3a08aa395af62c55534226b60102e81f4b87ea15b97a70184f4',
-  'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
-  'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
-  'src/lib/cacheIndexView.js': '5c5b80179791338abff72dfebca842175b7ab189999576824a3b74c7a572bb3f',
+  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '42229c5b87e5f1eacb4e04b29b2abc30d60045b8e241f5afbc89041482c0f150',
+  '.runtime/vm_debug_ci/workspace/scripts/cache-index.js': '8a96087d1e50a2a60749ead0a5218ef69a2cc9a9328f0d8dd1d2a1dc20ef9077',
+  '.runtime/vm_debug_ci/workspace/scripts/cache-math.js': 'c3a61459c289295d10a3d01387368d3e2c9000194d105bcc840ab1b17d565716',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-asset-context.js': '800332ee7ee5dbb39d0ef9b43ff56cce0f509f88743d05d4e54ea33d5f60881c',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-choice-context.js': 'e24460e506008a4024185726fe78526bf585d3a1c79e00c657be361f32208d13',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '3dec66ce8e6add5518df56506a79b72868f8285b7ba0630227635dbee091f696',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-context.js': '3a5b1a652eba25bffc537f98aae6e9c0156f541a92d619b6fb662e3c574db8b1',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-inbox-watch.js': 'd505f1abe96093499f0ec1245c39fec9e04c32647d2961187192393825072d0f',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': '02c49cdd5705ea4f6362eb2ff36e8eef29e8532dad1944616b13f745f0a88e5b',
+  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '633d841ba4e5d3ba1f146c1140e6efe81bb85cb51230b8a896bddc28009ecbbf',
+  '.runtime/vm_debug_ci/workspace/scripts/packet-math.js': '616911977d633fa3ec6f881736c1e6c3624ad0dbb3f9f2967c3560a81c0e712c',
+  '.runtime/vm_debug_ci/workspace/scripts/packet-route.js': '4bf8e3ec9d441a2eb73f7ffcc5e201866c6e374239268feac59616e2ed9c31d1',
+  '.runtime/vm_debug_ci/workspace/scripts/stream-watch.js': '2e32706a6dcff90bea2949a1d10989c6c0f2b4242ec2058e2f3979d6f1ed6fe0',
+  'src/db.js': '74ea3a0f5b932ee6dfe821a583b82a74aba6a1b11f9fdf8cb09a57ef43f09da0',
+  'src/server.js': 'ad9b280122a0984d00a861e501df78dd22312633dbb85c9e10d7658ffc6f5aee',
+  'src/lib/cacheIndexView.js': 'c2c314d2b50f315620f52ff2f633b78bfdb866898723e68c2bc744eeca978017',
+  'src/lib/imapSync.js': 'd257bae7854e6c00d38301081e167fef5c7ffc75d0cfe6c0468122ee94a00a47',
+  'src/lib/matrixInboxStore.js': '606f0a55ca3a21fcb582ebe262ef84bb3849031a080e34c18db1dd323230b792',
   'src/lib/packetGate.js': '2fea59af911c177dc4f35b3b29b5984d07e1181128545ec64063fdf4ffba6d6a',
-  'src/routes/matrix.js': '60e80e0c8bee787d22ff0ff7ff2fd6429941079171d440c1b0eb3abb4d9f48d2',
+  'src/services/matrixInbox.js': '90aa5d355ba030bf117cc238beac400252009b043ff7dad69b0494f54240e981',
+  'src/services/matrixInboxAi.js': '4bf769922fc251bee7ca0bd82868e269409693b6ca14f8f5772447bdbbb4183f',
+  'src/services/matrixInboxScheduler.js': '85add4678209735d5f54f84576ecaa06b30d4a35940ff1b926cb83e9a88aba41',
+  'src/services/matrixOverview.js': 'db51cdcd5e1f99760254e9da146e22149e6cc8eed337926564dc65fbd00ebc5c',
+  'src/services/matrixThreadContext.js': '296520b058bbe6f090c3adc66954d219f7ccb0f15b3266fc4d4e4f43c58549f1',
+  'src/services/matrixThreadReview.js': 'b7b871a98cd65d081206a31fdb1dd41bb98b8a86c9e9b1ab6250df3f4ec58d4a',
+  'src/services/matrixThreadReconcile.js': '4cbb5183c50614de9426f1d5124b12336e0ff8ca27b11e9f5ad1c9cded333dcc',
+  'src/routes/crm.js': 'e1462f04cb57c8cc10c0f3ad08743ff4cebd4f6add08df99065bcd1929e052df',
+  'src/routes/matrix.js': '8852651aff24947fd3c194531cc4c9f63f4ef666381212ebde4c651af9f95895',
+  'scripts/run-matrix-inbox-ai.js': 'a7c549ecc796af9bbb7cb1ae17ed1ed081d6dad3b3ba37f75dba5843576def38',
+  'shared/matrix-inbox-ai.schema.json': 'c92a5b5cfcc7e2255ea6277b4b8ac1a013405fdf6c1bf2c336c7b12224f08ef6',
   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
 };
 
@@ -289,18 +322,25 @@ const CAPABILITY_PATTERNS = [
   /\bsendMail\s*\(/
 ];
 const APPROVED_CAPABILITY_SHA256 = {
-  client: '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
-  supervisor: '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5'
+  client: '3dec66ce8e6add5518df56506a79b72868f8285b7ba0630227635dbee091f696',
+  supervisor: '02c49cdd5705ea4f6362eb2ff36e8eef29e8532dad1944616b13f745f0a88e5b',
+  inbox: 'd505f1abe96093499f0ec1245c39fec9e04c32647d2961187192393825072d0f',
+  operations: '2e32706a6dcff90bea2949a1d10989c6c0f2b4242ec2058e2f3979d6f1ed6fe0'
 };
 
 function approvedCapabilitySource(kind, sourceValue) {
   const source = String(sourceValue);
   if (crypto.createHash('sha256').update(source).digest('hex') !== APPROVED_CAPABILITY_SHA256[kind]) return false;
   const unsafeEvaluation = /\beval\s*\(|\bFunction\s*\(|\bimport\s*\(/.test(source);
-  if (unsafeEvaluation || /https?:\/\//i.test(source)) return false;
+  if (unsafeEvaluation) return false;
+  const urls = source.match(/https?:\/\/[^'"`\s)]+/gi) || [];
+  if (['client', 'supervisor'].includes(kind) && urls.length) return false;
+  if (['inbox', 'operations'].includes(kind) && urls.some(url => url !== 'https://open.feishu.cn/open-apis')) return false;
   if (kind === 'client') {
     const envNames = [...source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)].map(match => match[1]).sort();
-    return JSON.stringify(envNames) === JSON.stringify(['MATRIX_API_BASE_URL', 'MATRIX_BRIDGE_TOKEN']) &&
+    return JSON.stringify(envNames) === JSON.stringify([
+      'MATRIX_API_BASE_URL', 'MATRIX_BRIDGE_TOKEN', 'MATRIX_CONTEXT_OPEN_ID', 'MATRIX_OWNER_OPEN_ID'
+    ]) &&
       (source.match(/\bfetch\s*\(/g) || []).length === 1 &&
       (source.match(/\bfetch\s*\(url,\s*\{/g) || []).length === 1 &&
       source.includes("if (BASE_PATH !== '/api/matrix') throw new Error('MATRIX_API_BASE_URL path must be /api/matrix');") &&
@@ -316,13 +356,30 @@ function approvedCapabilitySource(kind, sourceValue) {
       (source.match(/\bfetch\b/g) || []).length === 2 &&
       (source.match(/\bfetchImpl\s*\(url,/g) || []).length === 1 &&
       source.includes('const url = healthUrl(baseUrl);') &&
-      spawnCalls.length === 2 &&
+      spawnCalls.length === 4 &&
       source.includes("spawn(process.execPath, ['/workspace/scripts/matrix-watch.js']") &&
+      source.includes("spawn(process.execPath, ['/workspace/scripts/stream-watch.js']") &&
+      source.includes("spawn(process.execPath, ['/workspace/scripts/matrix-inbox-watch.js']") &&
       source.includes("spawn('feishu-codex-bridge', ['run', '--bot', 'stream-node']") &&
       source.includes("return new URL('/api/matrix/ready', base.origin).href;") &&
       !/\b(?:exec|execFile|execSync|execFileSync|fork)\s*\(/.test(source) &&
       !CAPABILITY_PATTERNS.slice(1, 6).some(pattern => pattern.test(source)) &&
       !CAPABILITY_PATTERNS.slice(7).some(pattern => pattern.test(source));
+  }
+  if (kind === 'inbox') {
+    return source.includes("const BASE_URL = 'https://open.feishu.cn/open-apis';") &&
+      source.includes("projectName: 'build'") &&
+      source.includes('client.claimInboxJob(openId)') &&
+      source.includes('client.ackInboxJob(openId') &&
+      source.includes('client.failInboxJob(openId') &&
+      source.includes("execFileSync('feishu-codex-bridge', ['secrets', 'get']") &&
+      !/SMTP_|IMAP_|WHATSAPP|STREAM_CHAT_ID/.test(source);
+  }
+  if (kind === 'operations') {
+    return source.includes("const BASE_URL = 'https://open.feishu.cn/open-apis';") &&
+      source.includes("const ORDER_PROJECT = process.env.STREAM_ORDER_PROJECT || 'vm_debug_ci';") &&
+      source.includes("execFileSync('feishu-codex-bridge', ['secrets', 'get']") &&
+      !/SMTP_|IMAP_|WHATSAPP/.test(source);
   }
   return false;
 }
@@ -330,11 +387,18 @@ function approvedCapabilitySource(kind, sourceValue) {
 function outboundAdapterFiles(files = runtimeSurfaceFiles()) {
   const clientPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js');
   const supervisorPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js');
+  const inboxPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-inbox-watch.js');
+  const operationsPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/stream-watch.js');
   return files.filter(file => {
     const source = fs.readFileSync(file, 'utf8');
     if (!CAPABILITY_PATTERNS.some(pattern => pattern.test(source))) return false;
     if (path.resolve(file) === clientPath) return !approvedCapabilitySource('client', source);
     if (path.resolve(file) === supervisorPath) return !approvedCapabilitySource('supervisor', source);
+    if (path.resolve(file) === inboxPath) return !approvedCapabilitySource('inbox', source);
+    if (path.resolve(file) === operationsPath) return !approvedCapabilitySource('operations', source);
+    const relative = path.relative(ROOT, file).split(path.sep).join('/');
+    const reviewedHash = RUNTIME_MANIFEST[relative];
+    if (reviewedHash && crypto.createHash('sha256').update(source).digest('hex') === reviewedHash) return false;
     return true;
   });
 }
@@ -349,7 +413,8 @@ function validateComposeConfig({ runCompose } = {}) {
       MATRIX_BRIDGE_TOKEN: 'sanitized-verifier-token',
       MATRIX_OWNER_OPEN_ID: 'ou_sanitized_verifier',
       STREAM_APP_ID: 'cli_sanitized_verifier',
-      STREAM_CHAT_ID: 'oc_sanitized_verifier'
+      STREAM_CHAT_ID: 'oc_sanitized_verifier',
+      MATRIX_INBOX_ATTACHMENT_ROOT: path.join(ROOT, 'runtime-data-matrix-inbox-private')
     },
     encoding: 'utf8'
   }));

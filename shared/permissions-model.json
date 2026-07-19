@@ -56,6 +56,19 @@
       "ordersStages": [],
       "boardStages": []
     },
+    "smoke_reader": {
+      "modules": {
+        "orders": true,
+        "workorder": true,
+        "board": false,
+        "cost": false,
+        "stats": false,
+        "admin": false,
+        "crm": false
+      },
+      "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "boardStages": []
+    },
     "ai_sales": {
       "modules": {
         "orders": true,

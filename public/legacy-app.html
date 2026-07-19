@@ -596,7 +596,7 @@ body.embedded-mode #panel-package{margin-top:0!important}
         </div>
         <div style='margin-top:8px;display:flex;align-items:center;gap:6px'>
           <input id='rememberPwd' type='checkbox' style='width:auto' checked />
-          <label for='rememberPwd' class='muted-sm'>记住密码（下次自动填充）</label>
+          <label for='rememberPwd' class='muted-sm'>记住账号</label>
         </div>
         <div style='margin-top:10px' id='loginActions'>
           <button id='loginBtnMain' onclick='doLogin()' style='width:100%'>登录系统</button>
@@ -633,7 +633,7 @@ body.embedded-mode #panel-package{margin-top:0!important}
           <label>密码</label>
           <div class='modern-input'><span>🔒</span><input id='modern_p' type='password' placeholder='请输入 6 位以上密码'/><button type='button' class='modern-pwd-toggle' onclick='toggleModernPassword()'>👁</button></div>
         </div>
-        <div style='display:flex;align-items:center;gap:6px;margin:0 0 24px'><input id='modernRememberPwd' type='checkbox' checked style='width:auto'/><label for='modernRememberPwd' class='muted-sm' style='font-weight: 500'>记住密码</label></div>
+        <div style='display:flex;align-items:center;gap:6px;margin:0 0 24px'><input id='modernRememberPwd' type='checkbox' checked style='width:auto'/><label for='modernRememberPwd' class='muted-sm' style='font-weight: 500'>记住账号</label></div>
         <button id='modernLoginBtn' class='modern-btn-primary' style='width:100%; height: 48px; font-size: 16px' onclick='doLoginModern()'>进入系统</button>
         <div class='modern-login-footer'><a href='/register.html'>没有账号？立即注册</a><span>v1.0 Professional</span></div>
         <p id='modernMsg' class='muted' style='margin-top:10px'></p>
@@ -3499,7 +3499,6 @@ async function doLogin(){
     localStorage.setItem('token',token);
     if(document.getElementById('rememberPwd')?.checked){
       localStorage.setItem('savedUsername', username);
-      localStorage.setItem('savedPassword', password);
       localStorage.setItem('rememberPwd','1');
     }else{
       localStorage.removeItem('savedUsername');
@@ -3535,7 +3534,6 @@ async function doLoginModern(){
     localStorage.setItem('token',token);
     if(document.getElementById('modernRememberPwd')?.checked){
       localStorage.setItem('savedUsername', username);
-      localStorage.setItem('savedPassword', password);
       localStorage.setItem('rememberPwd','1');
     }else{
       localStorage.removeItem('savedUsername');
@@ -3765,7 +3763,7 @@ function disableCostAutocomplete(){
 function initLoginCache(){
   const remembered=localStorage.getItem('rememberPwd')!=='0';
   const u=localStorage.getItem('savedUsername')||'';
-  const p=localStorage.getItem('savedPassword')||'';
+  localStorage.removeItem('savedPassword');
   const uEl=document.getElementById('u');
   const pEl=document.getElementById('p');
   const cb=document.getElementById('rememberPwd');
@@ -3776,11 +3774,9 @@ function initLoginCache(){
   if(mcb) mcb.checked=remembered;
   if(remembered){
     if(uEl && u) uEl.value=u;
-    if(pEl && p) pEl.value=p;
     if(muEl && u) muEl.value=u;
-    if(mpEl && p) mpEl.value=p;
-    if((u||p) && document.getElementById('msg')) document.getElementById('msg').textContent='已为你填充上次登录信息';
-    if((u||p) && document.getElementById('modernMsg')) document.getElementById('modernMsg').textContent='已为你填充上次登录信息';
+    if(u && document.getElementById('msg')) document.getElementById('msg').textContent='已为你填充上次登录账号';
+    if(u && document.getElementById('modernMsg')) document.getElementById('modernMsg').textContent='已为你填充上次登录账号';
   }
   renderLoginByUiVersion();
 }

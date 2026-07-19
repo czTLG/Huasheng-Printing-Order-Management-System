@@ -888,6 +888,12 @@ async function main() {
   await httpJson('/api/crm/email/sync-runs', { token: scopedSalesLogin.token, expectedStatus: 403 });
   await httpJson('/api/crm/email/sync-runs', { token: costingLogin.token, expectedStatus: 403 });
   await httpJson('/api/crm/email/sync-runs', { token: freightLogin.token, expectedStatus: 403 });
+  const inboxHealth = await httpJson('/api/crm/email/inbox-health', { token: crmAdminLogin.token });
+  assert.strictEqual(typeof inboxHealth.configured, 'boolean', 'inbox health should expose configured boolean');
+  assert.strictEqual(typeof inboxHealth.pending_jobs, 'number', 'inbox health should expose pending job count');
+  for (const forbidden of ['mailbox', 'password', 'token', 'subject', 'message_body', 'filename', 'storage_key']) {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(inboxHealth, forbidden), false, `inbox health must not expose ${forbidden}`);
+  }
   const configStatus = await httpJson('/api/crm/email/config-status', { token: crmAdminLogin.token, expectedStatus: 400 });
   assert.strictEqual(configStatus.ok, false, 'config status should report missing env in smoke');
   assert.strictEqual(Object.prototype.hasOwnProperty.call(configStatus, 'password'), false, 'config status must not expose password');
@@ -1745,7 +1751,7 @@ async function main() {
   const nextRes = await httpJson(`/api/orders/${orderId}/next`, {
     method: 'PATCH',
     token: workerLogin.token,
-    body: { source: '1号印刷机', qty: 1200 }
+    body: { source: '1号机', qty: 1200 }
   });
   assert.strictEqual(nextRes.ok, true);
   assert.strictEqual(nextRes.from, '印刷');
@@ -1764,7 +1770,7 @@ async function main() {
   await httpJson(`/api/orders/${orderId}/next`, {
     method: 'PATCH',
     token: workerLogin.token,
-    body: { source: '1号印刷机', qty: 1200 },
+    body: { source: '1号机', qty: 1200 },
     expectedStatus: 403
   });
 
@@ -1890,7 +1896,19 @@ async function main() {
 
   const previewDrafts = await httpJson('/api/work-orders/preview-drafts', { token: adminToken });
   assert(Array.isArray(previewDrafts.rows), 'preview drafts should return rows');
-  assert(previewDrafts.rows.some(row => row.customer_name === '预览联调客户'), 'preview draft should be saved');
+  const savedPreviewDraft = previewDrafts.rows.find(row => row.customer_name === '预览联调客户');
+  assert(savedPreviewDraft, 'preview draft should be saved');
+  const previewDraftDetail = await httpJson(`/api/work-orders/preview-drafts/${savedPreviewDraft.id}`, { token: adminToken });
+  assert.strictEqual(previewDraftDetail.row.payload_json.customerName, '预览联调客户', 'preview draft detail should expose reusable payload');
+  const savedPreviewPdf = await httpResponse(`/api/work-orders/preview-drafts/${savedPreviewDraft.id}/preview.pdf`, { token: adminToken });
+  assert(savedPreviewPdf.headers.get('content-type')?.includes('application/pdf'), 'saved preview draft should use dedicated PDF endpoint');
+  assert(savedPreviewPdf.buffer.length > 1000, 'saved preview draft PDF should have content');
+
+  const onePixelPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const imageResult = await httpJson(`/api/orders/${workOrderCreate.orderId}/image`, {
+    method: 'POST', token: adminToken, body: { imageDataUrl: onePixelPng }
+  });
+  assert(String(imageResult.imageUrl || '').startsWith('/uploads/orders/'), 'real image upload should persist a local URL');
 
   const workOrderPdf = await httpResponse(`/api/work-orders/${workOrderCreate.id}/export.pdf`, {
     token: adminToken
@@ -1991,52 +2009,52 @@ async function main() {
   await httpJson(`/api/orders/${stageFilm}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '印刷机A', qty: 1000 }
+    body: { source: '1号机', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageBag}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '印刷机B', qty: 1000 }
+    body: { source: '2号机', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageBag}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '复膜机A', qty: 1000 }
+    body: { source: '干复 1 号', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageShip}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '印刷机C', qty: 1000 }
+    body: { source: '3号机', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageShip}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '复膜机B', qty: 1000 }
+    body: { source: '干复 2 号', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageShip}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '制袋机A', qty: 1000 }
+    body: { source: '厂内1 号', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageDone}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '印刷机D', qty: 1000 }
+    body: { source: '源天外加工1', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageDone}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '复膜机C', qty: 1000 }
+    body: { source: '无溶 1 号', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageDone}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '制袋机B', qty: 1000 }
+    body: { source: '厂内 2 号', qty: 1000 }
   });
   await httpJson(`/api/orders/${stageDone}/next`, {
     method: 'PATCH',
     token: adminToken,
-    body: { source: '发货台A', qty: 1 }
+    body: { source: '发货口1', qty: 1 }
   });
 
   const todayPaged = await httpJson(`/api/orders?q=${encodeURIComponent('排序联调客户')}&updatedFrom=${encodeURIComponent(todayStartSql)}&sortBy=today_stage&page=1&pageSize=5`, {

@@ -43,6 +43,8 @@ export default function Admin() {
   const [userRoleFilter, setUserRoleFilter] = useState('');
   const [showUserModal, setShowUserModal] = useState<'new' | 'edit' | null>(null);
   const [editingUser, setEditingUser] = useState<any>(null);
+  const [resetUser, setResetUser] = useState<any>(null);
+  const [resetPassword, setResetPassword] = useState('');
   const [modalLoading, setModalLoading] = useState(false);
   const [userForm, setUserForm] = useState({ username: '', password: '', fullName: '', role: 'ai_sales' });
   const [modulePerms, setModulePerms] = useState<Record<string, boolean>>({});
@@ -186,7 +188,10 @@ export default function Admin() {
                          setUserForm({ username: u.username, password: '', fullName: u.full_name || '', role: u.role || 'ai_sales' });
                          setModulePerms(hasModules ? { ...modules } : { ...getDefaultRoleModules(u.role || 'ai_sales') });
                          setShowUserModal('edit');
-                       }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded"><Edit className="w-4 h-4" /></button>
+                       }} title={u.status === 'pending' ? '审核并分配权限' : '编辑角色和权限'} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded">
+                         {u.status === 'pending' ? <CheckCircle2 className="w-4 h-4" /> : <Edit className="w-4 h-4" />}
+                       </button>
+                       <button onClick={() => { setResetUser(u); setResetPassword(''); }} title="重置密码" className="p-1.5 text-slate-600 hover:bg-slate-100 rounded"><Key className="w-4 h-4" /></button>
                        <button onClick={async () => {
                          if (!confirm(`确认删除用户 ${u.username}？`)) return;
                          try {
@@ -213,7 +218,7 @@ export default function Admin() {
           <div className="fixed inset-0 bg-black/40 z-[9998]" onClick={() => setShowUserModal(null)} />
           <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[420px] max-w-[90vw] bg-white rounded-2xl border border-slate-200 shadow-2xl z-[9999] overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h2 className="text-sm font-black text-slate-800">{showUserModal === 'new' ? '新增用户' : '编辑用户'}</h2>
+              <h2 className="text-sm font-black text-slate-800">{showUserModal === 'new' ? '新增用户' : editingUser?.status === 'pending' ? '审核用户并分配权限' : '编辑用户'}</h2>
               <button onClick={() => setShowUserModal(null)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
             </div>
             <div className="px-5 py-4 space-y-4">
@@ -239,7 +244,7 @@ export default function Admin() {
                   // when role changes, re-apply role default modules (unless user already had custom modules)
                   const modules = editingUser?.permissions?.modules || {};
                   const hasModules = Object.keys(modules).length > 0;
-                  if (!hasModules || showUserModal === 'new') {
+                  if (!hasModules || showUserModal === 'new' || editingUser?.status === 'pending') {
                     setModulePerms({ ...getDefaultRoleModules(newRole) });
                   }
                 }} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold w-full outline-none focus:border-indigo-500">
@@ -276,8 +281,13 @@ export default function Admin() {
                     await mockService.registerUser(userForm.username, userForm.password, userForm.fullName);
                     window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户已创建，等待审批' } }));
                   } else if (editingUser) {
-                    await mockService.updateUserPermissions(editingUser.id, { role: userForm.role, permissions: { modules: modulePerms } });
-                    window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户角色和权限已更新' } }));
+                    if (editingUser.status === 'pending') {
+                      await mockService.approveUser(editingUser.id, { role: userForm.role, permissions: { modules: modulePerms } });
+                      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: `用户 ${editingUser.username} 已审核通过` } }));
+                    } else {
+                      await mockService.updateUserPermissions(editingUser.id, { role: userForm.role, permissions: { modules: modulePerms } });
+                      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户角色和权限已更新' } }));
+                    }
                   }
                   setShowUserModal(null);
                   const data = await mockService.getUsers();
@@ -287,8 +297,37 @@ export default function Admin() {
                 }
                 setModalLoading(false);
               }} className="h-10 px-4 bg-indigo-600 text-white rounded-xl text-sm font-black disabled:opacity-60">
-                {modalLoading ? '处理中...' : '确认'}
+                {modalLoading ? '处理中...' : editingUser?.status === 'pending' ? '审核通过并启用' : '确认'}
               </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {resetUser && (
+        <>
+          <div className="fixed inset-0 bg-black/40 z-[9998]" onClick={() => setResetUser(null)} />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] max-w-[90vw] bg-white rounded-2xl border border-slate-200 shadow-2xl z-[9999] overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h2 className="text-sm font-black text-slate-800">重置 {resetUser.username} 的密码</h2>
+              <button onClick={() => setResetUser(null)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="px-5 py-4 space-y-2">
+              <label className="text-[11px] font-black text-slate-500 uppercase">新密码（至少 6 位）</label>
+              <input autoFocus type="password" value={resetPassword} onChange={e => setResetPassword(e.target.value)} className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold w-full outline-none focus:border-indigo-500" />
+            </div>
+            <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-3">
+              <button onClick={() => setResetUser(null)} className="h-10 px-4 border border-slate-200 rounded-xl text-sm font-bold text-slate-600">取消</button>
+              <button disabled={modalLoading || resetPassword.length < 6} onClick={async () => {
+                setModalLoading(true);
+                try {
+                  await mockService.resetUserPassword(resetUser.id, resetPassword);
+                  window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: `用户 ${resetUser.username} 的密码已重置` } }));
+                  setResetUser(null);
+                } catch (err: any) {
+                  window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '密码重置失败' } }));
+                } finally { setModalLoading(false); }
+              }} className="h-10 px-4 bg-indigo-600 text-white rounded-xl text-sm font-black disabled:opacity-50">确认重置</button>
             </div>
           </div>
         </>

@@ -287,6 +287,35 @@ export const mockService = {
     };
   },
 
+  async getOrdersDashboard(params: { q?: string; page?: number; pageSize?: number; sortBy?: string; sortOrder?: 'asc' | 'desc'; status?: string; updatedFrom?: string; roller?: string; urgentOnly?: boolean; stayMinDays?: number; abnormal?: boolean } = {}) {
+    const search = new URLSearchParams();
+    if (params.q) search.set('q', params.q);
+    if (params.page) search.set('page', String(params.page));
+    if (params.pageSize) search.set('pageSize', String(params.pageSize));
+    if (params.sortBy) search.set('sortBy', params.sortBy);
+    if (params.sortOrder) search.set('sortOrder', params.sortOrder);
+    if (params.status) search.set('status', params.status);
+    if (params.updatedFrom) search.set('updatedFrom', params.updatedFrom);
+    if (params.roller) search.set('roller', params.roller);
+    if (params.urgentOnly) search.set('urgentOnly', 'true');
+    if (params.stayMinDays) search.set('stayMinDays', String(params.stayMinDays));
+    if (params.abnormal) search.set('abnormal', 'true');
+    const data = await api<any>(`/api/orders/dashboard?${search.toString()}`);
+    return {
+      rows: Array.isArray(data?.rows) ? data.rows.map(mapOrder) : [],
+      total: Number(data?.total || 0),
+      page: Number(data?.page || params.page || 1),
+      pageSize: Number(data?.pageSize || params.pageSize || 20),
+      summary: {
+        total: Number(data?.summary?.total || 0),
+        urgentCount: Number(data?.summary?.urgentCount || 0),
+        avgStayDays: Number(data?.summary?.avgStayDays || 0),
+        stageCounts: data?.summary?.stageCounts || {},
+      },
+      todayStageCompletions: data?.todayStageCompletions || {},
+    };
+  },
+
   async getOrderDetail(id: string | number): Promise<Order> {
     const data = await api<any>(`/api/orders/${id}/detail`);
     return mapOrder(data);
@@ -339,11 +368,11 @@ export const mockService = {
     });
   },
 
-  async updateImage(id: string | number, imageUrl: string) {
+  async updateImage(id: string | number, imageUrl: string, imageDataUrl = '') {
     return api(`/api/orders/${id}/image`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageUrl }),
+      body: JSON.stringify({ imageUrl, imageDataUrl }),
     });
   },
 
@@ -370,6 +399,14 @@ export const mockService = {
   async getPreviewDrafts() {
     const data = await api<any>('/api/work-orders/preview-drafts');
     return Array.isArray(data?.rows) ? data.rows : [];
+  },
+
+  async getPreviewDraft(id: number | string) {
+    return api<any>(`/api/work-orders/preview-drafts/${id}`);
+  },
+
+  async previewDraftPdf(id: number | string) {
+    return apiBlob(`/api/work-orders/preview-drafts/${id}/preview.pdf`);
   },
 
   async deletePreviewDraft(id: number | string) {
@@ -433,7 +470,11 @@ export const mockService = {
     return api<any>('/api/work-orders/customers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        salespersonId: data.salespersonId,
+        name: data.customerName,
+        notes: data.productName ? `初始商品：${data.productName}` : '',
+      }),
     });
   },
 
@@ -453,6 +494,14 @@ export const mockService = {
     return api<any[]>('/api/cost/material-prices');
   },
 
+  async saveMaterialPrice(code: string, prop: number, price: number) {
+    return api<any>('/api/cost/material-prices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, prop, price }),
+    });
+  },
+
   async calculateCost(costType: string, input: any, withTrace = true) {
     return api<any>('/api/cost/calculate', {
       method: 'POST',
@@ -465,7 +514,7 @@ export const mockService = {
     return api<any[]>(`/api/cost/snapshots?kind=${kind}`);
   },
 
-  async saveCostSnapshot(payload: { kind: 'case' | 'history'; name?: string; costType: string; input: any; result?: any }) {
+  async saveCostSnapshot(payload: { kind: 'case' | 'history'; name?: string; costType: string; input: any; result?: any; orderId?: number; workOrderId?: number }) {
     return api<any>('/api/cost/snapshots', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -503,6 +552,10 @@ export const mockService = {
 
   async getCostEmailLogs() {
     return api<any>('/api/cost/email-logs');
+  },
+
+  async retryCostEmail(id: number | string) {
+    return api<any>(`/api/cost/email-logs/${id}/retry`, { method: 'POST' });
   },
 
   async parseForeignCosting(text: string) {
@@ -1059,6 +1112,22 @@ export const mockService = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+    });
+  },
+
+  async approveUser(id: number | string, data: { role?: string; permissions?: any }) {
+    return api<any>(`/api/auth/users/${id}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  },
+
+  async resetUserPassword(id: number | string, newPassword: string) {
+    return api<any>(`/api/auth/users/${id}/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newPassword }),
     });
   },
 };

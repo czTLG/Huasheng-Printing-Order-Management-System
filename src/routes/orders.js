@@ -4,11 +4,12 @@ const path = require('path');
 const Jimp = require('jimp');
 const { db, now, audit } = require('../db');
 const { allowRoles } = require('../middleware/auth');
+const stageRules = require('../../shared/runtime-stage-rules.json');
 
 const router = express.Router();
 const flow = ['印刷', '复膜', '制袋', '发货', '完成'];
 const boardPanelCache = new Map();
-const STAGE_UNIT = { '印刷': '米', '复膜': '米', '制袋': '袋', '发货': '单' };
+const STAGE_UNIT = Object.fromEntries(Object.entries(stageRules.stages || {}).map(([stage, rule]) => [stage, rule.unit]));
 const WORKER_ROLES = ['worker','worker_print','worker_film','worker_bag','worker_ship'];
 
 function validId(v) {
@@ -233,6 +234,7 @@ function buildOrderListScope(req = {}) {
   const updatedFrom = String(query.updatedFrom || '').trim();
   const sortBy = String(query.sortBy || 'priority').trim();
   const sortOrder = String(query.sortOrder || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const advancedFilters = parseAdvancedOrderFilters(query);
 
   let where = '';
   const params = [];
@@ -255,7 +257,7 @@ function buildOrderListScope(req = {}) {
   }
 
   if (updatedFrom) {
-    where = where ? `${where} AND datetime(updated_at) >= datetime(?)` : 'datetime(updated_at) >= datetime(?)';
+    where = where ? `${where} AND updated_at >= ?` : 'updated_at >= ?';
     params.push(updatedFrom);
   }
 
@@ -264,6 +266,20 @@ function buildOrderListScope(req = {}) {
     const qSql = '(customer_name LIKE ? OR bag_type LIKE ? OR use_case LIKE ? OR order_spec LIKE ? OR order_qty LIKE ?)';
     where = where ? `${where} AND ${qSql}` : qSql;
     params.push(kw, kw, kw, kw, kw);
+  }
+
+  // Filters backed directly by orders belong in SQLite so pagination does not
+  // materialize the complete order history in Node.js.
+  if (advancedFilters.urgentOnly) {
+    where = where ? `${where} AND urgency = 1` : 'urgency = 1';
+  }
+  if (advancedFilters.stayMinDays > 0) {
+    const cutoff = new Date(Date.now() - advancedFilters.stayMinDays * 86400000)
+      .toISOString().slice(0, 19).replace('T', ' ');
+    where = where
+      ? `${where} AND COALESCE(start_time, created_at) <= ?`
+      : 'COALESCE(start_time, created_at) <= ?';
+    params.push(cutoff);
   }
 
   const whereSql = where ? `WHERE ${where}` : '';
@@ -399,12 +415,72 @@ function parseOrderSizeJson(row = {}) {
   }
 }
 
-function loadScopedOrders(req = {}) {
+function loadScopedOrders(req = {}, paging = null) {
   const { whereSql, params, orderSql } = buildOrderListScope(req);
   const advancedFilters = parseAdvancedOrderFilters(req.query || {});
-  const rows = db.prepare(`SELECT * FROM orders ${whereSql}${orderSql}`).all(...params);
+  const limitSql = paging ? ' LIMIT ? OFFSET ?' : '';
+  const queryParams = paging ? [...params, paging.limit, paging.offset] : params;
+  const rows = db.prepare(`SELECT * FROM orders ${whereSql}${orderSql}${limitSql}`).all(...queryParams);
   const enriched = enrichCustomerDisplay(attachWoLite(rows, req.user?.userName || ''));
-  return applyAdvancedOrderFilters(enriched, advancedFilters);
+  return applyAdvancedOrderFilters(enriched, { ...advancedFilters, urgentOnly: false, stayMinDays: 0 });
+}
+
+function hasPostQueryOrderFilters(query = {}) {
+  const filters = parseAdvancedOrderFilters(query);
+  return !!(filters.roller || filters.abnormalOnly);
+}
+
+function loadTodayStageCompletions() {
+  const rows = db.prepare(`
+    SELECT stage, COUNT(DISTINCT order_id) AS cnt
+    FROM order_stage_logs
+    WHERE event_type='COMPLETE' AND COALESCE(rolled_back,0)=0
+      AND datetime(created_at) >= datetime('now','start of day','localtime')
+    GROUP BY stage
+  `).all();
+  const map = {};
+  rows.forEach(r => { map[r.stage] = r.cnt; });
+  return map;
+}
+
+function summarizeOrderRows(rows = []) {
+  const stageCounts = {};
+  let urgentCount = 0;
+  let stayDaysTotal = 0;
+  rows.forEach((row) => {
+    const key = String(row.status || '');
+    stageCounts[key] = Number(stageCounts[key] || 0) + 1;
+    urgentCount += Number(row.urgency || 0) === 1 ? 1 : 0;
+    stayDaysTotal += getStayDays(row);
+  });
+  return {
+    total: rows.length,
+    urgentCount,
+    avgStayDays: rows.length ? stayDaysTotal / rows.length : 0,
+    stageCounts
+  };
+}
+
+function summarizeScopedOrdersSql(req = {}) {
+  const { whereSql, params } = buildOrderListScope(req);
+  const rows = db.prepare(`
+    SELECT status, COUNT(*) AS total,
+      SUM(CASE WHEN urgency=1 THEN 1 ELSE 0 END) AS urgent_count,
+      SUM(MAX(0, CAST(julianday('now','localtime') - julianday(COALESCE(start_time, created_at)) AS INTEGER))) AS stay_days_total
+    FROM orders ${whereSql}
+    GROUP BY status
+  `).all(...params);
+  const summary = { total: 0, urgentCount: 0, avgStayDays: 0, stageCounts: {} };
+  let stayDaysTotal = 0;
+  rows.forEach((row) => {
+    const count = Number(row.total || 0);
+    summary.total += count;
+    summary.urgentCount += Number(row.urgent_count || 0);
+    stayDaysTotal += Number(row.stay_days_total || 0);
+    summary.stageCounts[String(row.status || '')] = count;
+  });
+  summary.avgStayDays = summary.total ? stayDaysTotal / summary.total : 0;
+  return summary;
 }
 
 router.post('/', allowRoles('super_admin','manager'), (req, res) => {
@@ -468,10 +544,55 @@ router.post('/', allowRoles('super_admin','manager'), (req, res) => {
   res.json({ ok: true, id: result.lastInsertRowid });
 });
 
+router.get('/dashboard', (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20)));
+    const offset = (page - 1) * pageSize;
+    let rows;
+    let summary;
+
+    if (hasPostQueryOrderFilters(req.query || {})) {
+      const filteredRows = loadScopedOrders(req);
+      summary = summarizeOrderRows(filteredRows);
+      rows = filteredRows.slice(offset, offset + pageSize);
+    } else {
+      summary = summarizeScopedOrdersSql(req);
+      rows = loadScopedOrders(req, { limit: pageSize, offset });
+    }
+
+    res.json({
+      rows: rows.map(r => ({ ...r, size_json: parseOrderSizeJson(r) })),
+      total: summary.total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(summary.total / pageSize)),
+      summary,
+      todayStageCompletions: loadTodayStageCompletions()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/', (req, res) => {
   const page = Number(req.query.page || 0);
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20)));
   const usePaging = page > 0;
+  if (usePaging && !hasPostQueryOrderFilters(req.query || {})) {
+    const { whereSql, params } = buildOrderListScope(req);
+    const total = Number(db.prepare(`SELECT COUNT(*) AS total FROM orders ${whereSql}`).get(...params)?.total || 0);
+    const offset = (page - 1) * pageSize;
+    const rows = loadScopedOrders(req, { limit: pageSize, offset });
+    return res.json({
+      rows: rows.map(r => ({ ...r, size_json: parseOrderSizeJson(r) })),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize))
+    });
+  }
+
   const filteredRows = loadScopedOrders(req);
 
   if (!usePaging) {
@@ -491,23 +612,10 @@ router.get('/', (req, res) => {
 
 router.get('/summary', (req, res) => {
   try {
-    const rows = loadScopedOrders(req);
-    const stageCounts = {};
-    rows.forEach((row) => {
-      const key = String(row.status || '');
-      stageCounts[key] = Number(stageCounts[key] || 0) + 1;
-    });
-    const stayDays = rows.map(getStayDays).filter(Number.isFinite);
-    const urgentCount = rows.filter(row => Number(row.urgency || 0) === 1).length;
-    const avgStayDays = stayDays.length
-      ? stayDays.reduce((sum, value) => sum + value, 0) / stayDays.length
-      : 0;
-    res.json({
-      total: rows.length,
-      urgentCount,
-      avgStayDays,
-      stageCounts
-    });
+    if (hasPostQueryOrderFilters(req.query || {})) {
+      return res.json(summarizeOrderRows(loadScopedOrders(req)));
+    }
+    res.json(summarizeScopedOrdersSql(req));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -515,16 +623,7 @@ router.get('/summary', (req, res) => {
 
 router.get('/today-stage-completions', (req, res) => {
   try {
-    const rows = db.prepare(`
-      SELECT stage, COUNT(DISTINCT order_id) AS cnt
-      FROM order_stage_logs
-      WHERE event_type='COMPLETE' AND COALESCE(rolled_back,0)=0
-        AND datetime(created_at) >= datetime('now','start of day','localtime')
-      GROUP BY stage
-    `).all();
-    const map = {};
-    rows.forEach(r => { map[r.stage] = r.cnt; });
-    res.json(map);
+    res.json(loadTodayStageCompletions());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1153,12 +1252,7 @@ router.patch('/:id/next', allowRoles('super_admin', 'manager', 'worker', 'worker
   }
 
   const stage = row.status;
-  const stageCfg = {
-    '印刷': { unit: '米', requireLog: true },
-    '复膜': { unit: '米', requireLog: true },
-    '制袋': { unit: '袋', requireLog: true },
-    '发货': { unit: '单', requireLog: true }
-  };
+  const stageCfg = Object.fromEntries(Object.entries(stageRules.stages || {}).map(([key, rule]) => [key, { ...rule, requireLog: true }]));
   const cfg = stageCfg[stage] || { unit: '', requireLog: false };
 
   const source = String(req.body?.source || '').trim();
@@ -1167,6 +1261,9 @@ router.patch('/:id/next', allowRoles('super_admin', 'manager', 'worker', 'worker
 
   if (cfg.requireLog && !source) {
     return res.status(400).json({ error: `${stage}完成需选择机台/加工来源` });
+  }
+  if (cfg.requireLog && !cfg.sources.includes(source)) {
+    return res.status(400).json({ error: `${stage}来源不在系统配置清单中` });
   }
   if (cfg.requireLog && (!Number.isFinite(qty) || qty <= 0)) {
     return res.status(400).json({ error: `${stage}完成需填写${cfg.unit}数且大于0` });
@@ -1211,6 +1308,10 @@ router.post('/:id/rollback-last-complete', allowRoles('super_admin', 'manager', 
   }
 
   const reason = String(req.body?.reason || '').trim();
+  const reasonMinLength = Number(stageRules.reasonMinLength || 0);
+  if (reasonMinLength > 0 && reason.length < reasonMinLength) {
+    return res.status(400).json({ error: `回退原因至少需要 ${reasonMinLength} 个字` });
+  }
   const ts = now();
 
   const doRollback = db.transaction(() => {

@@ -16,6 +16,7 @@ import { calculateStayDays, COMPLETED_LABELS, getCustomerName, getProductName, g
 import { DataItem, MissingTag, StatusBadge } from './orders/order-display';
 import { OrderDetailDrawer } from './orders/order-detail';
 import { OrderHistoryModal } from './orders/order-history-modal';
+import stageRules from '../../../shared/runtime-stage-rules.json';
 
 export default function Orders() {
   const [activeStatus, setActiveStatus] = useState<OrderStatus>(() => {
@@ -23,6 +24,7 @@ export default function Orders() {
     return (['印刷','复膜','制袋','发货','完成','全部','今日更新'].includes(saved || '')) ? saved as OrderStatus : '全部';
   });
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [cardMode, setCardMode] = useState<'full' | 'standard' | 'compact'>('standard');
   const [showFilters, setShowFilters] = useState(false);
   const [longPressTimer, setLongPressTimer] = useState<any>(null);
@@ -77,6 +79,11 @@ export default function Orders() {
   const currentUser = mockService.getUser();
   const canEdit = currentUser?.role === 'super_admin' || currentUser?.role === 'manager';
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
   const getUpdatedFrom = () => {
     if (orderDayMode === 'today') {
       const d = new Date();
@@ -93,7 +100,7 @@ export default function Orders() {
 
   const loadOrders = async () => {
     setIsLoadingOrders(true);
-    const query = searchQuery.trim();
+    const query = debouncedSearchQuery;
     let updatedFrom = getUpdatedFrom();
     let serverStatus: string | undefined = (activeStatus === '全部' || activeStatus === '今日更新') ? undefined : activeStatus;
     const roller = rollerFilter !== '全部压辊' ? rollerFilter : undefined;
@@ -110,8 +117,7 @@ export default function Orders() {
     }
 
     try {
-      const [paged, summary] = await Promise.all([
-        mockService.getOrdersPage({
+      const dashboard = await mockService.getOrdersDashboard({
           q: query || undefined,
           page,
           pageSize,
@@ -123,30 +129,16 @@ export default function Orders() {
           urgentOnly,
           stayMinDays: stayDaysFilter,
           abnormal,
-        }),
-        mockService.getOrderSummary({
-          q: query || undefined,
-          status: serverStatus,
-          updatedFrom: updatedFrom || undefined,
-          roller,
-          urgentOnly,
-          stayMinDays: stayDaysFilter,
-          abnormal,
-        }),
-      ]);
-      setOrders(paged.rows);
-      setTotalOrders(paged.total);
-      setSummaryStats(summary);
+        });
+      setOrders(dashboard.rows);
+      setTotalOrders(dashboard.total);
+      setSummaryStats(dashboard.summary);
+      setTodayStageCompletions(dashboard.todayStageCompletions);
     } catch (err: any) {
       window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '订单加载失败' } }));
     }
     setIsLoadingOrders(false);
 
-    mockService.getTodayStageCompletions().then(stageCompleted => {
-      setTodayStageCompletions(stageCompleted);
-    }).catch(() => {
-      setTodayStageCompletions({});
-    });
   };
 
   useEffect(() => {
@@ -155,11 +147,11 @@ export default function Orders() {
     localStorage.setItem('orders.sortBy', sortBy);
     localStorage.setItem('orders.sortOrder', sortOrder);
     loadOrders();
-  }, [activeStatus, searchQuery, page, sortBy, sortOrder, orderDayMode, rollerFilter, isUrgentOnly, stayMinDays, orderDataMode]);
+  }, [activeStatus, debouncedSearchQuery, page, sortBy, sortOrder, orderDayMode, rollerFilter, isUrgentOnly, stayMinDays, orderDataMode]);
 
   useEffect(() => {
     setPage(1);
-  }, [activeStatus, searchQuery, orderDayMode, sortBy, sortOrder, rollerFilter, isUrgentOnly, stayMinDays, orderDataMode]);
+  }, [activeStatus, debouncedSearchQuery, orderDayMode, sortBy, sortOrder, rollerFilter, isUrgentOnly, stayMinDays, orderDataMode]);
 
   // Listen for global search from header
   useEffect(() => {
@@ -302,15 +294,15 @@ export default function Orders() {
             </p>
           </div>
         )}
-        <div className="mt-4 flex items-center justify-between gap-3 px-1">
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
           <p className="text-[13px] md:text-xs font-bold text-slate-500">
             当前页显示 {filteredOrders.length} 条，累计 {totalOrders} 条
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between sm:justify-start gap-2 w-full sm:w-auto">
             <button
               disabled={page <= 1}
               onClick={() => setPage(p => Math.max(1, p - 1))}
-              className="px-3 h-8 border border-slate-200 bg-white rounded-lg text-[13px] font-bold text-slate-700 disabled:opacity-50"
+              className="px-4 h-11 sm:h-8 border border-slate-200 bg-white rounded-lg text-[13px] font-bold text-slate-700 disabled:opacity-50"
             >
               上一页
             </button>
@@ -318,7 +310,7 @@ export default function Orders() {
             <button
               disabled={page * pageSize >= totalOrders}
               onClick={() => setPage(p => p + 1)}
-              className="px-3 h-8 border border-slate-200 bg-white rounded-lg text-[13px] font-bold text-slate-700 disabled:opacity-50"
+              className="px-4 h-11 sm:h-8 border border-slate-200 bg-white rounded-lg text-[13px] font-bold text-slate-700 disabled:opacity-50"
             >
               下一页
             </button>
@@ -378,17 +370,9 @@ function ProcessModal({ order, onClose, onDone }: { order: Order, onClose: () =>
 
   const unit = order.status === '印刷' || order.status === '复膜' ? '米' : order.status === '制袋' ? '袋' : '单';
 
-  const sourceOptions: Record<string, string[]> = {
-    '印刷': ['1号机', '2号机', '3号机', '源天外加工1', '郭林外加工2', '外加工下园3'],
-    '复膜': ['干复 1 号', '干复 2 号', '无溶 1 号', '无溶 2 号', '外加工'],
-    '制袋': [
-      '厂内1 号', '厂内 2 号', '厂内 3 号', '厂内 4 号', '厂内 5 号', 
-      '厂内 6 号', '厂内 7 号', '厂内 8 号', '厂内 9 号', 
-      '桥头制袋 10 号', '元华制袋 11 号', '崇衍制袋 12 号', 
-      '源天制袋 13 号', '老尾 14 号', '俊明制袋 15 号', '陈湧钿分切'
-    ],
-    '发货': ['发货口1', '发货口2', '外发']
-  };
+  const sourceOptions: Record<string, string[]> = Object.fromEntries(
+    Object.entries(stageRules.stages).map(([stage, rule]) => [stage, rule.sources])
+  );
 
   const currentOptions = sourceOptions[order.status as string] || [];
 
@@ -524,6 +508,12 @@ function RollbackModal({ order, onClose, onDone }: { order: Order, onClose: () =
     setIsSubmitting(true);
     setError(null);
 
+    if (stageRules.reasonMinLength > 0 && reason.trim().length < stageRules.reasonMinLength) {
+      setError(`回退原因至少需要 ${stageRules.reasonMinLength} 个字`);
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
       await mockService.rollbackProcess(order.id, reason);
       await onDone();
@@ -570,9 +560,9 @@ function RollbackModal({ order, onClose, onDone }: { order: Order, onClose: () =
              <button type="button" onClick={onClose} className="flex-1 h-9 md:h-11 border border-slate-200 text-slate-600 rounded-lg md:rounded-xl text-[13px] md:text-sm font-bold hover:bg-slate-50 transition-all">
                考虑一下
              </button>
-             <button 
+             <button
                type="submit" 
-               disabled={isSubmitting}
+               disabled={isSubmitting || (stageRules.reasonMinLength > 0 && reason.trim().length < stageRules.reasonMinLength)}
                className={cn(
                  "flex-[2] h-9 md:h-11 bg-rose-600 text-white rounded-lg md:rounded-xl text-[13px] md:text-sm font-bold shadow-sm active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 md:gap-2",
                  isSubmitting ? "opacity-70 cursor-not-allowed" : "hover:bg-rose-700 shadow-rose-200"

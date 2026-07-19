@@ -309,15 +309,33 @@ export function OrderDetailDrawer({
     setRefreshTick(v => v + 1);
   };
 
-  const handleUploadClick = () => {
+  const handleUploadFile = async (file?: File) => {
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: '仅支持 PNG、JPG、WEBP 图片' } }));
+      return;
+    }
+    if (file.size > 6 * 1024 * 1024) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: '图片不能超过 6MB' } }));
+      return;
+    }
     setIsUploading(true);
-    setTimeout(async () => {
-      await mockService.updateImage(order.id, `https://picsum.photos/seed/${Math.random()}/1000/1000`);
+    try {
+      const imageDataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('读取图片失败'));
+        reader.readAsDataURL(file);
+      });
+      await mockService.updateImage(order.id, '', imageDataUrl);
       const detail = await mockService.getOrderDetail(order.id);
       Object.assign(order, detail);
       setRefreshTick(v => v + 1);
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '图片上传失败' } }));
+    } finally {
       setIsUploading(false);
-    }, 1000);
+    }
   };
 
   const handleDeleteImage = async () => {
@@ -436,7 +454,7 @@ export function OrderDetailDrawer({
                   {order.order_image_url ? (
                     <div className="relative group rounded-2xl overflow-hidden border p-1 bg-slate-50">
                       <img src={order.order_image_thumb_url || order.order_image_url} alt="Bag Ref" className="w-full h-auto rounded-xl cursor-pointer" onClick={() => setViewingFullImage(order.order_image_url || null)} />
-                      <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="absolute top-3 right-3 flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                         <button onClick={() => setViewingFullImage(order.order_image_url || null)} className="w-8 h-8 rounded-lg bg-white/90 shadow-sm flex items-center justify-center"><Search className="w-4 h-4" /></button>
                         {order.image_can_delete && <button onClick={handleDeleteImage} className="w-8 h-8 rounded-lg bg-rose-500 shadow-sm flex items-center justify-center text-white"><Trash2 className="w-4 h-4" /></button>}
                       </div>
@@ -444,13 +462,16 @@ export function OrderDetailDrawer({
                   ) : (
                     <div className="h-40 flex flex-col items-center justify-center border-2 border-dashed rounded-2xl bg-slate-50/50 gap-2">
                       <Camera className="w-8 h-8 text-slate-300" />
-                      {canEdit && <button onClick={handleUploadClick} disabled={isUploading} className="text-[12px] font-black text-indigo-600 uppercase border-b border-indigo-200">{isUploading ? '正在上传...' : '上传图片'}</button>}
+                      {canEdit && <label className="text-[12px] font-black text-indigo-600 uppercase border-b border-indigo-200 cursor-pointer">
+                        {isUploading ? '正在上传...' : '上传图片'}
+                        <input type="file" accept="image/png,image/jpeg,image/webp" disabled={isUploading} className="hidden" onChange={e => { handleUploadFile(e.target.files?.[0]); e.currentTarget.value = ''; }} />
+                      </label>}
                     </div>
                   )}
                   {canEdit && (
-                    <div className="flex gap-2">
-                      <input type="text" placeholder="粘贴 URL..." value={imageUrlInput} onChange={e => setImageUrlInput(e.target.value)} className="flex-1 h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-[13px] outline-none" />
-                      <button onClick={handleApplyUrl} className="h-9 px-4 bg-slate-900 text-white rounded-lg text-[12px] font-black uppercase tracking-widest shadow-sm">粘贴同步</button>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input type="url" placeholder="粘贴图片 URL..." value={imageUrlInput} onChange={e => setImageUrlInput(e.target.value)} className="flex-1 h-11 bg-slate-50 border border-slate-200 rounded-lg px-3 text-[16px] sm:text-[13px] outline-none" />
+                      <button onClick={handleApplyUrl} className="h-11 px-4 bg-slate-900 text-white rounded-lg text-[12px] font-black uppercase tracking-widest shadow-sm">粘贴同步</button>
                     </div>
                   )}
                 </div>
@@ -525,7 +546,7 @@ export function OrderDetailDrawer({
 
         <AnimatePresence>
           {viewingFullImage && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[110] bg-slate-900/90 flex items-center justify-center p-8 backdrop-blur-md" onClick={() => setViewingFullImage(null)}>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[110] bg-slate-900/90 flex items-center justify-center p-3 md:p-8 backdrop-blur-md" onClick={() => setViewingFullImage(null)}>
               <button className="absolute top-8 right-8 text-white"><X className="w-8 h-8" /></button>
               <motion.img initial={{ scale: 0.9 }} animate={{ scale: 1 }} src={viewingFullImage} className="max-w-full max-h-full rounded-2xl shadow-2xl border-4 border-white/10" />
             </motion.div>

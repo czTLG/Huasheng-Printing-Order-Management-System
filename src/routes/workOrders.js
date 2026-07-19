@@ -102,6 +102,25 @@ const BAG_TYPES = ['自立拉链','自立','单拉链','八边封','三边封','
 const CUSTOMER_BAG_MAP_PATH = path.join(__dirname, '..', '..', 'data', 'customer_bag_map.json');
 const PDF_FONT_PATH = path.join(__dirname, '..', '..', 'data', 'fonts', 'NotoSansSC-Regular.otf');
 const productOptionsCache = new Map();
+const productSearchCache = new Map();
+let workOrderMetaCache = null;
+const META_CACHE_TTL_MS = 5 * 60 * 1000;
+const SEARCH_CACHE_TTL_MS = 2 * 60 * 1000;
+
+function invalidateWorkOrderReferenceCaches() {
+  workOrderMetaCache = null;
+  productOptionsCache.clear();
+  productSearchCache.clear();
+}
+
+function setBoundedCache(cache, key, value, maxEntries) {
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const first = cache.keys().next().value;
+    if (first === undefined) break;
+    cache.delete(first);
+  }
+}
 let customerBagMapCache = null;
 let customerBagMapMtime = 0;
 function loadCustomerBagMap(){
@@ -418,6 +437,18 @@ function nextWorkNo(salespersonId, salespersonCode = 'YW') {
 }
 
 router.get('/meta', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res) => {
+  const lastMail = db.prepare(`
+    SELECT email_to
+    FROM work_orders
+    WHERE created_by = ? AND email_to IS NOT NULL AND TRIM(email_to) <> ''
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(req.user.userName || '');
+  if (workOrderMetaCache && (Date.now() - workOrderMetaCache.ts) < META_CACHE_TTL_MS) {
+    res.setHeader('X-Data-Cache', 'HIT');
+    return res.json({ ...workOrderMetaCache.data, lastEmailTo: String(lastMail?.email_to || '') });
+  }
+
   const salespersons = db.prepare('SELECT id, name, code, active FROM salespersons WHERE active=1 ORDER BY name').all();
   const customers = db.prepare('SELECT id, salesperson_id, name, contact, phone, default_bag_type, default_spec, default_use_case, default_roller, notes FROM customers WHERE active=1 ORDER BY name').all();
   const bySales = {};
@@ -444,14 +475,6 @@ router.get('/meta', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res)
   });
 
   Object.values(bySales).forEach(s => s.customers.sort((a,b)=>String(a.name).localeCompare(String(b.name),'zh-CN')));
-
-  const lastMail = db.prepare(`
-    SELECT email_to
-    FROM work_orders
-    WHERE created_by = ? AND email_to IS NOT NULL AND TRIM(email_to) <> ''
-    ORDER BY id DESC
-    LIMIT 1
-  `).get(req.user.userName || '');
 
   const materialNameMap = new Map();
   const sizeMap = new Map();
@@ -502,9 +525,8 @@ router.get('/meta', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res)
 
   const toSorted=(m)=>[...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,120).map(x=>x[0]);
 
-  res.json({
+  const payload = {
     salespersons: Object.values(bySales),
-    lastEmailTo: String(lastMail?.email_to || ''),
     materialOptions: {
       names: toSorted(materialNameMap),
       sizes: toSorted(sizeMap),
@@ -520,7 +542,10 @@ router.get('/meta', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res)
       '自动包': { filmType: '普通', packType: '编织袋', holes: '无', edges: '上封/下封' },
       '异形': { filmType: '双组', packType: '纸箱', holes: '无', edges: '上封/边封/下封' }
     }
-  });
+  };
+  workOrderMetaCache = { ts: Date.now(), data: payload };
+  res.setHeader('X-Data-Cache', 'MISS');
+  res.json({ ...payload, lastEmailTo: String(lastMail?.email_to || '') });
 });
 
 
@@ -532,6 +557,7 @@ router.post('/material-options', allowRoles('super_admin', 'manager', 'ai_sales'
   const arr = Array.isArray(data.names) ? data.names.map(x=>normalizeMaterialName(x)).filter(Boolean) : [];
   if (!arr.includes(name)) arr.unshift(name);
   saveMaterialOptions({ names: arr.slice(0, 500) });
+  invalidateWorkOrderReferenceCaches();
   audit({ role: req.user.role, userName: req.user.userName, action: 'add_material_option', resourceType: 'work_order_material', resourceId: name, detail: name });
   res.json({ ok: true, name, names: arr.slice(0,500) });
 });
@@ -544,6 +570,7 @@ router.post('/material-options/delete', allowRoles('super_admin', 'manager', 'ai
   const arr = Array.isArray(data.names) ? data.names.map(x=>normalizeMaterialName(x)).filter(Boolean) : [];
   const next = arr.filter(x => x !== name);
   saveMaterialOptions({ names: next.slice(0, 500) });
+  invalidateWorkOrderReferenceCaches();
   audit({ role: req.user.role, userName: req.user.userName, action: 'delete_material_option', resourceType: 'work_order_material', resourceId: name, detail: name });
   res.json({ ok: true, name, names: next.slice(0,500) });
 });
@@ -556,7 +583,10 @@ router.get('/product-options', allowRoles('super_admin', 'manager', 'ai_sales'),
   if (!salespersonId || !customerId) return res.json({ products: [], profiles: {}, truncated: false, total: 0 });
   const ck = `${salespersonId}:${customerId}:${limit}:${q}`;
   const hit = productOptionsCache.get(ck);
-  if (hit && (Date.now() - hit.ts) < 5 * 60 * 1000) return res.json(hit.data);
+  if (hit && (Date.now() - hit.ts) < 5 * 60 * 1000) {
+    res.setHeader('X-Data-Cache', 'HIT');
+    return res.json(hit.data);
+  }
   const sp = db.prepare('SELECT id, name FROM salespersons WHERE id=?').get(salespersonId);
   const cu = db.prepare('SELECT id, name FROM customers WHERE id=?').get(customerId);
   if (!sp || !cu) return res.json({ products: [], profiles: {}, truncated: false, total: 0 });
@@ -639,11 +669,8 @@ router.get('/product-options', allowRoles('super_admin', 'manager', 'ai_sales'),
     };
   });
   const payload = { products: names, profiles, truncated, total };
-  productOptionsCache.set(ck, { ts: Date.now(), data: payload });
-  if (productOptionsCache.size > 200) {
-    const first = productOptionsCache.keys().next().value;
-    if (first) productOptionsCache.delete(first);
-  }
+  setBoundedCache(productOptionsCache, ck, { ts: Date.now(), data: payload }, 200);
+  res.setHeader('X-Data-Cache', 'MISS');
   res.json(payload);
 });
 
@@ -678,6 +705,12 @@ router.get('/product-search', allowRoles('super_admin', 'manager', 'ai_sales'), 
   const qRaw = String(req.query.q || '').trim();
   if (!qRaw) return res.json({ items: [] });
   const mode = String(req.query.mode || 'all') === 'any' ? 'any' : 'all'; // all=全部关键词（默认）
+  const searchCacheKey = `${mode}:${qRaw}`;
+  const cachedSearch = productSearchCache.get(searchCacheKey);
+  if (cachedSearch && (Date.now() - cachedSearch.ts) < SEARCH_CACHE_TTL_MS) {
+    res.setHeader('X-Data-Cache', 'HIT');
+    return res.json(cachedSearch.data);
+  }
 
   const norm = (s = '') => String(s || '').toLowerCase().replace(/\s+/g, '').replace(/[()（）\-_,，。·]/g, '');
   const q = norm(qRaw);
@@ -793,7 +826,10 @@ router.get('/product-search', allowRoles('super_admin', 'manager', 'ai_sales'), 
     return String((a.productName || a.customerName)).localeCompare(String((b.productName || b.customerName)), 'zh-CN');
   });
 
-  res.json({ items: items.slice(0, 160).map(({ _score, _hits, ...rest }) => ({ ...rest, hits: _hits || [] })) });
+  const payload = { items: items.slice(0, 160).map(({ _score, _hits, ...rest }) => ({ ...rest, hits: _hits || [] })) };
+  setBoundedCache(productSearchCache, searchCacheKey, { ts: Date.now(), data: payload }, 100);
+  res.setHeader('X-Data-Cache', 'MISS');
+  res.json(payload);
 });
 
 router.get('/', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res) => {
@@ -862,6 +898,34 @@ router.get('/preview-drafts/:id', allowRoles('super_admin', 'manager', 'ai_sales
   res.json({ ok: true, row: { ...row, payload_json: payload } });
 });
 
+router.get('/preview-drafts/:id/preview.pdf', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res) => {
+  const id = Number(req.params.id || 0);
+  if (!id) return res.status(400).json({ error: 'id 必填' });
+  const draft = db.prepare('SELECT * FROM work_order_preview_drafts WHERE id=? AND created_by=?').get(id, req.user.userName || '');
+  if (!draft) return res.status(404).json({ error: '记录不存在' });
+  let payload = {};
+  try { payload = JSON.parse(draft.payload_json || '{}'); } catch {}
+  const row = {
+    id: 0,
+    work_no: `预览稿-${id}`,
+    salesperson_name: payload.salespersonName || draft.salesperson_name || '',
+    customer_name: payload.customerName || draft.customer_name || '',
+    product_name: payload.productName || draft.product_name || '',
+    bag_type: payload.bagType || draft.bag_type || '',
+    spec: payload.spec || draft.spec || '',
+    quantity: payload.quantity || draft.quantity || '',
+    delivery_date: payload.deliveryDate || '',
+    roller: payload.roller || draft.roller || '',
+    remark: payload.remark || '',
+    created_by: req.user.userName || '',
+    created_at: draft.created_at || now()
+  };
+  const p = hydrateLayerFields(row, payload.processRequirements || {});
+  const issues = validateLayerTriples(p);
+  if (issues.length) return res.status(400).json({ error: `预览已拦截：${issues.join('；')}` });
+  renderWorkOrderPdf(res, row, p, `draft_${id}`);
+});
+
 router.post('/customers', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res) => {
   const { salespersonId, name, contact = '', phone = '', defaultBagType = '', defaultSpec = '', defaultUseCase = '', defaultRoller = '', notes = '' } = req.body || {};
   if (!salespersonId || !name) return res.status(400).json({ error: 'salespersonId/name 必填' });
@@ -879,6 +943,7 @@ router.post('/customers', allowRoles('super_admin', 'manager', 'ai_sales'), (req
       notes=excluded.notes,
       updated_at=excluded.updated_at
   `).run(Number(salespersonId), String(name).trim(), contact, phone, defaultBagType, defaultSpec, defaultUseCase, defaultRoller, notes, ts, ts);
+  invalidateWorkOrderReferenceCaches();
   res.json({ ok: true, id: ret.lastInsertRowid || null });
 });
 
@@ -890,6 +955,7 @@ router.patch('/customers/:id', allowRoles('super_admin', 'manager', 'ai_sales'),
   const row = db.prepare('SELECT id FROM customers WHERE id=? AND salesperson_id=?').get(id, salespersonId);
   if (!row) return res.status(404).json({ error: '客户不存在' });
   db.prepare('UPDATE customers SET name=?, updated_at=? WHERE id=?').run(name, now(), id);
+  invalidateWorkOrderReferenceCaches();
   audit({ role: req.user.role, userName: req.user.userName, action: 'rename_customer', resourceType: 'customer', resourceId: id, detail: name });
   res.json({ ok: true, id, name });
 });
@@ -1048,6 +1114,7 @@ router.post('/', allowRoles('super_admin', 'manager', 'ai_sales'), async (req, r
     detail: `${workNo}${orderId ? ` -> order#${orderId}` : ''}`
   });
 
+  invalidateWorkOrderReferenceCaches();
   res.json({ ok: true, id: workOrderId, workNo, orderId, productNameSaved, emailQueued: true, emailTo: resolvedEmailTo, emailStatus });
 });
 
@@ -1272,7 +1339,9 @@ router.post('/preview.pdf', allowRoles('super_admin', 'manager', 'ai_sales'), (r
     deliveryDate = '',
     roller = '',
     remark = '',
-    processRequirements = {}
+    processRequirements = {},
+    imageUrl = '',
+    imageDataUrl = ''
   } = req.body || {};
 
   const sid = Number(salespersonId || 0);
@@ -1319,7 +1388,9 @@ router.post('/preview.pdf', allowRoles('super_admin', 'manager', 'ai_sales'), (r
     deliveryDate: String(deliveryDate || ''),
     roller: String(roller || ''),
     remark: String(remark || ''),
-    processRequirements: pReq || {}
+    processRequirements: pReq || {},
+    imageUrl: String(imageUrl || ''),
+    imageDataUrl: String(imageDataUrl || '')
   };
   db.prepare(`
     INSERT INTO work_order_preview_drafts (
