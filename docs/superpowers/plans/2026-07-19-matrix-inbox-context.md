@@ -4,6 +4,8 @@
 
 **Goal:** Continuously import inbound mailbox replies and attachments, notify the exact `build` Feishu project, and prevent standalone `A–E` answers from being consumed by the wrong option workflow.
 
+**Supervisor triage amendment:** Suppress pre-July reminders, filter clear advertising, classify and translate every actionable message before notification, create deduplicated quotation/missing-information review items, and publish a seven-day daily work digest.
+
 **Architecture:** The main application owns IMAP, durable import, protected attachment storage, correlation, and notification jobs. The existing bot container claims jobs through the authenticated Matrix API, reads attachments from a read-only mount, and publishes cards/images/files to the exact `build` project. The card extension handles candidate letters only when an explicit candidate prefix or exact quoted-card binding proves candidate context.
 
 **Tech Stack:** Node.js 22, Express 4, better-sqlite3 11, imapflow 1.4, mailparser 3.9, node-cron 3, Feishu Open API, Node `assert` integration tests.

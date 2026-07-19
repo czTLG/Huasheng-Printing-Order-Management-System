@@ -185,3 +185,15 @@ Rollout order is:
 8. Review previously missed replies and create current internal follow-up tasks.
 
 Disabling the scheduler stops new network polling but preserves imported messages, attachments, notification receipts, and audit records. The outbound sender remains independently gated throughout rollout and rollback.
+
+## 14. Supervisor Triage Amendment
+
+Only inbound messages received on or after `2026-07-01T00:00:00+08:00` may create a Feishu reminder. Older mail remains searchable in CRM and may be used for thread context, but its notification job is suppressed as `historical_cutoff`. The five-minute mailbox observer continues every calendar day; a daily supervisor digest is produced even on weekends.
+
+Before a reminder is queued, deterministic screening classifies the message as `quote_request`, `customer_reply`, `sample_request`, `technical_question`, `logistics_question`, `payment_question`, `delivery_notice`, `supplier_service`, `advertising`, or `system_notice`. SEO/website sales, unsolicited WhatsApp promotion, lead-generation offers, marketing services, and similar advertising are marked `filtered_advertising`, remain searchable for audit, and never enter the Feishu queue. Ambiguous messages are not silently discarded.
+
+Every non-filtered message is preprocessed into: original lines, Chinese line-by-line interpretation, extracted product/specification/quantity/terms, missing fields, quote-readiness state, current CRM correlation, and one recommended action. A quote request with enough information creates or reuses one internal pending review item; an incomplete quote request creates a missing-information item. Neither action sends an external message or confirms a price.
+
+Archiving means marking only the message/thread workflow as handled. It does not delete mail, archive a customer, change an inquiry stage, or bypass unresolved quotation work. Cards ask whether to archive only after required follow-up items have been created or explicitly dismissed.
+
+The daily supervisor digest lists four non-overlapping queues: new mail awaiting response, quotation required, information required, and ready to archive. Counts and item IDs are durable and deduplicated. A newly arrived message updates the relevant queue immediately; the daily digest is a summary, not the first alert.
