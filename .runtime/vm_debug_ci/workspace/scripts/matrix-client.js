@@ -115,4 +115,54 @@ function workItems(openId, filters = {}) {
   return call(openId, '/work-items', { query });
 }
 
-module.exports = { facets, createSession, rehydrateSession, listCandidates, candidateDetail, today, selectCandidate, workItems };
+function claimInboxJob(openId) {
+  return call(openId, '/inbox/jobs/claim', { method: 'POST', body: {} });
+}
+
+function inboxWorkbench(openId) {
+  return call(openId, '/inbox/workbench');
+}
+
+function contextSearch(openId, query) {
+  const value = String(query || '').trim();
+  if (value.length < 2 || value.length > 160) throw new Error('context query must contain 2 to 160 characters');
+  return call(openId, '/context/search', { query: { query: value } });
+}
+
+function contextResolve(openId, text) {
+  const value = String(text || '').trim();
+  if (value.length < 2 || value.length > 2000) throw new Error('conversation context must contain 2 to 2000 characters');
+  return call(openId, '/context/resolve', { query: { text: value } });
+}
+
+function contextRecord(openId, recordId) {
+  return call(openId, `/context/records/${positiveId(recordId, 'context record id')}`);
+}
+
+function ackInboxJob(openId, jobId, input) {
+  const body = exactObject(input, new Set(['lease_token', 'notification_uuid', 'status']), 'inbox acknowledgment');
+  return call(openId, `/inbox/jobs/${positiveId(jobId, 'inbox job id')}/ack`, { method: 'POST', body });
+}
+
+function failInboxJob(openId, jobId, input) {
+  const body = exactObject(input, new Set(['lease_token', 'error_code']), 'inbox failure');
+  return call(openId, `/inbox/jobs/${positiveId(jobId, 'inbox job id')}/fail`, { method: 'POST', body });
+}
+
+module.exports = {
+  facets,
+  createSession,
+  rehydrateSession,
+  listCandidates,
+  candidateDetail,
+  today,
+  selectCandidate,
+  workItems,
+  claimInboxJob,
+  inboxWorkbench,
+  contextSearch,
+  contextResolve,
+  contextRecord,
+  ackInboxJob,
+  failInboxJob
+};

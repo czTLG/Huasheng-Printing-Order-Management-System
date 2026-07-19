@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "message_class", "subject_cn", "line_translation_cn", "full_translation_cn",
+    "summary_cn", "extracted", "missing_information", "quote_required",
+    "quote_readiness", "suggested_next_action_cn", "thread_summary_cn",
+    "thread_state", "responsible_party", "background_summary_cn", "existing_task_action"
+  ],
+  "properties": {
+    "message_class": {
+      "type": "string",
+      "enum": ["quote_request", "customer_reply", "sample_request", "technical_question", "logistics_question", "payment_question", "delivery_notice", "supplier_service", "advertising", "system_notice", "internal_report"]
+    },
+    "subject_cn": { "type": "string" },
+    "line_translation_cn": { "type": "array", "items": { "type": "string" } },
+    "full_translation_cn": { "type": "string" },
+    "summary_cn": { "type": "string" },
+    "extracted": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "product_type": { "type": "string" },
+        "bag_type": { "type": "string" },
+        "size_text": { "type": "string" },
+        "material_structure": { "type": "string" },
+        "thickness_text": { "type": "string" },
+        "quantity_text": { "type": "string" },
+        "printing_colors": { "type": "string" },
+        "artwork_status": { "type": "string" },
+        "destination_country": { "type": "string" },
+        "destination_port": { "type": "string" },
+        "destination_text": { "type": "string" },
+        "trade_term": { "type": "string" }
+      },
+      "required": ["product_type", "bag_type", "size_text", "material_structure", "thickness_text", "quantity_text", "printing_colors", "artwork_status", "destination_country", "destination_port", "destination_text", "trade_term"]
+    },
+    "missing_information": { "type": "array", "items": { "type": "string" } },
+    "quote_required": { "type": "boolean" },
+    "quote_readiness": { "type": "string", "enum": ["ready_for_internal_review", "needs_information", "not_applicable"] },
+    "suggested_next_action_cn": { "type": "string" }
+    ,"thread_summary_cn": { "type": "string" }
+    ,"thread_state": { "type": "string", "enum": ["first_contact_unanswered", "awaiting_our_reply", "waiting_customer", "quote_required", "quote_in_progress", "archive_review", "outreach_reply"] }
+    ,"responsible_party": { "type": "string", "enum": ["our_team", "customer", "internal_review", "archive"] }
+    ,"background_summary_cn": { "type": "string" }
+    ,"existing_task_action": { "type": "string", "enum": ["continue_existing", "create_one", "no_quote_task"] }
+  }
+}

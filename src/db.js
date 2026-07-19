@@ -605,6 +605,105 @@ function initDb() {
       updated_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_inbox_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email_message_id INTEGER NOT NULL,
+      media_order INTEGER NOT NULL,
+      original_file_name TEXT NOT NULL,
+      storage_key TEXT,
+      detected_mime_type TEXT,
+      declared_mime_type TEXT,
+      file_size INTEGER NOT NULL DEFAULT 0,
+      sha256 TEXT,
+      availability_state TEXT NOT NULL,
+      quarantine_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(email_message_id, media_order),
+      FOREIGN KEY(email_message_id) REFERENCES email_messages(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_inbox_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email_message_id INTEGER NOT NULL UNIQUE,
+      correlation_state TEXT NOT NULL DEFAULT 'pending',
+      matched_customer_id INTEGER,
+      matched_inquiry_id INTEGER,
+      analysis_json TEXT NOT NULL DEFAULT '{}',
+      analysis_state TEXT NOT NULL DEFAULT 'pending',
+      delivery_state TEXT NOT NULL DEFAULT 'pending',
+      delivery_attempts INTEGER NOT NULL DEFAULT 0,
+      notification_uuid TEXT NOT NULL UNIQUE,
+      lease_token TEXT,
+      lease_expires_at TEXT,
+      receipt_json TEXT NOT NULL DEFAULT '{}',
+      last_error TEXT,
+      message_class TEXT NOT NULL DEFAULT 'unclassified',
+      workflow_state TEXT NOT NULL DEFAULT 'new',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(email_message_id) REFERENCES email_messages(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_inbox_leases (
+      lease_key TEXT PRIMARY KEY,
+      owner_token TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_inbox_analysis_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      analysis_hash TEXT NOT NULL,
+      analysis_source TEXT NOT NULL,
+      quality_rank INTEGER NOT NULL DEFAULT 0,
+      analysis_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(job_id, analysis_hash),
+      FOREIGN KEY(job_id) REFERENCES matrix_inbox_jobs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_thread_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_key TEXT NOT NULL,
+      analysis_hash TEXT NOT NULL,
+      analysis_source TEXT NOT NULL,
+      quality_rank INTEGER NOT NULL DEFAULT 0,
+      thread_state TEXT,
+      responsible_party TEXT,
+      summary_cn TEXT NOT NULL,
+      background_summary_cn TEXT,
+      next_action_cn TEXT NOT NULL,
+      evidence_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      UNIQUE(thread_key, analysis_hash)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_inbox_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      action_type TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      due_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(job_id, action_type),
+      FOREIGN KEY(job_id) REFERENCES matrix_inbox_jobs(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_matrix_inbox_attachments_email
+      ON matrix_inbox_attachments(email_message_id, media_order);
+    CREATE INDEX IF NOT EXISTS idx_matrix_inbox_jobs_delivery
+      ON matrix_inbox_jobs(delivery_state, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_inbox_actions_state
+      ON matrix_inbox_actions(state, action_type, due_at, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_inbox_analysis_versions_job
+      ON matrix_inbox_analysis_versions(job_id, quality_rank DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_matrix_thread_reviews_key
+      ON matrix_thread_reviews(thread_key, quality_rank DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS crm_import_suggestions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_type TEXT,
@@ -910,6 +1009,9 @@ function initDb() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_orders_legacy_source_key ON orders(legacy_source_key)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_orders_start_time ON orders(start_time)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_orders_processing ON orders(status, processing_started_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_orders_status_updated ON orders(status, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_orders_urgency_updated ON orders(urgency, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_orders_effective_start ON orders(COALESCE(start_time, created_at))");
 
   const ucols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
   if (!ucols.includes('full_name')) db.exec("ALTER TABLE users ADD COLUMN full_name TEXT");
@@ -1063,6 +1165,10 @@ function initDb() {
   if (!emcols.includes('customer_detected')) db.exec("ALTER TABLE email_messages ADD COLUMN customer_detected INTEGER DEFAULT 0");
   if (!emcols.includes('parsed_at')) db.exec("ALTER TABLE email_messages ADD COLUMN parsed_at TEXT");
 
+  const matrixInboxJobCols = db.prepare("PRAGMA table_info(matrix_inbox_jobs)").all().map(c => c.name);
+  if (!matrixInboxJobCols.includes('message_class')) db.exec("ALTER TABLE matrix_inbox_jobs ADD COLUMN message_class TEXT NOT NULL DEFAULT 'unclassified'");
+  if (!matrixInboxJobCols.includes('workflow_state')) db.exec("ALTER TABLE matrix_inbox_jobs ADD COLUMN workflow_state TEXT NOT NULL DEFAULT 'new'");
+
   const icols = db.prepare("PRAGMA table_info(inquiries)").all().map(c => c.name);
   if (!icols.includes('quote_readiness_status')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_status TEXT");
   if (!icols.includes('quote_readiness_score')) db.exec("ALTER TABLE inquiries ADD COLUMN quote_readiness_score INTEGER DEFAULT 0");
@@ -1081,9 +1187,12 @@ function initDb() {
   if (!cscols.includes('is_current')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN is_current INTEGER DEFAULT 1");
   if (!cscols.includes('crm_quote_status')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN crm_quote_status TEXT");
   if (!cscols.includes('crm_notes')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN crm_notes TEXT");
+  if (!cscols.includes('order_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN order_id INTEGER");
+  if (!cscols.includes('work_order_id')) db.exec("ALTER TABLE cost_snapshots ADD COLUMN work_order_id INTEGER");
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_user_kind ON cost_snapshots(user_name, kind, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_crm ON cost_snapshots(costing_request_id, inquiry_id, specification_id, updated_at DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_cost_snapshots_order ON cost_snapshots(order_id, work_order_id, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_salesperson ON customers(salesperson_id, active, name)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_stage ON customers(stage, priority, updated_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_customers_crm_priority ON customers(priority, stage, next_followup_at, updated_at DESC)");

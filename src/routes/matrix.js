@@ -1,10 +1,14 @@
 'use strict';
 
 const crypto = require('crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const express = require('express');
 const { defaultPermissionsByRole } = require('../lib/permissions');
 const { createCacheIndexView } = require('../lib/cacheIndexView');
 const { createPacketGate } = require('../lib/packetGate');
+const { buildMatrixOverview } = require('../services/matrixOverview');
+const { searchMatrixContext, resolveMatrixContext, contextByRecordId } = require('../services/matrixContextSearch');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -115,6 +119,162 @@ function errorStatus(error) {
   return 400;
 }
 
+function inboxClock(value) {
+  const date = value instanceof Date ? value : new Date(value || Date.now());
+  if (!Number.isFinite(date.getTime())) throw new Error('invalid inbox relay clock');
+  return date;
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(String(value || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) { return {}; }
+}
+
+function hydrateInboxJob(db, id) {
+  const row = db.prepare(`
+    SELECT j.*, em.from_email, em.from_name, em.subject, em.cleaned_text, em.received_at,
+           COALESCE(NULLIF(c.company_name, ''), NULLIF(c.name, ''), '') AS customer_name,
+           c.country AS customer_country, i.inquiry_title
+    FROM matrix_inbox_jobs j
+    JOIN email_messages em ON em.id = j.email_message_id
+    LEFT JOIN customers c ON c.id = j.matched_customer_id
+    LEFT JOIN inquiries i ON i.id = j.matched_inquiry_id
+    WHERE j.id = ?
+  `).get(id);
+  if (!row) return null;
+  const attachments = db.prepare(`
+    SELECT id, storage_key, original_file_name, detected_mime_type, file_size, sha256,
+           availability_state, quarantine_reason, media_order
+    FROM matrix_inbox_attachments
+    WHERE email_message_id = ?
+    ORDER BY media_order ASC
+  `).all(row.email_message_id).map(item => ({
+    attachment_id: Number(item.id),
+    storage_key: item.storage_key || '',
+    original_file_name: item.original_file_name || '',
+    detected_mime_type: item.detected_mime_type || '',
+    file_size: Number(item.file_size || 0),
+    sha256: item.sha256 || '',
+    availability_state: item.availability_state,
+    quarantine_reason: item.quarantine_reason || ''
+  }));
+  return {
+    id: Number(row.id),
+    email_message_id: Number(row.email_message_id),
+    notification_uuid: row.notification_uuid,
+    lease_token: row.lease_token,
+    lease_expires_at: row.lease_expires_at,
+    correlation_state: row.correlation_state,
+    matched_customer_id: row.matched_customer_id ? Number(row.matched_customer_id) : null,
+    matched_inquiry_id: row.matched_inquiry_id ? Number(row.matched_inquiry_id) : null,
+    customer_name: row.customer_name || '',
+    customer_country: row.customer_country || '',
+    inquiry_title: row.inquiry_title || '',
+    sender_name: row.from_name || '',
+    sender_email: row.from_email || '',
+    subject: row.subject || '',
+    received_at: row.received_at || '',
+    original_preview: String(row.cleaned_text || '').slice(0, 800),
+    analysis: parseJsonObject(row.analysis_json),
+    analysis_state: row.analysis_state,
+    delivery_attempts: Number(row.delivery_attempts || 0),
+    attachments
+  };
+}
+
+function claimInboxJob(db, { clock = () => new Date() } = {}) {
+  const nowDate = inboxClock(clock());
+  const nowIso = nowDate.toISOString();
+  const leaseToken = crypto.randomUUID();
+  const leaseExpires = new Date(nowDate.getTime() + 10 * 60 * 1000).toISOString();
+  const id = db.transaction(() => {
+    const row = db.prepare(`
+      SELECT id FROM matrix_inbox_jobs
+      WHERE delivery_state IN ('pending', 'retry')
+        AND delivery_attempts < 5
+        AND (lease_token IS NULL OR lease_expires_at <= ?)
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `).get(nowIso);
+    if (!row) return 0;
+    const updated = db.prepare(`
+      UPDATE matrix_inbox_jobs
+      SET lease_token = ?, lease_expires_at = ?, updated_at = ?
+      WHERE id = ? AND (lease_token IS NULL OR lease_expires_at <= ?)
+    `).run(leaseToken, leaseExpires, nowIso, row.id, nowIso);
+    return updated.changes === 1 ? Number(row.id) : 0;
+  }).immediate();
+  return id ? hydrateInboxJob(db, id) : null;
+}
+
+function ackInboxJob(db, jobId, input, { clock = () => new Date() } = {}) {
+  const id = positiveInteger(jobId, 'inbox job id');
+  const body = rejectUnknown(input, new Set(['lease_token', 'notification_uuid', 'status']), 'inbox acknowledgment');
+  const leaseToken = String(body.lease_token || '');
+  const notificationUuid = String(body.notification_uuid || '');
+  if (body.status !== 'delivered' || !leaseToken || !notificationUuid) throw new Error('valid delivery acknowledgment required');
+  const row = db.prepare('SELECT * FROM matrix_inbox_jobs WHERE id = ?').get(id);
+  if (!row) throw new Error('inbox job not found');
+  if (row.notification_uuid !== notificationUuid) throw new Error('notification binding mismatch');
+  if (row.delivery_state === 'delivered') return { id, delivery_state: 'delivered', repeated: true };
+  if (row.lease_token !== leaseToken) throw new Error('inbox job lease mismatch');
+  const deliveredAt = inboxClock(clock()).toISOString();
+  db.prepare(`
+    UPDATE matrix_inbox_jobs
+    SET delivery_state = 'delivered', lease_token = NULL, lease_expires_at = NULL,
+        receipt_json = ?, last_error = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(JSON.stringify({ status: 'delivered', delivered_at: deliveredAt }), deliveredAt, id);
+  return { id, delivery_state: 'delivered', repeated: false };
+}
+
+function failInboxJob(db, jobId, input, { clock = () => new Date() } = {}) {
+  const id = positiveInteger(jobId, 'inbox job id');
+  const body = rejectUnknown(input, new Set(['lease_token', 'error_code']), 'inbox failure');
+  const leaseToken = String(body.lease_token || '');
+  const errorCode = String(body.error_code || '');
+  const allowedErrors = new Set(['feishu_rate_limited', 'feishu_unavailable', 'attachment_unavailable', 'attachment_integrity', 'delivery_failed']);
+  if (!leaseToken || !allowedErrors.has(errorCode)) throw new Error('valid inbox failure required');
+  const row = db.prepare('SELECT lease_token, delivery_attempts FROM matrix_inbox_jobs WHERE id = ?').get(id);
+  if (!row) throw new Error('inbox job not found');
+  if (row.lease_token !== leaseToken) throw new Error('inbox job lease mismatch');
+  const attempts = Number(row.delivery_attempts || 0) + 1;
+  const state = attempts >= 5 ? 'manual_review' : 'retry';
+  const ts = inboxClock(clock()).toISOString();
+  db.prepare(`
+    UPDATE matrix_inbox_jobs
+    SET delivery_state = ?, delivery_attempts = ?, lease_token = NULL,
+        lease_expires_at = NULL, last_error = ?, updated_at = ?
+    WHERE id = ?
+  `).run(state, attempts, errorCode, ts, id);
+  return { id, delivery_state: state, delivery_attempts: attempts };
+}
+
+function inboxWorkbench(db, { backlogItems = [] } = {}) {
+  const overview = buildMatrixOverview(db, { backlogItems });
+  const counts = {
+    reply_review: Number(overview.counts.awaiting_our_reply || 0) + Number(overview.counts.first_contact_unanswered || 0),
+    quote_review: Number(overview.counts.quote_required || 0) + Number(overview.counts.quote_in_progress || 0),
+    waiting_customer: Number(overview.counts.waiting_customer || 0),
+    outreach_waiting: Number(overview.counts.outreach_waiting || 0),
+    archive_review: Number(overview.counts.archive_review || 0),
+    active_supervisor: backlogItems.length
+  };
+  const actionable = overview.threads.filter(row => ['awaiting_our_reply', 'first_contact_unanswered', 'quote_required', 'quote_in_progress'].includes(row.state));
+  const incomplete = actionable.filter(row => row.translation_state !== 'complete' || row.background_state === 'research_required');
+  return { counts, items: overview.items.slice(0, 50), overall_ready: incomplete.length === 0, incomplete_count: incomplete.length, generated_at: overview.generated_at };
+}
+
+function productionBacklogItems() {
+  const target = path.resolve(__dirname, '../../.runtime/vm_debug_ci/workspace/outputs/matrix-supervisor-backlog.json');
+  try {
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+    return Array.isArray(parsed.items) ? parsed.items : [];
+  } catch (_) { return []; }
+}
+
 function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_STREAM_DB_PATH, clock } = {}) {
   const router = express.Router();
   const view = createCacheIndexView({ dbPath: candidateDbPath });
@@ -128,6 +288,96 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
       rejectUnknown(req.query, new Set(), 'query');
       view.ready();
       res.json({ ok: true, service: 'matrix' });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.post('/inbox/jobs/claim', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      rejectUnknown(req.query, new Set(), 'query');
+      rejectUnknown(req.body || {}, new Set(), 'inbox claim');
+      const job = claimInboxJob(db, { clock });
+      res.json({ ok: true, job });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.get('/inbox/workbench', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      rejectUnknown(req.query, new Set(), 'query');
+      res.json({ ok: true, ...inboxWorkbench(db, { backlogItems: productionBacklogItems() }) });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.get('/context/search', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      const query = rejectUnknown(req.query, new Set(['query']), 'query');
+      const result = searchMatrixContext(db, query.query);
+      audit({
+        role: req.user.role,
+        userName: req.user.userName,
+        action: 'matrix_context_search',
+        resourceType: 'matrix_context',
+        resourceId: null,
+        detail: JSON.stringify({ matchCount: result.matches.length })
+      });
+      res.json({ ok: true, ...result });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.get('/context/resolve', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      const query = rejectUnknown(req.query, new Set(['text']), 'query');
+      const result = resolveMatrixContext(db, query.text);
+      audit({
+        role: req.user.role,
+        userName: req.user.userName,
+        action: 'matrix_context_resolve',
+        resourceType: 'matrix_context',
+        resourceId: null,
+        detail: JSON.stringify({ matchCount: result.matches.length })
+      });
+      res.json({ ok: true, ...result });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.get('/context/records/:id', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      rejectUnknown(req.query, new Set(), 'query');
+      const recordId = positiveInteger(req.params.id, 'context record id');
+      const result = contextByRecordId(db, recordId);
+      audit({
+        role: req.user.role,
+        userName: req.user.userName,
+        action: 'matrix_context_record',
+        resourceType: 'matrix_context',
+        resourceId: recordId,
+        detail: JSON.stringify({ matchCount: result.matches.length })
+      });
+      res.json({ ok: true, ...result });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.post('/inbox/jobs/:id/ack', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      rejectUnknown(req.query, new Set(), 'query');
+      const result = ackInboxJob(db, req.params.id, req.body || {}, { clock });
+      audit({ role: req.user.role, userName: req.user.userName, action: 'matrix_inbox_delivered', resourceType: 'matrix_inbox_job', resourceId: result.id, detail: '{}' });
+      res.json({ ok: true, ...result });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.post('/inbox/jobs/:id/fail', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      rejectUnknown(req.query, new Set(), 'query');
+      const result = failInboxJob(db, req.params.id, req.body || {}, { clock });
+      audit({ role: req.user.role, userName: req.user.userName, action: 'matrix_inbox_failed', resourceType: 'matrix_inbox_job', resourceId: result.id, detail: JSON.stringify({ state: result.delivery_state }) });
+      res.json({ ok: true, ...result });
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 
@@ -211,6 +461,7 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
         id: row.id, company_name: row.company_name, country_code: row.country_code,
         region: row.region, city: row.city, official_domain: row.official_domain,
         official_url: row.official_url, categories: row.categories,
+        product_url: row.product_url,
         format_signals: row.format_signals, size_signals: row.size_signals,
         scale_tier: row.scale_tier, priority: row.priority, fit_score: row.fit_score,
         demand_fit_score: row.demand_fit_score, access_score: row.access_score,
@@ -296,4 +547,12 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
   return router;
 }
 
-module.exports = { createMatrixBridgeAuth, createMatrixRouter };
+module.exports = {
+  createMatrixBridgeAuth,
+  createMatrixRouter,
+  claimInboxJob,
+  ackInboxJob,
+  failInboxJob,
+  hydrateInboxJob,
+  inboxWorkbench
+};

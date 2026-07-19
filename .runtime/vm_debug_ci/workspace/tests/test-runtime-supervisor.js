@@ -16,7 +16,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
 (async () => {
   try {
     const statePath = path.join(root, 'runtime.json');
-    fs.writeFileSync(statePath, JSON.stringify({ watcherPid: 101, bridgePid: 102 }), { mode: 0o600 });
+    fs.writeFileSync(statePath, JSON.stringify({ watcherPid: 101, orderWatcherPid: 102, inboxWatcherPid: 103, bridgePid: 104 }), { mode: 0o600 });
     process.env.MATRIX_BRIDGE_TOKEN = 'runtime-test-token';
     process.env.MATRIX_OWNER_OPEN_ID = 'ou-runtime-owner';
     const fetchOk = async (url, options) => {
@@ -27,12 +27,16 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
     };
     await runtime.assertHealthy({
       baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
-      fetchImpl: fetchOk, isAlive: pid => pid === 101 || pid === 102
+      fetchImpl: fetchOk, isAlive: pid => [101, 102, 103, 104].includes(pid)
     });
     await assert.rejects(() => runtime.assertHealthy({
       baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
-      fetchImpl: fetchOk, isAlive: pid => pid === 102
+      fetchImpl: fetchOk, isAlive: pid => pid !== 101
     }), /watcher.*not running/i);
+    await assert.rejects(() => runtime.assertHealthy({
+      baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
+      fetchImpl: fetchOk, isAlive: pid => pid !== 103
+    }), /inbox watcher.*not running/i);
     await assert.rejects(() => runtime.assertHealthy({
       baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
       fetchImpl: async () => { throw new Error('connection refused'); },
@@ -45,6 +49,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
     assert.ok(compose.includes('host.docker.internal:host-gateway'));
     assert.ok(compose.includes('command:\n      - node\n      - /workspace/scripts/matrix-runtime.js'));
     assert.ok(compose.includes('test: ["CMD", "node", "/workspace/scripts/matrix-runtime.js", "health"]'));
+    assert.ok(compose.includes('MATRIX_INBOX_ATTACHMENT_ROOT: /refs/matrix-inbox-attachments'));
+    assert.ok(compose.includes(':/refs/matrix-inbox-attachments:ro'));
     assert.ok(!compose.includes('matrix-watch.js &'));
     console.log('runtime supervisor tests passed');
   } finally {

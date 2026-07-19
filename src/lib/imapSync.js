@@ -1,4 +1,6 @@
 const { db, now } = require('../db');
+const { createAttachmentStore } = require('./matrixInboxStore');
+const { processInboundEmail } = require('../services/matrixInbox');
 
 function text(value) {
   if (value === undefined || value === null) return '';
@@ -20,11 +22,12 @@ function maskMailboxUser(value) {
 }
 
 function getImapConfig() {
-  const host = text(process.env.ALIYUN_MAIL_IMAP_HOST);
-  const port = Number(process.env.ALIYUN_MAIL_IMAP_PORT || 993);
-  const secure = parseBool(process.env.ALIYUN_MAIL_IMAP_SECURE, true);
-  const user = text(process.env.ALIYUN_MAIL_USER);
-  const password = text(process.env.ALIYUN_MAIL_PASSWORD);
+  const inboxEnabled = process.env.MATRIX_INBOX_ENABLED === '1';
+  const host = text(process.env.ALIYUN_MAIL_IMAP_HOST || process.env.MATRIX_INBOX_IMAP_HOST);
+  const port = Number(process.env.ALIYUN_MAIL_IMAP_PORT || process.env.MATRIX_INBOX_IMAP_PORT || 993);
+  const secure = parseBool(process.env.ALIYUN_MAIL_IMAP_SECURE || process.env.MATRIX_INBOX_IMAP_SECURE, true);
+  const user = text(process.env.ALIYUN_MAIL_USER || (inboxEnabled ? process.env.SMTP_USER : ''));
+  const password = text(process.env.ALIYUN_MAIL_PASSWORD || (inboxEnabled ? process.env.SMTP_PASS : ''));
   const syncDays = Number(process.env.ALIYUN_MAIL_SYNC_DAYS || 90);
   const syncLimit = Number(process.env.ALIYUN_MAIL_SYNC_LIMIT || 200);
   return { host, port, secure, user, password, syncDays, syncLimit };
@@ -32,7 +35,7 @@ function getImapConfig() {
 
 function sanitizeErrorMessage(message) {
   const raw = text(message);
-  const secret = text(process.env.ALIYUN_MAIL_PASSWORD);
+  const secret = text(process.env.ALIYUN_MAIL_PASSWORD || (process.env.MATRIX_INBOX_ENABLED === '1' ? process.env.SMTP_PASS : ''));
   if (!raw) return '';
   if (!secret) return raw;
   return raw.split(secret).join('[redacted]');
@@ -330,18 +333,40 @@ async function openMailboxWithFallback(client, folder) {
   throw lastError || new Error(`Mailbox folder not found: ${folder}`);
 }
 
-async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' } = {}) {
-  const cfgCheck = validateImapConfig();
+function persistParsedAttachments(emailMessageId, attachments, { attachmentStore } = {}) {
+  if (!attachmentStore) return [];
+  const list = Array.isArray(attachments) ? attachments.slice(0, 20) : [];
+  return list.map((item, index) => attachmentStore.save({
+    emailMessageId,
+    index,
+    filename: item?.filename || `attachment-${index + 1}`,
+    contentType: item?.contentType || 'application/octet-stream',
+    content: Buffer.isBuffer(item?.content) ? item.content : Buffer.from(item?.content || '')
+  }));
+}
+
+async function syncMailbox({
+  folder = 'INBOX',
+  days,
+  limit,
+  operator = 'system',
+  syncType = 'manual',
+  attachmentStore,
+  afterImport = processInboundEmail
+} = {}) {
+  const rawConfig = getImapConfig();
+  const cfgCheck = validateImapConfig(rawConfig);
   const ts = now();
   const result = createSyncResult({
     mailbox: cfgCheck.config.user,
     folder: text(folder || 'INBOX'),
     status: 'running'
   });
+  const normalizedSyncType = ['manual', 'startup', 'scheduled', 'backfill'].includes(text(syncType)) ? text(syncType) : 'manual';
   const run = db.prepare(`
     INSERT INTO email_sync_runs (mailbox, folder, sync_type, status, started_at, created_by, created_at)
-    VALUES (?, ?, 'manual', 'running', ?, ?, ?)
-  `).run(cfgCheck.config.user || '', text(folder || 'INBOX'), ts, operator, ts);
+    VALUES (?, ?, ?, 'running', ?, ?, ?)
+  `).run(cfgCheck.config.user || '', text(folder || 'INBOX'), normalizedSyncType, ts, operator, ts);
   const runId = run.lastInsertRowid;
   result.id = runId;
 
@@ -384,7 +409,7 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
     secure: cfgCheck.config.secure,
     auth: {
       user: cfgCheck.config.user,
-      pass: process.env.ALIYUN_MAIL_PASSWORD || ''
+      pass: rawConfig.password
     },
     logger: false
   });
@@ -397,6 +422,9 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
   const sinceDays = Number(days || cfgCheck.config.syncDays || 90);
   const maxItems = Number(limit || cfgCheck.config.syncLimit || 200);
   const sinceDate = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
+  const resolvedAttachmentStore = attachmentStore || (text(process.env.MATRIX_INBOX_ATTACHMENT_ROOT)
+    ? createAttachmentStore({ root: process.env.MATRIX_INBOX_ATTACHMENT_ROOT, dbHandle: db })
+    : null);
 
   try {
     await client.connect();
@@ -449,6 +477,10 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' 
           }),
           parsed_at: now()
         });
+        persistParsedAttachments(imported.id, parsed.attachments, { attachmentStore: resolvedAttachmentStore });
+        if (imported.normalized.direction === 'inbound' && typeof afterImport === 'function') {
+          afterImport(db, imported.id);
+        }
         result.messages.push({ id: imported.id, message_id: imported.normalized.message_id, subject: imported.normalized.subject });
         if (imported.inserted) {
           insertedCount += 1;
@@ -516,5 +548,6 @@ module.exports = {
   resolveFolderName,
   upsertEmailMessage,
   sanitizeErrorMessage,
+  persistParsedAttachments,
   syncMailbox
 };

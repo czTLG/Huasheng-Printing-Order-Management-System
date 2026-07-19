@@ -6,6 +6,8 @@ After=network.target
 Type=simple
 User=__APP_USER__
 WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
+Environment=NODE_ENV=production
 Environment=PORT=8080
 Environment=FORCE_HTTPS=0
 ExecStart=__NODE_BIN__ __APP_DIR__/src/server.js

@@ -4,6 +4,14 @@ for (const [key, value] of Object.entries(bootEnv)) {
   if (value !== undefined) process.env[key] = value;
 }
 
+const insecureJwtSecret = !process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-this-in-production' || process.env.JWT_SECRET.length < 32;
+if (process.env.NODE_ENV === 'production' && insecureJwtSecret) {
+  throw new Error('生产环境必须配置至少 32 位且非默认值的 JWT_SECRET');
+}
+if (insecureJwtSecret) {
+  console.warn('[security] JWT_SECRET 未安全配置；仅允许在开发或测试环境使用');
+}
+
 const express = require('express');
 const compression = require('compression');
 const cron = require('node-cron');
@@ -26,8 +34,21 @@ const statsRouter = require('./routes/stats');
 const crmRouter = require('./routes/crm');
 const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant');
 const { createMatrixBridgeAuth, createMatrixRouter } = require('./routes/matrix');
+const { syncMailbox } = require('./lib/imapSync');
+const { createInboxScheduler } = require('./services/matrixInboxScheduler');
 
 initDb();
+
+const inboxScheduler = createInboxScheduler({
+  db,
+  sync: syncMailbox,
+  cronImpl: cron,
+  enabled: process.env.MATRIX_INBOX_ENABLED === '1',
+  log: message => console.warn(`[matrix-inbox] ${message}`)
+});
+void inboxScheduler.start().catch(error => {
+  console.warn(`[matrix-inbox] startup cycle failed: ${error?.code || error?.name || 'error'}`);
+});
 
 const matrixBridgeAuth = createMatrixBridgeAuth({ db });
 let matrixRouter = null;
@@ -43,11 +64,16 @@ function dispatchMatrix(req, res, next) {
 
 const app = express();
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.secure || req.header('x-forwarded-proto') === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   // API 严格禁缓存；静态页允许协商缓存（提升首屏速度）
   if (req.path.startsWith('/api/')) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
@@ -70,12 +96,18 @@ app.use(express.json({ limit: '8mb' }));
 // API 耗时日志（慢接口榜单基础）
 const apiSlowStats = new Map();
 app.locals.apiSlowStats = apiSlowStats;
+function normalizeApiMetricPath(method, requestPath) {
+  const pathOnly = String(requestPath || '')
+    .replace(/\/[0-9]+(?=\/|$)/g, '/:id')
+    .replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}(?=\/|$)/ig, '/:id');
+  return `${method} ${pathOnly}`;
+}
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')) return next();
   const t0 = Date.now();
   res.on('finish', () => {
     const ms = Date.now() - t0;
-    const key = `${req.method} ${req.path}`;
+    const key = normalizeApiMetricPath(req.method, req.path);
     const old = apiSlowStats.get(key) || { count: 0, total: 0, max: 0 };
     const cur = { count: old.count + 1, total: old.total + ms, max: Math.max(old.max, ms) };
     apiSlowStats.set(key, cur);
@@ -90,8 +122,14 @@ app.use(express.static(require('path').join(__dirname, '..', 'public'), {
   etag: true,
   maxAge: '10m',
   setHeaders: (res, filePath) => {
-    if (String(filePath || '').endsWith('.html')) {
+    const normalizedPath = String(filePath || '');
+    if (normalizedPath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      return;
+    }
+    // Vite filenames contain a content hash, so they can be cached permanently.
+    if (/[/\\]new[/\\]assets[/\\].+\.(?:js|css|woff2?|png|jpe?g|webp|svg)$/i.test(normalizedPath)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       return;
     }
     res.setHeader('Cache-Control', 'public, max-age=600');

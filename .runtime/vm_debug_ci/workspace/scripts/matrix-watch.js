@@ -9,6 +9,11 @@ const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
 const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
+const COUNTRY_NAMES_CN = Object.freeze({
+  US: '美国', VN: '越南', TH: '泰国', MY: '马来西亚', ID: '印度尼西亚', PH: '菲律宾',
+  JP: '日本', KR: '韩国', RU: '俄罗斯', KZ: '哈萨克斯坦', UZ: '乌兹别克斯坦',
+  KG: '吉尔吉斯斯坦', PK: '巴基斯坦', BD: '孟加拉国', NP: '尼泊尔', LK: '斯里兰卡', MN: '蒙古'
+});
 
 function shanghaiParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -114,18 +119,33 @@ function supplierLabel(signal) {
   return ({ confirmed: '已确认', public_lead: '公开线索' })[signal?.confidence] || '未知';
 }
 
+function countryLabel(code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  return `${COUNTRY_NAMES_CN[normalized] || '待核实'}（${normalized || '??'}）`;
+}
+
+function publicHttps(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
+  } catch (_) { return ''; }
+}
+
 function renderReminderContent(selected, budgets) {
   return selected.map((row, index) => {
     const signals = confirmedSignals(row.size_signals);
     return [
-      `${String.fromCharCode(65 + index)}｜${clip(row.company_name, budgets.company)}｜${clip(row.country_code, 8)}｜${clip(row.priority, 4)}`,
+      `${String.fromCharCode(65 + index)}｜${clip(row.company_name, budgets.company)}｜${clip(row.priority, 4)}`,
+      `国家：${countryLabel(row.country_code)}`,
       `推荐理由：${clip(withoutQualification(row.assessment_cn), budgets.reason)}`,
-      `品类：${clip((row.categories || []).join('、'), budgets.categories)}`,
+      `主营类目：${clip((row.categories || []).join('、'), budgets.categories)}`,
       `阶段：${stageLabel(row.stage_code)}`,
       `供应商：${supplierLabel(row.supplier_signal)}`,
       `切入策略：${clip(row.strategy_signal?.differentiation_angle || row.next_action_cn, budgets.strategy)}`,
       ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), budgets.specifications)}`] : []),
       ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), budgets.observations)}`] : []),
+      `官网：${publicHttps(row.official_url) ? `[打开官网](${publicHttps(row.official_url)})` : '待核实'}`,
+      `产品页：${publicHttps(row.product_url) ? `[查看产品与图片](${publicHttps(row.product_url)})` : '待核实'}`,
       `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
       `下一步：${clip(row.next_action_cn, budgets.nextAction)}`
     ].join('\n');
@@ -134,9 +154,9 @@ function renderReminderContent(selected, budgets) {
 
 function boundedReminderContent(selected) {
   if (!selected.length) return '今日没有达到证据标准的候选';
-  const maximumContentPoints = 1000;
-  const budgets = { company: 36, reason: 64, categories: 42, strategy: 52, specifications: 30, observations: 30, nextAction: 45 };
-  const minimums = { company: 14, reason: 16, categories: 8, strategy: 16, specifications: 8, observations: 8, nextAction: 16 };
+  const maximumContentPoints = 2700;
+  const budgets = { company: 56, reason: 130, categories: 90, strategy: 110, specifications: 72, observations: 72, nextAction: 90 };
+  const minimums = { company: 24, reason: 50, categories: 30, strategy: 44, specifications: 24, observations: 24, nextAction: 40 };
   let content = renderReminderContent(selected, budgets);
   while ([...content].length > maximumContentPoints) {
     let changed = false;
@@ -181,7 +201,7 @@ function reminderCard(rows) {
     body: { elements: [
       { tag: 'markdown', content },
       ...quickRows,
-      ...(selected.length ? [{ tag: 'markdown', content: '也可 @智能桓 回复 A-E' }] : [])
+      ...(selected.length ? [{ tag: 'markdown', content: '点击按钮、引用本卡回复 A-E，或输入“候选A”' }] : [])
     ] }
   };
 }

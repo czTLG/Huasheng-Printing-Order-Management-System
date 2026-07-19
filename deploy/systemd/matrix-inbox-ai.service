@@ -1,0 +1,21 @@
+[Unit]
+Description=Matrix inbox analysis worker
+After=network-online.target packaging-system.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=admin
+WorkingDirectory=/home/admin/work/packaging-system
+Environment=HOME=/home/admin
+Environment=CODEX_HOME=/home/admin/.codex
+Environment=MATRIX_INBOX_AI_PRIVACY_APPROVED=0
+Environment=PATH=/home/admin/.nvm/versions/node/v22.22.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/home/admin/.nvm/versions/node/v22.22.0/bin/node /home/admin/work/packaging-system/scripts/run-matrix-inbox-ai.js
+TimeoutStartSec=10min
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/admin/.codex /home/admin/work/packaging-system/data /tmp

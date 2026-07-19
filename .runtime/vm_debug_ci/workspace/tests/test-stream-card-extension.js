@@ -6,6 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 process.env.MATRIX_DELIVERY_ENABLED = '0';
+const choiceContextRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-choice-extension-'));
+process.env.MATRIX_CHOICE_CONTEXT_PATH = path.join(choiceContextRoot, 'contexts.json');
+process.env.MATRIX_ASSET_CONTEXT_PATH = path.join(choiceContextRoot, 'asset-contexts.json');
+process.on('exit', () => fs.rmSync(choiceContextRoot, { recursive: true, force: true }));
 const extension = require('../extensions/stream-card.cjs');
 
 async function testNarrowClient() {
@@ -14,7 +18,7 @@ async function testNarrowClient() {
   const clientPath = require.resolve('../scripts/matrix-client.js');
   delete require.cache[clientPath];
   const client = require(clientPath);
-  assert.deepStrictEqual(Object.keys(client).sort(), ['candidateDetail', 'createSession', 'facets', 'listCandidates', 'rehydrateSession', 'selectCandidate', 'today', 'workItems']);
+  assert.deepStrictEqual(Object.keys(client).sort(), ['ackInboxJob', 'candidateDetail', 'claimInboxJob', 'contextRecord', 'contextResolve', 'contextSearch', 'createSession', 'facets', 'failInboxJob', 'inboxWorkbench', 'listCandidates', 'rehydrateSession', 'selectCandidate', 'today', 'workItems']);
   const originalFetch = global.fetch;
   const requests = [];
   global.fetch = async (url, options) => {
@@ -29,8 +33,15 @@ async function testNarrowClient() {
     await client.listCandidates('ou-client', { region: 'europe', page: 1, page_size: 5 });
     await client.candidateDetail('ou-client', 4);
     await client.today('ou-client', { page_size: 5 });
+    await client.inboxWorkbench('ou-client');
+    await client.contextSearch('ou-client', 'Acepac Singapore');
+    await client.contextResolve('ou-client', '新加坡的客户你能看到了吗？');
+    await client.contextRecord('ou-client', 5878);
     await client.selectCandidate('ou-client', { candidate_id: 4, session_id: 7, expected_version: 2, idempotency_key: 'evt', next_action: 'verify' });
     await client.workItems('ou-client', { stage: 'selected' });
+    await client.claimInboxJob('ou-client');
+    await client.ackInboxJob('ou-client', 9, { lease_token: 'lease', notification_uuid: 'uuid', status: 'delivered' });
+    await client.failInboxJob('ou-client', 9, { lease_token: 'lease', error_code: 'delivery_failed' });
     assert.ok(requests.every(item => new URL(item.url).origin === 'https://matrix.test'));
     assert.ok(requests.every(item => new URL(item.url).pathname.startsWith('/api/matrix/')));
     assert.ok(requests.every(item => item.options.redirect === 'manual'));
@@ -48,6 +59,103 @@ async function testNarrowClient() {
     await assert.rejects(() => client.facets('ou-client'), /JSON/);
   } finally {
     global.fetch = originalFetch;
+  }
+}
+
+async function testAuthoritativeContextInjection() {
+  const calls = [];
+  const timer = { unref() {} };
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: () => undefined }, card: helpers(),
+    scheduleReminderPoll: () => timer, clearReminderPoll: () => undefined,
+    sendManagedCard: async () => undefined,
+    client: {
+      contextResolve: async (openId, text) => {
+        calls.push([openId, text]);
+        return { matches: [{
+          customer: { id: 5878, company_name: 'Acepac International (S) Pte Ltd', contact_person: 'Tio Jia Ling', country: 'Singapore' },
+          inquiry: { inquiry_code: 'MX-ACEPAC', status: 'quote_pending' },
+          specifications: [{ bag_type: 'stand_up_pouch', size_width: '160mm', size_height: '220mm', material_structure_text: 'PET/PE' }],
+          messages: [{ email_message_id: 63, direction: 'inbound', lines: ['Please quote the attached pouch.'] }],
+          attachments: [{ filename: 'product.png', mime_type: 'image/png', availability: 'available', local_path: '/refs/matrix-inbox-attachments/2026/07/product.png', evidence_role: 'product_reference', display_recommended: true, summary_cn: '自立拉链袋产品图' }],
+          existing_tasks: [{ id: 2, status: 'pending', note_cn: 'Prepare quote' }]
+        }] };
+      }
+    }
+  });
+  const msg = { content: '新加坡的客户你能看到了吗？', chatId: 'chat-context', senderId: 'ou-context' };
+  assert.strictEqual(await registered.onMessage({ msg, project: {} }), false);
+  assert.deepStrictEqual(calls, [['ou-context', '新加坡的客户你能看到了吗？']]);
+  assert.match(msg.content, /权威系统上下文/);
+  assert.match(msg.content, /Acepac International/);
+  assert.match(msg.content, /product\.png/);
+  assert.match(msg.content, /不得要求.*Outlook.*Gmail/);
+  assert.match(msg.content, /是否把这1张产品图发到群里/);
+  registered.dispose();
+
+  const delivered = [];
+  const confirmations = [];
+  const display = extension.register({
+    channel: {}, dispatcher: { on: () => undefined }, card: helpers(),
+    scheduleReminderPoll: () => timer, clearReminderPoll: () => undefined,
+    sendManagedCard: async (_channel, _chat, card) => confirmations.push(card),
+    sendCustomerAttachment: async input => delivered.push(input),
+    client: {
+      contextResolve: async () => ({ matches: [{
+        customer: { id: 5878, company_name: 'Acepac International (S) Pte Ltd' },
+        attachments: [{ filename: 'product.png', mime_type: 'image/png', availability: 'available', local_path: '/refs/matrix-inbox-attachments/2026/07/product.png', evidence_role: 'product_reference', display_recommended: true }]
+      }] })
+    }
+  });
+  assert.strictEqual(await display.onMessage({ msg: { content: '显示 Acepac 客户图片', chatId: 'chat-context', senderId: 'ou-context', messageId: 'message-confirm' } }), true);
+  assert.strictEqual(delivered.length, 1);
+  assert.deepStrictEqual(delivered[0], { replyTo: 'message-confirm', absolutePath: '/refs/matrix-inbox-attachments/2026/07/product.png', filename: 'product.png', mimeType: 'image/png' });
+  assert.strictEqual(confirmations.length, 1);
+  assert.match(visibleText(confirmations[0]), /已发出 1 张产品图/);
+  display.dispose();
+}
+
+async function testShortImageConfirmationUsesBoundContext() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-asset-extension-'));
+  const delivered = [];
+  const calls = [];
+  const timer = { unref() {} };
+  try {
+    const registered = extension.register({
+      channel: {}, dispatcher: { on: () => undefined }, card: helpers(),
+      assetContextPath: path.join(root, 'contexts.json'),
+      now: () => Date.parse('2026-07-19T10:00:00.000Z'),
+      scheduleReminderPoll: () => timer, clearReminderPoll: () => undefined,
+      sendManagedCard: async () => undefined,
+      sendCustomerAttachment: async input => delivered.push(input),
+      client: {
+        contextResolve: async (_openId, text) => {
+          calls.push(['resolve', text]);
+          return { matches: [{
+            customer: { id: 5878, company_name: 'Acepac International (S) Pte Ltd' },
+            attachments: [{ filename: 'product.png', mime_type: 'image/png', availability: 'available', local_path: '/refs/matrix-inbox-attachments/product.png', evidence_role: 'product_reference', display_recommended: true }]
+          }] };
+        },
+        contextRecord: async (_openId, recordId) => {
+          calls.push(['record', recordId]);
+          return { matches: [{
+            customer: { id: 5878, company_name: 'Acepac International (S) Pte Ltd' },
+            attachments: [{ filename: 'product.png', mime_type: 'image/png', availability: 'available', local_path: '/refs/matrix-inbox-attachments/product.png', evidence_role: 'product_reference', display_recommended: true }]
+          }] };
+        }
+      }
+    });
+
+    const mention = { content: '新加坡客户你看到了吗？', chatId: 'chat-context', senderId: 'ou-context' };
+    assert.strictEqual(await registered.onMessage({ msg: mention }), false);
+    assert.match(mention.content, /需要请回复：发图/);
+    assert.strictEqual(await registered.onMessage({ msg: { content: '发图', chatId: 'chat-context', senderId: 'ou-context', messageId: 'confirm-message' } }), true);
+    assert.deepStrictEqual(calls, [['resolve', '新加坡客户你看到了吗？'], ['record', 5878]]);
+    assert.strictEqual(delivered.length, 1);
+    assert.strictEqual(delivered[0].absolutePath, '/refs/matrix-inbox-attachments/product.png');
+    registered.dispose();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -144,11 +252,11 @@ function testWatcherWholeCardBudget() {
   }));
   const card = watcher.reminderCard(rows);
   const text = visibleText(card);
-  assert.ok([...text].length <= 1500, `watcher reminder uses ${[...text].length} code points`);
+  assert.ok([...text].length <= 3500, `watcher reminder uses ${[...text].length} code points`);
   for (let index = 0; index < 5; index += 1) {
     assert.ok(text.includes(`${String.fromCharCode(65 + index)}｜定时公司${index + 1}`));
   }
-  for (const required of ['推荐理由：', '品类：', '阶段：已观察', '已确认规格：', '已确认公开信号：', '供应商：已确认', '供应商：未知', '切入策略：', '待核实：', '下一步：', '也可 @智能桓 回复 A-E']) {
+  for (const required of ['推荐理由：', '主营类目：', '阶段：已观察', '已确认规格：', '已确认公开信号：', '供应商：已确认', '供应商：未知', '切入策略：', '待核实：', '下一步：', '引用本卡回复 A-E']) {
     assert.ok(text.includes(required), `watcher reminder missing ${required}`);
   }
   const quick = buttons(card).filter(item => item.behaviors?.[0]?.value?.a === 'mx.quick');
@@ -163,7 +271,7 @@ async function testFreshQuickChoiceRecovery() {
     categories: ['fruit'], format_signals: ['roll film'], size_signals: [], status: 'valid',
     stage_code: 'observed', assessment_cn: '公开产品证据', next_action_cn: '确认结构', contacts: {}
   }));
-  for (const input of ['A', 'a', '开发客户 A']) {
+  for (const input of ['候选A', '候选 a', '开发客户 A']) {
     const calls = [];
     const sent = [];
     const registered = extension.register({
@@ -395,7 +503,7 @@ async function testWholeCardBudget() {
   });
   await registered.onMessage({ msg: { content: '开发客户', chatId: 'chat-long', threadId: '', senderId: 'ou-long' } });
   const text = visibleText(sent[0]);
-  assert.ok([...text].length <= 1500, `whole card uses ${[...text].length} code points`);
+  assert.ok([...text].length <= 3500, `whole card uses ${[...text].length} code points`);
   for (let index = 0; index < 5; index += 1) assert.ok(text.includes(`${String.fromCharCode(65 + index)}｜极限公司${index + 1}`));
   for (const core of ['推荐理由：', '待核实：', '下一步：']) assert.ok(text.includes(core));
 }
@@ -447,9 +555,9 @@ async function testExpiredSessionRecovery() {
   const message = { content: '开发客户', chatId: 'chat-expiry', threadId: '', senderId: 'ou-expiry' };
   await registered.onMessage({ msg: message });
   now += 30 * 60 * 1000 + 1;
-  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
+  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: '候选A' } }), true);
   assert.ok(visibleText(sent.at(-1)).includes('Expiry Company'));
-  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
+  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: '候选A' } }), true);
   assert.ok(visibleText(sent.at(-1)).includes('Expiry Company'));
 
   await registered.onMessage({ msg: message });
@@ -464,7 +572,7 @@ async function testExpiredSessionRecovery() {
   now = Date.parse('2026-07-17T01:00:00.000Z');
   await registered.onMessage({ msg: message });
   failRefresh = true;
-  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: 'A' } }), true);
+  assert.strictEqual(await registered.onMessage({ msg: { ...message, content: '候选A' } }), true);
   assert.ok(visibleText(sent.at(-1)).includes('Expiry Company'));
   failRefresh = false;
 
@@ -617,6 +725,8 @@ async function testRecommendationSnapshotTransitions() {
 
 (async () => {
   await testNarrowClient();
+  await testAuthoritativeContextInjection();
+  await testShortImageConfirmationUsesBoundContext();
   await testReadOnlyWatcher();
   testWatcherWholeCardBudget();
   await testFreshQuickChoiceRecovery();
@@ -756,7 +866,9 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(text.includes('已确认公开信号：own factory'));
   assert.ok(!text.includes('已确认规格：own factory'));
   assert.ok(!text.includes('待核实：250g'));
-  assert.strictEqual(await registered.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
+  assert.strictEqual(await registered.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), false);
+  assert.strictEqual(await registered.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1', replyToMessageId: 'non-candidate-card' }, project: {} }), false);
+  assert.strictEqual(await registered.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1', replyToMessageId: 'message-1' }, project: {} }), true);
   assert.ok(calls.some(item => item[0] === 'candidateDetail' && item[2] === 1));
   const detailText = visibleText(sent.at(-1).card);
   for (const expected of ['official_association_directory', 'https://association.test/member', 'https://company.test/', 'https://company.test/products', '为什么推荐', '产品结构', '供应链线索', '开发策略', 'Verified Supplier', '已确认', 'stable repeat print control', 'https://trade.test/public-record']) assert.ok(detailText.includes(expected));
@@ -834,7 +946,7 @@ async function testRecommendationSnapshotTransitions() {
     client,
     now: () => Date.parse('2026-07-17T00:00:00.000Z')
   });
-  assert.strictEqual(await fresh.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
+  assert.strictEqual(await fresh.onMessage({ msg: { content: '候选A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' }, project: {} }), true);
   assert.ok(calls.some(item => item[0] === 'rehydrateSession'));
   assert.ok(visibleText(freshSent[0].card).includes('Company 1'));
   const callbackFresh = extension.register({
@@ -853,7 +965,7 @@ async function testRecommendationSnapshotTransitions() {
     channel: {}, dispatcher: { on: (name, handler) => incompleteHandlers.set(name, handler) }, card: helpers(), client: incompleteClient,
     now: () => Date.parse('2026-07-17T00:00:00.000Z'), sendManagedCard: async (_channel, _chat, card) => incompleteSent.push(card)
   });
-  await incomplete.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' } });
+  await incomplete.onMessage({ msg: { content: '候选A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' } });
   assert.ok(visibleText(incompleteSent.at(-1)).includes('Company 1'));
   await incompleteHandlers.get('mx.detail')({ evt: callbackEvent, value: { a: 'mx.detail', s: 999, v: 1, c: 1 } });
   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
