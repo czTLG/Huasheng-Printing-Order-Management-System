@@ -27,22 +27,23 @@ function inferProductType(lower) {
 }
 
 function inferMessageType(lower) {
+  if (/\bquote\b|\bquotation\b|official\s+quotation|please.{0,40}\bprice|报价/.test(lower)) return 'quote_request';
   if (/material|thickness|wvtr|otr|structure|laminate|laminated|barrier|alox|kbopp|bopp|pet|r?cpp|nylon|pa|结构|厚度|阻隔/.test(lower)) return 'technical_question';
   if (/payment|deposit|付款|账期/.test(lower)) return 'payment_question';
   if (/cif|ddp|freight|customs|door delivery|目的港|运费|清关/.test(lower)) return 'logistics_question';
   if (/sample|样品/.test(lower)) return 'sample_request';
   if (/discount|too high|target price|议价|价格太高/.test(lower)) return 'price_negotiation';
-  if (/quote|quotation|price|报价/.test(lower)) return 'quote_request';
+  if (/price|报价/.test(lower)) return 'quote_request';
   return 'customer_reply';
 }
 
 function inferCountry(source) {
-  const known = ['Bangladesh', 'Pakistan', 'UAE', 'United Arab Emirates', 'Oman', 'India', 'China', 'USA', 'United States', 'Canada', 'Australia', 'Germany', 'France', 'UK'];
+  const known = ['Singapore', 'Tunisia', 'Israel', 'Bangladesh', 'Pakistan', 'UAE', 'United Arab Emirates', 'Oman', 'India', 'China', 'USA', 'United States', 'Canada', 'Australia', 'Germany', 'France', 'UK'];
   return known.find((country) => new RegExp(`\\b${country.replace(/ /g, '\\s+')}\\b`, 'i').test(source)) || '';
 }
 
 function inferPort(source) {
-  const ports = ['Ajman', 'Chittagong', 'Karachi', 'ICD Dhaka', 'Dhaka', 'Jebel Ali', 'Dubai', 'Faridpur'];
+  const ports = ['Singapore', 'Shenzhen', 'Shekou', 'Ajman', 'Chittagong', 'Karachi', 'ICD Dhaka', 'Dhaka', 'Jebel Ali', 'Dubai', 'Faridpur'];
   return ports.find((port) => new RegExp(`\\b${port.replace(/ /g, '\\s+')}\\b`, 'i').test(source)) || '';
 }
 
