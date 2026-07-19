@@ -23,7 +23,6 @@ function createMatrixTaskSchedule({
   quietHours = { start: '22:00', end: '08:00' }
 } = {}) {
   if (!db || typeof db.prepare !== 'function') throw new Error('db required');
-  const holidaySet = new Set(holidays);
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -39,19 +38,14 @@ function createMatrixTaskSchedule({
     const minute = minuteOfDay(parts), start = parseHm(quietHours.start), end = parseHm(quietHours.end);
     return start > end ? minute >= start || minute < end : minute >= start && minute < end;
   }
-  function isBusinessDate(dateKey) {
-    const day = new Date(`${dateKey}T00:00:00.000Z`).getUTCDay();
-    return day !== 0 && day !== 6 && !holidaySet.has(dateKey);
-  }
-  function businessDaysAfter(fromDate, toDate) {
+  function calendarDaysAfter(fromDate, toDate) {
     if (toDate <= fromDate) return 0;
     let cursor = new Date(`${fromDate}T00:00:00.000Z`);
     const end = new Date(`${toDate}T00:00:00.000Z`);
     let count = 0;
     while (cursor < end) {
       cursor = new Date(cursor.getTime() + 86400000);
-      const key = cursor.toISOString().slice(0, 10);
-      if (isBusinessDate(key)) count += 1;
+      count += 1;
     }
     return count;
   }
@@ -78,7 +72,7 @@ function createMatrixTaskSchedule({
     };
   }
   function slotsAt(parts) {
-    if (!isBusinessDate(parts.date) || inQuietHours(parts)) return [];
+    if (inQuietHours(parts)) return [];
     const minute = minuteOfDay(parts);
     const slots = [];
     if (minute >= billDigest.hour * 60 + billDigest.minute) slots.push({ channel: 'bill', slotKey: `${parts.date}:bill:daily` });
@@ -112,19 +106,19 @@ function createMatrixTaskSchedule({
     const nowValue = iso(now), parts = localParts(nowValue);
     const request = { operation: 'advance', now: nowValue };
     return command(idempotencyKey, request, (key) => {
-      if (!isBusinessDate(parts.date) || inQuietHours(parts)) return { proposedTaskIds: [], now: nowValue };
+      if (inQuietHours(parts)) return { proposedTaskIds: [], now: nowValue };
       const tasks = db.prepare(`SELECT * FROM matrix_tasks WHERE state IN ('open','blocked','waiting_decision') AND due_at<=? ORDER BY id`).all(nowValue);
       const proposedTaskIds = [];
       for (const task of tasks) {
         if (task.followup_count >= 2) continue;
-        const elapsed = businessDaysAfter(localParts(task.due_at).date, parts.date);
+        const elapsed = calendarDaysAfter(localParts(task.due_at).date, parts.date);
         const threshold = task.followup_count === 0 ? 1 : 3;
         if (elapsed < threshold) continue;
         const nextCount = task.followup_count + 1;
         db.prepare('UPDATE matrix_tasks SET followup_count=?,version=version+1,updated_at=? WHERE id=?').run(nextCount, nowValue, task.id);
         const updated = db.prepare('SELECT * FROM matrix_tasks WHERE id=?').get(task.id);
         db.prepare(`INSERT INTO matrix_task_events (task_id,task_version,event_type,payload_json,actor_user_id,binding_id,channel,chat_id,card_event_id,idempotency_key,created_at) VALUES (?,?, 'followup_proposed',?,NULL,?,?, '', '', ?,?)`)
-          .run(updated.id, updated.version, canonicalJson({ followupCount: nextCount, businessDaysOverdue: elapsed }), updated.binding_id, updated.channel, `${key}:task:${updated.id}`, nowValue);
+          .run(updated.id, updated.version, canonicalJson({ followupCount: nextCount, calendarDaysOverdue: elapsed }), updated.binding_id, updated.channel, `${key}:task:${updated.id}`, nowValue);
         proposedTaskIds.push(updated.id);
       }
       return { proposedTaskIds, now: nowValue };

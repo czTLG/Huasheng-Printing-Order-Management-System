@@ -28,6 +28,7 @@ assert.strictEqual(db.prepare("SELECT COUNT(*) AS total FROM matrix_digest_outbo
 
 const vmciDigests = schedule.prepareDueDigests({ now: '2026-07-20T02:00:00.000Z', idempotencyKey: 'vmci-slot' });
 assert(vmciDigests.some(row => row.channel === 'vmci'));
+
 const advanced1 = schedule.advance({ now: '2026-07-20T08:30:00.000Z', idempotencyKey: 'advance-1' });
 assert(advanced1.proposedTaskIds.includes(bill.id));
 assert.strictEqual(tasks.getTask(bill.id).state, 'open', 'silence must never complete a task');
@@ -44,6 +45,13 @@ const ambiguousClaim = schedule.claimDigest({ channel: 'bill', ownerToken: 'work
 assert(ambiguousClaim);
 assert.strictEqual(schedule.nackDigest({ outboxId: ambiguousClaim.id, claimToken: ambiguousClaim.claimToken, outcome: 'ambiguous', now: '2026-07-21T01:01:01.000Z' }).state, 'manual_review');
 assert.strictEqual(schedule.claimDigest({ channel: 'bill', ownerToken: 'worker-3', leaseMs: 30000, now: '2026-07-21T01:02:00.000Z' }), null, 'ambiguous delivery must never retry automatically');
+
+const saturdayBill = schedule.prepareDueDigests({ now: '2026-07-18T01:00:00.000Z', idempotencyKey: 'saturday-bill-slot' });
+assert(saturdayBill.some(row => row.channel === 'bill'), 'Saturday must run the Bill daily digest');
+const sundayVmci = schedule.prepareDueDigests({ now: '2026-07-19T02:00:00.000Z', idempotencyKey: 'sunday-vmci-slot' });
+assert(sundayVmci.some(row => row.channel === 'vmci'), 'Sunday must run the VMCI daily digest');
+const sundayOverdue = schedule.prepareDueDigests({ now: '2026-07-19T08:30:00.000Z', idempotencyKey: 'sunday-overdue-slot' });
+assert(sundayOverdue.some(row => row.slotKey === '2026-07-19:bill:overdue'), 'Sunday must run the overdue digest');
 
 assert.strictEqual(tasks.getTask(vmci.id).state, 'open');
 db.close();

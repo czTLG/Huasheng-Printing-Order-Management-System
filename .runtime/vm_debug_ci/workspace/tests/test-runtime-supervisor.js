@@ -16,7 +16,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
 (async () => {
   try {
     const statePath = path.join(root, 'runtime.json');
-    fs.writeFileSync(statePath, JSON.stringify({ watcherPid: 101, bridgePid: 102 }), { mode: 0o600 });
+    fs.writeFileSync(statePath, JSON.stringify({ watcherPid: 101, bridgePid: 102, orderWatcherPid: 103 }), { mode: 0o600 });
     process.env.MATRIX_BRIDGE_TOKEN = 'runtime-test-token';
     process.env.MATRIX_OWNER_OPEN_ID = 'ou-runtime-owner';
     const fetchOk = async (url, options) => {
@@ -27,12 +27,16 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
     };
     await runtime.assertHealthy({
       baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
-      fetchImpl: fetchOk, isAlive: pid => pid === 101 || pid === 102
+      fetchImpl: fetchOk, isAlive: pid => pid === 101 || pid === 102 || pid === 103
     });
     await assert.rejects(() => runtime.assertHealthy({
       baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
       fetchImpl: fetchOk, isAlive: pid => pid === 102
     }), /watcher.*not running/i);
+    await assert.rejects(() => runtime.assertHealthy({
+      baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
+      fetchImpl: fetchOk, isAlive: pid => pid === 101 || pid === 102
+    }), /order watcher.*not running/i);
     await assert.rejects(() => runtime.assertHealthy({
       baseUrl: 'http://host.docker.internal:8080/api/matrix', statePath,
       fetchImpl: async () => { throw new Error('connection refused'); },
@@ -46,6 +50,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-runtime-'));
     assert.ok(compose.includes('command:\n      - node\n      - /workspace/scripts/matrix-runtime.js'));
     assert.ok(compose.includes('test: ["CMD", "node", "/workspace/scripts/matrix-runtime.js", "health"]'));
     assert.ok(!compose.includes('matrix-watch.js &'));
+    assert.ok(fs.readFileSync(scriptPath, 'utf8').includes("spawn(process.execPath, ['/workspace/scripts/stream-watch.js']"));
     console.log('runtime supervisor tests passed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

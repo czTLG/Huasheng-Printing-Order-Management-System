@@ -261,6 +261,7 @@ function reviewState(workItemId) {
     assert.deepStrictEqual(recommendations.body.rows.map(row => row.id), [1]);
     assert.strictEqual(recommendations.body.page_size, 5);
     assert.strictEqual(recommendations.body.rows[0].stage_code, 'observed');
+    assert.strictEqual(recommendations.body.rows[0].product_url, 'https://alpha.test/products');
     assert.strictEqual(recommendations.body.total, 1);
     assert.strictEqual(recommendations.body.total_pages, 1);
     const recommendationPage2 = await request('/api/matrix/recommendations/today?page=2&page_size=5', { token: crmAdminToken });
@@ -320,6 +321,7 @@ function reviewState(workItemId) {
     const restored = await request(`/api/matrix/sessions/${createdSession.body.id}?chat_id=chat-1&thread_id=thread-1`, { serviceToken: bridgeToken, openId: 'ou-service' });
     assert.strictEqual(restored.status, 200);
     assert.deepStrictEqual(restored.body.candidates.map(row => row.id), [1]);
+    assert.strictEqual(restored.body.candidates[0].product_url, 'https://alpha.test/products');
     assert.ok(!JSON.stringify(restored.body).includes('team@alpha.test'));
     for (const forbidden of ['contacts', 'discovery', 'official_evidence', 'supporting_evidence', 'evidence', 'excerpt']) assert.strictEqual(Object.prototype.hasOwnProperty.call(restored.body.candidates[0], forbidden), false);
     assert.strictEqual((await request('/api/matrix/candidates/1', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);

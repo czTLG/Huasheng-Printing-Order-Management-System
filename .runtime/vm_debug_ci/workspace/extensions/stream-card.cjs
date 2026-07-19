@@ -13,6 +13,11 @@ const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
 const REPLY_SPOOL_PATH = '/workspace/store/matrix-reply-pending.json';
 const REPLY_INFLIGHT_PATH = '/workspace/store/matrix-reply-inflight.json';
 const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
+const COUNTRY_NAMES_CN = Object.freeze({
+  US: '美国', VN: '越南', TH: '泰国', MY: '马来西亚', ID: '印度尼西亚', PH: '菲律宾',
+  JP: '日本', KR: '韩国', RU: '俄罗斯', KZ: '哈萨克斯坦', UZ: '乌兹别克斯坦',
+  KG: '吉尔吉斯斯坦', PK: '巴基斯坦', BD: '孟加拉国', NP: '尼泊尔', LK: '斯里兰卡', MN: '蒙古'
+});
 
 function readOptionalJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -182,8 +187,20 @@ function withoutQualification(value) {
   return visible.join('，') || '产品与规模依据见公开来源';
 }
 
+function countryLabel(code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  return `${COUNTRY_NAMES_CN[normalized] || '待核实'}（${normalized || '??'}）`;
+}
+
+function publicHttps(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
+  } catch (_) { return ''; }
+}
+
 function renderCandidates(state, cardHelpers) {
-  const { card, md, note, hr, actions, button } = cardHelpers;
+  const { card, md, note, hr, actions, button, linkButton } = cardHelpers;
   if (!state.candidates.length) return card([md('当前筛选条件下没有达到公开证据标准的候选。'), note('可稍后重试或调整高级筛选。')], { header: { title: '暂无合格候选', template: 'blue' }, summary: '暂无合格候选' });
   const elements = [];
   state.candidates.slice(0, 5).forEach((candidate, index) => {
@@ -191,17 +208,22 @@ function renderCandidates(state, cardHelpers) {
     const categories = Array.isArray(candidate.categories) && candidate.categories.length ? candidate.categories.join('、') : '待核实';
     const signals = confirmedSignals(candidate.size_signals);
     elements.push(md([
-      `**${label}｜${clip(candidate.company_name, 26)}｜${clip(candidate.country_code, 4)}｜${clip(candidate.priority, 3)}**`,
-      `推荐理由：${clip(withoutQualification(candidate.assessment_cn), 28)}`,
-      `品类：${clip(categories, 16)}`,
+      `**${label}｜${clip(candidate.company_name, 44)}｜${clip(candidate.priority, 3)}**`,
+      `国家：${countryLabel(candidate.country_code)}`,
+      `推荐理由：${clip(withoutQualification(candidate.assessment_cn), 100)}`,
+      `主营类目：${clip(categories, 70)}`,
       `数据状态：${statusLabel(candidate.status)}｜阶段：${stageLabel(candidate.stage_code)}`,
-      ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), 12)}`] : []),
-      ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), 12)}`] : []),
+      ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), 60)}`] : []),
+      ...(signals.observations.length ? [`已确认公开信号：${clip(signals.observations.join('、'), 60)}`] : []),
       `待核实：${signals.specifications.length ? '联系人角色' : '规格与联系人角色'}`,
-      `下一步：${clip(candidate.next_action_cn, 28)}`
+      `下一步：${clip(candidate.next_action_cn, 80)}`
     ].join('\n')));
+    const officialUrl = publicHttps(candidate.official_url);
+    const productUrl = publicHttps(candidate.product_url);
     elements.push(actions([
-      button(`查看 ${label}`, { a: 'mx.detail', s: state.session.id, v: state.session.version, c: candidate.id }, 'default')
+      button(`查看 ${label}`, { a: 'mx.detail', s: state.session.id, v: state.session.version, c: candidate.id }, 'default'),
+      ...(officialUrl ? [linkButton('官网', officialUrl)] : []),
+      ...(productUrl ? [linkButton('产品页', productUrl)] : [])
     ]));
     if (index < Math.min(4, state.candidates.length - 1)) elements.push(hr());
   });

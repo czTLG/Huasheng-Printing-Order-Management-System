@@ -1,7 +1,7 @@
 # Matrix Supervisor Design
 
 **Date:** 2026-07-18  
-**Status:** Approved concept, written specification pending owner review  
+**Status:** Owner approved; calendar-day trial operation amendment confirmed
 **Scope:** A proactive, auditable supervisor spanning public organization discovery, bilingual communication, factory decisions, multi-item costing coordination, follow-up, and knowledge distillation.
 
 ## 1. Outcome
@@ -99,15 +99,15 @@ The scheduler advances internal work automatically but does not invent missing d
 
 ### 5.2 Default operating cadence
 
-All times use Asia/Shanghai and weekdays unless a task has an earlier explicit deadline:
+All times use Asia/Shanghai and run on every calendar day. Saturday, Sunday, and holidays are ordinary operating days for internal observation, order changes, summaries, task reminders, and escalation:
 
 - 09:00 Bill daily digest: discoveries, replies, due follow-ups, quotes ready for review, and blocked opportunities;
 - 10:00 VMCI decision digest: factory decisions and item-level costing blockers;
 - 16:30 overdue digest: items due today but incomplete, grouped by owner and customer;
-- one-business-day blocker reminder;
-- three-business-day escalation with a red status and at least one safe alternative action;
+- one-calendar-day blocker reminder;
+- three-calendar-day escalation with a red status and at least one safe alternative action;
 - immediate Bill notification for a correlated inbound reply;
-- three-business-day no-reply task after accepted delivery;
+- three-calendar-day no-reply task after accepted delivery;
 - at most two follow-up proposals by default; every external follow-up still requires exact approval.
 
 Duplicate scheduler runs, bridge restarts, stale cards, and repeated clicks replay the same task transition rather than creating duplicate tasks or messages. Quiet hours suppress non-urgent chat notifications while retaining due state.
@@ -365,7 +365,7 @@ The production log warning for missing `im.message.receive_v1` must be resolved 
 - zero unapproved external sends and zero guessed contacts;
 - at least 95% of correlated replies notify Bill within five minutes of synchronization;
 - median factory decision card requires one response turn;
-- quote blockers older than one and three business days are reminded/escalated according to schedule;
+- quote blockers older than one and three calendar days are reminded/escalated according to schedule;
 - Atlas pilot packets have 100% evidence provenance and zero exact-domain duplicates;
 - draft adoption, revision reasons, reply rate, qualified-inquiry rate, and quote-cycle time are measured by cohort, not hidden in chat history;
 - every active knowledge rule has source, confirmer, scope, version, and unresolved/exclusion fields.

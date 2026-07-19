@@ -14,7 +14,7 @@ async function testNarrowClient() {
   const clientPath = require.resolve('../scripts/matrix-client.js');
   delete require.cache[clientPath];
   const client = require(clientPath);
-  assert.deepStrictEqual(Object.keys(client).sort(), ['ackNotification', 'approveVersion', 'candidateDetail', 'claimNotification', 'confirmSend', 'createSession', 'createVersion', 'facets', 'listCandidates', 'nackNotification', 'notificationStatus', 'rehydrateSession', 'retryTranslation', 'reviseVersion', 'selectCandidate', 'startReplyDraft', 'today', 'versionPreview', 'workItems']);
+  assert.deepStrictEqual(Object.keys(client).sort(), ['ackNotification', 'appendLedgerEvent', 'approveVersion', 'candidateDetail', 'claimNotification', 'confirmSend', 'coreTasks', 'createSession', 'createVersion', 'facets', 'listCandidates', 'nackNotification', 'notificationStatus', 'prepareCoreDigests', 'preparePrivateCopy', 'rehydrateSession', 'retryTranslation', 'reviseVersion', 'selectCandidate', 'startReplyDraft', 'today', 'versionPreview', 'workItems']);
   const originalFetch = global.fetch;
   const requests = [];
   global.fetch = async (url, options) => {
@@ -652,6 +652,8 @@ function testWatcherWholeCardBudget() {
     stage_code: index === 4 ? 'recommendation_ready' : 'observed',
     assessment_cn: index === 0 ? `ISO22000认证明确，产品匹配${long}` : `理由${index + 1}${long}`,
     categories: [`品类${index + 1}${long}`, long],
+    official_url: `https://scheduled-${index + 1}.test/`,
+    product_url: `https://scheduled-${index + 1}.test/products`,
     size_signals: [`250g ${long}`, `own factory ${long}`, 'ISO22000/GMP/BRC认证'],
     next_action_cn: `下一步${index + 1}${long}`,
     supplier_signal: index === 0 ? { confidence: 'confirmed', supplier_name: '公开供应方' } : null,
@@ -659,11 +661,11 @@ function testWatcherWholeCardBudget() {
   }));
   const card = watcher.reminderCard(rows);
   const text = visibleText(card);
-  assert.ok([...text].length <= 1500, `watcher reminder uses ${[...text].length} code points`);
+  assert.ok([...text].length <= 3200, `watcher reminder uses ${[...text].length} code points`);
   for (let index = 0; index < 5; index += 1) {
     assert.ok(text.includes(`${String.fromCharCode(65 + index)}｜定时公司${index + 1}`));
   }
-  for (const required of ['推荐理由：', '品类：', '阶段：已观察', '已确认规格：', '已确认公开信号：', '供应商：已确认', '供应商：未知', '切入策略：', '待核实：', '下一步：', '也可 @智能桓 回复 A-E']) {
+  for (const required of ['国家：美国（US）', '推荐理由：', '主营类目：', '官网：', '产品页：', '阶段：已观察', '已确认规格：', '已确认公开信号：', '供应商：已确认', '供应商：未知', '切入策略：', '待核实：', '下一步：', '也可 @智能桓 回复 A-E']) {
     assert.ok(text.includes(required), `watcher reminder missing ${required}`);
   }
   const quick = buttons(card).filter(item => item.behaviors?.[0]?.value?.a === 'mx.quick');
@@ -889,6 +891,7 @@ async function testWholeCardBudget() {
   const rows = Array.from({ length: 5 }, (_, index) => ({
     id: 100 + index, company_name: `极限公司${index + 1}${long}`, country_code: 'US', region: 'americas', city: '',
     official_domain: `long-${index + 1}.test`, official_url: `https://long-${index + 1}.test/`,
+    product_url: `https://long-${index + 1}.test/products`,
     categories: [long, long], format_signals: [long], size_signals: [long], scale_tier: 'large',
     priority: 'P0', fit_score: 99, demand_fit_score: 99, access_score: 99, confidence: 0.99,
     status: index === 1 ? 'needs_review' : 'valid', stage_code: 'observed', audit_state: 'audited',
@@ -910,9 +913,9 @@ async function testWholeCardBudget() {
   });
   await registered.onMessage({ msg: { content: '开发客户', chatId: 'chat-long', threadId: '', senderId: 'ou-long' } });
   const text = visibleText(sent[0]);
-  assert.ok([...text].length <= 1500, `whole card uses ${[...text].length} code points`);
+  assert.ok([...text].length <= 3200, `whole card uses ${[...text].length} code points`);
   for (let index = 0; index < 5; index += 1) assert.ok(text.includes(`${String.fromCharCode(65 + index)}｜极限公司${index + 1}`));
-  for (const core of ['推荐理由：', '待核实：', '下一步：']) assert.ok(text.includes(core));
+  for (const core of ['国家：美国（US）', '推荐理由：', '主营类目：', '待核实：', '下一步：', '官网', '产品页']) assert.ok(text.includes(core));
 }
 
 async function testExpiredSessionRecovery() {

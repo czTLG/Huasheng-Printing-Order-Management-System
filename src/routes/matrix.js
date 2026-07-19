@@ -587,6 +587,7 @@ function createMatrixRouter({
         id: row.id, company_name: row.company_name, country_code: row.country_code,
         region: row.region, city: row.city, official_domain: row.official_domain,
         official_url: row.official_url, categories: row.categories,
+        product_url: row.product_url,
         format_signals: row.format_signals, size_signals: row.size_signals,
         scale_tier: row.scale_tier, priority: row.priority, fit_score: row.fit_score,
         demand_fit_score: row.demand_fit_score, access_score: row.access_score,
