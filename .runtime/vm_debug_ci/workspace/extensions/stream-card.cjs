@@ -258,10 +258,9 @@ function authoritativeContextBlock(matches) {
   const bounded = [...payload].slice(0, 24000).join('');
   const imagePrompts = rows.map(item => {
     const images = (item.attachments || []).filter(attachment => attachment.evidence_role === 'product_reference' && attachment.display_recommended === true && attachment.availability === 'available');
-    const company = String(item.customer?.company_name || item.customer?.name || '该客户').trim();
     const pending = (item.attachments || []).filter(attachment => attachment.availability === 'available' && String(attachment.mime_type || '').startsWith('image/') && !attachment.evidence_role);
     return [
-      images.length ? `已识别 ${images.length} 张产品参考图。说明图片观察结果后，必须询问：是否把这${images.length}张产品图发到群里？需要请回复：发图。不要主动发送。长指令“显示 ${company} 客户图片”仍可使用。` : '',
+      images.length ? `已识别 ${images.length} 张产品参考图。说明图片观察结果后，必须询问：是否把这${images.length}张产品图发到群里？需要时只要回复“显示”或“发图”，不要要求重复客户名称，也不要主动发送。` : '',
       pending.length ? `另有 ${pending.length} 张尚未分类的图片；必须先使用图片查看能力逐张判断是产品图、文件照片还是邮件签名素材，再决定是否建议展示，不能只报附件数量。` : ''
     ].filter(Boolean).join(' ');
   }).filter(Boolean);
@@ -715,7 +714,7 @@ function register(context) {
         }
         return true;
       }
-      const shortAssetCommand = /^(?:发图|显示图片)[！!。.]?$/u.test(text);
+      const shortAssetCommand = /^(?:显示|发图|看图|查看图片|查看照片|看照片|照片|图片|显示图片|显示照片)[！!。.]?$/u.test(text);
       if (shortAssetCommand || /^(?:请)?(?:显示|发出|把).*(?:客户)?图片(?:发出来)?[！!。.]?$/u.test(text)) {
         const openId = String(msg?.senderId || '').trim();
         const binding = shortAssetCommand ? assetContext.resolve({ chatId: msg?.chatId, operatorId: openId }) : null;

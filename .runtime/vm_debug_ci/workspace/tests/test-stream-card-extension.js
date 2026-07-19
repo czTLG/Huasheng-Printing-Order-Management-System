@@ -148,8 +148,9 @@ async function testShortImageConfirmationUsesBoundContext() {
 
     const mention = { content: '新加坡客户你看到了吗？', chatId: 'chat-context', senderId: 'ou-context' };
     assert.strictEqual(await registered.onMessage({ msg: mention }), false);
-    assert.match(mention.content, /需要请回复：发图/);
-    assert.strictEqual(await registered.onMessage({ msg: { content: '发图', chatId: 'chat-context', senderId: 'ou-context', messageId: 'confirm-message' } }), true);
+    assert.match(mention.content, /只要回复“显示”或“发图”/);
+    assert.doesNotMatch(mention.content, /长指令|客户图片/);
+    assert.strictEqual(await registered.onMessage({ msg: { content: '显示', chatId: 'chat-context', senderId: 'ou-context', messageId: 'confirm-message' } }), true);
     assert.deepStrictEqual(calls, [['resolve', '新加坡客户你看到了吗？'], ['record', 5878]]);
     assert.strictEqual(delivered.length, 1);
     assert.strictEqual(delivered[0].absolutePath, '/refs/matrix-inbox-attachments/product.png');
