@@ -182,6 +182,23 @@ function confirmSend(openId, workItemId, versionId, input) {
   return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}/send`, { method: 'POST', body });
 }
 
+function prepareThreadRoute(openId,input){
+  const body=exactObject(input,new Set(['customer_id','chat_id','thread_id','idempotency_key']),'thread prepare');
+  body.customer_id=positiveId(body.customer_id,'customer id');
+  return call(openId,'/thread-routes/prepare',{method:'POST',body});
+}
+function approveThreadRoute(openId,routeId,input){
+  const body=exactObject(input,new Set(['expected_revision','expected_content_hash','idempotency_key']),'thread approval');
+  body.expected_revision=positiveId(body.expected_revision,'expected revision');
+  return call(openId,`/thread-routes/${positiveId(routeId,'route id')}/approve`,{method:'POST',body});
+}
+function previewThreadRoute(openId,routeId){return call(openId,`/thread-routes/${positiveId(routeId,'route id')}/preview`);}
+function confirmThreadRoute(openId,routeId,input){
+  const body=exactObject(input,new Set(['expected_revision','expected_content_hash','chat_id','thread_id','card_event_id','idempotency_key']),'thread confirmation');
+  body.expected_revision=positiveId(body.expected_revision,'expected revision');
+  return call(openId,`/thread-routes/${positiveId(routeId,'route id')}/send`,{method:'POST',body});
+}
+
 function startReplyDraft(openId, notificationId) {
   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/reply-draft`, { method: 'POST', body: {} });
 }
@@ -216,4 +233,5 @@ module.exports = {
   retryTranslation, claimNotification, ackNotification, nackNotification,
   notificationStatus, createVersion, reviseVersion, approveVersion,
   versionPreview, confirmSend
+  , prepareThreadRoute, approveThreadRoute, previewThreadRoute, confirmThreadRoute
 };

@@ -5,7 +5,7 @@ const fs = require('fs');
 const defaultChoiceContext = require('../scripts/matrix-choice-context.js');
 const defaultAssetContext = require('../scripts/matrix-asset-context.js');
 
-const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.reply_draft', 'mx.retry_translation'];
+const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.reply_draft', 'mx.retry_translation', 'mx.thread_approve', 'mx.thread_preview', 'mx.thread_confirm'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REVISION_TTL_MS = 10 * 60 * 1000;
@@ -551,6 +551,28 @@ function renderWorkItems(rows, cardHelpers) {
   return card([md(lines.length ? lines.join('\n') : '暂无进行中项目'), note('这里只展示当前操作者负责的工作项。')], { summary: '进行中' });
 }
 
+function threadValue(route, action) {
+  return { a: action, i: Number(route.id), v: Number(route.revision), h: String(route.content_hash || '') };
+}
+
+function renderThreadDraft(route, cardHelpers) {
+  const { card, md, note, actions, button } = cardHelpers;
+  return card([
+    md(`**收件人**：${clip(route.recipient_email, 180)}\n**主题**：${clip(route.subject, 240)}\n\n**英文正文**\n${clip(route.body_en, 3500)}\n\n**中文翻译**\n${clip(route.body_cn, 3500)}`),
+    note(`客户记录 #${Number(route.customer_id)}｜询盘 #${Number(route.inquiry_id)}｜附件 ${Number(route.attachment_manifest?.length || 0)} 个；尚未发送。`),
+    actions([button('采用并查看最终预览', threadValue(route, 'mx.thread_approve'), 'primary')])
+  ], { header: { title: '现有往来回复草稿', template: 'blue' }, summary: '现有往来回复草稿待审阅' });
+}
+
+function renderThreadPreview(preview, cardHelpers) {
+  const { card, md, note, actions, button } = cardHelpers;
+  const gates = ['authorization','thread','approval','suppression','readiness','duplicate'].map(name => `${name}：${preview?.[name]?.ok === true ? '通过' : `阻断(${(preview?.[name]?.reasons || []).join(',')})`}`).join('\n');
+  const elements = [md(`**收件人**：${clip(preview.recipient_email, 180)}\n**主题**：${clip(preview.subject, 240)}\n\n**英文正文**\n${clip(preview.body_en, 3500)}\n\n**中文翻译**\n${clip(preview.body_cn, 3500)}\n\n${gates}`)];
+  if (preview.allowed === true) elements.push(actions([button('确认发送', threadValue(preview, 'mx.thread_confirm'), 'primary')]));
+  else elements.push(note('当前门禁未全部通过，不会提交发送。'));
+  return card(elements, { header: { title: '最终发送预览', template: preview.allowed === true ? 'orange' : 'red' }, summary: '最终发送预览' });
+}
+
 function register(context) {
   if (process.env.MATRIX_DELIVERY_ENABLED !== '0') throw new Error('MATRIX_DELIVERY_ENABLED must be exactly 0');
   const { channel, dispatcher, sendManagedCard, card: cardHelpers } = context;
@@ -565,6 +587,7 @@ function register(context) {
   const selectionEvents = new Map();
   const revisionContexts = new Map();
   const sendConfirmationContexts = new Map();
+  const threadConfirmationContexts = new Map();
   const unmentionedFollowups = new Map();
   const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
   const clearReminderPoll = context.clearReminderPoll || (timer => clearInterval(timer));
@@ -986,6 +1009,24 @@ function register(context) {
       `translation_status=${result.translation_status}；${result.translation_status === 'ready' ? '请重新查看回复通知。' : '翻译仍待处理，未生成推测内容。'}`));
   }
 
+  function threadActionValue(evt, value) {
+    const openId=String(evt?.operator?.openId||'').trim(),routeId=Number(value?.i),revision=Number(value?.v),hash=String(value?.h||'').trim().toLowerCase();
+    if(!openId||!Number.isInteger(routeId)||routeId<1||!Number.isInteger(revision)||revision<1||!/^[a-f0-9]{64}$/.test(hash)) throw new Error('valid thread action required');
+    return{openId,routeId,revision,hash};
+  }
+
+  async function threadApproveAction({evt,value}){
+    const binding=threadActionValue(evt,value);if(typeof client.approveThreadRoute!=='function'||typeof client.previewThreadRoute!=='function')throw new Error('thread approval service unavailable');
+    const approved=await client.approveThreadRoute(binding.openId,binding.routeId,{expected_revision:binding.revision,expected_content_hash:binding.hash,idempotency_key:actionKey('thread-approve',binding.openId,binding.routeId,binding.revision,binding.hash)});
+    const preview=await client.previewThreadRoute(binding.openId,binding.routeId);const key=sessionKey(evt.chatId,binding.openId,evt.threadId);
+    if(preview.allowed===true)threadConfirmationContexts.set(key,{route:approved,preview,expiresAt:clockMillis()+REVISION_TTL_MS});else threadConfirmationContexts.delete(key);
+    await sendForEvent(evt,renderThreadPreview(preview,cardHelpers));
+  }
+
+  async function threadPreviewAction({evt,value}){const binding=threadActionValue(evt,value);const preview=await client.previewThreadRoute(binding.openId,binding.routeId);const key=sessionKey(evt.chatId,binding.openId,evt.threadId);if(preview.allowed===true)threadConfirmationContexts.set(key,{route:preview,preview,expiresAt:clockMillis()+REVISION_TTL_MS});await sendForEvent(evt,renderThreadPreview(preview,cardHelpers));}
+
+  async function threadConfirmAction({evt,value}){const binding=threadActionValue(evt,value);const key=sessionKey(evt.chatId,binding.openId,evt.threadId);const context=threadConfirmationContexts.get(key);if(!context||context.expiresAt<=clockMillis()||Number(context.route.id)!==binding.routeId||context.route.content_hash!==binding.hash){threadConfirmationContexts.delete(key);await sendForEvent(evt,infoCard(cardHelpers,'当前没有绑定到本会话的最终预览，尚未发送。'));return;}threadConfirmationContexts.delete(key);const result=await client.confirmThreadRoute(binding.openId,binding.routeId,{expected_revision:binding.revision,expected_content_hash:binding.hash,chat_id:String(evt.chatId||''),thread_id:String(evt.threadId||''),card_event_id:String(evt.messageId||''),idempotency_key:actionKey('thread-confirm',binding.openId,binding.routeId,binding.revision,binding.hash)});await sendForEvent(evt,infoCard(cardHelpers,result.state==='accepted'?'邮件已由发送器接受，客户进度已更新。':result.state==='failed'?'邮件未被接收，未自动重试。':'发送结果待人工核对，系统已阻止重复发送。'));}
+
   const actionHandlers = {
     'mx.today': todayAction,
     'mx.pick': detailAction,
@@ -1005,6 +1046,9 @@ function register(context) {
     'mx.confirm': confirmAction,
     'mx.reply_draft': replyDraftAction,
     'mx.retry_translation': retryTranslationAction
+    , 'mx.thread_approve': threadApproveAction
+    , 'mx.thread_preview': threadPreviewAction
+    , 'mx.thread_confirm': threadConfirmAction
   };
   for (const action of ACTIONS) {
     dispatcher.on(action, async payload => {
@@ -1028,6 +1072,7 @@ function register(context) {
       clearReminderPoll(reminderTimer);
       unmentionedFollowups.clear();
       sendConfirmationContexts.clear();
+      threadConfirmationContexts.clear();
     },
     async shouldHandleUnmentioned({ msg }) {
       if (msg?.mentionedBot || msg?.mentionAll) return false;
@@ -1042,6 +1087,12 @@ function register(context) {
     async onMessage({ msg }) {
       const text = String(msg?.content || '').trim();
       const revisionKey = sessionKey(msg?.chatId, msg?.senderId, msg?.threadId);
+      if (/^发送邮件[！!。.]?$/u.test(text)) {
+        const openId=String(msg?.senderId||'').trim();const binding=assetContext.resolve({chatId:msg?.chatId,operatorId:openId});
+        if(!binding||typeof client.prepareThreadRoute!=='function'){await sendManagedCard(channel,msg.chatId,infoCard(cardHelpers,'当前没有绑定到本会话的客户邮件上下文，尚未发送。'),msg.messageId,Boolean(msg.threadId));return true;}
+        const route=await client.prepareThreadRoute(openId,{customer_id:Number(binding.recordId),chat_id:String(msg.chatId||''),thread_id:String(msg.threadId||''),idempotency_key:actionKey('thread-prepare',openId,binding.recordId,msg.chatId,msg.threadId||'')});
+        await sendManagedCard(channel,msg.chatId,renderThreadDraft(route,cardHelpers),msg.messageId,Boolean(msg.threadId));return true;
+      }
       const revision = revisionContexts.get(revisionKey);
       if (revision) {
         if (revision.expiresAt <= clockMillis()) {
@@ -1069,6 +1120,10 @@ function register(context) {
         }
       }
       if (/^(?:确认发送|你?直接发送给[他她]|发送给[他她])[！!。.]?$/u.test(text)) {
+        const threadContext=threadConfirmationContexts.get(revisionKey);
+        if(threadContext&&threadContext.expiresAt>clockMillis()){
+          await threadConfirmAction({evt:{operator:{openId:String(msg.senderId||'').trim()},chatId:msg.chatId,threadId:msg.threadId||'',messageId:msg.messageId},value:threadValue(threadContext.route,'mx.thread_confirm')});return true;
+        }
         const context = sendConfirmationContexts.get(revisionKey);
         if (!context || context.expiresAt <= clockMillis()) {
           sendConfirmationContexts.delete(revisionKey);

@@ -20,11 +20,11 @@ async function testNarrowClient() {
   delete require.cache[clientPath];
   const client = require(clientPath);
   assert.deepStrictEqual(Object.keys(client).sort(), [
-    'ackInboxJob', 'ackNotification', 'approveVersion', 'candidateDetail',
-    'claimInboxJob', 'claimNotification', 'confirmSend', 'contextRecord',
+    'ackInboxJob', 'ackNotification', 'approveThreadRoute', 'approveVersion', 'candidateDetail',
+    'claimInboxJob', 'claimNotification', 'confirmSend', 'confirmThreadRoute', 'contextRecord',
     'contextResolve', 'contextSearch', 'createSession', 'createVersion', 'facets',
     'failInboxJob', 'inboxWorkbench', 'listCandidates', 'nackNotification',
-    'notificationStatus', 'rehydrateSession', 'retryTranslation', 'reviseVersion',
+    'notificationStatus', 'prepareThreadRoute', 'previewThreadRoute', 'rehydrateSession', 'retryTranslation', 'reviseVersion',
     'selectCandidate', 'startReplyDraft', 'today', 'versionPreview', 'workItems'
   ]);
   const originalFetch = global.fetch;
@@ -1581,7 +1581,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
   incomplete.dispose();
   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
-  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.approve', 'mx.back', 'mx.category', 'mx.confirm', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.preview', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.review', 'mx.revise', 'mx.select', 'mx.today', 'mx.work']);
+  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.approve', 'mx.back', 'mx.category', 'mx.confirm', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.preview', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.review', 'mx.revise', 'mx.select', 'mx.thread_approve', 'mx.thread_confirm', 'mx.thread_preview', 'mx.today', 'mx.work']);
 
   console.log('stream card extension tests passed');
 })().catch(error => {

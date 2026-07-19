@@ -359,6 +359,9 @@ function createMatrixRouter({
   reviewService = require('../services/matrixStreamReview'),
   deliveryService,
   previewService,
+  threadRouteService,
+  threadPreviewService,
+  threadDeliveryService,
   correlationService = require('../services/matrixStreamCorrelation'),
   textService = createMatrixStreamText(),
   claimOptions = {}
@@ -902,6 +905,47 @@ function createMatrixRouter({
         state: 'draft_pending'
       });
     } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/thread-routes/prepare', (req, res) => {
+    try {
+      if (!threadRouteService || typeof threadRouteService.prepare !== 'function') throw new Error('thread route service unavailable');
+      const body = rejectUnknown(req.body, new Set(['customer_id','chat_id','thread_id','idempotency_key']), 'body');
+      const identity = reviewIdentity(req);
+      res.json(threadRouteService.prepare({
+        actorUserId: identity.actorUserId, bindingId: identity.bindingId,
+        customerId: positiveInteger(body.customer_id, 'customer id'), chatId: String(body.chat_id || '').trim(),
+        threadId: String(body.thread_id || '').trim(), idempotencyKey: String(body.idempotency_key || '').trim()
+      }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/thread-routes/:id/approve', (req, res) => {
+    try {
+      if (!threadRouteService || typeof threadRouteService.approve !== 'function') throw new Error('thread route service unavailable');
+      const body = rejectUnknown(req.body, new Set(['expected_revision','expected_content_hash','idempotency_key']), 'body');
+      const identity = reviewIdentity(req);
+      res.json(threadRouteService.approve({actorUserId:identity.actorUserId,bindingId:identity.bindingId,routeId:positiveInteger(req.params.id,'route id'),expectedRevision:positiveInteger(body.expected_revision,'expected revision'),expectedContentHash:String(body.expected_content_hash||''),idempotencyKey:String(body.idempotency_key||'')}));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.get('/thread-routes/:id/preview', async (req, res) => {
+    try {
+      rejectUnknown(req.query, new Set(), 'query');
+      if (!threadRouteService || !threadPreviewService) throw new Error('thread preview service unavailable');
+      const identity = reviewIdentity(req);
+      const route = threadRouteService.preview({actorUserId:identity.actorUserId,bindingId:identity.bindingId,routeId:positiveInteger(req.params.id,'route id')});
+      res.json(await threadPreviewService.project(route));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/thread-routes/:id/send', async (req, res) => {
+    try {
+      if (!threadDeliveryService || typeof threadDeliveryService.confirm !== 'function') throw new Error('delivery service unavailable');
+      const body=rejectUnknown(req.body,new Set(['expected_revision','expected_content_hash','chat_id','thread_id','card_event_id','idempotency_key']),'body');
+      const identity=reviewIdentity(req);
+      res.json(await threadDeliveryService.confirm({actorUserId:identity.actorUserId,bindingId:identity.bindingId,routeId:positiveInteger(req.params.id,'route id'),expectedRevision:positiveInteger(body.expected_revision,'expected revision'),expectedContentHash:String(body.expected_content_hash||''),chatId:String(body.chat_id||''),threadId:String(body.thread_id||''),cardEventId:String(body.card_event_id||''),idempotencyKey:String(body.idempotency_key||'')}));
+    } catch (error) { sendDeliveryError(res, error); }
   });
 
   router.post('/notifications/:id/retry-translation', async (req, res) => {

@@ -44,8 +44,7 @@ function createMatrixStreamReadiness({ resolveTxt, verifyTransport, clock = () =
   if (typeof resolveTxt !== 'function' || typeof verifyTransport !== 'function' || typeof clock !== 'function') {
     throw new Error('readiness dependencies required');
   }
-  return {
-    async check(input = {}) {
+  async function perform(input = {}, requirePolicy = true) {
       const domain = String(input.domain || '').trim().toLowerCase().replace(/\.$/, '');
       const selector = String(input.selector || '').trim().toLowerCase();
       const countryCode = String(input.countryCode || '').trim().toUpperCase();
@@ -101,13 +100,18 @@ function createMatrixStreamReadiness({ resolveTxt, verifyTransport, clock = () =
       if (!row?.dmarc_ok) hardFailures.push('missing_dmarc');
       if (!row?.tls_ok) hardFailures.push('missing_tls');
       if (!row?.smtp_ok) hardFailures.push('missing_smtp_verification');
-      try {
-        if (!currentPolicy(input.db, countryCode, channel, nowMs)) hardFailures.push('country_channel_policy_not_approved');
-      } catch (_) {
-        hardFailures.push('country_channel_policy_not_approved');
+      if (requirePolicy) {
+        try {
+          if (!currentPolicy(input.db, countryCode, channel, nowMs)) hardFailures.push('country_channel_policy_not_approved');
+        } catch (_) {
+          hardFailures.push('country_channel_policy_not_approved');
+        }
       }
       return { ok: hardFailures.length === 0, hardFailures: [...new Set(hardFailures)], checkedAt: row?.checked_at || null };
-    }
+  }
+  return {
+    check(input = {}) { return perform(input, true); },
+    checkSender(input = {}) { return perform(input, false); }
   };
 }
 

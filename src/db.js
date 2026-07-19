@@ -973,6 +973,68 @@ function initDb() {
       FOREIGN KEY(created_by) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_thread_routes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id INTEGER NOT NULL,
+      customer_id INTEGER NOT NULL,
+      inquiry_id INTEGER NOT NULL,
+      crm_draft_id INTEGER NOT NULL,
+      source_crm_message_id INTEGER NOT NULL,
+      source_email_message_id INTEGER NOT NULL,
+      chat_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL DEFAULT '',
+      revision INTEGER NOT NULL,
+      recipient_email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      body_en TEXT NOT NULL,
+      body_cn TEXT NOT NULL,
+      in_reply_to TEXT NOT NULL,
+      references_header TEXT NOT NULL DEFAULT '',
+      attachment_manifest_json TEXT NOT NULL DEFAULT '[]',
+      content_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('draft','approved','superseded','sent','delivery_ambiguous')),
+      approved_by INTEGER,
+      approved_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(customer_id, inquiry_id, revision),
+      FOREIGN KEY(crm_draft_id) REFERENCES crm_reply_drafts(id),
+      FOREIGN KEY(source_crm_message_id) REFERENCES crm_messages(id),
+      FOREIGN KEY(source_email_message_id) REFERENCES email_messages(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_thread_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      route_id INTEGER NOT NULL,
+      actor_user_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_hash TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      before_json TEXT NOT NULL DEFAULT '{}',
+      after_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(route_id) REFERENCES matrix_thread_routes(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_thread_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      route_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      content_hash TEXT NOT NULL,
+      message_id TEXT NOT NULL UNIQUE,
+      state TEXT NOT NULL CHECK(state IN ('pending','sending','accepted','failed','ambiguous')),
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      error_class TEXT NOT NULL DEFAULT '',
+      owner_token TEXT NOT NULL DEFAULT '',
+      lease_expires_at TEXT NOT NULL DEFAULT '',
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(route_id, content_hash),
+      FOREIGN KEY(route_id) REFERENCES matrix_thread_routes(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_stream_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id INTEGER NOT NULL,

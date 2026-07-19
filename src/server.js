@@ -41,6 +41,9 @@ const { createMatrixRelayFactory } = require('./services/matrixRelayFactory');
 const { createMatrixStreamDelivery } = require('./services/matrixStreamDelivery');
 const { createMatrixStreamReadiness } = require('./services/matrixStreamReadiness');
 const { createMatrixStreamPreview } = require('./services/matrixStreamPreview');
+const { createMatrixThreadRoute } = require('./services/matrixThreadRoute');
+const { createMatrixThreadPreview } = require('./services/matrixThreadPreview');
+const { createMatrixThreadDelivery } = require('./services/matrixThreadDelivery');
 
 initDb();
 
@@ -59,6 +62,9 @@ const matrixBridgeAuth = createMatrixBridgeAuth({ db });
 let matrixRelayFactory = null;
 let matrixDeliveryService = null;
 let matrixPreviewService = null;
+const matrixThreadRouteService = createMatrixThreadRoute({ db });
+let matrixThreadPreviewService = null;
+let matrixThreadDeliveryService = null;
 if (process.env.MATRIX_RELAY_ENABLED === '1') {
   matrixRelayFactory = createMatrixRelayFactory({ env: process.env });
   const matrixReadinessService = createMatrixStreamReadiness({
@@ -82,6 +88,8 @@ if (process.env.MATRIX_RELAY_ENABLED === '1') {
     messageIdDomain: process.env.MATRIX_MESSAGE_ID_DOMAIN || 'gdhspack.com',
     dkimSelector: process.env.MATRIX_DKIM_SELECTOR
   });
+  matrixThreadPreviewService = createMatrixThreadPreview({db,readinessService:matrixReadinessService,senderDomain:process.env.MATRIX_MESSAGE_ID_DOMAIN||'gdhspack.com',dkimSelector:process.env.MATRIX_DKIM_SELECTOR});
+  matrixThreadDeliveryService = createMatrixThreadDelivery({db,transport:matrixRelayFactory.transport,previewService:matrixThreadPreviewService,fromAddress:matrixRelayFactory.senderAddress,replyToAddress:matrixRelayFactory.replyToAddress,messageIdDomain:process.env.MATRIX_MESSAGE_ID_DOMAIN||'gdhspack.com'});
 }
 let matrixRouter = null;
 function dispatchMatrix(req, res, next) {
@@ -91,6 +99,9 @@ function dispatchMatrix(req, res, next) {
       audit,
       deliveryService: matrixDeliveryService,
       previewService: matrixPreviewService
+      , threadRouteService: matrixThreadRouteService
+      , threadPreviewService: matrixThreadPreviewService
+      , threadDeliveryService: matrixThreadDeliveryService
     });
     return matrixRouter(req, res, next);
   } catch (error) {
