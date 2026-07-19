@@ -15,6 +15,7 @@ const extension = require('../extensions/stream-card.cjs');
 async function testNarrowClient() {
   process.env.MATRIX_API_BASE_URL = 'https://matrix.test/api/matrix';
   process.env.MATRIX_BRIDGE_TOKEN = 'test-bridge-token';
+  process.env.MATRIX_CONTEXT_OPEN_ID = 'ou-context-service';
   const clientPath = require.resolve('../scripts/matrix-client.js');
   delete require.cache[clientPath];
   const client = require(clientPath);
@@ -47,7 +48,10 @@ async function testNarrowClient() {
     assert.ok(requests.every(item => item.options.redirect === 'manual'));
     assert.ok(requests.every(item => item.options.signal));
     assert.ok(requests.every(item => item.options.headers['x-matrix-bridge-token'] === 'test-bridge-token'));
-    assert.ok(requests.every(item => item.options.headers['x-feishu-open-id'] === 'ou-client'));
+    const contextRequests = requests.filter(item => new URL(item.url).pathname.includes('/context/'));
+    const operatorRequests = requests.filter(item => !new URL(item.url).pathname.includes('/context/'));
+    assert.ok(contextRequests.every(item => item.options.headers['x-feishu-open-id'] === 'ou-context-service'));
+    assert.ok(operatorRequests.every(item => item.options.headers['x-feishu-open-id'] === 'ou-client'));
     assert.strictEqual(requests[1].options.method, 'POST');
     assert.strictEqual(requests[2].options.method, 'PATCH');
     assert.ok(requests[2].url.endsWith('/sessions/7'));
@@ -158,6 +162,24 @@ async function testShortImageConfirmationUsesBoundContext() {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+async function testImageConfirmationReportsReadFailure() {
+  const sent = [];
+  const timer = { unref() {} };
+  const registered = extension.register({
+    channel: {}, dispatcher: { on: () => undefined }, card: helpers(),
+    assetContext: { resolve: () => ({ recordId: 5878 }), bind: () => undefined },
+    scheduleReminderPoll: () => timer, clearReminderPoll: () => undefined,
+    logReminder: () => undefined,
+    sendManagedCard: async (_channel, _chat, card) => sent.push(card),
+    client: {
+      contextRecord: async () => { const error = new Error('matrix API HTTP 403'); error.status = 403; throw error; }
+    }
+  });
+  assert.strictEqual(await registered.onMessage({ msg: { content: '显示', chatId: 'chat-context', senderId: 'ou-context', messageId: 'confirm-message' } }), true);
+  assert.match(visibleText(sent[0]), /资料读取失败.*显示.*重试/);
+  registered.dispose();
 }
 
 async function testReadOnlyWatcher() {
@@ -728,6 +750,7 @@ async function testRecommendationSnapshotTransitions() {
   await testNarrowClient();
   await testAuthoritativeContextInjection();
   await testShortImageConfirmationUsesBoundContext();
+  await testImageConfirmationReportsReadFailure();
   await testReadOnlyWatcher();
   testWatcherWholeCardBudget();
   await testFreshQuickChoiceRecovery();

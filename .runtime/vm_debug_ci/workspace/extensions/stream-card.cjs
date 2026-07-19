@@ -718,9 +718,16 @@ function register(context) {
       if (shortAssetCommand || /^(?:请)?(?:显示|发出|把).*(?:客户)?图片(?:发出来)?[！!。.]?$/u.test(text)) {
         const openId = String(msg?.senderId || '').trim();
         const binding = shortAssetCommand ? assetContext.resolve({ chatId: msg?.chatId, operatorId: openId }) : null;
-        const resolved = shortAssetCommand
-          ? (binding && typeof client.contextRecord === 'function' ? await client.contextRecord(openId, binding.recordId) : { matches: [] })
-          : (typeof client.contextResolve === 'function' ? await client.contextResolve(openId, text) : { matches: [] });
+        let resolved;
+        try {
+          resolved = shortAssetCommand
+            ? (binding && typeof client.contextRecord === 'function' ? await client.contextRecord(openId, binding.recordId) : { matches: [] })
+            : (typeof client.contextResolve === 'function' ? await client.contextResolve(openId, text) : { matches: [] });
+        } catch (error) {
+          logReminder(`[stream-card] asset context read failed: ${error?.status || error?.message || 'unknown error'}`);
+          await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '图片资料读取失败，请稍后回复“显示”重试。'), msg.messageId, Boolean(msg.threadId));
+          return true;
+        }
         const images = (resolved?.matches || []).flatMap(item => (item.attachments || []).filter(attachment =>
           attachment.evidence_role === 'product_reference'
           && attachment.display_recommended === true

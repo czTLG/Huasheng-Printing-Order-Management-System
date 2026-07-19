@@ -11,6 +11,10 @@ function operatorId(value) {
   return text;
 }
 
+function contextOpenId(fallback) {
+  return operatorId(process.env.MATRIX_CONTEXT_OPEN_ID || process.env.MATRIX_OWNER_OPEN_ID || fallback);
+}
+
 function exactObject(value, allowed, label) {
   const input = value == null ? {} : value;
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error(`${label} must be an object`);
@@ -126,17 +130,17 @@ function inboxWorkbench(openId) {
 function contextSearch(openId, query) {
   const value = String(query || '').trim();
   if (value.length < 2 || value.length > 160) throw new Error('context query must contain 2 to 160 characters');
-  return call(openId, '/context/search', { query: { query: value } });
+  return call(contextOpenId(openId), '/context/search', { query: { query: value } });
 }
 
 function contextResolve(openId, text) {
   const value = String(text || '').trim();
   if (value.length < 2 || value.length > 2000) throw new Error('conversation context must contain 2 to 2000 characters');
-  return call(openId, '/context/resolve', { query: { text: value } });
+  return call(contextOpenId(openId), '/context/resolve', { query: { text: value } });
 }
 
 function contextRecord(openId, recordId) {
-  return call(openId, `/context/records/${positiveId(recordId, 'context record id')}`);
+  return call(contextOpenId(openId), `/context/records/${positiveId(recordId, 'context record id')}`);
 }
 
 function ackInboxJob(openId, jobId, input) {
