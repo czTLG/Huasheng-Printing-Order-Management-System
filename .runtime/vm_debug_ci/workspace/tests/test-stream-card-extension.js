@@ -915,6 +915,7 @@ async function testReminderPollingAndRetry() {
   let failReceiptOnce = true;
   let failRemoveOnce = false;
   let activeTimers = 0;
+  let diagnosticCalls = 0;
   const reminderLogs = [];
   try {
     process.env.STREAM_CHAT_ID = 'chat-poll';
@@ -926,6 +927,14 @@ async function testReminderPollingAndRetry() {
       logReminder: message => reminderLogs.push(message),
       scheduleReminderPoll: callback => { poll = callback; activeTimers += 1; return { unref() {} }; },
       clearReminderPoll: () => { activeTimers -= 1; },
+      diagnosticsWatcher: {
+        deliverNextAlert: async ({ channel, sendManagedCard }) => {
+          assert.ok(channel);
+          assert.strictEqual(typeof sendManagedCard, 'function');
+          diagnosticCalls += 1;
+          return false;
+        }
+      },
       writeReminderReceipt: (receiptPath, receipt) => {
         if (failReceiptOnce) { failReceiptOnce = false; throw new Error('crash before local receipt'); }
         fs.writeFileSync(receiptPath, JSON.stringify(receipt));
@@ -951,6 +960,7 @@ async function testReminderPollingAndRetry() {
     assert.strictEqual(attempts, 1, 'overlapping timer ticks must not duplicate delivery');
     releaseFirstSend();
     await Promise.all([firstPoll, overlappingPoll]);
+    assert.strictEqual(diagnosticCalls, 1, 'shared bounded poller must check diagnostics once');
     assert.strictEqual(fs.existsSync(spoolPath), false);
     assert.strictEqual(fs.existsSync(inflightPath), true, 'post-send receipt crash must remain inflight');
     const inflight = JSON.parse(fs.readFileSync(inflightPath, 'utf8'));
