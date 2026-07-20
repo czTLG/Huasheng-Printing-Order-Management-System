@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Building2, Printer, Layers, ClipboardList, Box, Search, ChevronLeft,
   Plus, UploadCloud, AlertCircle, History, Save, FileText, CheckCircle2,
@@ -104,6 +104,7 @@ export default function WorkOrders() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [historyProducts, setHistoryProducts] = useState<string[]>([]);
   const [metaLoaded, setMetaLoaded] = useState(false);
+  const metaRequestRef = useRef<Promise<void> | null>(null);
 
   // Global search
   const [globalSearchQ, setGlobalSearchQ] = useState('');
@@ -136,10 +137,6 @@ export default function WorkOrders() {
   const currentUser = mockService.getUser();
 
   useEffect(() => {
-    loadMeta();
-  }, []);
-
-  useEffect(() => {
     fetchWorkOrders();
     fetchDrafts();
   }, [page, pageSize, woSearch]);
@@ -168,24 +165,32 @@ export default function WorkOrders() {
     setHistoryProducts([...new Set(nextHistoryProducts)].slice(0, 100));
   }, [formData.salesman, formData.customer_name, workOrders]);
 
-  const loadMeta = async () => {
-    try {
-      const meta = await mockService.getWorkOrderMeta();
-      const nextSalespersons = Array.isArray(meta?.salespersons) && meta.salespersons.length
-        ? meta.salespersons
-        : [{ id: 0, name: currentUser.username || '' }];
-      setSalespersons(nextSalespersons);
-      const nextMaterials = Array.isArray(meta?.materialOptions?.names) && meta.materialOptions.names.length
-        ? meta.materialOptions.names
-        : INITIAL_MATERIALS;
-      setMaterials(nextMaterials);
-      if (meta?.lastEmailTo && !formData.mail_to_list[0]) {
-        setFormData(prev => ({ ...prev, mail_to_list: [String(meta.lastEmailTo || '')] }));
+  const loadMeta = async (): Promise<void> => {
+    if (metaLoaded) return;
+    if (metaRequestRef.current) return metaRequestRef.current;
+    const request = (async () => {
+      try {
+        const meta = await mockService.getWorkOrderMeta();
+        const nextSalespersons = Array.isArray(meta?.salespersons) && meta.salespersons.length
+          ? meta.salespersons
+          : [{ id: 0, name: currentUser.username || '' }];
+        setSalespersons(nextSalespersons);
+        const nextMaterials = Array.isArray(meta?.materialOptions?.names) && meta.materialOptions.names.length
+          ? meta.materialOptions.names
+          : INITIAL_MATERIALS;
+        setMaterials(nextMaterials);
+        if (meta?.lastEmailTo && !formData.mail_to_list[0]) {
+          setFormData(prev => ({ ...prev, mail_to_list: [String(meta.lastEmailTo || '')] }));
+        }
+        setMetaLoaded(true);
+      } catch (err: any) {
+        window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: `加载开单元数据失败：${err?.message || '未知错误'}` } }));
+      } finally {
+        metaRequestRef.current = null;
       }
-      setMetaLoaded(true);
-    } catch (err: any) {
-      window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: `加载开单元数据失败：${err?.message || '未知错误'}` } }));
-    }
+    })();
+    metaRequestRef.current = request;
+    return request;
   };
 
   const fetchWorkOrders = async () => {
@@ -205,6 +210,7 @@ export default function WorkOrders() {
     setSearchResults([]);
     setShowSearchCards(false);
     setShowNewPanel(false);
+    void loadMeta();
     setView('create');
   };
 
