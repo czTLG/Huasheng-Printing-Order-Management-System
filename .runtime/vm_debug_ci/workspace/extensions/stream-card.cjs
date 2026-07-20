@@ -1093,6 +1093,29 @@ function register(context) {
         const route=await client.prepareThreadRoute(openId,{customer_id:Number(binding.recordId),chat_id:String(msg.chatId||''),thread_id:String(msg.threadId||''),idempotency_key:actionKey('thread-prepare',openId,binding.recordId,msg.chatId,msg.threadId||'')});
         await sendManagedCard(channel,msg.chatId,renderThreadDraft(route,cardHelpers),msg.messageId,Boolean(msg.threadId));return true;
       }
+      if (/^(?:我允许你发送|允许你发送|允许发送|同意发送|发送吧)[！!。.]?$/u.test(text)) {
+        const openId=String(msg?.senderId||'').trim();
+        if(!openId||typeof client.resumeThreadRoute!=='function'){
+          await sendManagedCard(channel,msg.chatId,infoCard(cardHelpers,'发送桥接暂不可用，尚未发送。'),msg.messageId,Boolean(msg.threadId));return true;
+        }
+        let route;
+        try{
+          route=await client.resumeThreadRoute(openId,{chat_id:String(msg.chatId||''),thread_id:String(msg.threadId||'')});
+        }catch(error){
+          if(Number(error?.status)===404){await sendManagedCard(channel,msg.chatId,infoCard(cardHelpers,'当前会话没有可恢复的邮件草稿，尚未发送。请先回复“发送邮件”生成并核对草稿。'),msg.messageId,Boolean(msg.threadId));return true;}
+          throw error;
+        }
+        if(route.status==='draft'){
+          await sendManagedCard(channel,msg.chatId,renderThreadDraft(route,cardHelpers),msg.messageId,Boolean(msg.threadId));return true;
+        }
+        if(route.status==='approved'){
+          if(typeof client.previewThreadRoute!=='function')throw new Error('thread preview service unavailable');
+          const preview=await client.previewThreadRoute(openId,route.id);const key=sessionKey(msg.chatId,openId,msg.threadId||'');
+          if(preview.allowed===true)threadConfirmationContexts.set(key,{route,preview,expiresAt:clockMillis()+REVISION_TTL_MS});else threadConfirmationContexts.delete(key);
+          await sendManagedCard(channel,msg.chatId,renderThreadPreview(preview,cardHelpers),msg.messageId,Boolean(msg.threadId));return true;
+        }
+        await sendManagedCard(channel,msg.chatId,infoCard(cardHelpers,'当前邮件任务状态不能继续发送，尚未发送。'),msg.messageId,Boolean(msg.threadId));return true;
+      }
       const revision = revisionContexts.get(revisionKey);
       if (revision) {
         if (revision.expiresAt <= clockMillis()) {

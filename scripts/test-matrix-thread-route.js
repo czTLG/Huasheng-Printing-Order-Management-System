@@ -39,9 +39,14 @@ function fixture() {
   assert.deepStrictEqual(prepared.attachment_manifest, [], 'inbound/reference attachments must not become outbound attachments');
   assert.match(prepared.content_hash, /^[a-f0-9]{64}$/);
   assert.deepStrictEqual(route.prepare({ actorUserId: 1, bindingId: 7, customerId: 10, chatId: 'chat-build', threadId: 'thread-feishu', idempotencyKey: 'thread-prepare-1' }), prepared);
+  assert.deepStrictEqual(route.resume({ actorUserId: 1, bindingId: 7, chatId: 'chat-build', threadId: 'thread-feishu' }), prepared);
+  assert.deepStrictEqual(route.resume({ actorUserId: 1, bindingId: 7, chatId: 'chat-build', threadId: 'reply-thread-after-restart' }), prepared);
   const approved = route.approve({ actorUserId: 1, bindingId: 7, routeId: prepared.id, expectedContentHash: prepared.content_hash, expectedRevision: 1, idempotencyKey: 'thread-approve-1' });
   assert.strictEqual(approved.status, 'approved');
+  assert.strictEqual(route.resume({ actorUserId: 1, bindingId: 7, chatId: 'chat-build', threadId: 'thread-feishu' }).status, 'approved');
   assert.strictEqual(route.preview({ actorUserId: 1, bindingId: 7, routeId: prepared.id }).status, 'approved');
+  db.prepare("UPDATE matrix_thread_routes SET status='sent' WHERE id=?").run(prepared.id);
+  assert.strictEqual(route.resume({ actorUserId: 1, bindingId: 7, chatId: 'chat-build', threadId: 'thread-feishu' }), null);
   db.close();
 }
 

@@ -920,6 +920,22 @@ function createMatrixRouter({
     } catch (error) { sendReviewError(res, error); }
   });
 
+  router.post('/thread-routes/resume', (req, res) => {
+    try {
+      if (!threadRouteService || typeof threadRouteService.resume !== 'function') throw new Error('thread route service unavailable');
+      const body = rejectUnknown(req.body, new Set(['chat_id','thread_id']), 'body');
+      const identity = reviewIdentity(req);
+      const route = threadRouteService.resume({
+        actorUserId: identity.actorUserId,
+        bindingId: identity.bindingId,
+        chatId: String(body.chat_id || '').trim(),
+        threadId: String(body.thread_id || '').trim()
+      });
+      if (!route) return res.status(404).json({ error: 'resumable thread route not found' });
+      res.json(route);
+    } catch (error) { sendReviewError(res, error); }
+  });
+
   router.post('/thread-routes/:id/approve', (req, res) => {
     try {
       if (!threadRouteService || typeof threadRouteService.approve !== 'function') throw new Error('thread route service unavailable');

@@ -160,7 +160,19 @@ function createMatrixThreadRoute({ db, clock = () => new Date(), draftService = 
     return publicRoute(row);
   }
 
-  return { prepare, approve, preview, get: routeId => { const row=rowById(id(routeId,'route id')); return row ? publicRoute(row) : null; } };
+  function resume(raw) {
+    const input=exact(raw,new Set(['actorUserId','bindingId','chatId','threadId']),'thread resume input');
+    const actorUserId=id(input.actorUserId,'actor user id'),bindingId=id(input.bindingId,'binding id');
+    const chatId=text(input.chatId,'chat id',256),threadId=String(input.threadId||'').trim();
+    if(threadId.length>256||/[\r\n\0]/.test(threadId))throw new Error('valid thread id required');
+    actor(db,actorUserId,bindingId);
+    const rows=db.prepare("SELECT * FROM matrix_thread_routes WHERE actor_user_id=? AND chat_id=? AND status IN ('draft','approved') ORDER BY updated_at DESC,id DESC LIMIT 2").all(actorUserId,chatId);
+    const exactMatch=rows.find(row=>String(row.thread_id||'')===threadId);
+    const row=exactMatch||(rows.length===1?rows[0]:null);
+    return row?publicRoute(row):null;
+  }
+
+  return { prepare, approve, preview, resume, get: routeId => { const row=rowById(id(routeId,'route id')); return row ? publicRoute(row) : null; } };
 }
 
 module.exports = { createMatrixThreadRoute, contentHash: digest };

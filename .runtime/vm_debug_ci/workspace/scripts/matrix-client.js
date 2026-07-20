@@ -187,6 +187,10 @@ function prepareThreadRoute(openId,input){
   body.customer_id=positiveId(body.customer_id,'customer id');
   return call(openId,'/thread-routes/prepare',{method:'POST',body});
 }
+function resumeThreadRoute(openId,input){
+  const body=exactObject(input,new Set(['chat_id','thread_id']),'thread resume');
+  return call(openId,'/thread-routes/resume',{method:'POST',body});
+}
 function approveThreadRoute(openId,routeId,input){
   const body=exactObject(input,new Set(['expected_revision','expected_content_hash','idempotency_key']),'thread approval');
   body.expected_revision=positiveId(body.expected_revision,'expected revision');
@@ -233,5 +237,5 @@ module.exports = {
   retryTranslation, claimNotification, ackNotification, nackNotification,
   notificationStatus, createVersion, reviseVersion, approveVersion,
   versionPreview, confirmSend
-  , prepareThreadRoute, approveThreadRoute, previewThreadRoute, confirmThreadRoute
+  , prepareThreadRoute, resumeThreadRoute, approveThreadRoute, previewThreadRoute, confirmThreadRoute
 };

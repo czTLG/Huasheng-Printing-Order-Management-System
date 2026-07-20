@@ -24,7 +24,7 @@ async function testNarrowClient() {
     'claimInboxJob', 'claimNotification', 'confirmSend', 'confirmThreadRoute', 'contextRecord',
     'contextResolve', 'contextSearch', 'createSession', 'createVersion', 'facets',
     'failInboxJob', 'inboxWorkbench', 'listCandidates', 'nackNotification',
-    'notificationStatus', 'prepareThreadRoute', 'previewThreadRoute', 'rehydrateSession', 'retryTranslation', 'reviseVersion',
+    'notificationStatus', 'prepareThreadRoute', 'previewThreadRoute', 'rehydrateSession', 'resumeThreadRoute', 'retryTranslation', 'reviseVersion',
     'selectCandidate', 'startReplyDraft', 'today', 'versionPreview', 'workItems'
   ]);
   const originalFetch = global.fetch;
@@ -61,6 +61,7 @@ async function testNarrowClient() {
     await client.ackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', receipt_id: 'message-51' });
     await client.nackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', outcome: 'ambiguous' });
     await client.notificationStatus('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052' });
+    await client.resumeThreadRoute('ou-client', { chat_id: 'chat', thread_id: 'thread' });
     assert.ok(requests.every(item => new URL(item.url).origin === 'https://matrix.test'));
     assert.ok(requests.every(item => new URL(item.url).pathname.startsWith('/api/matrix/')));
     assert.ok(requests.every(item => item.options.redirect === 'manual'));
@@ -79,6 +80,7 @@ async function testNarrowClient() {
     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/ack')));
     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/nack')));
     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/status')));
+    assert.ok(requests.some(item => item.url.endsWith('/thread-routes/resume')));
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions')));
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/approve')));
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/preview')));
