@@ -56,6 +56,8 @@ function sensitiveKinds(sentence) {
 
 function isNonAssertionRequest(sentence) {
   const text = normalizedSyntaxSentence(sentence);
+  if (/^(?:(?:您|贵司)?是否(?:愿意|有兴趣)|这对(?:您|贵司)是否有帮助)/u.test(text)) return true;
+  if (/^(?:would you (?:like|be interested in)|would it be useful|would this be useful)\b/i.test(text)) return true;
   const chinese = text.match(CHINESE_REQUEST);
   if (chinese) {
     const remainder = chinese[1];
@@ -268,7 +270,7 @@ function createMatrixStreamText({ callJson = callJsonProvider } = {}) {
       if (!instruction) return Promise.reject(new Error('revision instruction required'));
       return run({
         keys: REVISION_KEYS,
-        systemPrompt: 'Return only the requested bilingual JSON fields. Preserve evidence; introduce no facts, prices, qualifications, or URLs.',
+        systemPrompt: 'Return only the requested bilingual JSON fields. Preserve evidence; introduce no facts, prices, qualifications, or URLs. For first-contact B2B outreach: use one specific evidence-backed observation, one relevant problem or useful offer, and one low-friction interest question. Keep the English body concise, human, mobile-readable, and separated into short paragraphs. Do not dump category lists, demand many specifications, use generic catalog language, or request a meeting unless the instruction explicitly requires it. Keep the Chinese version complete and naturally aligned with the English version.',
         userPrompt: JSON.stringify({ current: input.current, instruction }),
         input: { ...input, sourceSnapshot: input.sourceSnapshot || input.current.source_snapshot_json }
       });

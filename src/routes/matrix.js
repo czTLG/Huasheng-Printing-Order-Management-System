@@ -746,9 +746,16 @@ function createMatrixRouter({
     const categoryTextCn = categories.map(value => categoryCnMap[value] || value).join('、');
     const specPrefix = specs.length ? `${specs.join(' and ')} ` : '';
     const specPrefixCn = specs.length ? specs.join('和') : '';
-    const subject = `${specPrefix}${category} ${entryProduct} options for ${company}`;
-    const bodyEn = `Dear ${company} team,\nWe reviewed your publicly available ${specPrefix}${categoryText} product range. We would like to discuss ${entryProduct} options. Could you share your current material structure and expected annual volume?\nBest regards`;
-    const bodyCn = `您好，\n我们查看了贵司公开展示的${specPrefixCn}${categoryTextCn}产品，希望沟通${entryProductCn}方案。请问能否提供当前材料结构和预计年用量？\n此致敬礼`;
+    const liquidCare = categories.some(value => ['shampoo', 'body wash', 'personal care', 'home care', 'baby care', 'oral care'].includes(value));
+    const subject = liquidCare
+      ? `Refill pouch idea for ${company}'s shampoo and body wash lines`
+      : `${specPrefix}${category} ${entryProduct} options for ${company}`;
+    const bodyEn = liquidCare
+      ? `Dear ${company} Sourcing Team,\n\nI noticed ${company}'s public product range includes shampoo and body wash products, with refill pouches among its packaging formats.\n\nFor liquid refill pouches, we would focus the first review on leak prevention, filling-line fit, and repeat-print consistency—rather than sending a generic catalog.\n\nWould you like us to prepare a one-page recommendation for one shampoo or body-wash SKU based on its current pouch size?\n\nBest regards,\nGavin\nHuasheng Printing Co., Ltd.`
+      : `Dear ${company} team,\nWe reviewed your publicly available ${specPrefix}${categoryText} product range. We would like to discuss ${entryProduct} options. Could you share your current material structure and expected annual volume?\nBest regards`;
+    const bodyCn = liquidCare
+      ? `您好，\n\n我留意到贵司公开产品系列包含洗发和沐浴产品，并使用补充袋等包装形式。\n\n针对液体补充袋，我们建议首轮先聚焦防漏、灌装线适配和重复订单的印刷一致性，而不是发送一份泛泛的产品目录。\n\n您是否愿意让我们先根据一个洗发或沐浴产品的现有袋子尺寸，整理一页针对性建议？\n\n此致敬礼\nGavin\n华胜印刷有限公司`
+      : `您好，\n我们查看了贵司公开展示的${specPrefixCn}${categoryTextCn}产品，希望沟通${entryProductCn}方案。请问能否提供当前材料结构和预计年用量？\n此致敬礼`;
     const snapshot = {
       organization_domain: organizationDomain,
       recipient_email: email,

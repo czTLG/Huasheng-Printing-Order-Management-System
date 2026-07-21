@@ -522,6 +522,15 @@ function reviewState(workItemId) {
     assert.strictEqual(personalCareVersion.body.recipient_email, 'packaging@gamma.test');
     assert.ok(/refill pouch/i.test(personalCareVersion.body.subject));
     assert.ok(!/\b\d+\s*(?:kg|g)\b/i.test(personalCareVersion.body.subject));
+    assert.ok(/one-page recommendation/i.test(personalCareVersion.body.body_en));
+    assert.ok(/leak prevention/i.test(personalCareVersion.body.body_en));
+    assert.ok(/Gavin\nHuasheng Printing Co\., Ltd\./.test(personalCareVersion.body.body_en));
+    assert.ok(/一页针对性建议/.test(personalCareVersion.body.body_cn));
+    assert.ok(/Gavin\n华胜印刷有限公司/.test(personalCareVersion.body.body_cn));
+    assert.ok(!/shampoo, body wash, personal care/i.test(personalCareVersion.body.body_en));
+    assert.ok(!/current material structure and expected annual volume/i.test(personalCareVersion.body.body_en));
+    assert.strictEqual((personalCareVersion.body.body_en.match(/\?/g) || []).length, 1);
+    assert.ok(personalCareVersion.body.body_en.split(/\n\s*\n/).length >= 4);
     const restoredPersonalCareVersion = await request(
       `/api/matrix/work-items/${personalCareWorkItemId}/versions/${personalCareVersion.body.id}`,
       { serviceToken: bridgeToken, openId: 'ou-service' }
