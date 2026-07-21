@@ -711,7 +711,34 @@ function createMatrixRouter({
     } catch (_) { return ''; }
   }
 
-  function candidateDraft(detail) {
+  async function verifyThailandLiquidRouteSet() {
+    if (process.env.NODE_ENV === 'test') return;
+    const routes = [
+      '/th',
+      '/th/about',
+      '/th/markets/thailand-food-packaging',
+      '/th/applications/daily-chemical-packaging',
+      '/th/products/spout-pouches'
+    ];
+    const origin = String(process.env.MATRIX_PUBLIC_SITE_ORIGIN || 'https://gdhspack.com').replace(/\/$/, '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const responses = await Promise.all(routes.map(async route => {
+        const response = await fetch(`${origin}${route}`, { signal: controller.signal, redirect: 'follow' });
+        if (!response.ok) throw new Error(`localized website route unavailable: ${route}`);
+        return { route, html: await response.text() };
+      }));
+      const application = responses.find(row => row.route === '/th/applications/daily-chemical-packaging');
+      if (!application?.html.includes('บรรจุภัณฑ์รีฟิลสำหรับแชมพู')) {
+        throw new Error('localized website route set is not the verified release');
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function candidateDraft(detail) {
     const evidence = Array.isArray(detail.official_evidence) ? detail.official_evidence : [];
     const organizationDomain = String(detail.official_domain || '').trim().toLowerCase();
     if (!organizationDomain) throw new Error('official organization domain required');
@@ -747,6 +774,8 @@ function createMatrixRouter({
     const specPrefix = specs.length ? `${specs.join(' and ')} ` : '';
     const specPrefixCn = specs.length ? specs.join('和') : '';
     const liquidCare = categories.some(value => ['shampoo', 'body wash', 'personal care', 'home care', 'baby care', 'oral care'].includes(value));
+    const thailandLiquidCare = liquidCare && String(detail.country_code || '').trim().toUpperCase() === 'TH';
+    if (thailandLiquidCare) await verifyThailandLiquidRouteSet();
     const subject = liquidCare
       ? `Refill pouch idea for ${company}'s shampoo and body wash lines`
       : `${specPrefix}${category} ${entryProduct} options for ${company}`;
@@ -765,6 +794,13 @@ function createMatrixRouter({
       categories,
       products,
       entryProduct,
+      localizedRouteSet: thailandLiquidCare ? {
+        status: 'requires_production_verification',
+        primary: 'https://gdhspack.com/th/applications/daily-chemical-packaging',
+        about: 'https://gdhspack.com/th/about',
+        market: 'https://gdhspack.com/th/markets/thailand-food-packaging',
+        product: 'https://gdhspack.com/th/products/spout-pouches'
+      } : null,
       supportedClaims: [],
       evidenceIds: evidence.map(row => row.source_url).filter(Boolean),
       official_evidence: evidence.map(row => ({
@@ -1136,7 +1172,7 @@ function createMatrixRouter({
       const item = db.transaction(() => freshReviewAuthorization(identity, workItemId, expectedWorkVersion)).immediate();
       const detail = view.detail(item.candidate_id, { revealContacts: true });
       if (!detail) throw new Error('candidate not found');
-      const draft = candidateDraft(detail);
+      const draft = await candidateDraft(detail);
       const create = db.transaction(() => {
         const ownership = requireOwnedClaim({
           identity, workItemId, action, idempotencyKey, fingerprint, expectedWorkVersion, ownerToken: heldClaimToken
