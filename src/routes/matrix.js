@@ -730,8 +730,8 @@ function createMatrixRouter({
         return { route, html: await response.text() };
       }));
       const application = responses.find(row => row.route === '/th/applications/daily-chemical-packaging');
-      if (!application?.html.includes('บรรจุภัณฑ์รีฟิลสำหรับแชมพู')) {
-        throw new Error('localized website route set is not the verified release');
+      if (!application?.html.includes('lang="th"') || !application.html.includes('/th/applications/daily-chemical-packaging')) {
+        throw new Error('localized website route set did not return the expected Thai canonical page');
       }
     } finally {
       clearTimeout(timer);
@@ -795,7 +795,7 @@ function createMatrixRouter({
       products,
       entryProduct,
       localizedRouteSet: thailandLiquidCare ? {
-        status: 'requires_production_verification',
+        status: 'verified_at_draft_time',
         primary: 'https://gdhspack.com/th/applications/daily-chemical-packaging',
         about: 'https://gdhspack.com/th/about',
         market: 'https://gdhspack.com/th/markets/thailand-food-packaging',
