@@ -586,6 +586,7 @@ try {
   assert.strictEqual(v2.revision, 2);
   assert.notStrictEqual(v2.quality_json, '{}');
   assert.strictEqual(v2.quality_score, JSON.parse(v2.quality_json).score);
+  assert.ok(!JSON.parse(v2.quality_json).hardFailures.includes('invalid_recipient_provenance'));
   assert.strictEqual(review.getVersion(db, { actorUserId: userId, versionId: v1.id }).status, 'superseded');
   const approveReplayInput = {
     actorUserId: userId,

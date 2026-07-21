@@ -365,7 +365,8 @@ function reviseVersion(db, input = {}) {
       recipient: {
         email: base.recipient_email,
         sourceUrl: base.recipient_source_url,
-        verifiedAt: base.recipient_verified_at
+        verifiedAt: base.recipient_verified_at,
+        kind: 'public_company'
       },
       sourceSnapshot,
       now: at
