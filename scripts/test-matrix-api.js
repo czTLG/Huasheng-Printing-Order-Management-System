@@ -530,6 +530,14 @@ function reviewState(workItemId) {
     assert.strictEqual(restoredPersonalCareVersion.body.id, personalCareVersion.body.id);
     assert.strictEqual(restoredPersonalCareVersion.body.work_item_id, personalCareWorkItemId);
     assert.strictEqual(restoredPersonalCareVersion.body.work_item_version, personalCareVersion.body.work_item_version);
+    const personalCareItems = await request('/api/matrix/work-items', {
+      serviceToken: bridgeToken, openId: 'ou-service'
+    });
+    assert.strictEqual(personalCareItems.status, 200, JSON.stringify(personalCareItems.body));
+    const restoredPersonalCareItem = personalCareItems.body.rows.find(row => row.id === personalCareWorkItemId);
+    assert.ok(restoredPersonalCareItem, 'created personal-care work item must remain discoverable');
+    assert.strictEqual(restoredPersonalCareItem.current_stream_version_id, personalCareVersion.body.id);
+    assert.strictEqual(restoredPersonalCareItem.stream_state, 'draft_pending');
 
     const createdVersion = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}/versions`, {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',

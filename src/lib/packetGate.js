@@ -64,6 +64,8 @@ function workItemResult(row) {
     current_summary: row.current_summary,
     next_action: row.next_action,
     next_followup_at: row.next_followup_at,
+    current_stream_version_id: row.current_stream_version_id || null,
+    stream_state: row.stream_state || '',
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at
