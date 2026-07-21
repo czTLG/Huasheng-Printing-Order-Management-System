@@ -258,6 +258,10 @@ function renderDetail(detail, state, cardHelpers, chatId) {
     ? Object.entries(detail.contacts || {}).filter(([, value]) => Boolean(value)).map(([key, value]) => `${key}：${clip(value, 80)}`).join('\n') || '待核实'
     : `已发现类型：${contactTypes}；请在CRM详情中查看`;
   const evidenceLines = evidence.length ? evidence.map(item => `• ${clip(item.page_title || '证据', 30)}：${clip(item.source_url, 110)}`).join('\n') : '• 待核实';
+  const strategyMatch = detail.strategy_match && typeof detail.strategy_match === 'object' ? detail.strategy_match : null;
+  const matchLine = strategyMatch
+    ? `${Number(strategyMatch.score || 0)}/${Number(strategyMatch.threshold || 75)}｜${strategyMatch.passed ? '已达标' : '待补调查或页面验证'}`
+    : '待计算';
   const supplier = detail.supplier_signal;
   const supplierState = ({ confirmed: '已确认', public_lead: '公开线索' })[supplier?.confidence] || '未知';
   const supplierLine = supplier
@@ -270,6 +274,7 @@ function renderDetail(detail, state, cardHelpers, chatId) {
   const elements = [md([
     `**${clip(detail.company_name, 60)}｜${clip(detail.country_code, 8)}｜${clip(detail.priority, 4)}**`,
     `阶段：${stageLabel(detail.stage_code)}`,
+    `策略匹配度：${matchLine}`,
     `\n**为什么推荐**\n${clip(withoutQualification(detail.assessment_cn), 110)}\n规模信号：${clip(detail.scale_tier, 30)}`,
     `\n**产品结构**\n品类：${clip((detail.categories || []).join('、'), 70)}\n形式：${clip(formats, 70)}${signals.specifications.length ? `\n规格：${clip(signals.specifications.join('、'), 70)}` : ''}${signals.observations.length ? `\n公开信号：${clip(signals.observations.join('、'), 70)}` : ''}`,
     `\n**供应链线索**\n${supplierLine}`,

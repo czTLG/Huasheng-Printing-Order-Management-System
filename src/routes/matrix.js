@@ -10,6 +10,7 @@ const { createPacketGate } = require('../lib/packetGate');
 const { buildMatrixOverview } = require('../services/matrixOverview');
 const { searchMatrixContext, resolveMatrixContext, contextByRecordId } = require('../services/matrixContextSearch');
 const { createMatrixStreamText } = require('../services/matrixStreamText');
+const { scoreSignalMatch } = require('../services/matrixSignalMatch');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -280,9 +281,10 @@ function productionBacklogItems() {
   } catch (_) { return []; }
 }
 
-function reviewFailure(code) {
+function reviewFailure(code, details = null) {
   const error = new Error(code);
   error.matrixReviewCode = code;
+  error.matrixReviewDetails = details;
   return error;
 }
 
@@ -300,6 +302,9 @@ function reviewErrorDescriptor(error) {
   }
   if (explicit === 'claim_lost') {
     return { status: 409, code: 'review_claim_lost', message: 'Review request lease was lost.' };
+  }
+  if (explicit === 'strategy_match_blocked') {
+    return { status: 422, code: 'strategy_match_blocked', message: 'Strategy match research is incomplete.', details: error.matrixReviewDetails || null };
   }
   if (/idempotency request conflict/.test(message)) {
     return { status: 409, code: 'idempotency_conflict', message: 'Idempotency key conflicts with another request.' };
@@ -322,7 +327,7 @@ function reviewErrorDescriptor(error) {
 function sendReviewError(res, error) {
   const descriptor = reviewErrorDescriptor(error);
   if (descriptor.status >= 500) console.warn(`[matrix-review] ${descriptor.code}`);
-  return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
+  return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message, ...(descriptor.details ? { details: descriptor.details } : {}) } });
 }
 
 function deliveryErrorDescriptor(error) {
@@ -501,7 +506,7 @@ function createMatrixRouter({
         resourceId: id,
         detail: JSON.stringify({ authMode: req.authMode || 'jwt' })
       });
-      res.json(detail);
+      res.json({ ...detail, strategy_match: scoreSignalMatch(detail, { localizedRouteStatus: 'not_checked' }) });
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 
@@ -776,6 +781,18 @@ function createMatrixRouter({
     const liquidCare = categories.some(value => ['shampoo', 'body wash', 'personal care', 'home care', 'baby care', 'oral care'].includes(value));
     const thailandLiquidCare = liquidCare && String(detail.country_code || '').trim().toUpperCase() === 'TH';
     if (thailandLiquidCare) await verifyThailandLiquidRouteSet();
+    const strategyMatch = scoreSignalMatch(detail, {
+      localizedRouteStatus: thailandLiquidCare ? 'ready' : 'not_required'
+    });
+    if (!strategyMatch.passed) {
+      throw reviewFailure('strategy_match_blocked', {
+        score: strategyMatch.score,
+        threshold: strategyMatch.threshold,
+        blockers: strategyMatch.blockers,
+        components: strategyMatch.components,
+        next_action: 'Complete official-site research and localized content-gap review before drafting.'
+      });
+    }
     const subject = liquidCare
       ? `Refill pouch idea for ${company}'s shampoo and body wash lines`
       : `${specPrefix}${category} ${entryProduct} options for ${company}`;
@@ -802,6 +819,7 @@ function createMatrixRouter({
         product: 'https://gdhspack.com/th/products/spout-pouches'
       } : null,
       supportedClaims: [],
+      strategy_match: strategyMatch,
       evidenceIds: evidence.map(row => row.source_url).filter(Boolean),
       official_evidence: evidence.map(row => ({
         source_url: row.source_url,

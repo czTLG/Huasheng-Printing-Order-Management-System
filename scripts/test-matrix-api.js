@@ -429,6 +429,11 @@ function reviewState(workItemId) {
     mutateCandidate(db => {
       db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
       db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (11,1,'https://alpha.test/about','official_website','Company profile','2026-07-17T00:00:00Z','Coffee manufacturer with export production capacity','e11')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (12,1,'https://alpha.test/services','official_website','Packaging development service','2026-07-17T00:00:00Z','Packaging development, filling review and artwork control','e12')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (13,1,'https://alpha.test/quality','official_website','Quality testing','2026-07-17T00:00:00Z','Quality testing and production traceability','e13')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (14,1,'https://alpha.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable packaging and material efficiency','e14')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (15,1,'https://alpha.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e15')").run();
     });
 
     await assertFailedWithoutReviewWrite('JWT request without a Matrix binding', 403, () => request(versionRoute, {
@@ -498,6 +503,27 @@ function reviewState(workItemId) {
     mutateCandidate(db => {
       db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
       db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (11,1,'https://alpha.test/about','official_website','Company profile','2026-07-17T00:00:00Z','Coffee manufacturer with export production capacity','e11')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (12,1,'https://alpha.test/services','official_website','Packaging development service','2026-07-17T00:00:00Z','Packaging development, filling review and artwork control','e12')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (13,1,'https://alpha.test/quality','official_website','Quality testing','2026-07-17T00:00:00Z','Quality testing and production traceability','e13')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (14,1,'https://alpha.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable packaging and material efficiency','e14')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (15,1,'https://alpha.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e15')").run();
+    });
+
+    mutateCandidate(db => db.prepare('DELETE FROM cache_evidence WHERE record_id=1 AND id<>1').run());
+    const matchBlocked = await assertFailedWithoutReviewWrite('strategy match gate blocks thin research', 422, () => request(versionRoute, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'strategy-match-thin' }
+    }));
+    assert.strictEqual(matchBlocked.body.error.code, 'strategy_match_blocked');
+    assert.ok(matchBlocked.body.error.details.score < matchBlocked.body.error.details.threshold);
+    assert.ok(matchBlocked.body.error.details.blockers.includes('official_source_coverage_below_3'));
+    mutateCandidate(db => {
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (11,1,'https://alpha.test/about','official_website','Company profile','2026-07-17T00:00:00Z','Coffee manufacturer with export production capacity','e11')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (12,1,'https://alpha.test/services','official_website','Packaging development service','2026-07-17T00:00:00Z','Packaging development, filling review and artwork control','e12')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (13,1,'https://alpha.test/quality','official_website','Quality testing','2026-07-17T00:00:00Z','Quality testing and production traceability','e13')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (14,1,'https://alpha.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable packaging and material efficiency','e14')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (15,1,'https://alpha.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e15')").run();
     });
 
     mutateCandidate(db => {
@@ -507,6 +533,11 @@ function reviewState(workItemId) {
         '公开信息确认','确认补充装产品线与年度计划','observed','audited',NULL,
         '2026-07-17T00:00:00Z','2026-07-17T00:00:00Z','SECRET-COST-FORMULA')`).run();
       db.prepare("INSERT INTO cache_evidence VALUES (5,5,'https://gamma.test/products','official_website','Personal care products','2026-07-17T00:00:00Z','Shampoo, body wash and private-label personal care products','e5')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (51,5,'https://gamma.test/about','official_website','Company profile','2026-07-17T00:00:00Z','OEM ODM manufacturer with export production capacity','e51')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (52,5,'https://gamma.test/services','official_website','Packaging service and development','2026-07-17T00:00:00Z','Private label development, packaging testing and filling-line review','e52')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (53,5,'https://gamma.test/quality','official_website','Quality and regulatory','2026-07-17T00:00:00Z','Laboratory testing, regulatory review and traceability','e53')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (54,5,'https://gamma.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable mono material, material efficiency and product waste reduction','e54')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (55,5,'https://gamma.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e55')").run();
     });
     let personalCareWorkItemId;
     mutateApp(db => {
