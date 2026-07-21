@@ -23,7 +23,7 @@ async function testNarrowClient() {
     'ackInboxJob', 'ackNotification', 'approveThreadRoute', 'approveVersion', 'candidateDetail',
     'claimInboxJob', 'claimNotification', 'confirmSend', 'confirmThreadRoute', 'contextRecord',
     'contextResolve', 'contextSearch', 'createSession', 'createVersion', 'facets',
-    'failInboxJob', 'inboxWorkbench', 'listCandidates', 'nackNotification',
+    'failInboxJob', 'getVersion', 'inboxWorkbench', 'listCandidates', 'nackNotification',
     'notificationStatus', 'prepareThreadRoute', 'previewThreadRoute', 'rehydrateSession', 'resumeThreadRoute', 'retryTranslation', 'reviseVersion',
     'selectCandidate', 'startReplyDraft', 'today', 'versionPreview', 'workItems'
   ]);
@@ -1375,6 +1375,14 @@ async function testRecommendationSnapshotTransitions() {
   }));
   let sessionExpiry = '';
   let failNextList = false;
+  let currentStreamVersionId = 0;
+  const draftVersion = workItemId => ({
+    id: 301, work_item_id: workItemId, revision: 1, recipient_email: 'public@company.test',
+    recipient_source_url: 'https://company.test/contact', subject: 'laminated roll film for Company 1',
+    body_en: 'Dear Company 1 team,\nCould you confirm structure and annual volume?\nBest regards',
+    body_cn: '您好，请确认当前结构和年用量。', content_hash: '3'.repeat(64), status: 'draft',
+    quality_score: 92, quality_json: '{"score":92,"passed":true,"components":{},"hardFailures":[]}', work_item_version: 2
+  });
   const client = {
     today: async (openId, filters) => {
       calls.push(['today', openId, filters]);
@@ -1438,15 +1446,14 @@ async function testRecommendationSnapshotTransitions() {
     },
     createVersion: async (openId, workItemId, input) => {
       calls.push(['createVersion', openId, workItemId, input]);
-      return {
-        id: 301, work_item_id: workItemId, revision: 1, recipient_email: 'public@company.test',
-        recipient_source_url: 'https://company.test/contact', subject: 'laminated roll film for Company 1',
-        body_en: 'Dear Company 1 team,\nCould you confirm structure and annual volume?\nBest regards',
-        body_cn: '您好，请确认当前结构和年用量。', content_hash: '3'.repeat(64), status: 'draft',
-        quality_score: 92, quality_json: '{"score":92,"passed":true,"components":{},"hardFailures":[]}', work_item_version: 2
-      };
+      currentStreamVersionId = 301;
+      return draftVersion(workItemId);
     },
-    workItems: async openId => { calls.push(['workItems', openId]); return { rows: [{ id: 91, candidate_id: 1, stage: 'selected', next_action: '核实公开联系入口' }] }; }
+    getVersion: async (openId, workItemId, versionId) => {
+      calls.push(['getVersion', openId, workItemId, versionId]);
+      return draftVersion(workItemId);
+    },
+    workItems: async openId => { calls.push(['workItems', openId]); return { rows: [{ id: 91, candidate_id: 1, stage: 'selected', current_stream_version_id: currentStreamVersionId || null, next_action: '核实公开联系入口' }] }; }
   };
   const registered = extension.register({
     channel: {},
@@ -1537,9 +1544,9 @@ async function testRecommendationSnapshotTransitions() {
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectionCalls[1][2].idempotency_key);
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectButton.value.e);
   const selectedVersionCalls = calls.filter(item => item[0] === 'createVersion').slice(-2);
-  assert.strictEqual(selectedVersionCalls.length, 2);
+  assert.strictEqual(selectedVersionCalls.length, 1);
   assert.strictEqual(selectedVersionCalls[0][3].expected_work_version, 4);
-  assert.strictEqual(selectedVersionCalls[1][3].expected_work_version, 4);
+  assert.ok(calls.some(item => item[0] === 'getVersion' && item[2] === 91 && item[3] === 301));
   const selectedText = visibleText(sent.at(-1).card);
   for (const expected of ['public@company.test', '英文草稿', '中文翻译', '尚未发送', '质量评分', '确认采用']) {
     assert.ok(selectedText.includes(expected), `selection follow-up missing ${expected}`);

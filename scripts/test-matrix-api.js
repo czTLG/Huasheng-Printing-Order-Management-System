@@ -522,6 +522,14 @@ function reviewState(workItemId) {
     assert.strictEqual(personalCareVersion.body.recipient_email, 'packaging@gamma.test');
     assert.ok(/refill pouch/i.test(personalCareVersion.body.subject));
     assert.ok(!/\b\d+\s*(?:kg|g)\b/i.test(personalCareVersion.body.subject));
+    const restoredPersonalCareVersion = await request(
+      `/api/matrix/work-items/${personalCareWorkItemId}/versions/${personalCareVersion.body.id}`,
+      { serviceToken: bridgeToken, openId: 'ou-service' }
+    );
+    assert.strictEqual(restoredPersonalCareVersion.status, 200, JSON.stringify(restoredPersonalCareVersion.body));
+    assert.strictEqual(restoredPersonalCareVersion.body.id, personalCareVersion.body.id);
+    assert.strictEqual(restoredPersonalCareVersion.body.work_item_id, personalCareWorkItemId);
+    assert.strictEqual(restoredPersonalCareVersion.body.work_item_version, personalCareVersion.body.work_item_version);
 
     const createdVersion = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}/versions`, {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',

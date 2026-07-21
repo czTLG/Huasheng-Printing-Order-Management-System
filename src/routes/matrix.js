@@ -891,6 +891,19 @@ function createMatrixRouter({
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 
+  router.get('/work-items/:id/versions/:versionId', (req, res) => {
+    try {
+      requireReviewAccess(req);
+      rejectUnknown(req.query, new Set(), 'query');
+      const workItemId = positiveInteger(req.params.id, 'work item id');
+      const versionId = positiveInteger(req.params.versionId, 'version id');
+      const item = ownedReviewItem(workItemId, req.user.id);
+      const version = reviewService.getVersion(db, { actorUserId: req.user.id, versionId });
+      if (!version || version.work_item_id !== item.id) return res.status(404).json({ error: 'version not found' });
+      res.json({ ...version, work_item_version: item.version });
+    } catch (error) { sendReviewError(res, error); }
+  });
+
   router.post('/notifications/:id/reply-draft', (req, res) => {
     try {
       rejectUnknown(req.body, new Set(), 'body');

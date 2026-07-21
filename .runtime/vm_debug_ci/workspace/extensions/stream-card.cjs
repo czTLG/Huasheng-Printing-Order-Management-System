@@ -873,6 +873,18 @@ function register(context) {
       throw error;
     }
     if (Number(result.session_version) > Number(state.session.version)) state.session.version = result.session_version;
+    if (typeof client.workItems === 'function' && typeof client.getVersion === 'function') {
+      const items = await client.workItems(openId, { limit: 100 });
+      const item = Array.isArray(items?.rows)
+        ? items.rows.find(row => Number(row.id) === Number(result.work_item_id))
+        : null;
+      const currentVersionId = Number(item?.current_stream_version_id || 0);
+      if (currentVersionId > 0) {
+        const current = await client.getVersion(openId, result.work_item_id, currentVersionId);
+        await sendForEvent(evt, renderVersionReview(current, cardHelpers));
+        return;
+      }
+    }
     if (typeof client.createVersion !== 'function') throw new Error('version review service unavailable');
     const version = await client.createVersion(openId, result.work_item_id, {
       expected_work_version: Number(result.work_item_version || 1),

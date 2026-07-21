@@ -121,6 +121,10 @@ function workItems(openId, filters = {}) {
   return call(openId, '/work-items', { query });
 }
 
+function getVersion(openId, workItemId, versionId) {
+  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}`);
+}
+
 function claimInboxJob(openId) {
   return call(openId, '/inbox/jobs/claim', { method: 'POST', body: {} });
 }
@@ -234,7 +238,7 @@ function notificationStatus(openId, notificationId, input) {
 
 module.exports = {
   facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
-  selectCandidate, workItems, claimInboxJob, inboxWorkbench, contextSearch,
+  selectCandidate, workItems, getVersion, claimInboxJob, inboxWorkbench, contextSearch,
   contextResolve, contextRecord, ackInboxJob, failInboxJob, startReplyDraft,
   retryTranslation, claimNotification, ackNotification, nackNotification,
   notificationStatus, createVersion, reviseVersion, approveVersion,
