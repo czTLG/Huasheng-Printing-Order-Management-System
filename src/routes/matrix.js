@@ -730,26 +730,32 @@ function createMatrixRouter({
     const verifiedMs = Date.parse(String(verifiedValue || ''));
     if (!Number.isFinite(verifiedMs)) throw new Error('recipient evidence verification timestamp required');
 
-    const category = String((detail.categories || [])[0] || '').trim().toLowerCase();
-    const categoryCn = ({ coffee: '咖啡', tea: '茶', snacks: '零食' })[category];
+    const categories = (detail.categories || []).map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
+    const category = categories[0] || '';
+    const categoryCnMap = { coffee: '咖啡', tea: '茶', snacks: '零食', shampoo: '洗发产品', 'body wash': '沐浴产品', 'personal care': '个护产品', 'home care': '家清产品', 'baby care': '婴童护理产品', 'oral care': '口腔护理产品' };
+    const categoryCn = categoryCnMap[category];
     if (!category || !categoryCn) throw new Error('deterministic draft category is unsupported');
-    const products = evidence.map(row => String(row.excerpt || row.page_title || '').trim()).filter(Boolean);
+    const formats = (detail.format_signals || []).map(value => String(value || '').trim()).filter(Boolean);
+    const products = [...evidence.map(row => String(row.excerpt || row.page_title || '').trim()).filter(Boolean), ...formats];
     const specs = [...new Set(products.join(' ').match(/\b\d+(?:\.\d+)?\s*(?:kg|g)\b/gi) || [])];
-    if (!specs.length) throw new Error('official product specifications required for deterministic draft');
-    const specText = specs.join(' and ');
-    const specTextCn = specs.join('和');
     const company = String(detail.company_name || '').trim();
-    const entryProduct = `${category} pouch`;
-    const subject = `${specText} ${entryProduct} options for ${company}`;
-    const bodyEn = `Dear ${company} team,\nWe reviewed your ${specText} ${category} range. We would like to discuss ${category} pouches. Could you share your current material structure and annual volume?\nBest regards`;
-    const bodyCn = `您好，\n我们查看了贵司${specTextCn}${categoryCn}产品，希望沟通${categoryCn}袋。请问能否提供当前材料结构和年用量？\n此致敬礼`;
+    const preferredFormat = formats.find(value => /refill\s+pouch/i.test(value)) || formats.find(value => /pouch/i.test(value));
+    const entryProduct = preferredFormat || `${category} pouch`;
+    const entryProductCn = /refill\s+pouch/i.test(entryProduct) ? '补充袋' : `${categoryCn}袋`;
+    const categoryText = categories.join(', ');
+    const categoryTextCn = categories.map(value => categoryCnMap[value] || value).join('、');
+    const specPrefix = specs.length ? `${specs.join(' and ')} ` : '';
+    const specPrefixCn = specs.length ? specs.join('和') : '';
+    const subject = `${specPrefix}${category} ${entryProduct} options for ${company}`;
+    const bodyEn = `Dear ${company} team,\nWe reviewed your publicly available ${specPrefix}${categoryText} product range. We would like to discuss ${entryProduct} options. Could you share your current material structure and expected annual volume?\nBest regards`;
+    const bodyCn = `您好，\n我们查看了贵司公开展示的${specPrefixCn}${categoryTextCn}产品，希望沟通${entryProductCn}方案。请问能否提供当前材料结构和预计年用量？\n此致敬礼`;
     const snapshot = {
       organization_domain: organizationDomain,
       recipient_email: email,
       source_url: sourceUrl,
       country_code: String(detail.country_code || '').trim().toUpperCase(),
       company,
-      categories: detail.categories || [],
+      categories,
       products,
       entryProduct,
       supportedClaims: [],

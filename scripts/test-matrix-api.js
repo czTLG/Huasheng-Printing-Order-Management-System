@@ -500,6 +500,29 @@ function reviewState(workItemId) {
       db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
     });
 
+    mutateCandidate(db => {
+      db.prepare(`INSERT INTO cache_records VALUES (5,'Gamma Personal Care','TH','','gamma.test','https://gamma.test/',
+        '["shampoo","body wash","personal care"]','["refill pouches","bottles"]','["exports"]','medium',
+        'packaging@gamma.test','','','https://gamma.test/contact','P0',92,92,80,0.9,'valid',
+        '公开信息确认','确认补充装产品线与年度计划','observed','audited',NULL,
+        '2026-07-17T00:00:00Z','2026-07-17T00:00:00Z','SECRET-COST-FORMULA')`).run();
+      db.prepare("INSERT INTO cache_evidence VALUES (5,5,'https://gamma.test/products','official_website','Personal care products','2026-07-17T00:00:00Z','Shampoo, body wash and private-label personal care products','e5')").run();
+    });
+    let personalCareWorkItemId;
+    mutateApp(db => {
+      personalCareWorkItemId = Number(db.prepare(`INSERT INTO matrix_work_items
+        (candidate_id,stage,owner_user_id,current_summary,next_action,version,created_at,updated_at,stream_state)
+        VALUES (5,'selected',103,'','确认补充装产品线与年度计划',1,?,?, 'selected')`).run('2026-07-17T00:00:00Z','2026-07-17T00:00:00Z').lastInsertRowid);
+    });
+    const personalCareVersion = await request(`/api/matrix/work-items/${personalCareWorkItemId}/versions`, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'draft-personal-care-1' }
+    });
+    assert.strictEqual(personalCareVersion.status, 201, JSON.stringify(personalCareVersion.body));
+    assert.strictEqual(personalCareVersion.body.recipient_email, 'packaging@gamma.test');
+    assert.ok(/refill pouch/i.test(personalCareVersion.body.subject));
+    assert.ok(!/\b\d+\s*(?:kg|g)\b/i.test(personalCareVersion.body.subject));
+
     const createdVersion = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}/versions`, {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
       body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
@@ -1080,7 +1103,7 @@ function reviewState(workItemId) {
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
       assert.deepStrictEqual(
         inspect.prepare('SELECT action FROM matrix_stream_api_requests ORDER BY id').all().map(row => row.action),
-        ['create', 'approve', 'revise', 'revise', 'revise']
+        ['create', 'create', 'approve', 'revise', 'revise', 'revise']
       );
       const persistedSession = JSON.stringify(inspect.prepare('SELECT snapshot_key, candidate_ids_json, filters_json FROM matrix_sessions WHERE id = ?').get(createdSession.body.id));
       assert.ok(!persistedSession.includes('Alpha Foods'));

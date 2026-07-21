@@ -124,6 +124,9 @@ function normalizeTextNumbers(value) {
 
 const CONCEPTS = Object.freeze([
   ['coffee', /\bcoffee\b/i, /咖啡/u], ['tea', /\btea\b/i, /茶/u],
+  ['shampoo', /\bshampoo\b/i, /洗发/u], ['body_wash', /\bbody[ -]?wash\b/i, /沐浴/u],
+  ['personal_care', /\bpersonal[ -]?care\b/i, /个护/u], ['home_care', /\bhome[ -]?care\b/i, /家清/u],
+  ['refill', /\brefill\b/i, /补充/u],
   ['pouch', /\bpouches?\b/i, /袋/u], ['valve', /\bvalve\b/i, /阀/u],
   ['barrier', /\bbarrier\b/i, /阻隔/u], ['printing', /\bprint(?:ing)?\b/i, /(?:印刷|套色)/u]
 ]);
@@ -283,7 +286,7 @@ function scoreDraft(input = {}) {
   const expectedConcepts = conceptMatches([...products, ...categories].join(' '), 'en');
   const sharedProductConcepts = expectedConcepts.filter(value => enConcepts.includes(value) && cnConcepts.includes(value));
   const specsMatch = expectedSpecs.length > 0 && expectedSpecs.every(value => numericSpecs(bodyEn).includes(value) && numericSpecs(bodyCn).includes(value));
-  const productMatch = specsMatch && sharedProductConcepts.length > 0;
+  const productMatch = sharedProductConcepts.length > 0 && (expectedSpecs.length === 0 || specsMatch);
   const productPoints = productMatch ? MAXIMUMS.product_match : 0;
   const companyMatch = includesPhrase(bodyEn, evidence.company) && /(?:贵司|您(?:司|们)?|公司)/u.test(bodyCn) && productMatch;
   const companyPoints = companyMatch ? MAXIMUMS.company_specific : 0;
@@ -314,7 +317,7 @@ function scoreDraft(input = {}) {
   const provenancePoints = provenanceOk ? MAXIMUMS.recipient_provenance : 0;
 
   const components = {
-    product_match: component(productPoints, MAXIMUMS.product_match, productMatch ? ['same_evidence_product_specs_in_both_languages'] : ['product_specs_not_bilingual'], productMatch ? evidenceIds : []),
+    product_match: component(productPoints, MAXIMUMS.product_match, productMatch ? [expectedSpecs.length ? 'same_evidence_product_specs_in_both_languages' : 'same_evidence_product_categories_in_both_languages'] : ['product_evidence_not_bilingual'], productMatch ? evidenceIds : []),
     company_specific: component(companyPoints, MAXIMUMS.company_specific, companyMatch ? ['company_and_observed_range_specific'] : ['company_context_not_bilingual'], companyMatch ? evidenceIds : []),
     entry_value: component(entryPoints, MAXIMUMS.entry_value, entryMatch ? ['same_entry_value_concepts_in_both_languages'] : ['entry_value_not_bilingual'], entryMatch ? evidenceIds : []),
     questions: component(questionPoints, MAXIMUMS.questions, questionMatch ? [`matching_question_intents:${enQuestions.intents.join(',')}`] : ['question_intents_not_aligned'], []),
