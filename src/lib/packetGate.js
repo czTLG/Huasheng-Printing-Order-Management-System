@@ -293,8 +293,10 @@ function createPacketGate({ db, now = () => new Date().toISOString(), candidateV
     if (event.actor_user_id !== actorUserId) throw new Error('not authorized');
     activeBindingForUser(actorUserId);
     const after = parseJson(event.after_json, {});
+    const item = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(event.work_item_id);
     return {
       work_item_id: event.work_item_id,
+      work_item_version: Number(after.work_item_version || item?.version || 0) || null,
       candidate_id: event.candidate_id,
       session_id: after.session_id,
       session_version: after.session_version,
@@ -361,6 +363,7 @@ function createPacketGate({ db, now = () => new Date().toISOString(), candidateV
 
     const after = {
       work_item_id: item.id,
+      work_item_version: item.version,
       candidate_id: item.candidate_id,
       stage: item.stage,
       next_action: item.next_action,

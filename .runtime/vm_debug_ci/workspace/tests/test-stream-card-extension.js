@@ -1434,7 +1434,7 @@ async function testRecommendationSnapshotTransitions() {
     selectCandidate: async (openId, input) => {
       calls.push(['selectCandidate', openId, input]);
       if (input.idempotency_key === 'stale-event') { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; }
-      return { work_item_id: 91, candidate_id: input.candidate_id, session_id: input.session_id, session_version: input.expected_version + 1, next_action: input.next_action };
+      return { work_item_id: 91, work_item_version: 4, candidate_id: input.candidate_id, session_id: input.session_id, session_version: input.expected_version + 1, next_action: input.next_action };
     },
     createVersion: async (openId, workItemId, input) => {
       calls.push(['createVersion', openId, workItemId, input]);
@@ -1536,6 +1536,10 @@ async function testRecommendationSnapshotTransitions() {
   assert.strictEqual(selectionCalls.length, 2);
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectionCalls[1][2].idempotency_key);
   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectButton.value.e);
+  const selectedVersionCalls = calls.filter(item => item[0] === 'createVersion').slice(-2);
+  assert.strictEqual(selectedVersionCalls.length, 2);
+  assert.strictEqual(selectedVersionCalls[0][3].expected_work_version, 4);
+  assert.strictEqual(selectedVersionCalls[1][3].expected_work_version, 4);
   const selectedText = visibleText(sent.at(-1).card);
   for (const expected of ['public@company.test', '英文草稿', '中文翻译', '尚未发送', '质量评分', '确认采用']) {
     assert.ok(selectedText.includes(expected), `selection follow-up missing ${expected}`);

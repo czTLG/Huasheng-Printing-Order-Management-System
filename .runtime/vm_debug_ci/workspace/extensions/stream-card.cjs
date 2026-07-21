@@ -654,7 +654,6 @@ function register(context) {
 
   function invalidSessionError(error) {
     return Boolean(error?.matrixSessionInvalid)
-      || Number(error?.status) === 409
       || /session.*(?:expired|stale)|(?:expired|stale).*session|callback (?:session expired|stale version|session context mismatch)/i.test(String(error?.message || ''));
   }
 
@@ -866,11 +865,17 @@ function register(context) {
       };
       selectionEvents.set(key, input);
     }
-    const result = await client.selectCandidate(openId, input);
+    let result;
+    try {
+      result = await client.selectCandidate(openId, input);
+    } catch (error) {
+      if (Number(error?.status) === 409) error.matrixSessionInvalid = true;
+      throw error;
+    }
     if (Number(result.session_version) > Number(state.session.version)) state.session.version = result.session_version;
     if (typeof client.createVersion !== 'function') throw new Error('version review service unavailable');
     const version = await client.createVersion(openId, result.work_item_id, {
-      expected_work_version: 1,
+      expected_work_version: Number(result.work_item_version || 1),
       idempotency_key: `${key}:version`
     });
     await sendForEvent(evt, renderVersionReview(version, cardHelpers));

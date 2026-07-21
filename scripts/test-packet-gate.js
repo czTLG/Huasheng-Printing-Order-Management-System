@@ -325,6 +325,8 @@ try {
   assert.strictEqual(gate.replaySelection({ idempotencyKey: 'evt-unseen', actorUserId: 7 }), null);
   assert.throws(() => gate.replaySelection({ idempotencyKey: 'evt-001', actorUserId: 8 }), /not authorized/);
   assert.strictEqual(first.work_item_id, second.work_item_id);
+  assert.strictEqual(first.work_item_version, 1);
+  assert.strictEqual(second.work_item_version, 1);
   assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_work_items').get().n, 1);
   assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM matrix_selection_events').get().n, 1);
   assert.deepStrictEqual(db.prepare('SELECT * FROM matrix_selection_events WHERE idempotency_key = ?').get('evt-001'), firstEvent);

@@ -65,8 +65,10 @@ async function call(openId, pathname, { method = 'GET', query, body } = {}) {
   let payload;
   try { payload = await response.json(); } catch (_) { throw new Error('matrix API returned invalid JSON'); }
   if (!response.ok) {
-    const error = new Error(`matrix API HTTP ${response.status}`);
+    const apiError = String(payload?.error || '').trim();
+    const error = new Error(apiError ? `matrix API HTTP ${response.status}: ${apiError}` : `matrix API HTTP ${response.status}`);
     error.status = response.status;
+    error.apiError = apiError;
     throw error;
   }
   return payload;
