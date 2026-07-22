@@ -35,6 +35,8 @@ public/new/
 .claude/
 
 *.log
+__pycache__/
+*.pyc
 .DS_Store
 /-
 
@@ -45,3 +47,14 @@ data/*.db.xz
 page-screenshot.png
 data/email-ai-prompts/
 data/email-ai-outputs/
+
+# Private business knowledge and live assistant artifacts stay outside Git.
+docs/costing/
+.runtime/stream-publisher/
+.runtime/vm_debug_ci/workspace/.calc-*.json
+.runtime/vm_debug_ci/workspace/cases/
+.runtime/vm_debug_ci/workspace/outputs/
+.runtime/vm_debug_ci/workspace/store/
+.runtime/vm_debug_ci/workspace/packet-form-v1.json
+.runtime/vm_debug_ci/workspace/tests/packet-math-*.json
+.runtime/vm_debug_ci/workspace/tests/packet-route-current-case.json
