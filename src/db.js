@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const { ensureResearchSchema } = require('./services/matrixResearchLedger');
 
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
@@ -1357,6 +1358,7 @@ function initDb() {
       SELECT RAISE(ABORT, 'matrix_stream_recipient_evidence lifecycle is irreversible');
     END;
   `);
+  ensureResearchSchema(db);
 
   const sessionColumns = new Set(db.prepare('PRAGMA table_info(matrix_sessions)').all().map(column => column.name));
   if (!sessionColumns.has('snapshot_key')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN snapshot_key TEXT NOT NULL DEFAULT ''");
