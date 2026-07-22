@@ -17,6 +17,8 @@ function ensureResearchSchema(db) {
       checked_at TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('complete','insufficient')),
       blockers_json TEXT NOT NULL DEFAULT '[]',
+      content_gaps_json TEXT NOT NULL DEFAULT '[]',
+      unanswered_questions_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -70,6 +72,9 @@ function ensureResearchSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_matrix_research_facts_candidate ON matrix_research_facts(candidate_id, confidence);
     CREATE INDEX IF NOT EXISTS idx_matrix_route_assessments_candidate ON matrix_route_assessments(candidate_id, route_set_id, checked_at DESC);
   `);
+  const dossierColumns = new Set(db.prepare('PRAGMA table_info(matrix_research_dossiers)').all().map(row => row.name));
+  if (!dossierColumns.has('content_gaps_json')) db.exec("ALTER TABLE matrix_research_dossiers ADD COLUMN content_gaps_json TEXT NOT NULL DEFAULT '[]'");
+  if (!dossierColumns.has('unanswered_questions_json')) db.exec("ALTER TABLE matrix_research_dossiers ADD COLUMN unanswered_questions_json TEXT NOT NULL DEFAULT '[]'");
 }
 
 function positiveId(value, label) {
@@ -162,16 +167,19 @@ function saveDossier(db, input = {}) {
   const checkedAt = isoTimestamp(input.checked_at, 'checked_at');
   const sources = Array.isArray(input.sources) ? input.sources.map(normalizeSource) : [];
   const facts = Array.isArray(input.facts) ? input.facts.map(normalizeFact) : [];
+  const contentGaps = Array.isArray(input.content_gaps) ? input.content_gaps : [];
+  const unansweredQuestions = Array.isArray(input.unanswered_questions) ? input.unanswered_questions : [];
   if (!sources.length) throw new Error('at least one source required');
   const assessment = dossierStatus(sources);
   const now = new Date().toISOString();
   return db.transaction(() => {
     db.prepare(`
-      INSERT INTO matrix_research_dossiers (candidate_id, reviewer, checked_at, status, blockers_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO matrix_research_dossiers (candidate_id, reviewer, checked_at, status, blockers_json, content_gaps_json, unanswered_questions_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(candidate_id) DO UPDATE SET reviewer=excluded.reviewer, checked_at=excluded.checked_at,
-        status=excluded.status, blockers_json=excluded.blockers_json, updated_at=excluded.updated_at
-    `).run(candidateId, reviewer, checkedAt, assessment.status, JSON.stringify(assessment.blockers), now, now);
+        status=excluded.status, blockers_json=excluded.blockers_json, content_gaps_json=excluded.content_gaps_json,
+        unanswered_questions_json=excluded.unanswered_questions_json, updated_at=excluded.updated_at
+    `).run(candidateId, reviewer, checkedAt, assessment.status, JSON.stringify(assessment.blockers), JSON.stringify(contentGaps), JSON.stringify(unansweredQuestions), now, now);
     const dossier = db.prepare('SELECT * FROM matrix_research_dossiers WHERE candidate_id = ?').get(candidateId);
     db.prepare('UPDATE matrix_research_sources SET active = 0 WHERE candidate_id = ?').run(candidateId);
     db.prepare('UPDATE matrix_research_facts SET active = 0 WHERE candidate_id = ?').run(candidateId);
@@ -223,6 +231,8 @@ function getDossier(db, candidateIdValue) {
   return {
     ...dossier,
     blockers: JSON.parse(dossier.blockers_json),
+    content_gaps: JSON.parse(dossier.content_gaps_json),
+    unanswered_questions: JSON.parse(dossier.unanswered_questions_json),
     covered_roles: [...new Set(sources.map(source => source.role))],
     sources,
     facts
