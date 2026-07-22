@@ -838,6 +838,31 @@ function createMatrixRouter({
     };
   }
 
+  async function assertVersionStrategyCurrent(item, version) {
+    const detail = view.detail(item.candidate_id, { revealContacts: true });
+    if (!detail) throw new Error('candidate not found');
+    const currentDraft = await candidateDraft(detail);
+    let snapshot;
+    try { snapshot = JSON.parse(version.source_snapshot_json); } catch (_) { snapshot = null; }
+    const prior = snapshot?.strategy_match;
+    const current = currentDraft.sourceSnapshot.strategy_match;
+    const oldEvidence = [...new Set((snapshot?.evidenceIds || []).map(String))].sort();
+    const currentEvidence = [...new Set((currentDraft.sourceSnapshot.evidenceIds || []).map(String))].sort();
+    const staleReasons = [];
+    if (!prior || prior.passed !== true) staleReasons.push('legacy_strategy_assessment_missing');
+    if (JSON.stringify(oldEvidence) !== JSON.stringify(currentEvidence)) staleReasons.push('official_evidence_changed');
+    if (staleReasons.length) {
+      throw reviewFailure('strategy_match_blocked', {
+        score: current.score,
+        threshold: current.threshold,
+        blockers: staleReasons,
+        components: current.components,
+        next_action: 'Refresh the draft from the current verified candidate record before review.'
+      });
+    }
+    return currentDraft;
+  }
+
   function withWorkVersion(version) {
     const item = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(version.work_item_id);
     return { ...version, work_item_version: item?.version || null };
@@ -952,7 +977,7 @@ function createMatrixRouter({
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 
-  router.get('/work-items/:id/versions/:versionId', (req, res) => {
+  router.get('/work-items/:id/versions/:versionId', async (req, res) => {
     try {
       requireReviewAccess(req);
       rejectUnknown(req.query, new Set(), 'query');
@@ -961,6 +986,7 @@ function createMatrixRouter({
       const item = ownedReviewItem(workItemId, req.user.id);
       const version = reviewService.getVersion(db, { actorUserId: req.user.id, versionId });
       if (!version || version.work_item_id !== item.id) return res.status(404).json({ error: 'version not found' });
+      await assertVersionStrategyCurrent(item, version);
       res.json({ ...version, work_item_version: item.version });
     } catch (error) { sendReviewError(res, error); }
   });
@@ -1151,6 +1177,8 @@ function createMatrixRouter({
       if (hasBase) {
         const current = reviewService.getVersion(db, { actorUserId: identity.actorUserId, versionId: baseVersionId });
         if (!current || current.work_item_id !== workItemId) throw new Error('base version not found');
+        const currentItem = ownedReviewItem(workItemId, identity.actorUserId, expectedWorkVersion);
+        await assertVersionStrategyCurrent(currentItem, current);
         let sourceSnapshot;
         try { sourceSnapshot = JSON.parse(current.source_snapshot_json); } catch (_) { throw new Error('stored source snapshot invalid'); }
         let generated;
@@ -1257,6 +1285,10 @@ function createMatrixRouter({
       if (claim.kind === 'replay') return res.json(claim.response);
       heldClaimToken = claim.ownerToken;
       heldClaimKey = idempotencyKey;
+      const approvalItem = ownedReviewItem(workItemId, identity.actorUserId, expectedWorkVersion);
+      const approvalVersion = reviewService.getVersion(db, { actorUserId: identity.actorUserId, versionId });
+      if (!approvalVersion || approvalVersion.work_item_id !== workItemId) throw new Error('version not found');
+      await assertVersionStrategyCurrent(approvalItem, approvalVersion);
       const approve = db.transaction(() => {
         const ownership = requireOwnedClaim({
           identity, workItemId, action: 'approve', idempotencyKey, fingerprint,
@@ -1294,6 +1326,7 @@ function createMatrixRouter({
       const item = ownedReviewItem(workItemId, req.user.id);
       const basePreview = reviewService.finalPreview(db, { actorUserId: req.user.id, versionId });
       if (!basePreview || basePreview.version.work_item_id !== item.id) throw new Error('version not found');
+      await assertVersionStrategyCurrent(item, basePreview.version);
       const unavailable = { ok: false, reasons: ['preview_gate_unavailable'] };
       const preview = previewService && typeof previewService.project === 'function'
         ? await previewService.project(basePreview)
@@ -1307,6 +1340,12 @@ function createMatrixRouter({
       const body = rejectUnknown(req.body, SEND_FIELDS, 'body');
       if (!deliveryService || typeof deliveryService.confirm !== 'function') throw new Error('delivery service unavailable');
       const identity = reviewIdentity(req);
+      const sendWorkItemId = positiveInteger(req.params.id, 'work item id');
+      const sendVersionId = positiveInteger(req.params.versionId, 'version id');
+      const sendItem = ownedReviewItem(sendWorkItemId, identity.actorUserId, positiveInteger(body.expected_work_version, 'expected work version'));
+      const sendVersion = reviewService.getVersion(db, { actorUserId: identity.actorUserId, versionId: sendVersionId });
+      if (!sendVersion || sendVersion.work_item_id !== sendWorkItemId) throw new Error('version not found');
+      await assertVersionStrategyCurrent(sendItem, sendVersion);
       const requiredToken = (value, label, maximum = 256) => {
         const token = String(value || '').trim();
         if (!token || token.length > maximum || /[\r\n\0]/.test(token)) throw new Error(`${label} required`);
@@ -1315,8 +1354,8 @@ function createMatrixRouter({
       const result = await deliveryService.confirm({
         actorUserId: identity.actorUserId,
         bindingId: identity.bindingId,
-        workItemId: positiveInteger(req.params.id, 'work item id'),
-        versionId: positiveInteger(req.params.versionId, 'version id'),
+        workItemId: sendWorkItemId,
+        versionId: sendVersionId,
         expectedWorkVersion: positiveInteger(body.expected_work_version, 'expected work version'),
         expectedContentHash: requiredToken(body.expected_content_hash, 'expected content hash', 64),
         chatId: requiredToken(body.chat_id, 'chat id'),

@@ -69,6 +69,7 @@ async function call(openId, pathname, { method = 'GET', query, body } = {}) {
     const error = new Error(apiError ? `matrix API HTTP ${response.status}: ${apiError}` : `matrix API HTTP ${response.status}`);
     error.status = response.status;
     error.apiError = apiError;
+    error.apiPayload = payload?.error && typeof payload.error === 'object' ? payload.error : null;
     throw error;
   }
   return payload;

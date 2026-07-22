@@ -614,6 +614,11 @@ function reviewState(workItemId) {
     mutateCandidate(db => {
       db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
       db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (11,1,'https://alpha.test/about','official_website','Company profile','2026-07-17T00:00:00Z','Coffee manufacturer with export production capacity','e11')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (12,1,'https://alpha.test/services','official_website','Packaging development service','2026-07-17T00:00:00Z','Packaging development, filling review and artwork control','e12')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (13,1,'https://alpha.test/quality','official_website','Quality testing','2026-07-17T00:00:00Z','Quality testing and production traceability','e13')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (14,1,'https://alpha.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable packaging and material efficiency','e14')").run();
+      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (15,1,'https://alpha.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e15')").run();
     });
 
     await assertFailedWithoutReviewWrite('unknown revision field', 400, () => request(versionRoute, {

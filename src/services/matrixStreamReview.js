@@ -247,14 +247,21 @@ function createInitialVersion(db, input = {}) {
     const at = timestamp();
     const quality = versionQuality({ subject, bodyEn, bodyCn, recipient, sourceSnapshot, now: at });
     const qualityJson = canonicalJson(quality);
+    const revisionRow = db.prepare('SELECT COALESCE(MAX(revision), 0) AS revision FROM matrix_stream_versions WHERE work_item_id = ?').get(workItemId);
+    const revision = Number(revisionRow?.revision || 0) + 1;
+    db.prepare(`
+      UPDATE matrix_stream_versions
+      SET status = 'superseded', updated_at = ?
+      WHERE work_item_id = ? AND status IN ('draft', 'approved')
+    `).run(at, workItemId);
     const inserted = db.prepare(`
       INSERT INTO matrix_stream_versions (
         work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
         subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
         quality_score, quality_json, status, created_by, created_at, updated_at
-      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
     `).run(
-      workItemId, evidenceBinding.evidence.id, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
+      workItemId, evidenceBinding.evidence.id, revision, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
       subject, bodyEn, bodyCn, strategySummary, JSON.stringify(sourceSnapshot),
       hash, quality.score, qualityJson, actorUserId, at, at
     );
@@ -269,7 +276,7 @@ function createInitialVersion(db, input = {}) {
     const result = versionById(db, versionId);
     addEvent(db, {
       workItemId, versionId, actorUserId, action: 'created', idempotencyKey, fingerprint,
-      contentHash: hash, before: {}, after: { version_id: versionId, revision: 1, status: result.status, response: result }, at
+      contentHash: hash, before: {}, after: { version_id: versionId, revision, status: result.status, response: result }, at
     });
     return result;
   });

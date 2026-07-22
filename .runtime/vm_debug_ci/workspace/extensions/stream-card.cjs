@@ -160,6 +160,22 @@ function clip(value, maximum = 90) {
   return points.length > maximum ? `${points.slice(0, maximum - 1).join('')}…` : text;
 }
 
+function formattedBody(value, maximum = 3500) {
+  const normalized = String(value == null || value === '' ? '待核实' : value)
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(line => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const points = [...normalized];
+  if (points.length <= maximum) return normalized;
+  const candidate = points.slice(0, maximum - 18).join('');
+  const boundary = Math.max(candidate.lastIndexOf('\n\n'), candidate.lastIndexOf('\n'));
+  const safe = boundary >= Math.floor(maximum * 0.65) ? candidate.slice(0, boundary) : candidate;
+  return `${safe.trimEnd()}\n\n[正文较长，请在最终预览查看完整内容]`;
+}
+
 function eventId(session, candidate) {
   return crypto.createHash('sha256').update(`${session.id}:${session.version}:${candidate.id}:select`).digest('hex').slice(0, 24);
 }
@@ -400,10 +416,15 @@ function renderVersionReview(version, cardHelpers) {
   const { card, md, note, actions, button } = cardHelpers;
   const quality = (() => { try { return JSON.parse(version.quality_json); } catch (_) { return null; } })();
   const score = Number.isFinite(Number(version.quality_score)) ? Number(version.quality_score) : Number(quality?.score || 0);
+  const snapshot = (() => { try { return JSON.parse(version.source_snapshot_json); } catch (_) { return null; } })();
+  const strategy = snapshot?.strategy_match;
+  const strategyLine = strategy?.passed === true
+    ? `${Number(strategy.score || 0)}/${Number(strategy.threshold || 75)}（已通过）`
+    : '旧版本未评估（不可继续审批）';
   return card([
-    md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${score}/100`),
-    md(`**英文草稿**\n${clip(version.body_en, 360)}`),
-    md(`**中文翻译**\n${clip(version.body_cn, 280)}`),
+    md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**正文质量评分**：${score}/100\n**客户胃口匹配度**：${strategyLine}`),
+    md(`**英文草稿**\n\n${formattedBody(version.body_en)}`),
+    md(`**中文翻译**\n\n${formattedBody(version.body_cn)}`),
     actions([
       button('确认采用', versionAction(version, 'mx.approve'), 'primary'),
       button('修改草稿', versionAction(version, 'mx.revise'), 'default'),
@@ -411,6 +432,28 @@ function renderVersionReview(version, cardHelpers) {
     ]),
     note('尚未发送。确认采用仅记录审批，仍需打开最终预览并再次确认。')
   ], { header: { title: `草稿 v${Number(version.revision || 1)} 待审阅`, template: 'blue' }, summary: '草稿待审阅' });
+}
+
+function renderStrategyBlocked(error, cardHelpers) {
+  const { card, md, note } = cardHelpers;
+  const details = error?.apiPayload?.details || {};
+  const labels = {
+    official_source_coverage_below_3: '官网有效证据少于 3 条',
+    operating_profile_missing: '缺少公司规模或经营模式证据',
+    product_evidence_missing: '缺少明确产品与包装形态证据',
+    development_process_missing: '缺少开发、生产或质量流程证据',
+    organizational_access_missing: '缺少官网公开的组织联系入口',
+    localized_journey_not_ready: '对应语言的网站承接页面尚未就绪',
+    score_below_threshold: '总分尚未达到门槛',
+    legacy_strategy_assessment_missing: '旧草稿没有经过当前匹配度门禁',
+    official_evidence_changed: '客户官网证据已发生变化'
+  };
+  const blockers = (Array.isArray(details.blockers) ? details.blockers : [])
+    .map(value => `• ${labels[value] || clip(value, 80)}`);
+  return card([
+    md(`**当前匹配度**：${Number(details.score || 0)}/${Number(details.threshold || 75)}\n**旧草稿已停止使用**\n${blockers.join('\n') || '需要重新核验客户官网与对应网站页面。'}`),
+    note('完成官网调查和对应页面补强并达到门槛后，系统才会生成新的草稿版本；不会发送旧稿。')
+  ], { header: { title: '暂不生成开发信', template: 'orange' }, summary: '匹配度门禁未通过' });
 }
 
 function renderApproved(version, cardHelpers) {
@@ -878,23 +921,37 @@ function register(context) {
       throw error;
     }
     if (Number(result.session_version) > Number(state.session.version)) state.session.version = result.session_version;
+    let item = null;
     if (typeof client.workItems === 'function' && typeof client.getVersion === 'function') {
       const items = await client.workItems(openId, { limit: 100 });
-      const item = Array.isArray(items?.rows)
+      item = Array.isArray(items?.rows)
         ? items.rows.find(row => Number(row.id) === Number(result.work_item_id))
         : null;
       const currentVersionId = Number(item?.current_stream_version_id || 0);
       if (currentVersionId > 0) {
-        const current = await client.getVersion(openId, result.work_item_id, currentVersionId);
-        await sendForEvent(evt, renderVersionReview(current, cardHelpers));
-        return;
+        try {
+          const current = await client.getVersion(openId, result.work_item_id, currentVersionId);
+          await sendForEvent(evt, renderVersionReview(current, cardHelpers));
+          return;
+        } catch (error) {
+          if (!(Number(error?.status) === 422 && error?.apiPayload?.code === 'strategy_match_blocked')) throw error;
+        }
       }
     }
     if (typeof client.createVersion !== 'function') throw new Error('version review service unavailable');
-    const version = await client.createVersion(openId, result.work_item_id, {
-      expected_work_version: Number(result.work_item_version || 1),
-      idempotency_key: `${key}:version`
-    });
+    let version;
+    try {
+      version = await client.createVersion(openId, result.work_item_id, {
+        expected_work_version: Number(item?.version || result.work_item_version || 1),
+        idempotency_key: `${key}:version`
+      });
+    } catch (error) {
+      if (Number(error?.status) === 422 && error?.apiPayload?.code === 'strategy_match_blocked') {
+        await sendForEvent(evt, renderStrategyBlocked(error, cardHelpers));
+        return;
+      }
+      throw error;
+    }
     await sendForEvent(evt, renderVersionReview(version, cardHelpers));
   }
 
