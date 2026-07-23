@@ -11,6 +11,7 @@ const { buildMatrixOverview } = require('../services/matrixOverview');
 const { searchMatrixContext, resolveMatrixContext, contextByRecordId } = require('../services/matrixContextSearch');
 const { createMatrixStreamText } = require('../services/matrixStreamText');
 const { scoreSignalMatch } = require('../services/matrixSignalMatch');
+const { createMatrixLedgerCommand } = require('../services/matrixLedgerCommand');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -21,6 +22,7 @@ const LIST_FIELDS = new Set(['region', 'country', 'category', 'priority', 'statu
 const VERSION_FIELDS = new Set(['expected_work_version', 'base_version_id', 'revision_instruction', 'idempotency_key']);
 const APPROVAL_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']);
 const SEND_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'chat_id', 'card_event_id', 'idempotency_key']);
+const LEDGER_CONFIRM_FIELDS = new Set(['expected_content_hash', 'confirmation_text', 'chat_id', 'card_event_id', 'idempotency_key']);
 
 function plainObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -364,6 +366,7 @@ function createMatrixRouter({
   reviewService = require('../services/matrixStreamReview'),
   deliveryService,
   previewService,
+  ledgerCommand,
   threadRouteService,
   threadPreviewService,
   threadDeliveryService,
@@ -374,6 +377,8 @@ function createMatrixRouter({
   const router = express.Router();
   const view = createCacheIndexView({ dbPath: candidateDbPath });
   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
+  const command = ledgerCommand || (previewService && deliveryService
+    ? createMatrixLedgerCommand({ db, reviewService, previewService, deliveryService, clock }) : null);
 
   router.use(requireMatrixRole);
 
@@ -1372,6 +1377,43 @@ function createMatrixRouter({
     } catch (error) {
       sendDeliveryError(res, error);
     }
+  });
+
+  router.get('/customers/:customerId/final-preview', async (req, res) => {
+    try {
+      requireReviewAccess(req);
+      rejectUnknown(req.query, new Set(['version_id']), 'query');
+      if (!command) throw new Error('ledger command unavailable');
+      const identity = reviewIdentity(req);
+      const customerId = positiveInteger(req.params.customerId, 'customer id');
+      const versionId = positiveInteger(req.query.version_id, 'version id');
+      res.json(await command.finalPreview({ actorUserId: identity.actorUserId, customerId, versionId }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/customers/:customerId/final-preview/:versionId/confirm', async (req, res) => {
+    try {
+      const body = rejectUnknown(req.body, LEDGER_CONFIRM_FIELDS, 'body');
+      requireReviewAccess(req);
+      if (!command) throw new Error('ledger command unavailable');
+      const identity = reviewIdentity(req);
+      const customerId = positiveInteger(req.params.customerId, 'customer id');
+      const versionId = positiveInteger(req.params.versionId, 'version id');
+      const result = await command.confirmDelivery({
+        actorUserId: identity.actorUserId,
+        bindingId: identity.bindingId,
+        customerId,
+        versionId,
+        expectedContentHash: String(body.expected_content_hash || '').trim(),
+        confirmationText: String(body.confirmation_text == null ? '' : body.confirmation_text),
+        chatId: String(body.chat_id || '').trim(),
+        cardEventId: String(body.card_event_id || '').trim(),
+        idempotencyKey: String(body.idempotency_key || '').trim()
+      });
+      const state = String(result?.state || '');
+      if (!new Set(['accepted', 'failed', 'ambiguous']).has(state)) throw new Error('invalid delivery result');
+      res.json({ state, error_class: String(result?.error_class || ''), work_item_version: positiveInteger(result?.work_item_version, 'delivery work item version') });
+    } catch (error) { sendDeliveryError(res, error); }
   });
 
   return router;

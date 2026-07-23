@@ -711,6 +711,17 @@ function reviewState(workItemId) {
         return deliveryImpl(input);
       }
     };
+    const ledgerCommandCalls = [];
+    const injectedLedgerCommand = {
+      async finalPreview(input) {
+        ledgerCommandCalls.push({ kind: 'preview', ...input });
+        return { customer_id: input.customerId, customer_name: 'UNITEA Kazakhstan', contact_id: 9, recipient: 'procurement@unitea.kz', subject: 'Tea pouch and roll-film review for one UNITEA SKU', body_en: 'exact body', body_cn: '准确中文', attachments: [], version_id: createdVersion.body.id, content_hash: createdVersion.body.content_hash, allowed: true, blockers: [] };
+      },
+      async confirmDelivery(input) {
+        ledgerCommandCalls.push({ kind: 'confirm', ...input });
+        return { state: 'accepted', error_class: '', work_item_version: 4 };
+      }
+    };
     const replyDraftCalls = [];
     const injectedCorrelationService = {
       startReplyDraft(_db, input) {
@@ -747,6 +758,7 @@ function reviewState(workItemId) {
       candidateDbPath,
       reviewService: injectedReviewService,
       deliveryService: injectedDeliveryService,
+      ledgerCommand: injectedLedgerCommand,
       correlationService: injectedCorrelationService,
       textService: injectedTextService,
       claimOptions
@@ -756,6 +768,28 @@ function reviewState(workItemId) {
       server.once('error', reject);
     });
     try {
+      const ledgerPreview = await request(`/api/matrix/customers/1/final-preview?version_id=${createdVersion.body.id}`, {
+        port: injectedPort, serviceToken: bridgeToken, openId: 'ou-service'
+      });
+      assert.strictEqual(ledgerPreview.status, 200, JSON.stringify(ledgerPreview.body));
+      assert.strictEqual(ledgerPreview.body.allowed, true);
+      const ledgerConfirmRoute = `/api/matrix/customers/1/final-preview/${createdVersion.body.id}/confirm`;
+      const ledgerConfirmBody = {
+        expected_content_hash: createdVersion.body.content_hash,
+        confirmation_text: '确认发送 UNITEA Kazakhstan',
+        chat_id: 'ledger-chat',
+        card_event_id: 'ledger-card',
+        idempotency_key: 'ledger-api-1'
+      };
+      const ledgerConfirmed = await request(ledgerConfirmRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: ledgerConfirmBody
+      });
+      assert.deepStrictEqual(ledgerConfirmed, { status: 200, body: { state: 'accepted', error_class: '', work_item_version: 4 } });
+      assert.strictEqual(ledgerCommandCalls.filter(call => call.kind === 'confirm').length, 1);
+      const rejectedLedgerField = await request(ledgerConfirmRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...ledgerConfirmBody, recipient: 'outside@test' }
+      });
+      assert.strictEqual(rejectedLedgerField.status, 400);
       const sendRoute = `${versionRoute}/${createdVersion.body.id}/send`;
       const sendBody = {
         expected_work_version: 3,

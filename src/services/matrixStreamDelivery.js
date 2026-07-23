@@ -9,7 +9,7 @@ const { scheduleReplyCheck } = require('./matrixStreamFollowup');
 
 const INPUT_FIELDS = new Set([
   'actorUserId', 'bindingId', 'workItemId', 'versionId', 'expectedWorkVersion',
-  'expectedContentHash', 'chatId', 'cardEventId', 'idempotencyKey'
+  'expectedContentHash', 'chatId', 'cardEventId', 'idempotencyKey', 'canonicalCustomerId'
 ]);
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 
@@ -30,6 +30,7 @@ function exactInput(value) {
   };
   const expectedContentHash = token('expectedContentHash', 64).toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(expectedContentHash)) throw new Error('valid expectedContentHash required');
+  const canonicalCustomerId = value.canonicalCustomerId === undefined ? null : positiveInteger(value.canonicalCustomerId, 'canonical customer id');
   return {
     actorUserId: positiveInteger(value.actorUserId, 'actor user id'),
     bindingId: positiveInteger(value.bindingId, 'binding id'),
@@ -39,7 +40,8 @@ function exactInput(value) {
     expectedContentHash,
     chatId: token('chatId'),
     cardEventId: token('cardEventId'),
-    idempotencyKey: token('idempotencyKey', 200)
+    idempotencyKey: token('idempotencyKey', 200),
+    canonicalCustomerId
   };
 }
 
@@ -137,6 +139,24 @@ function currentApprovalEvent(db, version) {
   `).get(version.work_item_id, version.id, version.approved_by, version.content_hash);
 }
 
+function canonicalContactAuthorized(db, input, version, workItem) {
+  if (!input.canonicalCustomerId) return false;
+  const customer = db.prepare('SELECT id, active FROM customers WHERE id = ?').get(input.canonicalCustomerId);
+  if (!customer || !Number(customer.active)) throw new Error('canonical customer is inactive');
+  const candidate = db.prepare(`
+    SELECT 1 FROM matrix_customer_links
+    WHERE canonical_customer_id = ? AND source_kind = 'candidate' AND source_id = ?
+  `).get(customer.id, String(workItem.candidate_id));
+  if (!candidate) throw new Error('canonical customer does not own delivery');
+  const contact = db.prepare(`
+    SELECT status FROM matrix_contacts
+    WHERE canonical_customer_id = ? AND channel = 'email' AND lower(address) = lower(?)
+    ORDER BY id ASC LIMIT 1
+  `).get(customer.id, version.recipient_email);
+  if (!contact || contact.status !== 'active') throw new Error('canonical contact is inactive');
+  return true;
+}
+
 function freshReplayAuthorization(db, input) {
   const row = db.prepare(`
     SELECT b.status AS binding_status, u.role, u.status AS actor_status, u.permissions_json,
@@ -159,7 +179,7 @@ function freshDeliveryGate(db, input, context) {
   const row = db.prepare(`
     SELECT b.id AS binding_id, b.status AS binding_status,
            u.id AS actor_user_id, u.role, u.status AS actor_status, u.permissions_json,
-           w.id AS work_item_id, w.owner_user_id, w.stage, w.stream_state,
+           w.id AS work_item_id, w.candidate_id, w.owner_user_id, w.stage, w.stream_state,
            w.current_stream_version_id, w.version AS work_item_version
     FROM matrix_actor_bindings b
     JOIN users u ON u.id = b.user_id
@@ -227,6 +247,7 @@ function freshDeliveryGate(db, input, context) {
   if (!quality.passed || quality.score < 80 || quality.score !== version.quality_score
       || review.canonicalJson(quality) !== review.canonicalJson(storedQuality)) throw new Error('quality final gate blocked');
 
+  const canonicalContact = canonicalContactAuthorized(db, input, version, row);
   const identity = evaluateInitialContact(db, {
     email: recipient.email,
     domain: recipientDomain,
@@ -234,7 +255,7 @@ function freshDeliveryGate(db, input, context) {
     aliases: versionSnapshot.aliases,
     now: context.iso
   });
-  if (!identity.allowed || identity.route !== 'initial_contact') throw new Error(`initial contact gate blocked: ${identity.reasons.join(',')}`);
+  if (!canonicalContact && (!identity.allowed || identity.route !== 'initial_contact')) throw new Error(`initial contact gate blocked: ${identity.reasons.join(',')}`);
 
   const senderChecks = db.prepare(`
     SELECT * FROM matrix_stream_sender_checks
