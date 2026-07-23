@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -46,6 +47,16 @@ function record(sourceKind, sourceId, evidence = {}, extra = {}) {
     provenance: { sourcePath: `/protected/${sourceKind}/${sourceId}.json`, bodyHash: `hash-${sourceId}` },
     evidence,
     ...extra
+  };
+}
+
+function databaseSnapshot(databasePath) {
+  return {
+    bytes: crypto.createHash('sha256').update(fs.readFileSync(databasePath)).digest('hex'),
+    mtimeMs: fs.statSync(databasePath).mtimeMs,
+    schema: db.prepare("SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'trigger') ORDER BY type, name").all(),
+    users: db.prepare('SELECT id, username, role, status, created_at, approved_at FROM users ORDER BY id').all(),
+    migrationRows: db.prepare('SELECT * FROM matrix_migration_records ORDER BY id').all()
   };
 }
 
@@ -167,17 +178,23 @@ try {
   const reportPath = path.join(protectedRuntime, 'reviewed-report.json');
   fs.writeFileSync(reportPath, JSON.stringify({ candidateQuery: 'SELECT record_json FROM candidate_import_rows' }), { mode: 0o600 });
   const rowsBeforeCliDryRun = db.prepare('SELECT COUNT(*) AS count FROM matrix_migration_records').get().count;
+  const protectedDryRunBefore = databaseSnapshot(process.env.DB_PATH);
   const cliDryRun = await runMigrationCli(['--dry-run', '--report', reportPath], { runtimeDir: protectedRuntime, candidateDb: db });
   assert.deepStrictEqual(cliDryRun, { imported: 1, matched: 0, unresolved: 0, skipped: 0, conflicts: 0 }, 'CLI dry-run loads reviewed candidate sources');
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_migration_records').get().count, rowsBeforeCliDryRun, 'CLI dry-run creates no operational rows');
+  assert.deepStrictEqual(databaseSnapshot(process.env.DB_PATH), protectedDryRunBefore, 'protected dry-run changes no schema, rows, default user, bytes, or mtime');
   const applyReportPath = path.join(protectedRuntime, 'apply-report.json');
   fs.writeFileSync(applyReportPath, JSON.stringify({ records: [record('candidate', 'cli-apply', { candidateId: '602', companyName: 'CLI Apply Candidate' })] }), { mode: 0o600 });
   const cliApply = await runMigrationCli(['--apply', '--report', applyReportPath, '--idempotency-key', 'cli-apply-1'], { runtimeDir: protectedRuntime, candidateDb: db });
   assert.deepStrictEqual(cliApply, { imported: 1, matched: 0, unresolved: 0, skipped: 0, conflicts: 0 }, 'CLI apply uses the reviewed report after online backup preflight');
   const databasePath = db.prepare('PRAGMA database_list').all().find(row => row.name === 'main').file;
-  const backups = fs.readdirSync(path.dirname(databasePath)).filter(name => name.startsWith(`${path.basename(databasePath)}.matrix-ledger-backup-`));
-  assert.strictEqual(backups.length, 1, 'apply creates one online backup preflight artifact');
-  assert.strictEqual(fs.statSync(path.join(path.dirname(databasePath), backups[0])).mode & 0o777, 0o600, 'online backup is mode 0600');
+  const backupDirectories = fs.readdirSync(path.dirname(databasePath)).filter(name => name.startsWith('.matrix-ledger-backup-'));
+  assert.strictEqual(backupDirectories.length, 1, 'apply creates one unique online-backup directory');
+  const backupDirectory = path.join(path.dirname(databasePath), backupDirectories[0]);
+  const backupPath = path.join(backupDirectory, 'snapshot.db');
+  assert.strictEqual(fs.statSync(backupPath).mode & 0o777, 0o600, 'online backup is mode 0600');
+  assert.match(path.basename(backupDirectory), /^\.matrix-ledger-backup-/, 'backup lives in a unique protected directory');
+  assert.strictEqual(fs.statSync(backupDirectory).mode & 0o777, 0o700, 'backup directory is mode 0700');
   const escapedPath = path.join(protectedRuntime, 'escaped.json');
   fs.symlinkSync(path.join(root, 'outside.json'), escapedPath);
   assert.throws(() => protectedReportPath(escapedPath, protectedRuntime), /symlink|protected runtime directory/);
@@ -189,9 +206,11 @@ try {
     VALUES (704, 1, ?, ?)
   `).run(NOW, NOW);
   const rowsBeforeBareDryRun = db.prepare('SELECT COUNT(*) AS count FROM matrix_migration_records').get().count;
+  const bareDryRunBefore = databaseSnapshot(process.env.DB_PATH);
   const bareDryRun = await runMigrationCli(['--dry-run'], { candidateDb: db });
   assert.deepStrictEqual(bareDryRun, { imported: 0, matched: 1, unresolved: 0, skipped: 0, conflicts: 0 }, 'bare dry-run uses the authoritative work-item adapter');
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_migration_records').get().count, rowsBeforeBareDryRun, 'bare dry-run creates no operational rows');
+  assert.deepStrictEqual(databaseSnapshot(process.env.DB_PATH), bareDryRunBefore, 'bare dry-run changes no schema, rows, default user, bytes, or mtime');
 
   console.log('matrix ledger migration tests passed');
 } finally {

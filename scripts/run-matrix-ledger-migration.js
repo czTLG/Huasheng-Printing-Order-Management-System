@@ -4,7 +4,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
-const { db, initDb } = require('../src/db');
 const { createMatrixLedgerStore } = require('../src/services/matrixLedgerStore');
 const { createMatrixLedgerMigration } = require('../src/services/matrixLedgerMigration');
 
@@ -38,32 +37,54 @@ function protectedReportPath(value, configuredRuntimeDir) {
   if (!relative || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) throw new Error('report path must be under the protected runtime directory');
   return reportPath;
 }
-function initializeQuietly() {
+function operationalDatabasePath() {
+  return path.resolve(process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.db'));
+}
+function initializeWritableDatabase() {
+  const { db, initDb } = require('../src/db');
   const originalLog = console.log;
   console.log = () => {};
   try { initDb(); } finally { console.log = originalLog; }
+  return db;
 }
-async function databaseBackupPreflight() {
-  const row = db.prepare('PRAGMA database_list').all().find(item => item.name === 'main');
+function openReadOnlyOperationalDatabase() {
+  return new Database(operationalDatabasePath(), { readonly: true, fileMustExist: true });
+}
+function exactMode(targetPath, mode, errorMessage) {
+  if ((fs.statSync(targetPath).mode & 0o777) !== mode) throw new Error(errorMessage);
+}
+async function databaseBackupPreflight(database) {
+  const row = database.prepare('PRAGMA database_list').all().find(item => item.name === 'main');
   if (!row || !row.file || !fs.statSync(row.file).isFile()) throw new Error('database backup preflight failed');
-  const backupPath = `${row.file}.matrix-ledger-backup-${Date.now()}`;
-  await db.backup(backupPath);
-  fs.chmodSync(backupPath, 0o600);
-  if ((fs.statSync(backupPath).mode & 0o777) !== 0o600) throw new Error('database backup permissions are not 0600');
-  let backup;
+  let backupDirectory = '';
+  const previousUmask = process.umask(0o077);
   try {
-    backup = new Database(backupPath, { readonly: true, fileMustExist: true });
-    const integrity = backup.pragma('integrity_check', { simple: true });
-    if (integrity !== 'ok') throw new Error('database backup integrity check failed');
+    backupDirectory = fs.mkdtempSync(path.join(path.dirname(row.file), '.matrix-ledger-backup-'));
+    fs.chmodSync(backupDirectory, 0o700);
+    exactMode(backupDirectory, 0o700, 'database backup directory permissions are not 0700');
+    const backupPath = path.join(backupDirectory, 'snapshot.db');
+    await database.backup(backupPath);
+    fs.chmodSync(backupPath, 0o600);
+    exactMode(backupPath, 0o600, 'database backup permissions are not 0600');
+    let backup;
+    try {
+      backup = new Database(backupPath, { readonly: true, fileMustExist: true });
+      if (backup.pragma('integrity_check', { simple: true }) !== 'ok') throw new Error('database backup integrity check failed');
+    } finally {
+      if (backup) backup.close();
+    }
+    return { path: backupPath, directory: backupDirectory };
+  } catch (error) {
+    if (backupDirectory) fs.rmSync(backupDirectory, { recursive: true, force: true });
+    throw error;
   } finally {
-    if (backup) backup.close();
+    process.umask(previousUmask);
   }
-  return backupPath;
 }
-function candidateDatabase(options = {}) {
+function candidateDatabase(options = {}, fallbackDatabase) {
   if (options.candidateDb) return { database: options.candidateDb, close: false };
   const candidatePath = process.env.MATRIX_STREAM_DB_PATH;
-  if (!candidatePath) return { database: db, close: false };
+  if (!candidatePath) return { database: fallbackDatabase, close: false };
   return { database: new Database(path.resolve(candidatePath), { readonly: true, fileMustExist: true }), close: true };
 }
 function tableExists(database, tableName) {
@@ -110,18 +131,20 @@ function authoritativeSources(candidateDb) {
 }
 async function run(argv, options = {}) {
   const args = parseArgs(argv);
-  initializeQuietly();
-  const candidate = candidateDatabase(options);
+  const dryRun = args.mode === '--dry-run';
+  const operational = dryRun ? { database: openReadOnlyOperationalDatabase(), close: true } : { database: initializeWritableDatabase(), close: false };
+  const candidate = candidateDatabase(options, operational.database);
   try {
-    const store = createMatrixLedgerStore({ db });
-    const migration = createMatrixLedgerMigration({ db, candidateDb: candidate.database, store });
+    const store = createMatrixLedgerStore({ db: operational.database });
+    const migration = createMatrixLedgerMigration({ db: operational.database, candidateDb: candidate.database, store });
     const report = args.report ? JSON.parse(fs.readFileSync(protectedReportPath(args.report, options.runtimeDir), 'utf8')) : null;
     const plan = migration.scan(report ? report.sources || report : authoritativeSources(candidate.database));
-    if (args.mode === '--dry-run') return plan.counts;
-    await databaseBackupPreflight();
+    if (dryRun) return plan.counts;
+    await databaseBackupPreflight(operational.database);
     return migration.apply(plan, { idempotencyKey: args.idempotencyKey }).counts;
   } finally {
     if (candidate.close) candidate.database.close();
+    if (operational.close) operational.database.close();
   }
 }
 async function main() {
@@ -133,7 +156,7 @@ if (require.main === module) {
   main().catch(error => {
     process.stderr.write(`matrix ledger migration failed: ${error.message}\n`);
     process.exitCode = 1;
-  }).finally(() => db.close());
+  });
 }
 
 module.exports = { run, parseArgs, protectedReportPath, databaseBackupPreflight, authoritativeSources };
