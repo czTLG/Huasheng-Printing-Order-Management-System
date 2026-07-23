@@ -12,6 +12,7 @@ const MATCH_RULES = [
 ];
 const ZERO_COUNTS = Object.freeze({ imported: 0, matched: 0, unresolved: 0, skipped: 0, conflicts: 0 });
 const BLOCKED_HISTORY_STATES = new Set(['bounced', 'suppressed', 'stale']);
+const BLOCKED_HISTORY_SOURCE_KINDS = new Set(['bounce', 'bounced', 'suppression', 'suppressed', 'stale']);
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 function stable(value) {
@@ -53,7 +54,9 @@ function createMatrixLedgerMigration({ db, candidateDb, store, clock = () => new
   }
   function blockedHistory(record) {
     const state = text(record.deliveryState || record.historyState || record.state).toLowerCase();
-    return Boolean(record.suppressed || record.stale || BLOCKED_HISTORY_STATES.has(state));
+    const sourceKindTokens = text(record.sourceKind).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    return Boolean(record.suppressed || record.stale || BLOCKED_HISTORY_STATES.has(state)
+      || sourceKindTokens.some(token => BLOCKED_HISTORY_SOURCE_KINDS.has(token)));
   }
   function match(record) {
     const evidence = record.evidence || {};

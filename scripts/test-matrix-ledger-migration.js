@@ -133,6 +133,12 @@ try {
 
   const unresolvedChain = migration.scan({ records: [record('email_message', 'unmapped-chain', { messageReferenceChain: ['<unmapped@test>'] })] });
   assert.strictEqual(unresolvedChain.counts.unresolved, 1, 'an unmapped message reference chain cannot match');
+  const sourceKindOnlyHistory = migration.scan({ records: [
+    record('bounce', 'kind-only-bounce', { candidateId: '701', companyName: 'Source Kind Bounce' }),
+    record('suppression', 'kind-only-suppression', { candidateId: '702', companyName: 'Source Kind Suppression' }),
+    record('stale', 'kind-only-stale', { candidateId: '703', companyName: 'Source Kind Stale' })
+  ] });
+  assert.deepStrictEqual(sourceKindOnlyHistory.counts, { imported: 0, matched: 0, unresolved: 3, skipped: 0, conflicts: 0 }, 'source kinds alone fail closed for historical ineligible records');
 
   const duplicatePlan = migration.scan({ records: [
     record('candidate', 'duplicate-source', { candidateId: '401', companyName: 'Duplicate One' }),
@@ -171,9 +177,21 @@ try {
   const databasePath = db.prepare('PRAGMA database_list').all().find(row => row.name === 'main').file;
   const backups = fs.readdirSync(path.dirname(databasePath)).filter(name => name.startsWith(`${path.basename(databasePath)}.matrix-ledger-backup-`));
   assert.strictEqual(backups.length, 1, 'apply creates one online backup preflight artifact');
+  assert.strictEqual(fs.statSync(path.join(path.dirname(databasePath), backups[0])).mode & 0o777, 0o600, 'online backup is mode 0600');
   const escapedPath = path.join(protectedRuntime, 'escaped.json');
   fs.symlinkSync(path.join(root, 'outside.json'), escapedPath);
   assert.throws(() => protectedReportPath(escapedPath, protectedRuntime), /symlink|protected runtime directory/);
+
+  const adapterCustomerId = insertCustomer('Adapter Customer');
+  insertLink(adapterCustomerId, 'candidate', '704');
+  db.prepare(`
+    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+    VALUES (704, 1, ?, ?)
+  `).run(NOW, NOW);
+  const rowsBeforeBareDryRun = db.prepare('SELECT COUNT(*) AS count FROM matrix_migration_records').get().count;
+  const bareDryRun = await runMigrationCli(['--dry-run'], { candidateDb: db });
+  assert.deepStrictEqual(bareDryRun, { imported: 0, matched: 1, unresolved: 0, skipped: 0, conflicts: 0 }, 'bare dry-run uses the authoritative work-item adapter');
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_migration_records').get().count, rowsBeforeBareDryRun, 'bare dry-run creates no operational rows');
 
   console.log('matrix ledger migration tests passed');
 } finally {

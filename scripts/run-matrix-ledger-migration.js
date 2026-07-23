@@ -2,12 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
 const { db, initDb } = require('../src/db');
 const { createMatrixLedgerStore } = require('../src/services/matrixLedgerStore');
 const { createMatrixLedgerMigration } = require('../src/services/matrixLedgerMigration');
 
-function usage() { throw new Error('usage: --dry-run --report <protected-json-path> | --apply --report <protected-json-path> --idempotency-key <key>'); }
+function usage() { throw new Error('usage: --dry-run [--report <protected-json-path>] | --apply --report <protected-json-path> --idempotency-key <key>'); }
 function parseArgs(argv) {
   const args = { mode: '', report: '', idempotencyKey: '' };
   for (let index = 0; index < argv.length; index += 1) {
@@ -19,7 +20,7 @@ function parseArgs(argv) {
     else if (value === '--idempotency-key') args.idempotencyKey = argv[++index] || '';
     else usage();
   }
-  if (args.mode === '--dry-run' && args.report && !args.idempotencyKey) return args;
+  if (args.mode === '--dry-run' && !args.idempotencyKey) return args;
   if (args.mode === '--apply' && args.report && args.idempotencyKey) return args;
   usage();
 }
@@ -47,6 +48,8 @@ async function databaseBackupPreflight() {
   if (!row || !row.file || !fs.statSync(row.file).isFile()) throw new Error('database backup preflight failed');
   const backupPath = `${row.file}.matrix-ledger-backup-${Date.now()}`;
   await db.backup(backupPath);
+  fs.chmodSync(backupPath, 0o600);
+  if ((fs.statSync(backupPath).mode & 0o777) !== 0o600) throw new Error('database backup permissions are not 0600');
   let backup;
   try {
     backup = new Database(backupPath, { readonly: true, fileMustExist: true });
@@ -63,16 +66,57 @@ function candidateDatabase(options = {}) {
   if (!candidatePath) return { database: db, close: false };
   return { database: new Database(path.resolve(candidatePath), { readonly: true, fileMustExist: true }), close: true };
 }
+function tableExists(database, tableName) {
+  return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
+}
+function authoritativeSources(candidateDb) {
+  if (!tableExists(candidateDb, 'matrix_work_items')) return { records: [] };
+  const hasCanonicalEvidence = tableExists(candidateDb, 'matrix_customer_links') && tableExists(candidateDb, 'customers');
+  const rows = candidateDb.prepare(hasCanonicalEvidence ? `
+    SELECT w.id AS work_item_id, w.candidate_id, w.stage, w.created_at, w.updated_at,
+      COALESCE(c.name, '') AS company_name, c.id AS canonical_customer_id
+    FROM matrix_work_items w
+    LEFT JOIN matrix_customer_links l
+      ON l.source_kind = 'candidate' AND l.source_id = CAST(w.candidate_id AS TEXT)
+    LEFT JOIN customers c ON c.id = l.canonical_customer_id AND c.active = 1
+    ORDER BY w.id
+  ` : `
+    SELECT id AS work_item_id, candidate_id, stage, created_at, updated_at,
+      '' AS company_name, NULL AS canonical_customer_id
+    FROM matrix_work_items ORDER BY id
+  `).all();
+  return {
+    records: rows.map(row => {
+      const candidateId = String(row.candidate_id);
+      const occurredAt = row.updated_at || row.created_at || '';
+      const companyName = String(row.company_name || '');
+      return {
+        sourceKind: 'matrix_work_item',
+        sourceId: String(row.work_item_id),
+        occurredAt,
+        companyName,
+        state: String(row.stage || ''),
+        evidence: row.canonical_customer_id ? {
+          explicitSourceId: { kind: 'candidate', id: candidateId },
+          companyName
+        } : { candidateId, companyName },
+        provenance: {
+          sourcePath: `candidate-db:matrix_work_items/${row.work_item_id}`,
+          bodyHash: crypto.createHash('sha256').update(`matrix_work_item:${row.work_item_id}:${candidateId}:${occurredAt}`).digest('hex')
+        }
+      };
+    })
+  };
+}
 async function run(argv, options = {}) {
   const args = parseArgs(argv);
   initializeQuietly();
-  const reportPath = protectedReportPath(args.report, options.runtimeDir);
-  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
   const candidate = candidateDatabase(options);
   try {
     const store = createMatrixLedgerStore({ db });
     const migration = createMatrixLedgerMigration({ db, candidateDb: candidate.database, store });
-    const plan = migration.scan(report.sources || report);
+    const report = args.report ? JSON.parse(fs.readFileSync(protectedReportPath(args.report, options.runtimeDir), 'utf8')) : null;
+    const plan = migration.scan(report ? report.sources || report : authoritativeSources(candidate.database));
     if (args.mode === '--dry-run') return plan.counts;
     await databaseBackupPreflight();
     return migration.apply(plan, { idempotencyKey: args.idempotencyKey }).counts;
@@ -92,4 +136,4 @@ if (require.main === module) {
   }).finally(() => db.close());
 }
 
-module.exports = { run, parseArgs, protectedReportPath, databaseBackupPreflight };
+module.exports = { run, parseArgs, protectedReportPath, databaseBackupPreflight, authoritativeSources };
