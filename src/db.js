@@ -1243,6 +1243,87 @@ function initDb() {
       FOREIGN KEY(supersedes_notification_id) REFERENCES matrix_stream_notification_spool(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_customer_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      canonical_customer_id INTEGER NOT NULL,
+      source_kind TEXT NOT NULL CHECK(source_kind IN ('customer','candidate','legacy_registry','protected_mapping')),
+      source_id TEXT NOT NULL,
+      normalized_domain TEXT NOT NULL DEFAULT '',
+      confidence TEXT NOT NULL CHECK(confidence IN ('deterministic','reviewed')),
+      created_at TEXT NOT NULL,
+      UNIQUE(source_kind, source_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      canonical_customer_id INTEGER NOT NULL,
+      channel TEXT NOT NULL CHECK(channel IN ('email','whatsapp','phone','contact_form')),
+      address TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT '',
+      source_url TEXT NOT NULL,
+      verified_at TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('active','revoked','unverified')),
+      revoked_reason TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(channel, address)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_threads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      canonical_customer_id INTEGER NOT NULL,
+      channel TEXT NOT NULL CHECK(channel IN ('email','whatsapp')),
+      conversation_key TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('active','waiting_customer','waiting_internal','closed','unresolved')),
+      last_message_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(channel, conversation_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_thread_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id INTEGER NOT NULL,
+      source_kind TEXT NOT NULL CHECK(source_kind IN ('email_message','crm_message','legacy_delivery')),
+      source_id TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+      classification TEXT NOT NULL,
+      message_id TEXT NOT NULL DEFAULT '',
+      content_hash TEXT NOT NULL DEFAULT '',
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(source_kind, source_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      canonical_customer_id INTEGER NOT NULL,
+      source_kind TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      task_type TEXT NOT NULL CHECK(task_type IN ('check_reply','review_reply','replace_contact','delivery_review','review_unresolved')),
+      due_at TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','completed','cancelled','blocked')),
+      priority TEXT NOT NULL DEFAULT 'normal',
+      next_action TEXT NOT NULL DEFAULT '',
+      cancellation_reason TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(source_kind, source_id, task_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_lifecycle_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      canonical_customer_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      actor_user_id INTEGER,
+      before_json TEXT NOT NULL DEFAULT '{}',
+      after_json TEXT NOT NULL DEFAULT '{}',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
@@ -1254,6 +1335,16 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_api_claims_lease ON matrix_stream_api_claims(lease_expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_reply_checks_due ON matrix_stream_reply_checks(state, due_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_stream_notification_spool_state ON matrix_stream_notification_spool(delivery_state, id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_customer_links_customer ON matrix_customer_links(canonical_customer_id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_customer_links_domain ON matrix_customer_links(normalized_domain, canonical_customer_id);
+    CREATE INDEX IF NOT EXISTS idx_matrix_contacts_customer ON matrix_contacts(canonical_customer_id, status);
+    CREATE INDEX IF NOT EXISTS idx_matrix_contacts_lookup ON matrix_contacts(channel, address, status);
+    CREATE INDEX IF NOT EXISTS idx_matrix_threads_customer ON matrix_threads(canonical_customer_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_matrix_thread_messages_thread ON matrix_thread_messages(thread_id, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_matrix_tasks_customer_state_due ON matrix_tasks(canonical_customer_id, state, due_at);
+    CREATE INDEX IF NOT EXISTS idx_matrix_tasks_state_due ON matrix_tasks(state, due_at);
+    CREATE INDEX IF NOT EXISTS idx_matrix_lifecycle_events_customer ON matrix_lifecycle_events(canonical_customer_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_matrix_lifecycle_events_source ON matrix_lifecycle_events(source_kind, source_id, created_at DESC);
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
     BEFORE UPDATE ON matrix_selection_events
@@ -1277,6 +1368,18 @@ function initDb() {
     BEFORE DELETE ON matrix_stream_events
     BEGIN
       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_lifecycle_events_no_update
+    BEFORE UPDATE ON matrix_lifecycle_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_lifecycle_events is append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_lifecycle_events_no_delete
+    BEFORE DELETE ON matrix_lifecycle_events
+    BEGIN
+      SELECT RAISE(ABORT, 'matrix_lifecycle_events is append-only');
     END;
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_delivery_event_keys_no_update

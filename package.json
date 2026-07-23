@@ -12,6 +12,8 @@
     "verify:smoke": "node scripts/smoke-test.js",
     "test:admin-access": "node scripts/test-admin-access-regression.js",
     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+    "test:matrix-ledger-store": "node scripts/test-matrix-ledger-store.js",
+    "verify:matrix-relay-schema": "node scripts/test-matrix-relay-schema.js",
     "test:private-baseline": "node scripts/test-private-baseline.js",
     "runtime:audit": "node scripts/runtime-audit.js",
     "runtime:backup": "node scripts/runtime-backup.js",
