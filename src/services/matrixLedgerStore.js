@@ -122,6 +122,29 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
     return customer;
   }
 
+  function activeCanonicalCustomer(customerId) {
+    const customer = customerById(customerId);
+    if (!Number(customer.active)) throw new Error('canonical customer is inactive');
+    return customer;
+  }
+
+  function establishCandidateLink(customerId, identity, createdAt) {
+    const candidateId = text(identity.candidateId);
+    if (!candidateId) return;
+    db.prepare(`
+      INSERT OR IGNORE INTO matrix_customer_links (
+        canonical_customer_id, source_kind, source_id, normalized_domain, confidence, created_at
+      ) VALUES (?, 'candidate', ?, ?, 'deterministic', ?)
+    `).run(customerId, candidateId, normalizeDomain(identity.normalizedDomain), createdAt);
+    const link = db.prepare(`
+      SELECT canonical_customer_id FROM matrix_customer_links
+      WHERE source_kind = 'candidate' AND source_id = ?
+    `).get(candidateId);
+    if (!link || Number(link.canonical_customer_id) !== Number(customerId)) {
+      throw new Error('candidate link conflict');
+    }
+  }
+
   function uniqueCustomer(rows, error) {
     const ids = Array.from(new Set(rows.map(row => Number(row.canonical_customer_id)).filter(Number.isInteger)));
     if (ids.length > 1) throw new Error(error);
@@ -177,11 +200,7 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
           VALUES (?, 1, ?, ?)
         `).run(companyName, createdAt, createdAt);
         canonicalCustomerId = Number(result.lastInsertRowid);
-        db.prepare(`
-          INSERT INTO matrix_customer_links (
-            canonical_customer_id, source_kind, source_id, normalized_domain, confidence, created_at
-          ) VALUES (?, 'candidate', ?, ?, 'deterministic', ?)
-        `).run(canonicalCustomerId, candidateId, normalizeDomain(identity.normalizedDomain), createdAt);
+        establishCandidateLink(canonicalCustomerId, identity, createdAt);
         recordEvent({
           customerId: canonicalCustomerId,
           eventType: 'customer_resolved',
@@ -193,6 +212,8 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
         });
       }
 
+      activeCanonicalCustomer(canonicalCustomerId);
+      establishCandidateLink(canonicalCustomerId, identity, now());
       return { canonical_customer_id: Number(canonicalCustomerId) };
     });
   }
@@ -254,12 +275,22 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
       const sourceId = requireValue(input.sourceId, 'message source id');
       const direction = requireMember(input.direction, DIRECTIONS, 'message direction');
       const classification = requireValue(input.classification, 'message classification');
+      const messageId = text(input.messageId);
+      const contentHash = text(input.contentHash);
       const occurredAt = iso(input.occurredAt, 'message timestamp');
       const createdAt = now();
       const existingMessage = db.prepare('SELECT * FROM matrix_thread_messages WHERE source_kind = ? AND source_id = ?').get(sourceKind, sourceId);
       if (existingMessage) {
         const existingThread = db.prepare('SELECT * FROM matrix_threads WHERE id = ?').get(existingMessage.thread_id);
-        if (!existingThread || existingThread.canonical_customer_id !== customer.id || existingThread.channel !== channel || existingThread.conversation_key !== conversationKey) {
+        if (!existingThread
+          || Number(existingThread.canonical_customer_id) !== customer.id
+          || existingThread.channel !== channel
+          || existingThread.conversation_key !== conversationKey
+          || existingMessage.direction !== direction
+          || existingMessage.classification !== classification
+          || existingMessage.message_id !== messageId
+          || existingMessage.content_hash !== contentHash
+          || existingMessage.occurred_at !== occurredAt) {
           throw new Error('thread message identity conflict');
         }
         return { inserted: false, thread: existingThread, message: existingMessage };
@@ -281,7 +312,7 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
         INSERT INTO matrix_thread_messages (
           thread_id, source_kind, source_id, direction, classification, message_id, content_hash, occurred_at, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(thread.id, sourceKind, sourceId, direction, classification, text(input.messageId), text(input.contentHash), occurredAt, createdAt);
+      `).run(thread.id, sourceKind, sourceId, direction, classification, messageId, contentHash, occurredAt, createdAt);
       const message = db.prepare('SELECT * FROM matrix_thread_messages WHERE id = ?').get(Number(result.lastInsertRowid));
       recordEvent({
         customerId: customer.id,
