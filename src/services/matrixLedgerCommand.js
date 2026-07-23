@@ -132,11 +132,14 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
       ...(projected.readiness?.reasons || []),
       ...(projected.policy?.reasons || [])
     ]);
+    const recipientDomain = String(resolved.version.recipient_email || '').trim().toLowerCase().split('@')[1] || '';
     const delivery = db.prepare(`
-      SELECT state FROM matrix_stream_jobs
-      WHERE version_id = ? AND content_hash = ? AND state IN ('accepted', 'ambiguous')
-      ORDER BY id DESC LIMIT 1
-    `).get(resolved.version.id, resolved.version.content_hash);
+      SELECT j.state FROM matrix_stream_jobs j
+      LEFT JOIN matrix_stream_versions prior ON prior.id = j.version_id
+      WHERE j.state IN ('accepted', 'ambiguous')
+        AND (lower(prior.recipient_email) = lower(?) OR lower(j.recipient_domain) = ?)
+      ORDER BY j.id DESC LIMIT 1
+    `).get(resolved.version.recipient_email, recipientDomain);
     if (delivery) blockers.push(`existing_${delivery.state}_delivery`);
     const normalizedBlockers = reasons(blockers);
     return Object.freeze({

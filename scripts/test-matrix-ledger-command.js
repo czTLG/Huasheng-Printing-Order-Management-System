@@ -175,6 +175,42 @@ function seed() {
     assert.strictEqual(jobCount(), 0, 'withdrawn evidence must block without creating a delivery job');
     evidenceCurrent = true;
 
+    const originalVersion = db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ?').get(fixture.version.id);
+    const priorVersionId = Number(db.prepare(`
+      INSERT INTO matrix_stream_versions (
+        work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
+        subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash, quality_score, quality_json,
+        status, created_by, approved_by, approved_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'superseded', ?, ?, ?, ?, ?)
+    `).run(
+      originalVersion.work_item_id, originalVersion.recipient_evidence_id, originalVersion.revision + 100,
+      originalVersion.recipient_email, originalVersion.recipient_source_url, originalVersion.recipient_verified_at,
+      originalVersion.subject, originalVersion.body_en, originalVersion.body_cn, originalVersion.strategy_summary,
+      originalVersion.source_snapshot_json, `${originalVersion.content_hash.slice(0, 63)}0`, originalVersion.quality_score,
+      originalVersion.quality_json, originalVersion.created_by, originalVersion.approved_by, originalVersion.approved_at,
+      originalVersion.created_at, originalVersion.updated_at
+    ).lastInsertRowid);
+    db.prepare(`
+      INSERT INTO matrix_stream_jobs (
+        work_item_id, version_id, idempotency_key, content_hash, message_id, state, attempt_count, error_class,
+        redacted_diagnostic, created_by, owner_token, lease_expires_at, recipient_domain, sender_email,
+        reservation_day, created_at, updated_at
+      ) VALUES (?, ?, 'ledger-prior-ambiguous', ?, '<prior@sender.test>', 'ambiguous', 1, '', '', ?, '', '', 'unitea.kz', 'sales@sender.test', '2026-07-18', ?, ?)
+    `).run(fixture.workItemId, priorVersionId, `${originalVersion.content_hash.slice(0, 63)}0`, fixture.actorUserId, NOW, NOW);
+    const ambiguousPreview = await command.finalPreview({ actorUserId: fixture.actorUserId, customerId: fixture.customerId, versionId: fixture.version.id });
+    assert.strictEqual(ambiguousPreview.allowed, false);
+    assert.ok(ambiguousPreview.blockers.includes('existing_ambiguous_delivery'));
+    await assert.rejects(
+      () => command.confirmDelivery({
+        actorUserId: fixture.actorUserId, bindingId: fixture.bindingId, customerId: fixture.customerId,
+        versionId: fixture.version.id, expectedContentHash: fixture.version.content_hash,
+        confirmationText: '确认发送 UNITEA Kazakhstan', chatId: 'blocked-chat', cardEventId: 'blocked-card', idempotencyKey: 'blocked-prior-domain'
+      }),
+      /final preview blocked/
+    );
+    assert.strictEqual(deliveries.length, 0, 'an ambiguous delivery for a prior version must block before transport');
+    db.prepare("DELETE FROM matrix_stream_jobs WHERE idempotency_key = 'ledger-prior-ambiguous'").run();
+
     const common = {
       actorUserId: fixture.actorUserId,
       bindingId: fixture.bindingId,

@@ -343,8 +343,11 @@ function deliveryErrorDescriptor(error) {
   if (/active actor binding|administrator role|matrixSend capability|not authorized/.test(message)) {
     return { status: 403, code: 'delivery_forbidden', message: 'Delivery confirmation is not authorized.' };
   }
-  if (/stale work version|idempotency(?: request)? conflict|blocks resend|not current|result conflict/.test(message)) {
+  if (/stale work version|stale research or route readiness|idempotency(?: request)? conflict|blocks resend|not current|result conflict/.test(message)) {
     return { status: 409, code: 'delivery_conflict', message: 'Delivery confirmation conflicts with current state.' };
+  }
+  if (/not found/.test(message)) {
+    return { status: 404, code: 'delivery_not_found', message: 'Delivery confirmation resource was not found.' };
   }
   if (/required|invalid|unknown|mismatch|blocked|suppressed|approved|provenance|quality|readiness|policy|official evidence|canonical customer|canonical contact/.test(message)) {
     return { status: 400, code: 'invalid_delivery_confirmation', message: 'Invalid delivery confirmation.' };

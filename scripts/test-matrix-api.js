@@ -714,10 +714,13 @@ function reviewState(workItemId) {
     const ledgerCommandCalls = [];
     const injectedLedgerCommand = {
       async finalPreview(input) {
+        if (input.customerId === 404) throw new Error('canonical customer not found');
         ledgerCommandCalls.push({ kind: 'preview', ...input });
         return { customer_id: input.customerId, customer_name: 'UNITEA Kazakhstan', contact_id: 9, recipient: 'procurement@unitea.kz', subject: 'Tea pouch and roll-film review for one UNITEA SKU', body_en: 'exact body', body_cn: '准确中文', attachments: [], version_id: createdVersion.body.id, content_hash: createdVersion.body.content_hash, allowed: true, blockers: [] };
       },
       async confirmDelivery(input) {
+        if (input.customerId === 88) throw new Error('stale research or route readiness');
+        if (input.customerId === 404) throw new Error('canonical customer not found');
         ledgerCommandCalls.push({ kind: 'confirm', ...input });
         return { state: 'accepted', error_class: '', work_item_version: 4 };
       }
@@ -773,6 +776,10 @@ function reviewState(workItemId) {
       });
       assert.strictEqual(ledgerPreview.status, 200, JSON.stringify(ledgerPreview.body));
       assert.strictEqual(ledgerPreview.body.allowed, true);
+      const missingLedgerPreview = await request(`/api/matrix/customers/404/final-preview?version_id=${createdVersion.body.id}`, {
+        port: injectedPort, serviceToken: bridgeToken, openId: 'ou-service'
+      });
+      assert.strictEqual(missingLedgerPreview.status, 404, JSON.stringify(missingLedgerPreview.body));
       const ledgerConfirmRoute = `/api/matrix/customers/1/final-preview/${createdVersion.body.id}/confirm`;
       const ledgerConfirmBody = {
         expected_content_hash: createdVersion.body.content_hash,
@@ -800,6 +807,17 @@ function reviewState(workItemId) {
         port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...ledgerConfirmBody, recipient: 'outside@test' }
       });
       assert.strictEqual(rejectedLedgerField.status, 400);
+      const staleLedgerConfirm = await request(`/api/matrix/customers/88/final-preview/${createdVersion.body.id}/confirm`, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...ledgerConfirmBody, idempotency_key: 'ledger-api-stale-research' }
+      });
+      assert.strictEqual(staleLedgerConfirm.status, 409, JSON.stringify(staleLedgerConfirm.body));
+      const missingLedgerConfirm = await request('/api/matrix/customers/1/final-preview/999999/confirm', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...ledgerConfirmBody, idempotency_key: 'ledger-api-missing-version' }
+      });
+      assert.strictEqual(missingLedgerConfirm.status, 404, JSON.stringify(missingLedgerConfirm.body));
+      assert.strictEqual(ledgerCommandCalls.filter(call => call.kind === 'confirm').length, 1, 'failed canonical validation must not invoke delivery');
       const sendRoute = `${versionRoute}/${createdVersion.body.id}/send`;
       const sendBody = {
         expected_work_version: 3,
