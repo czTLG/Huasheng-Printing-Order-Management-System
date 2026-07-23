@@ -1324,6 +1324,44 @@ function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_migration_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      mode TEXT NOT NULL CHECK(mode IN ('dry_run','apply')),
+      source_fingerprint TEXT NOT NULL,
+      counts_json TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_migration_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      source_kind TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_fingerprint TEXT NOT NULL,
+      resolution TEXT NOT NULL CHECK(resolution IN ('imported','matched','unresolved','skipped','conflict')),
+      canonical_customer_id INTEGER,
+      reason_code TEXT NOT NULL,
+      provenance_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(source_kind, source_id, source_fingerprint)
+    );
+
+    CREATE TABLE IF NOT EXISTS matrix_unresolved_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_kind TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_fingerprint TEXT NOT NULL,
+      reason_code TEXT NOT NULL,
+      review_payload_json TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','resolved','dismissed')),
+      resolved_customer_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(source_kind, source_id, source_fingerprint)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);

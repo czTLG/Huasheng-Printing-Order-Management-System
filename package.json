@@ -13,6 +13,8 @@
     "test:admin-access": "node scripts/test-admin-access-regression.js",
     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
     "test:matrix-ledger-store": "node scripts/test-matrix-ledger-store.js",
+    "test:matrix-ledger-migration": "node scripts/test-matrix-ledger-migration.js",
+    "matrix-ledger:migrate": "node scripts/run-matrix-ledger-migration.js",
     "verify:matrix-relay-schema": "node scripts/test-matrix-relay-schema.js",
     "test:private-baseline": "node scripts/test-private-baseline.js",
     "runtime:audit": "node scripts/runtime-audit.js",
