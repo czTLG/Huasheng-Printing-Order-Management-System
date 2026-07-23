@@ -149,6 +149,11 @@ function confirmationInput(fixture, key) {
     assert.deepStrictEqual(await service.confirm(input), result);
     assert.strictEqual(accepted.length, 1);
     assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_reply_checks').get().count, 1);
+    assert.strictEqual(
+      db.prepare('SELECT due_at FROM matrix_stream_reply_checks WHERE originating_job_id = 1').get().due_at,
+      '2026-07-21T10:00:00+08:00',
+      'accepted sends require a reply check exactly three calendar days later'
+    );
     assert.ok(!JSON.stringify(result).includes(accepted[0].messageId));
     assert.ok(!JSON.stringify(db.prepare('SELECT * FROM matrix_stream_events').all()).includes(accepted[0].messageId));
 

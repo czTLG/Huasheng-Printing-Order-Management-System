@@ -786,6 +786,16 @@ function reviewState(workItemId) {
       });
       assert.deepStrictEqual(ledgerConfirmed, { status: 200, body: { state: 'accepted', error_class: '', work_item_version: 4 } });
       assert.strictEqual(ledgerCommandCalls.filter(call => call.kind === 'confirm').length, 1);
+      const ledgerReplay = await request(ledgerConfirmRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: ledgerConfirmBody
+      });
+      assert.deepStrictEqual(ledgerReplay, ledgerConfirmed);
+      assert.strictEqual(ledgerCommandCalls.filter(call => call.kind === 'confirm').length, 1, 'exact ledger confirmation replay must not execute twice');
+      const ledgerMismatch = await request(ledgerConfirmRoute, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...ledgerConfirmBody, confirmation_text: '确认发送 another customer' }
+      });
+      assert.strictEqual(ledgerMismatch.status, 409, JSON.stringify(ledgerMismatch.body));
       const rejectedLedgerField = await request(ledgerConfirmRoute, {
         port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...ledgerConfirmBody, recipient: 'outside@test' }
       });
@@ -1198,7 +1208,7 @@ function reviewState(workItemId) {
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
       assert.deepStrictEqual(
         inspect.prepare('SELECT action FROM matrix_stream_api_requests ORDER BY id').all().map(row => row.action),
-        ['create', 'create', 'approve', 'revise', 'revise', 'revise']
+        ['create', 'create', 'approve', 'approve', 'revise', 'revise', 'revise']
       );
       const persistedSession = JSON.stringify(inspect.prepare('SELECT snapshot_key, candidate_ids_json, filters_json FROM matrix_sessions WHERE id = ?').get(createdSession.body.id));
       assert.ok(!persistedSession.includes('Alpha Foods'));

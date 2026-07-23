@@ -35,12 +35,12 @@ function createMatrixStreamPreview({ db, readinessService, clock = () => new Dat
       const snapshot = snapshotOf(version);
       const email = String(version.recipient_email || '').trim().toLowerCase();
       const recipientDomain = email.split('@')[1] || '';
-      const suppliedIdentity = base?.identity;
-      const identity = suppliedIdentity && typeof suppliedIdentity === 'object' ? suppliedIdentity : snapshot && now ? evaluateInitialContact(db, {
+      const identity = snapshot && now ? evaluateInitialContact(db, {
         email,
         domain: recipientDomain,
         companyName: snapshot.company,
         aliases: snapshot.aliases,
+        excludeCustomerIds: base?.canonicalCustomerIds,
         now
       }) : { allowed: false, route: 'blocked', reasons: ['identity_check_failed'] };
 

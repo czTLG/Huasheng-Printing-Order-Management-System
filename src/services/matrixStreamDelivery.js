@@ -247,15 +247,16 @@ function freshDeliveryGate(db, input, context) {
   if (!quality.passed || quality.score < 80 || quality.score !== version.quality_score
       || review.canonicalJson(quality) !== review.canonicalJson(storedQuality)) throw new Error('quality final gate blocked');
 
-  const canonicalContact = canonicalContactAuthorized(db, input, version, row);
+  canonicalContactAuthorized(db, input, version, row);
   const identity = evaluateInitialContact(db, {
     email: recipient.email,
     domain: recipientDomain,
     companyName: versionSnapshot.company,
     aliases: versionSnapshot.aliases,
+    excludeCustomerIds: input.canonicalCustomerId ? [input.canonicalCustomerId] : [],
     now: context.iso
   });
-  if (!canonicalContact && (!identity.allowed || identity.route !== 'initial_contact')) throw new Error(`initial contact gate blocked: ${identity.reasons.join(',')}`);
+  if (!identity.allowed || identity.route !== 'initial_contact') throw new Error(`initial contact gate blocked: ${identity.reasons.join(',')}`);
 
   const senderChecks = db.prepare(`
     SELECT * FROM matrix_stream_sender_checks

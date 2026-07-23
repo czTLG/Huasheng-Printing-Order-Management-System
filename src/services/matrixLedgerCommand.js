@@ -58,10 +58,19 @@ function reasons(values) {
   return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
 }
 
-function createMatrixLedgerCommand({ db, reviewService, previewService, deliveryService, clock = () => new Date() } = {}) {
+function authoritativeResearch(value) {
+  return {
+    organization_domain: value?.organization_domain, recipient_email: value?.recipient_email, source_url: value?.source_url,
+    country_code: value?.country_code, company: value?.company, categories: value?.categories, products: value?.products,
+    entryProduct: value?.entryProduct, localizedRouteSet: value?.localizedRouteSet,
+    evidenceIds: value?.evidenceIds, official_evidence: value?.official_evidence
+  };
+}
+
+function createMatrixLedgerCommand({ db, reviewService, previewService, deliveryService, currentEvidence, clock = () => new Date() } = {}) {
   if (!db || typeof db.prepare !== 'function' || !reviewService || typeof reviewService.finalPreview !== 'function'
       || !previewService || typeof previewService.project !== 'function'
-      || !deliveryService || typeof deliveryService.confirm !== 'function' || typeof clock !== 'function') {
+      || !deliveryService || typeof deliveryService.confirm !== 'function' || typeof currentEvidence !== 'function' || typeof clock !== 'function') {
     throw new Error('ledger command dependencies required');
   }
 
@@ -94,9 +103,15 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
     const customerId = positiveInteger(input.customerId, 'customer id');
     const versionId = positiveInteger(input.versionId, 'version id');
     const resolved = resolve(customerId, versionId);
+    const current = await currentEvidence({ customer: resolved.customer, contact: resolved.contact, workItem: resolved.workItem, version: resolved.version });
+    if (!current || !current.sourceSnapshot
+        || reviewService.canonicalJson(authoritativeResearch(current.sourceSnapshot))
+          !== reviewService.canonicalJson(authoritativeResearch(jsonObject(resolved.version.source_snapshot_json, 'research snapshot')))) {
+      throw new Error('official evidence changed');
+    }
     const reviewGate = reviewService.finalPreview(db, { actorUserId, versionId });
     if (!reviewGate || reviewGate.version.work_item_id !== resolved.workItem.id) throw new Error('version not found');
-    const snapshot = jsonObject(resolved.version.source_snapshot_json, 'research snapshot');
+    const snapshot = current.sourceSnapshot;
     const strategy = snapshot.strategy_match;
     const researchBlockers = !strategy || strategy.passed !== true
       || !Number.isFinite(Number(strategy.score)) || !Number.isFinite(Number(strategy.threshold))
@@ -106,7 +121,7 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
       ...reviewGate,
       allowed: reviewGate.allowed && researchBlockers.length === 0,
       reasons: reasons([...(reviewGate.reasons || []), ...researchBlockers]),
-      identity: { allowed: true, route: 'initial_contact', reasons: [] }
+      canonicalCustomerIds: [resolved.customer.id]
     };
     const projected = await previewService.project(base);
     const blockers = reasons([
@@ -144,15 +159,18 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
     const input = exactConfirmationInput(value);
     const resolved = resolve(input.customerId, input.versionId);
     const requiredText = `确认发送 ${resolved.customer.name}`;
-    const cardAction = input.confirmationText === 'card:confirm_delivery';
-    if (input.confirmationText !== requiredText && !cardAction) throw new Error('exact confirmation required');
+    if (input.confirmationText !== requiredText) throw new Error('exact confirmation required');
     if (input.expectedContentHash !== resolved.version.content_hash) throw new Error('content hash mismatch');
     const confirmationEventKey = `matrix-ledger-confirm:${crypto.createHash('sha256').update(input.idempotencyKey).digest('hex')}`;
     const confirmationEvent = db.prepare('SELECT after_json FROM matrix_lifecycle_events WHERE idempotency_key = ?').get(confirmationEventKey);
     let expectedWorkVersion = resolved.workItem.version;
     if (confirmationEvent) {
-      const prior = jsonObject(confirmationEvent.after_json, 'stored delivery confirmation');
-      expectedWorkVersion = positiveInteger(prior.expected_work_version, 'stored expected work version');
+      try {
+        const prior = jsonObject(confirmationEvent.after_json, 'stored delivery confirmation');
+        expectedWorkVersion = positiveInteger(prior.expected_work_version, 'stored expected work version');
+      } catch (_) {
+        throw new Error('delivery confirmation idempotency conflict');
+      }
     }
     const deliveryInput = {
       actorUserId: input.actorUserId,
@@ -179,15 +197,26 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
     const at = timestamp instanceof Date ? timestamp.toISOString() : new Date(timestamp).toISOString();
     if (!Number.isFinite(Date.parse(at))) throw new Error('command clock invalid');
     db.transaction(() => {
+      const existing = db.prepare('SELECT * FROM matrix_lifecycle_events WHERE idempotency_key = ?').get(confirmationEventKey);
+      const before = { content_hash: input.expectedContentHash };
+      const after = { confirmation_text: input.confirmationText, version_id: resolved.version.id, expected_work_version: expectedWorkVersion, chat_id: input.chatId, card_event_id: input.cardEventId };
+      if (existing) {
+        if (existing.canonical_customer_id !== resolved.customer.id || existing.event_type !== 'delivery_confirmed'
+            || existing.source_kind !== 'matrix_stream_version' || existing.source_id !== String(resolved.version.id)
+            || existing.actor_user_id !== input.actorUserId || reviewService.canonicalJson(jsonObject(existing.before_json, 'stored delivery confirmation')) !== reviewService.canonicalJson(before)
+            || reviewService.canonicalJson(jsonObject(existing.after_json, 'stored delivery confirmation')) !== reviewService.canonicalJson(after)) {
+          throw new Error('delivery confirmation idempotency conflict');
+        }
+        return;
+      }
       db.prepare(`
-        INSERT OR IGNORE INTO matrix_lifecycle_events (
+        INSERT INTO matrix_lifecycle_events (
           canonical_customer_id, event_type, source_kind, source_id, actor_user_id,
           before_json, after_json, idempotency_key, created_at
         ) VALUES (?, 'delivery_confirmed', 'matrix_stream_version', ?, ?, ?, ?, ?, ?)
       `).run(
         resolved.customer.id, String(resolved.version.id), input.actorUserId,
-        JSON.stringify({ content_hash: input.expectedContentHash }),
-        JSON.stringify({ confirmation_text: input.confirmationText, version_id: resolved.version.id, expected_work_version: expectedWorkVersion }),
+        JSON.stringify(before), JSON.stringify(after),
         confirmationEventKey,
         at
       );

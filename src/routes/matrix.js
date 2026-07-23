@@ -311,7 +311,7 @@ function reviewErrorDescriptor(error) {
   if (/idempotency request conflict/.test(message)) {
     return { status: 409, code: 'idempotency_conflict', message: 'Idempotency key conflicts with another request.' };
   }
-  if (/stale (?:work )?version|session rehydration incomplete/.test(message)) {
+  if (/stale (?:work )?version|stale research|official evidence changed|session rehydration incomplete/.test(message)) {
     return { status: 409, code: 'stale_review_state', message: 'Review state is stale.' };
   }
   if (/not authorized|actor binding|required binding|service binding|inactive|revoked|matrixSend capability|administrator role/.test(message)) {
@@ -320,7 +320,7 @@ function reviewErrorDescriptor(error) {
   if (/not found/.test(message)) {
     return { status: 404, code: 'review_not_found', message: 'Review resource was not found.' };
   }
-  if (/must|required|invalid|unknown|cannot|suppressed|mismatch|conflict|eligible|unsupported|contact form|quality gate/.test(message)) {
+  if (/must|required|invalid|unknown|cannot|suppressed|mismatch|conflict|eligible|unsupported|contact form|quality gate|canonical customer|canonical contact/.test(message)) {
     return { status: 400, code: 'invalid_review_request', message: 'Invalid review request.' };
   }
   return { status: 500, code: 'internal_error', message: 'Review request could not be completed.' };
@@ -343,10 +343,10 @@ function deliveryErrorDescriptor(error) {
   if (/active actor binding|administrator role|matrixSend capability|not authorized/.test(message)) {
     return { status: 403, code: 'delivery_forbidden', message: 'Delivery confirmation is not authorized.' };
   }
-  if (/stale work version|idempotency conflict|blocks resend|not current|result conflict/.test(message)) {
+  if (/stale work version|idempotency(?: request)? conflict|blocks resend|not current|result conflict/.test(message)) {
     return { status: 409, code: 'delivery_conflict', message: 'Delivery confirmation conflicts with current state.' };
   }
-  if (/required|invalid|unknown|mismatch|blocked|suppressed|approved|provenance|quality|readiness|policy/.test(message)) {
+  if (/required|invalid|unknown|mismatch|blocked|suppressed|approved|provenance|quality|readiness|policy|official evidence|canonical customer|canonical contact/.test(message)) {
     return { status: 400, code: 'invalid_delivery_confirmation', message: 'Invalid delivery confirmation.' };
   }
   return { status: 500, code: 'delivery_internal_error', message: 'Delivery confirmation could not be completed.' };
@@ -378,7 +378,10 @@ function createMatrixRouter({
   const view = createCacheIndexView({ dbPath: candidateDbPath });
   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
   const command = ledgerCommand || (previewService && deliveryService
-    ? createMatrixLedgerCommand({ db, reviewService, previewService, deliveryService, clock }) : null);
+    ? createMatrixLedgerCommand({
+      db, reviewService, previewService, deliveryService, clock,
+      currentEvidence: async ({ workItem, version }) => assertVersionStrategyCurrent(workItem, version)
+    }) : null);
 
   router.use(requireMatrixRole);
 
@@ -856,6 +859,15 @@ function createMatrixRouter({
     const staleReasons = [];
     if (!prior || prior.passed !== true) staleReasons.push('legacy_strategy_assessment_missing');
     if (JSON.stringify(oldEvidence) !== JSON.stringify(currentEvidence)) staleReasons.push('official_evidence_changed');
+    const comparable = value => ({
+      organization_domain: value?.organization_domain, recipient_email: value?.recipient_email, source_url: value?.source_url,
+      country_code: value?.country_code, company: value?.company, categories: value?.categories, products: value?.products,
+      entryProduct: value?.entryProduct, localizedRouteSet: value?.localizedRouteSet,
+      evidenceIds: value?.evidenceIds, official_evidence: value?.official_evidence
+    });
+    if (!snapshot || reviewService.canonicalJson(comparable(snapshot)) !== reviewService.canonicalJson(comparable(currentDraft.sourceSnapshot))) {
+      staleReasons.push('authoritative_research_changed');
+    }
     if (staleReasons.length) {
       throw reviewFailure('strategy_match_blocked', {
         score: current.score,
@@ -1392,6 +1404,8 @@ function createMatrixRouter({
   });
 
   router.post('/customers/:customerId/final-preview/:versionId/confirm', async (req, res) => {
+    let heldClaimToken = null;
+    let heldClaimKey = '';
     try {
       const body = rejectUnknown(req.body, LEDGER_CONFIRM_FIELDS, 'body');
       requireReviewAccess(req);
@@ -1399,21 +1413,52 @@ function createMatrixRouter({
       const identity = reviewIdentity(req);
       const customerId = positiveInteger(req.params.customerId, 'customer id');
       const versionId = positiveInteger(req.params.versionId, 'version id');
+      const expectedContentHash = String(body.expected_content_hash || '').trim();
+      const idempotencyKey = String(body.idempotency_key || '').trim();
+      if (!idempotencyKey) throw new Error('idempotency key required');
+      const version = reviewService.getVersion(db, { actorUserId: identity.actorUserId, versionId });
+      if (!version) throw new Error('version not found');
+      const workItemId = positiveInteger(version.work_item_id, 'work item id');
+      const claimAction = 'approve';
+      const fingerprint = apiRequestFingerprint({
+        action: 'ledger_confirm', actorUserId: identity.actorUserId, customerId, versionId,
+        expectedContentHash, confirmationText: String(body.confirmation_text == null ? '' : body.confirmation_text),
+        chatId: String(body.chat_id || '').trim(), cardEventId: String(body.card_event_id || '').trim()
+      });
+      const claim = await acquireApiClaim({ identity, workItemId, action: claimAction, idempotencyKey, fingerprint });
+      const deliveryResponse = result => {
+        const state = String(result?.state || '');
+        if (!new Set(['accepted', 'failed', 'ambiguous']).has(state)) throw new Error('invalid delivery result');
+        return { state, error_class: String(result?.error_class || ''), work_item_version: positiveInteger(result?.work_item_version, 'delivery work item version') };
+      };
+      if (claim.kind === 'replay') return res.json(deliveryResponse(claim.response));
+      heldClaimToken = claim.ownerToken;
+      heldClaimKey = idempotencyKey;
       const result = await command.confirmDelivery({
         actorUserId: identity.actorUserId,
         bindingId: identity.bindingId,
         customerId,
         versionId,
-        expectedContentHash: String(body.expected_content_hash || '').trim(),
+        expectedContentHash,
         confirmationText: String(body.confirmation_text == null ? '' : body.confirmation_text),
         chatId: String(body.chat_id || '').trim(),
         cardEventId: String(body.card_event_id || '').trim(),
-        idempotencyKey: String(body.idempotency_key || '').trim()
+        idempotencyKey
       });
-      const state = String(result?.state || '');
-      if (!new Set(['accepted', 'failed', 'ambiguous']).has(state)) throw new Error('invalid delivery result');
-      res.json({ state, error_class: String(result?.error_class || ''), work_item_version: positiveInteger(result?.work_item_version, 'delivery work item version') });
-    } catch (error) { sendDeliveryError(res, error); }
+      const response = deliveryResponse(result);
+      const commit = db.transaction(() => {
+        const ownership = requireOwnedClaim({ identity, workItemId, action: claimAction, idempotencyKey, fingerprint, ownerToken: heldClaimToken });
+        if (ownership.replay) return ownership.replay;
+        recordApiRequest({ identity, workItemId, action: claimAction, idempotencyKey, fingerprint, versionId, response });
+        deleteOwnedClaim(idempotencyKey, heldClaimToken);
+        return response;
+      }).immediate();
+      heldClaimToken = null;
+      res.json(commit);
+    } catch (error) {
+      releaseOwnedClaim(heldClaimKey, heldClaimToken);
+      sendDeliveryError(res, error);
+    }
   });
 
   return router;

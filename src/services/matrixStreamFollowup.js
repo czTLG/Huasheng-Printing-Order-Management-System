@@ -14,25 +14,14 @@ function boundedToken(value, label, fallback) {
   return token;
 }
 
-function thirdWeekdayAtTen(sentAt) {
+function thirdCalendarDayAtTen(sentAt) {
   const timestamp = Date.parse(String(sentAt || ''));
   if (!Number.isFinite(timestamp)) throw new Error('valid accepted timestamp required');
   const shanghai = new Date(timestamp + 8 * 3600000);
-  let year = shanghai.getUTCFullYear();
-  let month = shanghai.getUTCMonth();
-  let day = shanghai.getUTCDate();
-  let weekdays = 0;
-  while (weekdays < 3) {
-    const next = new Date(Date.UTC(year, month, day + 1));
-    year = next.getUTCFullYear();
-    month = next.getUTCMonth();
-    day = next.getUTCDate();
-    const weekday = next.getUTCDay();
-    if (weekday !== 0 && weekday !== 6) weekdays += 1;
-  }
-  const yyyy = String(year).padStart(4, '0');
-  const mm = String(month + 1).padStart(2, '0');
-  const dd = String(day).padStart(2, '0');
+  const due = new Date(Date.UTC(shanghai.getUTCFullYear(), shanghai.getUTCMonth(), shanghai.getUTCDate() + 3));
+  const yyyy = String(due.getUTCFullYear()).padStart(4, '0');
+  const mm = String(due.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(due.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}T10:00:00+08:00`;
 }
 
@@ -58,7 +47,7 @@ function scheduleReplyCheck(db, input = {}) {
     if (!job || job.state !== 'accepted') throw new Error('accepted delivery job required');
     const workItem = db.prepare('SELECT id FROM matrix_work_items WHERE id = ?').get(job.work_item_id);
     if (!workItem) throw new Error('work item required');
-    const dueAt = thirdWeekdayAtTen(job.updated_at || job.created_at);
+    const dueAt = thirdCalendarDayAtTen(job.updated_at || job.created_at);
     const createdAt = new Date(Date.parse(job.updated_at || job.created_at)).toISOString();
     const result = db.prepare(`
       INSERT INTO matrix_stream_reply_checks (
@@ -95,4 +84,4 @@ function closeReplyCheck(db, input = {}) {
   return close.immediate();
 }
 
-module.exports = { thirdWeekdayAtTen, scheduleReplyCheck, closeReplyCheck };
+module.exports = { thirdCalendarDayAtTen, scheduleReplyCheck, closeReplyCheck };

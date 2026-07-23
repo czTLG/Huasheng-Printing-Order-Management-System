@@ -415,10 +415,10 @@ assert.deepStrictEqual(evaluateInitialContact(incompleteDb, {
 incompleteDb.close();
 
 const { createMatrixStreamReadiness } = require('../src/services/matrixStreamReadiness');
-const { thirdWeekdayAtTen, scheduleReplyCheck, closeReplyCheck } = require('../src/services/matrixStreamFollowup');
+const { thirdCalendarDayAtTen, scheduleReplyCheck, closeReplyCheck } = require('../src/services/matrixStreamFollowup');
 
-assert.strictEqual(thirdWeekdayAtTen('2026-07-17T14:00:00+08:00'), '2026-07-22T10:00:00+08:00');
-assert.strictEqual(thirdWeekdayAtTen('2026-07-18T14:00:00+08:00'), '2026-07-22T10:00:00+08:00');
+assert.strictEqual(thirdCalendarDayAtTen('2026-07-17T14:00:00+08:00'), '2026-07-20T10:00:00+08:00');
+assert.strictEqual(thirdCalendarDayAtTen('2026-07-18T14:00:00+08:00'), '2026-07-21T10:00:00+08:00');
 
 const followupDb = new Database(':memory:');
 followupDb.exec(`
@@ -451,7 +451,7 @@ assert.deepStrictEqual({
   due_at: scheduled.due_at
 }, {
   work_item_id: 1, originating_job_id: 11, purpose: 'reply_check', channel: 'email', priority: 'normal',
-  due_at: '2026-07-22T10:00:00+08:00'
+  due_at: '2026-07-20T10:00:00+08:00'
 });
 assert.strictEqual(scheduleReplyCheck(followupDb, { jobId: 11, channel: 'email', priority: 'urgent' }).id, scheduled.id);
 assert.strictEqual(followupDb.prepare('SELECT count(*) AS count FROM matrix_stream_reply_checks').get().count, 1);

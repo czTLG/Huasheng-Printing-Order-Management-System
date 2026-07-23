@@ -376,6 +376,8 @@ function evaluateInitialContact(db, input = {}) {
   const emailDomain = contactDomain(email);
   const domain = normalizedDomain(input.domain || emailDomain);
   const companyName = normalized(input.companyName);
+  const excludedCustomerIds = new Set((Array.isArray(input.excludeCustomerIds) ? input.excludeCustomerIds : [])
+    .map(Number).filter(value => Number.isInteger(value) && value > 0));
   const nowMs = Date.parse(String(input.now || ''));
   if (!db || typeof db.prepare !== 'function' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
       || !domain || domain !== emailDomain || !companyName || !Number.isFinite(nowMs)) {
@@ -417,9 +419,10 @@ function evaluateInitialContact(db, input = {}) {
       }).map(message => Number(message.customer_id)).filter(Number.isInteger));
       const exactCustomers = customers.filter(customer => {
         const contact = normalizedEmail(customer.contact);
-        return customer.active !== 0 && (contact === email || contactDomain(contact) === domain || messageCustomerIds.has(Number(customer.id)));
+        return !excludedCustomerIds.has(Number(customer.id)) && customer.active !== 0
+          && (contact === email || contactDomain(contact) === domain || messageCustomerIds.has(Number(customer.id)));
       });
-      const inquiryCustomerIds = new Set(inquiries.map(inquiry => Number(inquiry.customer_id)).filter(Number.isInteger));
+      const inquiryCustomerIds = new Set(inquiries.map(inquiry => Number(inquiry.customer_id)).filter(id => Number.isInteger(id) && !excludedCustomerIds.has(id)));
       const exactCompanyCustomers = customers.filter(customer => inquiryCustomerIds.has(Number(customer.id))
         && normalized(customer.name) === companyName);
       const exactOrder = orders.some(order => normalized(order.customer_name) === companyName);
@@ -459,7 +462,7 @@ function evaluateInitialContact(db, input = {}) {
       const candidateKeys = new Set([companyKey(companyName), ...aliases.map(companyKey)].filter(Boolean));
       const possible = customers.filter(customer => {
         const customerDomain = contactDomain(customer.contact);
-        return candidateKeys.has(companyKey(customer.name)) && customerDomain !== domain;
+        return !excludedCustomerIds.has(Number(customer.id)) && candidateKeys.has(companyKey(customer.name)) && customerDomain !== domain;
       }).map(customer => Number(customer.id)).filter(Number.isInteger).sort((a, b) => a - b);
       if (possible.length) {
         return { allowed: false, route: 'possible_duplicate_review', reasons: ['similar_name_different_domain'], matchedCustomerIds: possible };

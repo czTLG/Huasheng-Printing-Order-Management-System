@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -110,7 +111,7 @@ function seed() {
     ) VALUES ('KZ', 'email', 'approved', 1, 1, ?, '2026-07-17T00:00:00.000Z',
       '2026-08-17T00:00:00.000Z', '["https://authority.test/policy"]')
   `).run(actorUserId);
-  return { actorUserId, bindingId, customerId, contactId, workItemId, version };
+  return { actorUserId, bindingId, customerId, contactId, workItemId, version, sourceSnapshot };
 }
 
 (async () => {
@@ -131,12 +132,19 @@ function seed() {
       dkimSelector: 'selector',
       clock: () => new Date(NOW),
       transport: { sendMail: async mail => {
-        assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_lifecycle_events WHERE event_type = 'delivery_confirmed'").get().count, 1);
+        assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_lifecycle_events WHERE event_type = 'delivery_confirmed' AND actor_user_id = ?").get(fixture.actorUserId).count, 1);
         deliveries.push(mail);
         return { accepted: [mail.to], rejected: [] };
       } }
     });
-    const command = createMatrixLedgerCommand({ db, reviewService: review, previewService, deliveryService, clock: () => new Date(NOW) });
+    let evidenceCurrent = true;
+    const command = createMatrixLedgerCommand({
+      db, reviewService: review, previewService, deliveryService, clock: () => new Date(NOW),
+      currentEvidence: async () => {
+        if (!evidenceCurrent) throw new Error('official evidence changed');
+        return { sourceSnapshot: fixture.sourceSnapshot };
+      }
+    });
 
     assert.strictEqual(jobCount(), 0, 'candidate selection must create no delivery jobs');
     const preview = await command.finalPreview({
@@ -159,6 +167,13 @@ function seed() {
       blockers: []
     });
     assert.strictEqual(jobCount(), 0, 'opening a preview must create no delivery jobs');
+    evidenceCurrent = false;
+    await assert.rejects(
+      () => command.finalPreview({ actorUserId: fixture.actorUserId, customerId: fixture.customerId, versionId: fixture.version.id }),
+      /official evidence changed/
+    );
+    assert.strictEqual(jobCount(), 0, 'withdrawn evidence must block without creating a delivery job');
+    evidenceCurrent = true;
 
     const common = {
       actorUserId: fixture.actorUserId,
@@ -170,11 +185,27 @@ function seed() {
       cardEventId: 'card-ledger-command',
       idempotencyKey: 'ledger-command-confirm-1'
     };
+    const collisionKey = `matrix-ledger-confirm:${crypto.createHash('sha256').update('ledger-command-collision').digest('hex')}`;
+    db.prepare(`
+      INSERT INTO matrix_lifecycle_events (
+        canonical_customer_id, event_type, source_kind, source_id, actor_user_id,
+        before_json, after_json, idempotency_key, created_at
+      ) VALUES (?, 'delivery_confirmed', 'matrix_stream_version', ?, ?, '{}', '{}', ?, ?)
+    `).run(fixture.customerId, String(fixture.version.id), fixture.actorUserId + 1, collisionKey, NOW);
+    await assert.rejects(
+      () => command.confirmDelivery({ ...common, idempotencyKey: 'ledger-command-collision', confirmationText: '确认发送 UNITEA Kazakhstan' }),
+      /idempotency conflict/
+    );
+    assert.strictEqual(jobCount(), 0, 'a mismatched approval event must fail before delivery');
     await assert.rejects(
       () => command.confirmDelivery({ ...common, confirmationText: '确认采用' }),
       /exact confirmation required/
     );
     assert.strictEqual(jobCount(), 0, '确认采用 must create no delivery jobs');
+    await assert.rejects(
+      () => command.confirmDelivery({ ...common, confirmationText: 'card:confirm_delivery', idempotencyKey: 'ledger-command-spoofed-card' }),
+      /exact confirmation required/
+    );
     const result = await command.confirmDelivery({ ...common, confirmationText: ' 确认发送 UNITEA Kazakhstan ' });
     assert.strictEqual(result.state, 'accepted');
     assert.strictEqual(jobCount(), 1, 'only the exact confirmation creates one delivery job');
