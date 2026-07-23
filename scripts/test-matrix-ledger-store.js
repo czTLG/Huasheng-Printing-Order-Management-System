@@ -113,6 +113,37 @@ try {
     /canonical customer is inactive/
   );
   assert.throws(() => store.resolveCustomer({ normalizedDomain: 'inactive.example' }), /canonical customer is inactive/);
+  assert.throws(() => store.upsertContact({
+    customerId: inactiveCustomerId,
+    channel: 'email',
+    address: 'write-blocked@example.test',
+    sourceUrl: 'https://inactive.example/contact',
+    verifiedAt: NOW,
+    status: 'active'
+  }), /canonical customer is inactive/);
+  assert.throws(() => store.recordThreadMessage({
+    customerId: inactiveCustomerId,
+    channel: 'email',
+    conversationKey: 'inactive-thread',
+    sourceKind: 'email_message',
+    sourceId: 'inactive-message',
+    direction: 'inbound',
+    classification: 'customer_reply',
+    occurredAt: NOW
+  }), /canonical customer is inactive/);
+  assert.throws(() => store.createTask({
+    customerId: inactiveCustomerId,
+    sourceKind: 'email_message',
+    sourceId: 'inactive-message',
+    taskType: 'review_reply',
+    dueAt: '2026-07-24T00:00:00.000Z'
+  }), /canonical customer is inactive/);
+  assert.throws(() => store.cancelTasks({
+    customerId: inactiveCustomerId,
+    sourceKind: 'email_message',
+    sourceId: 'inactive-message',
+    reason: 'inactive customer'
+  }), /canonical customer is inactive/);
 
   const message = store.recordThreadMessage({
     customerId: customer.canonical_customer_id,

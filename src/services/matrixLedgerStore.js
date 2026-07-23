@@ -226,7 +226,7 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
       if (existing && Number(existing.canonical_customer_id) !== Number(input.customerId)) {
         throw new Error('contact identity conflict');
       }
-      const customer = customerById(input.customerId);
+      const customer = activeCanonicalCustomer(input.customerId);
       const role = text(input.role);
       const sourceUrl = requireValue(input.sourceUrl, 'contact source url');
       const verifiedAt = iso(input.verifiedAt, 'contact verified timestamp');
@@ -268,7 +268,7 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
 
   function recordThreadMessage(input = {}) {
     return immediate(() => {
-      const customer = customerById(input.customerId);
+      const customer = activeCanonicalCustomer(input.customerId);
       const channel = requireMember(input.channel, THREAD_CHANNELS, 'thread channel');
       const conversationKey = requireValue(input.conversationKey, 'conversation key');
       const sourceKind = requireMember(input.sourceKind, MESSAGE_SOURCES, 'message source kind');
@@ -329,7 +329,7 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
 
   function createTask(input = {}) {
     return immediate(() => {
-      const customer = customerById(input.customerId);
+      const customer = activeCanonicalCustomer(input.customerId);
       const sourceKind = requireValue(input.sourceKind, 'task source kind');
       const sourceId = requireValue(input.sourceId, 'task source id');
       const taskType = requireMember(input.taskType, TASK_TYPES, 'task type');
@@ -366,7 +366,7 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
 
   function cancelTasks(input = {}) {
     return immediate(() => {
-      const customer = customerById(input.customerId);
+      const customer = activeCanonicalCustomer(input.customerId);
       const sourceKind = requireValue(input.sourceKind, 'task source kind');
       const sourceId = requireValue(input.sourceId, 'task source id');
       const reason = requireValue(input.reason, 'task cancellation reason');
