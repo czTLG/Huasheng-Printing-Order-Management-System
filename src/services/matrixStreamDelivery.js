@@ -285,7 +285,8 @@ function freshDeliveryGate(db, input, context) {
 
 function createMatrixStreamDelivery({
   db, transport, clock = () => new Date(), fromAddress, replyToAddress = fromAddress, messageIdDomain, dkimSelector,
-  leaseMs = 30000, waitMs = 20000, pollMs = 25
+  leaseMs = 30000, waitMs = 20000, pollMs = 25,
+  requireCanonicalCutover = process.env.NODE_ENV === 'production'
 } = {}) {
   if (!db || typeof db.prepare !== 'function' || !transport || typeof transport.sendMail !== 'function' || typeof clock !== 'function') {
     throw new Error('delivery dependencies required');
@@ -530,6 +531,9 @@ function createMatrixStreamDelivery({
 
   return {
     async confirm(rawInput) {
+      if (requireCanonicalCutover) {
+        require('./matrixLedgerCutover').assertCanonicalDeliveryOnly({ db });
+      }
       const input = exactInput(rawInput);
       const prepared = prepare(input);
       if (prepared.kind === 'wait') {

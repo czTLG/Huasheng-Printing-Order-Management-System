@@ -16,6 +16,7 @@
     "test:matrix-ledger-inbox": "node scripts/test-matrix-ledger-inbox.js",
     "test:matrix-ledger-migration": "node scripts/test-matrix-ledger-migration.js",
     "matrix-ledger:migrate": "node scripts/run-matrix-ledger-migration.js",
+    "verify:matrix-ledger-cutover": "node scripts/verify-matrix-ledger-cutover.js --no-send",
     "verify:matrix-relay-schema": "node scripts/test-matrix-relay-schema.js",
     "test:private-baseline": "node scripts/test-private-baseline.js",
     "runtime:audit": "node scripts/runtime-audit.js",

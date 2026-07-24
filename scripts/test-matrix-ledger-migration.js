@@ -11,7 +11,7 @@ process.env.DB_PATH = path.join(root, 'app.db');
 const { db, initDb } = require('../src/db');
 const { createMatrixLedgerStore } = require('../src/services/matrixLedgerStore');
 const { createMatrixLedgerMigration } = require('../src/services/matrixLedgerMigration');
-const { run: runMigrationCli, protectedReportPath } = require('./run-matrix-ledger-migration');
+const { run: runMigrationCli, protectedReportPath, authoritativeSources } = require('./run-matrix-ledger-migration');
 
 const NOW = '2026-07-23T00:00:00.000Z';
 
@@ -211,6 +211,19 @@ try {
   assert.deepStrictEqual(bareDryRun, { imported: 0, matched: 1, unresolved: 0, skipped: 0, conflicts: 0 }, 'bare dry-run uses the authoritative work-item adapter');
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_migration_records').get().count, rowsBeforeBareDryRun, 'bare dry-run creates no operational rows');
   assert.deepStrictEqual(databaseSnapshot(process.env.DB_PATH), bareDryRunBefore, 'bare dry-run changes no schema, rows, default user, bytes, or mtime');
+
+  const separateCandidatePath = path.join(root, 'candidate.db');
+  const separateCandidate = new (require('better-sqlite3'))(separateCandidatePath);
+  separateCandidate.exec('CREATE TABLE cache_records (id INTEGER PRIMARY KEY, company_name TEXT)');
+  separateCandidate.prepare('INSERT INTO cache_records (id, company_name) VALUES (705, ?)').run('Separate Candidate Ltd');
+  db.prepare(`
+    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+    VALUES (705, 1, ?, ?)
+  `).run(NOW, NOW);
+  const separateSources = authoritativeSources(db, separateCandidate);
+  const separateRow = separateSources.records.find(row => row.evidence?.candidateId === '705');
+  assert.strictEqual(separateRow.companyName, 'Separate Candidate Ltd', 'unlinked work items resolve company identity from the separate candidate database');
+  separateCandidate.close();
 
   console.log('matrix ledger migration tests passed');
 } finally {

@@ -1324,6 +1324,29 @@ function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_runtime_state (
+      state_key TEXT PRIMARY KEY,
+      state_value TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by INTEGER
+    );
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_runtime_canonical_delivery_no_disable
+    BEFORE UPDATE ON matrix_runtime_state
+    WHEN OLD.state_key = 'canonical_delivery_only'
+      AND OLD.state_value = '1'
+      AND NEW.state_value <> '1'
+    BEGIN
+      SELECT RAISE(ABORT, 'canonical delivery cannot be disabled');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_matrix_runtime_canonical_delivery_no_delete
+    BEFORE DELETE ON matrix_runtime_state
+    WHEN OLD.state_key = 'canonical_delivery_only' AND OLD.state_value = '1'
+    BEGIN
+      SELECT RAISE(ABORT, 'canonical delivery cannot be disabled');
+    END;
+
     CREATE TABLE IF NOT EXISTS matrix_migration_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       idempotency_key TEXT NOT NULL UNIQUE,

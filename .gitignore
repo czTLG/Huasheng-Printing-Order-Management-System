@@ -47,6 +47,7 @@ data/*.db.xz
 page-screenshot.png
 data/email-ai-prompts/
 data/email-ai-outputs/
+data/.matrix-ledger-backup-*/
 
 # Private business knowledge and live assistant artifacts stay outside Git.
 docs/costing/

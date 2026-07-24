@@ -5,12 +5,13 @@ function required(value,label,max=256){const v=String(value??'').trim();if(!v||v
 function id(value,label){const n=Number(value);if(!Number.isInteger(n)||n<1)throw new Error(`${label} required`);return n;}
 function publicResult(row,revision){return{state:String(row.state),error_class:String(row.error_class||''),route_revision:Number(revision)};}
 
-function createMatrixThreadDelivery({db,transport,previewService,clock=()=>new Date(),fromAddress,replyToAddress=fromAddress,messageIdDomain}={}){
+function createMatrixThreadDelivery({db,transport,previewService,clock=()=>new Date(),fromAddress,replyToAddress=fromAddress,messageIdDomain,requireCanonicalCutover=process.env.NODE_ENV==='production'}={}){
  if(!db||typeof db.prepare!=='function'||!transport||typeof transport.sendMail!=='function'||!previewService||typeof previewService.project!=='function')throw new Error('matrix thread delivery dependencies required');
  const from=required(fromAddress,'from address').toLowerCase(),replyTo=required(replyToAddress,'reply-to address').toLowerCase(),domain=required(messageIdDomain,'message id domain').toLowerCase();
  if(from!==replyTo||from.split('@')[1]!==domain)throw new Error('matrix thread sender mismatch');
  const iso=()=>{const v=clock();const ms=v instanceof Date?v.getTime():Date.parse(String(v));if(!Number.isFinite(ms))throw new Error('matrix thread delivery clock invalid');return new Date(ms).toISOString()};
  async function confirm(raw={}){
+  if(requireCanonicalCutover)require('./matrixLedgerCutover').assertCanonicalDeliveryOnly({db});
   const fields=new Set(['actorUserId','bindingId','routeId','expectedRevision','expectedContentHash','chatId','threadId','cardEventId','idempotencyKey']);const unknown=Object.keys(raw).find(k=>!fields.has(k));if(unknown)throw new Error(`unknown thread confirmation field: ${unknown}`);
   const actorUserId=id(raw.actorUserId,'actor user id'),routeId=id(raw.routeId,'route id'),revision=id(raw.expectedRevision,'expected revision');id(raw.bindingId,'binding id');
   const hash=required(raw.expectedContentHash,'expected content hash',64).toLowerCase(),chatId=required(raw.chatId,'chat id'),threadId=String(raw.threadId||'').trim(),cardEventId=required(raw.cardEventId,'card event id'),key=required(raw.idempotencyKey,'idempotency key',200);

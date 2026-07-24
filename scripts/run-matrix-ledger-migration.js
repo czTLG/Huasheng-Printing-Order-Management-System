@@ -83,17 +83,17 @@ async function databaseBackupPreflight(database) {
 }
 function candidateDatabase(options = {}, fallbackDatabase) {
   if (options.candidateDb) return { database: options.candidateDb, close: false };
-  const candidatePath = process.env.MATRIX_STREAM_DB_PATH;
-  if (!candidatePath) return { database: fallbackDatabase, close: false };
+  const candidatePath = process.env.MATRIX_STREAM_DB_PATH || path.join(__dirname, '..', 'data', 'matrix-stream.db');
+  if (!fs.existsSync(path.resolve(candidatePath))) return { database: fallbackDatabase, close: false };
   return { database: new Database(path.resolve(candidatePath), { readonly: true, fileMustExist: true }), close: true };
 }
 function tableExists(database, tableName) {
   return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
 }
-function authoritativeSources(candidateDb) {
-  if (!tableExists(candidateDb, 'matrix_work_items')) return { records: [] };
-  const hasCanonicalEvidence = tableExists(candidateDb, 'matrix_customer_links') && tableExists(candidateDb, 'customers');
-  const rows = candidateDb.prepare(hasCanonicalEvidence ? `
+function authoritativeSources(operationalDb, candidateDb = operationalDb) {
+  if (!tableExists(operationalDb, 'matrix_work_items')) return { records: [] };
+  const hasCanonicalEvidence = tableExists(operationalDb, 'matrix_customer_links') && tableExists(operationalDb, 'customers');
+  const rows = operationalDb.prepare(hasCanonicalEvidence ? `
     SELECT w.id AS work_item_id, w.candidate_id, w.stage, w.created_at, w.updated_at,
       COALESCE(c.name, '') AS company_name, c.id AS canonical_customer_id
     FROM matrix_work_items w
@@ -106,11 +106,14 @@ function authoritativeSources(candidateDb) {
       '' AS company_name, NULL AS canonical_customer_id
     FROM matrix_work_items ORDER BY id
   `).all();
+  const candidateName = tableExists(candidateDb, 'cache_records')
+    ? candidateDb.prepare('SELECT company_name FROM cache_records WHERE id = ?')
+    : null;
   return {
     records: rows.map(row => {
       const candidateId = String(row.candidate_id);
       const occurredAt = row.updated_at || row.created_at || '';
-      const companyName = String(row.company_name || '');
+      const companyName = String(row.company_name || candidateName?.get(row.candidate_id)?.company_name || '');
       return {
         sourceKind: 'matrix_work_item',
         sourceId: String(row.work_item_id),
@@ -138,7 +141,7 @@ async function run(argv, options = {}) {
     const store = createMatrixLedgerStore({ db: operational.database });
     const migration = createMatrixLedgerMigration({ db: operational.database, candidateDb: candidate.database, store });
     const report = args.report ? JSON.parse(fs.readFileSync(protectedReportPath(args.report, options.runtimeDir), 'utf8')) : null;
-    const plan = migration.scan(report ? report.sources || report : authoritativeSources(candidate.database));
+    const plan = migration.scan(report ? report.sources || report : authoritativeSources(operational.database, candidate.database));
     if (dryRun) return plan.counts;
     await databaseBackupPreflight(operational.database);
     return migration.apply(plan, { idempotencyKey: args.idempotencyKey }).counts;
