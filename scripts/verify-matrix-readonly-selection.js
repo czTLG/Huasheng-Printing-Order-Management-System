@@ -19,6 +19,8 @@ const FOCUSED_TESTS = [
   'scripts/test-packet-gate.js',
   'scripts/test-matrix-api.js',
   'scripts/test-matrix-stream-preview.js',
+  'scripts/test-matrix-ledger-cutover.js',
+  'scripts/test-matrix-ledger-e2e.js',
   '.runtime/vm_debug_ci/workspace/tests/test-bridge-patch.js',
   '.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js',
   '.runtime/vm_debug_ci/workspace/tests/test-runtime-supervisor.js',
