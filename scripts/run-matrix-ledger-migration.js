@@ -106,14 +106,32 @@ function authoritativeSources(operationalDb, candidateDb = operationalDb) {
       '' AS company_name, NULL AS canonical_customer_id
     FROM matrix_work_items ORDER BY id
   `).all();
-  const candidateName = tableExists(candidateDb, 'cache_records')
-    ? candidateDb.prepare('SELECT company_name FROM cache_records WHERE id = ?')
+  const candidateRecord = tableExists(candidateDb, 'cache_records')
+    ? candidateDb.prepare('SELECT * FROM cache_records WHERE id = ?')
     : null;
   return {
     records: rows.map(row => {
       const candidateId = String(row.candidate_id);
       const occurredAt = row.updated_at || row.created_at || '';
-      const companyName = String(row.company_name || candidateName?.get(row.candidate_id)?.company_name || '');
+      const candidate = candidateRecord?.get(row.candidate_id) || {};
+      const companyName = String(row.company_name || candidate.company_name || '');
+      const verifiedDomain = candidate.audit_state === 'audited' && candidate.status === 'valid'
+        ? String(candidate.normalized_domain || '')
+        : '';
+      const officialEmail = verifiedDomain ? String(candidate.public_email || '') : '';
+      const contactSourceUrl = verifiedDomain ? String(candidate.contact_url || '') : '';
+      const contactVerifiedAt = verifiedDomain ? String(candidate.audited_at || '') : '';
+      const identityEvidence = {
+        candidateId,
+        companyName,
+        ...(verifiedDomain ? { verifiedDomain } : {}),
+        ...(officialEmail && contactSourceUrl && contactVerifiedAt ? {
+          officialEmail,
+          contactSourceUrl,
+          contactVerifiedAt,
+          contactRole: String(candidate.contact_role || '')
+        } : {})
+      };
       return {
         sourceKind: 'matrix_work_item',
         sourceId: String(row.work_item_id),
@@ -121,9 +139,9 @@ function authoritativeSources(operationalDb, candidateDb = operationalDb) {
         companyName,
         state: String(row.stage || ''),
         evidence: row.canonical_customer_id ? {
+          ...identityEvidence,
           explicitSourceId: { kind: 'candidate', id: candidateId },
-          companyName
-        } : { candidateId, companyName },
+        } : identityEvidence,
         provenance: {
           sourcePath: `candidate-db:matrix_work_items/${row.work_item_id}`,
           bodyHash: crypto.createHash('sha256').update(`matrix_work_item:${row.work_item_id}:${candidateId}:${occurredAt}`).digest('hex')

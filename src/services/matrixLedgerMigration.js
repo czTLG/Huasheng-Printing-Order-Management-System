@@ -125,6 +125,37 @@ function createMatrixLedgerMigration({ db, candidateDb, store, clock = () => new
   function requireInsert(result, label) {
     if (!result || result.changes !== 1) throw new Error(`${label} insert conflict`);
   }
+  function enrichVerifiedIdentity(entry, customerId, actorUserId) {
+    const evidence = entry.record.evidence || {};
+    const candidateId = text(evidence.candidateId)
+      || (text(evidence.explicitSourceId?.kind) === 'candidate' ? text(evidence.explicitSourceId.id) : '');
+    const companyName = text(evidence.companyName || entry.record.companyName);
+    const verifiedDomain = text(evidence.verifiedDomain).toLowerCase();
+    if (candidateId && companyName) {
+      const resolved = store.resolveCustomer({
+        candidateId,
+        companyName,
+        normalizedDomain: verifiedDomain,
+        actorUserId
+      });
+      if (Number(resolved.canonical_customer_id) !== Number(customerId)) throw new Error('candidate identity conflict');
+    }
+    const officialEmail = text(evidence.officialEmail).toLowerCase();
+    const contactSourceUrl = text(evidence.contactSourceUrl);
+    const contactVerifiedAt = text(evidence.contactVerifiedAt);
+    if (officialEmail && contactSourceUrl && contactVerifiedAt) {
+      store.upsertContact({
+        customerId,
+        channel: 'email',
+        address: officialEmail,
+        role: text(evidence.contactRole),
+        sourceUrl: contactSourceUrl,
+        verifiedAt: contactVerifiedAt,
+        status: 'active',
+        actorUserId
+      });
+    }
+  }
   function apply(plan, { actorUserId, idempotencyKey } = {}) {
     if (!plan || !Array.isArray(plan.entries) || !plan.counts) throw new Error('migration plan required');
     const key = text(idempotencyKey);
@@ -145,6 +176,9 @@ function createMatrixLedgerMigration({ db, candidateDb, store, clock = () => new
         if (entry.resolution === 'imported') {
           const identity = entry.record.evidence || {};
           customerId = store.resolveCustomer({ candidateId: text(identity.candidateId || entry.sourceId), companyName: text(identity.companyName || entry.record.companyName), normalizedDomain: text(identity.verifiedDomain), actorUserId }).canonical_customer_id;
+        }
+        if (customerId && (entry.resolution === 'imported' || entry.resolution === 'matched')) {
+          enrichVerifiedIdentity(entry, customerId, actorUserId);
         }
         const countKey = entry.resolution === 'conflict' ? 'conflicts' : entry.resolution;
         counts[countKey] += 1;

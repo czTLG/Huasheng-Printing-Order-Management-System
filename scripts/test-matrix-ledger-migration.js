@@ -129,6 +129,72 @@ try {
   assert.strictEqual(storedProvenance.includes('Hello'), false);
   assert.strictEqual(storedProvenance.includes('Private matching draft body'), false);
 
+  const verifiedPublicContact = record('candidate', 'verified-public-contact', {
+    candidateId: '808',
+    companyName: 'Verified Public Contact Ltd',
+    verifiedDomain: 'verified-public.example',
+    officialEmail: 'sourcing@verified-public.example',
+    contactSourceUrl: 'https://verified-public.example/contact',
+    contactVerifiedAt: NOW,
+    contactRole: 'sourcing'
+  });
+  const verifiedContactResult = migration.apply(migration.scan({ records: [verifiedPublicContact] }), {
+    actorUserId: 1,
+    idempotencyKey: 'verified-public-contact-1'
+  });
+  assert.strictEqual(verifiedContactResult.imported, 1);
+  const verifiedCustomer = db.prepare("SELECT id FROM customers WHERE name = 'Verified Public Contact Ltd'").get();
+  assert.ok(verifiedCustomer, 'verified public source imports a canonical customer');
+  assert.deepStrictEqual(
+    db.prepare('SELECT normalized_domain FROM matrix_customer_links WHERE canonical_customer_id = ? AND source_kind = ? AND source_id = ?').get(verifiedCustomer.id, 'candidate', '808'),
+    { normalized_domain: 'verified-public.example' },
+    'verified domain is persisted on the canonical candidate link'
+  );
+  const emptyDomainCustomer = insertCustomer('Existing Empty Domain Ltd');
+  insertLink(emptyDomainCustomer, 'candidate', '810');
+  const enrichExistingResult = migration.apply(migration.scan({
+    records: [record('matrix_work_item', 'enrich-existing', {
+      candidateId: '810',
+      companyName: 'Existing Empty Domain Ltd',
+      verifiedDomain: 'existing-enriched.example',
+      explicitSourceId: { kind: 'candidate', id: '810' }
+    })]
+  }), {
+    actorUserId: 1,
+    idempotencyKey: 'enrich-existing-domain-1'
+  });
+  assert.strictEqual(enrichExistingResult.matched, 1);
+  assert.strictEqual(
+    db.prepare("SELECT normalized_domain FROM matrix_customer_links WHERE source_kind = 'candidate' AND source_id = '810'").get().normalized_domain,
+    'existing-enriched.example',
+    'verified domain enriches an existing candidate link that was previously empty'
+  );
+  assert.deepStrictEqual(
+    db.prepare('SELECT address, role, source_url, verified_at, status FROM matrix_contacts WHERE canonical_customer_id = ?').get(verifiedCustomer.id),
+    {
+      address: 'sourcing@verified-public.example',
+      role: 'sourcing',
+      source_url: 'https://verified-public.example/contact',
+      verified_at: NOW,
+      status: 'active'
+    },
+    'verified official email is persisted with provenance'
+  );
+  const incompletePublicContact = record('candidate', 'incomplete-public-contact', {
+    candidateId: '809',
+    companyName: 'Incomplete Public Contact Ltd',
+    officialEmail: 'sales@incomplete-public.example'
+  });
+  migration.apply(migration.scan({ records: [incompletePublicContact] }), {
+    actorUserId: 1,
+    idempotencyKey: 'incomplete-public-contact-1'
+  });
+  assert.strictEqual(
+    db.prepare('SELECT COUNT(*) AS count FROM matrix_contacts WHERE address = ?').get('sales@incomplete-public.example').count,
+    0,
+    'email without official source URL and verification timestamp is not promoted'
+  );
+
   const second = migration.apply(migration.scan(fixtures), {
     actorUserId: 1,
     idempotencyKey: 'migration-fixture-2'
@@ -214,8 +280,19 @@ try {
 
   const separateCandidatePath = path.join(root, 'candidate.db');
   const separateCandidate = new (require('better-sqlite3'))(separateCandidatePath);
-  separateCandidate.exec('CREATE TABLE cache_records (id INTEGER PRIMARY KEY, company_name TEXT)');
-  separateCandidate.prepare('INSERT INTO cache_records (id, company_name) VALUES (705, ?)').run('Separate Candidate Ltd');
+  separateCandidate.exec(`
+    CREATE TABLE cache_records (
+      id INTEGER PRIMARY KEY, company_name TEXT, normalized_domain TEXT, public_email TEXT,
+      contact_url TEXT, contact_role TEXT, status TEXT, audit_state TEXT, audited_at TEXT
+    )
+  `);
+  separateCandidate.prepare(`
+    INSERT INTO cache_records (
+      id, company_name, normalized_domain, public_email, contact_url, contact_role,
+      status, audit_state, audited_at
+    ) VALUES (705, ?, 'separate-candidate.example', 'buy@separate-candidate.example',
+      'https://separate-candidate.example/contact', 'purchasing', 'valid', 'audited', ?)
+  `).run('Separate Candidate Ltd', NOW);
   db.prepare(`
     INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
     VALUES (705, 1, ?, ?)
@@ -223,6 +300,15 @@ try {
   const separateSources = authoritativeSources(db, separateCandidate);
   const separateRow = separateSources.records.find(row => row.evidence?.candidateId === '705');
   assert.strictEqual(separateRow.companyName, 'Separate Candidate Ltd', 'unlinked work items resolve company identity from the separate candidate database');
+  assert.deepStrictEqual(separateRow.evidence, {
+    candidateId: '705',
+    companyName: 'Separate Candidate Ltd',
+    verifiedDomain: 'separate-candidate.example',
+    officialEmail: 'buy@separate-candidate.example',
+    contactSourceUrl: 'https://separate-candidate.example/contact',
+    contactVerifiedAt: NOW,
+    contactRole: 'purchasing'
+  }, 'audited valid candidate evidence includes the verified domain and official public contact');
   separateCandidate.close();
 
   console.log('matrix ledger migration tests passed');

@@ -131,17 +131,34 @@ function createMatrixLedgerStore({ db, clock = () => new Date() } = {}) {
   function establishCandidateLink(customerId, identity, createdAt) {
     const candidateId = text(identity.candidateId);
     if (!candidateId) return;
+    const normalizedDomain = normalizeDomain(identity.normalizedDomain);
     db.prepare(`
       INSERT OR IGNORE INTO matrix_customer_links (
         canonical_customer_id, source_kind, source_id, normalized_domain, confidence, created_at
       ) VALUES (?, 'candidate', ?, ?, 'deterministic', ?)
-    `).run(customerId, candidateId, normalizeDomain(identity.normalizedDomain), createdAt);
+    `).run(customerId, candidateId, normalizedDomain, createdAt);
     const link = db.prepare(`
-      SELECT canonical_customer_id FROM matrix_customer_links
+      SELECT canonical_customer_id, normalized_domain FROM matrix_customer_links
       WHERE source_kind = 'candidate' AND source_id = ?
     `).get(candidateId);
     if (!link || Number(link.canonical_customer_id) !== Number(customerId)) {
       throw new Error('candidate link conflict');
+    }
+    if (normalizedDomain && link.normalized_domain && link.normalized_domain !== normalizedDomain) {
+      throw new Error('candidate domain conflict');
+    }
+    if (normalizedDomain && !link.normalized_domain) {
+      const domainOwner = db.prepare(`
+        SELECT canonical_customer_id FROM matrix_customer_links
+        WHERE normalized_domain = ? AND canonical_customer_id <> ?
+          AND confidence IN ('deterministic', 'reviewed')
+      `).get(normalizedDomain, customerId);
+      if (domainOwner) throw new Error('candidate domain identity conflict');
+      const updated = db.prepare(`
+        UPDATE matrix_customer_links SET normalized_domain = ?
+        WHERE source_kind = 'candidate' AND source_id = ? AND normalized_domain = ''
+      `).run(normalizedDomain, candidateId);
+      if (!updated || updated.changes !== 1) throw new Error('candidate domain enrichment conflict');
     }
   }
 
