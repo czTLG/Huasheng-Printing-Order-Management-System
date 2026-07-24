@@ -21,11 +21,11 @@ async function testNarrowClient() {
   const client = require(clientPath);
   assert.deepStrictEqual(Object.keys(client).sort(), [
     'ackInboxJob', 'ackNotification', 'approveThreadRoute', 'approveVersion', 'candidateDetail',
-    'claimInboxJob', 'claimNotification', 'confirmSend', 'confirmThreadRoute', 'contextRecord',
-    'contextResolve', 'contextSearch', 'createSession', 'createVersion', 'facets',
-    'failInboxJob', 'getVersion', 'inboxWorkbench', 'listCandidates', 'nackNotification',
+    'claimInboxJob', 'claimNotification', 'confirmDelivery', 'confirmSend', 'confirmThreadRoute', 'contextRecord',
+    'contextResolve', 'contextSearch', 'createSession', 'createVersion', 'customerGet', 'facets',
+    'failInboxJob', 'finalPreview', 'getVersion', 'inboxWorkbench', 'listCandidates', 'nackNotification',
     'notificationStatus', 'prepareThreadRoute', 'previewThreadRoute', 'rehydrateSession', 'resumeThreadRoute', 'retryTranslation', 'reviseVersion',
-    'selectCandidate', 'startReplyDraft', 'today', 'versionPreview', 'workItems'
+    'selectCandidate', 'startReplyDraft', 'taskList', 'threadList', 'today', 'versionPreview', 'workItems'
   ]);
   const originalFetch = global.fetch;
   const requests = [];
@@ -45,6 +45,14 @@ async function testNarrowClient() {
     await client.contextSearch('ou-client', 'Acepac Singapore');
     await client.contextResolve('ou-client', '新加坡的客户你能看到了吗？');
     await client.contextRecord('ou-client', 5878);
+    await client.customerGet('ou-client', 5878);
+    await client.finalPreview('ou-client', 5878);
+    await client.threadList('ou-client', 5878);
+    await client.taskList('ou-client', 5878);
+    await client.confirmDelivery('ou-client', 5878, 302, {
+      expected_content_hash: 'a'.repeat(64), confirmation_text: '确认发送 Alpha',
+      chat_id: 'chat', card_event_id: 'card-ledger', idempotency_key: 'ledger-302'
+    });
     await client.selectCandidate('ou-client', { candidate_id: 4, session_id: 7, expected_version: 2, idempotency_key: 'evt', next_action: 'verify' });
     await client.workItems('ou-client', { stage: 'selected' });
     await client.claimInboxJob('ou-client');
@@ -85,6 +93,11 @@ async function testNarrowClient() {
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/approve')));
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/preview')));
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/send')));
+    assert.ok(requests.some(item => item.url.endsWith('/customers/5878')));
+    assert.ok(requests.some(item => item.url.endsWith('/customers/5878/final-preview')));
+    assert.ok(requests.some(item => item.url.endsWith('/customers/5878/threads')));
+    assert.ok(requests.some(item => item.url.endsWith('/customers/5878/tasks')));
+    assert.ok(requests.some(item => item.url.endsWith('/customers/5878/final-preview/302/confirm')));
     assert.strictEqual(requests.at(-1).options.method, 'POST');
     assert.throws(() => client.candidateDetail('ou-client', '../outside'), /candidate id/);
     assert.throws(() => client.createVersion('ou-client', 0, { expected_work_version: 1, idempotency_key: 'x' }), /work item id/);
@@ -361,7 +374,7 @@ async function testTwoConfirmationReviewFlow() {
   await registered.onMessage({ msg });
   await handlers.get('mx.detail')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.detail').value });
   await handlers.get('mx.select')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value });
-  assert.deepStrictEqual(buttons(sent.at(-1)).map(item => item.label), ['确认采用', '修改草稿', '暂不处理']);
+  assert.deepStrictEqual(buttons(sent.at(-1)).map(item => item.label), ['查看最终预览', '修改草稿', '暂不处理']);
   assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 0, 'selection must never send');
   assert.ok([...visibleText(sent.at(-1))].length <= 1500);
 
@@ -374,8 +387,14 @@ async function testTwoConfirmationReviewFlow() {
   assert.strictEqual(clientCalls.at(-1)[3].revision_instruction, '语气更简洁，询问年用量');
   assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '修改：成功后不应继续消费' } }), false);
 
-  await handlers.get('mx.approve')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.approve').value });
-  assert.ok(visibleText(sent.at(-1)).includes('尚未发送'));
+  await handlers.get('mx.approve')({
+    evt,
+    value: {
+      a: 'mx.approve', w: currentVersion.work_item_id, x: currentVersion.id,
+      v: currentVersion.work_item_version, h: currentVersion.content_hash
+    }
+  });
+  assert.ok(visibleText(sent.at(-1)).includes('尚未发送'), visibleText(sent.at(-1)));
   assert.ok(visibleText(sent.at(-1)).includes('sales@alpha.test'));
   assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 0, 'approval must never send');
   assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '你直接发送给他' } }), true);
@@ -519,7 +538,15 @@ async function testReadOnlyWatcher() {
   const readOnlyClient = {
     today: async (openId, filters) => {
       calls.push({ openId, filters });
-      return { rows: Array.from({ length: 7 }, (_, index) => ({ id: index + 1, company_name: `Watch ${index + 1}`, country_code: 'US', priority: 'P1', stage_code: index === 4 ? 'recommendation_ready' : 'observed', assessment_cn: '公开理由', categories: ['coffee'], size_signals: index === 0 ? ['250g', 'own factory'] : [], next_action_cn: '核实公开信息' })) };
+      return { rows: Array.from({ length: 7 }, (_, index) => ({ id: index + 1, canonical_customer_id: index === 0 ? 115 : null, company_name: `Watch ${index + 1}`, country_code: 'US', priority: 'P1', stage_code: index === 4 ? 'recommendation_ready' : 'observed', assessment_cn: '公开理由', categories: ['coffee'], size_signals: index === 0 ? ['250g', 'own factory'] : [], next_action_cn: '核实公开信息' })) };
+    },
+    customerGet: async (openId, customerId) => {
+      calls.push({ openId, customerId });
+      return {
+        customer_id: 115, stage: 'waiting_customer', last_delivery_state: 'accepted',
+        pending_task: { type: 'check_reply', due_at: '2026-07-26T11:32:16.000Z' },
+        next_action: '等待客户回复'
+      };
     }
   };
   const first = await watcher.runDue({
@@ -530,8 +557,9 @@ async function testReadOnlyWatcher() {
     chatId: 'chat-watch',
     send: async card => { deliveries.push(card); return 'message-watch-1'; }
   });
-  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls.length, 2);
   assert.deepStrictEqual(calls[0], { openId: 'ou-owner', filters: { page_size: 5 } });
+  assert.deepStrictEqual(calls[1], { openId: 'ou-owner', customerId: 115 });
   assert.strictEqual(deliveries.length, 1);
   const watchText = visibleText(deliveries[0]);
   assert.ok(watchText.includes('Watch 1'));
@@ -541,13 +569,16 @@ async function testReadOnlyWatcher() {
   assert.ok(watchText.includes('阶段：推荐就绪'));
   assert.ok(watchText.includes('已确认规格：250g'));
   assert.ok(watchText.includes('已确认公开信号：own factory'));
+  assert.ok(watchText.includes('统一进度：waiting_customer'));
+  assert.ok(watchText.includes('最近投递：accepted'));
+  assert.ok(watchText.includes('统一下一步：等待客户回复'));
   assert.deepStrictEqual(first, { last_success_date: '2026-07-17', last_message_id: 'message-watch-1' });
   const second = await watcher.runDue({
     now: new Date('2026-07-17T01:05:00.000Z'), state: first, client: readOnlyClient,
     ownerOpenId: 'ou-owner', chatId: 'chat-watch', send: async () => { throw new Error('must not resend'); }
   });
   assert.deepStrictEqual(second, first);
-  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls.length, 2);
 
   const emptyDeliveries = [];
   await watcher.runDue({
@@ -1253,7 +1284,7 @@ async function testSelectionReplayAfterRestart() {
   await firstHandlers.get('mx.detail')({ evt, value: detailValue });
   const oldSelect = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value;
   await firstHandlers.get('mx.select')({ evt, value: oldSelect });
-  for (const expected of ['sales@replay.test', 'Proposal for Replay Company', '英文草稿', '中文翻译', '尚未发送', '确认采用']) {
+  for (const expected of ['sales@replay.test', 'Proposal for Replay Company', '英文草稿', '中文翻译', '尚未发送', '查看最终预览']) {
     assert.ok(visibleText(sent.at(-1)).includes(expected), `selection follow-up missing ${expected}`);
   }
   first.dispose();
@@ -1548,7 +1579,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.strictEqual(selectedVersionCalls[0][3].expected_work_version, 4);
   assert.ok(calls.some(item => item[0] === 'getVersion' && item[2] === 91 && item[3] === 301));
   const selectedText = visibleText(sent.at(-1).card);
-  for (const expected of ['public@company.test', '英文草稿', '中文翻译', '尚未发送', '质量评分', '确认采用']) {
+  for (const expected of ['public@company.test', '英文草稿', '中文翻译', '尚未发送', '质量评分', '查看最终预览']) {
     assert.ok(selectedText.includes(expected), `selection follow-up missing ${expected}`);
   }
   assert.ok([...selectedText].length <= 1500, `selection draft card uses ${[...selectedText].length} code points`);
@@ -1594,7 +1625,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
   incomplete.dispose();
   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
-  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.approve', 'mx.back', 'mx.category', 'mx.confirm', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.preview', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.review', 'mx.revise', 'mx.select', 'mx.thread_approve', 'mx.thread_confirm', 'mx.thread_preview', 'mx.today', 'mx.work']);
+  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.approve', 'mx.back', 'mx.category', 'mx.confirm', 'mx.detail', 'mx.filters', 'mx.ledger_confirm', 'mx.ledger_preview', 'mx.page', 'mx.pick', 'mx.preview', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.review', 'mx.revise', 'mx.select', 'mx.thread_approve', 'mx.thread_confirm', 'mx.thread_preview', 'mx.today', 'mx.work']);
 
   console.log('stream card extension tests passed');
 })().catch(error => {

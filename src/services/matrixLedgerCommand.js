@@ -98,10 +98,97 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
     return { customer, contact, version, workItem };
   }
 
+  function currentVersionId(customerId) {
+    const rows = db.prepare(`
+      SELECT COALESCE(w.current_stream_version_id, (
+        SELECT v.id FROM matrix_stream_versions v
+        WHERE v.work_item_id = w.id ORDER BY v.revision DESC, v.id DESC LIMIT 1
+      )) AS version_id
+      FROM matrix_customer_links l
+      JOIN matrix_work_items w ON CAST(w.candidate_id AS TEXT) = l.source_id
+      WHERE l.canonical_customer_id = ? AND l.source_kind = 'candidate'
+      ORDER BY w.updated_at DESC, w.id DESC
+    `).all(customerId).filter(row => Number.isInteger(Number(row.version_id)) && Number(row.version_id) > 0);
+    const ids = [...new Set(rows.map(row => Number(row.version_id)))];
+    if (!ids.length) throw new Error('version not found');
+    return ids[0];
+  }
+
+  function customerSnapshot(input = {}) {
+    positiveInteger(input.actorUserId, 'actor user id');
+    const customerId = positiveInteger(input.customerId, 'customer id');
+    const customer = db.prepare('SELECT id, name, active FROM customers WHERE id = ?').get(customerId);
+    if (!customer) throw new Error('canonical customer not found');
+    if (!Number(customer.active)) throw new Error('canonical customer is inactive');
+    const thread = db.prepare(`
+      SELECT state, updated_at FROM matrix_threads
+      WHERE canonical_customer_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1
+    `).get(customerId);
+    const delivery = db.prepare(`
+      SELECT j.state
+      FROM matrix_customer_links l
+      JOIN matrix_work_items w ON CAST(w.candidate_id AS TEXT) = l.source_id
+      JOIN matrix_stream_jobs j ON j.work_item_id = w.id
+      WHERE l.canonical_customer_id = ? AND l.source_kind = 'candidate'
+      ORDER BY j.updated_at DESC, j.id DESC LIMIT 1
+    `).get(customerId);
+    const task = db.prepare(`
+      SELECT id, task_type, due_at, priority, next_action
+      FROM matrix_tasks
+      WHERE canonical_customer_id = ? AND state = 'pending'
+      ORDER BY due_at, id LIMIT 1
+    `).get(customerId);
+    const actionLabels = {
+      check_reply: '等待客户回复',
+      review_reply: '查看客户回复',
+      replace_contact: '更换有效联系人',
+      delivery_review: '核对投递状态',
+      review_unresolved: '核对客户关联'
+    };
+    return Object.freeze({
+      customer_id: customerId,
+      stage: thread?.state || (delivery?.state === 'accepted' ? 'waiting_customer' : 'active'),
+      last_delivery_state: delivery?.state || '',
+      pending_task: task ? { type: task.task_type, due_at: task.due_at } : null,
+      next_action: task ? (actionLabels[task.task_type] || task.next_action || '') : ''
+    });
+  }
+
+  function threadList(input = {}) {
+    positiveInteger(input.actorUserId, 'actor user id');
+    const customerId = positiveInteger(input.customerId, 'customer id');
+    customerSnapshot(input);
+    return {
+      customer_id: customerId,
+      rows: db.prepare(`
+        SELECT id, channel, conversation_key, state, last_message_at, created_at, updated_at
+        FROM matrix_threads WHERE canonical_customer_id = ?
+        ORDER BY updated_at DESC, id DESC
+      `).all(customerId)
+    };
+  }
+
+  function taskList(input = {}) {
+    positiveInteger(input.actorUserId, 'actor user id');
+    const customerId = positiveInteger(input.customerId, 'customer id');
+    customerSnapshot(input);
+    return {
+      customer_id: customerId,
+      rows: db.prepare(`
+        SELECT id, task_type AS type, due_at, state, priority, next_action,
+               cancellation_reason, created_at, updated_at
+        FROM matrix_tasks WHERE canonical_customer_id = ?
+        ORDER BY CASE state WHEN 'pending' THEN 0 ELSE 1 END, due_at, id
+      `).all(customerId)
+    };
+  }
+
   async function finalPreview(input = {}) {
     const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
     const customerId = positiveInteger(input.customerId, 'customer id');
-    const versionId = positiveInteger(input.versionId, 'version id');
+    const versionId = input.versionId == null
+      ? currentVersionId(customerId)
+      : positiveInteger(input.versionId, 'version id');
     const resolved = resolve(customerId, versionId);
     const current = await currentEvidence({ customer: resolved.customer, contact: resolved.contact, workItem: resolved.workItem, version: resolved.version });
     if (!current || !current.sourceSnapshot
@@ -117,10 +204,13 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
       || !Number.isFinite(Number(strategy.score)) || !Number.isFinite(Number(strategy.threshold))
       || Number(strategy.score) < Number(strategy.threshold) || (Array.isArray(strategy.blockers) && strategy.blockers.length)
       ? ['stale_research_or_route_readiness'] : [];
+    const reviewBlockers = reasons((reviewGate.reasons || []).filter(reason => (
+      reason !== 'version_not_approved' || reviewGate.version.status !== 'draft'
+    )));
     const base = {
       ...reviewGate,
-      allowed: reviewGate.allowed && researchBlockers.length === 0,
-      reasons: reasons([...(reviewGate.reasons || []), ...researchBlockers]),
+      allowed: reviewBlockers.length === 0 && researchBlockers.length === 0,
+      reasons: reasons([...reviewBlockers, ...researchBlockers]),
       canonicalCustomerIds: [resolved.customer.id]
     };
     const projected = await previewService.project(base);
@@ -174,6 +264,29 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
       } catch (_) {
         throw new Error('delivery confirmation idempotency conflict');
       }
+    } else {
+      const preview = await finalPreview({
+        actorUserId: input.actorUserId,
+        customerId: input.customerId,
+        versionId: input.versionId
+      });
+      if (!preview.allowed) throw new Error(`final preview blocked: ${preview.blockers.join(',')}`);
+      if (input.expectedContentHash !== preview.content_hash) throw new Error('content hash mismatch');
+      if (resolved.version.status === 'draft') {
+        if (typeof reviewService.approveVersion !== 'function') throw new Error('version approval unavailable');
+        reviewService.approveVersion(db, {
+          actorUserId: input.actorUserId,
+          workItemId: resolved.workItem.id,
+          versionId: resolved.version.id,
+          expectedWorkVersion: resolved.workItem.version,
+          expectedContentHash: input.expectedContentHash,
+          idempotencyKey: `matrix-ledger-approve:${crypto.createHash('sha256').update(input.idempotencyKey).digest('hex')}`
+        });
+        expectedWorkVersion = positiveInteger(
+          db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(resolved.workItem.id)?.version,
+          'approved work version'
+        );
+      }
     }
     const deliveryInput = {
       actorUserId: input.actorUserId,
@@ -189,13 +302,6 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
     };
     const replay = db.prepare('SELECT id FROM matrix_stream_jobs WHERE idempotency_key = ?').get(input.idempotencyKey);
     if (replay) return deliveryService.confirm(deliveryInput);
-    const preview = await finalPreview({
-      actorUserId: input.actorUserId,
-      customerId: input.customerId,
-      versionId: input.versionId
-    });
-    if (!preview.allowed) throw new Error(`final preview blocked: ${preview.blockers.join(',')}`);
-    if (input.expectedContentHash !== preview.content_hash) throw new Error('content hash mismatch');
     const timestamp = clock();
     const at = timestamp instanceof Date ? timestamp.toISOString() : new Date(timestamp).toISOString();
     if (!Number.isFinite(Date.parse(at))) throw new Error('command clock invalid');
@@ -227,7 +333,13 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
     return deliveryService.confirm(deliveryInput);
   }
 
-  return { finalPreview, confirmDelivery };
+  return {
+    customerSnapshot,
+    threadList,
+    taskList,
+    finalPreview,
+    confirmDelivery
+  };
 }
 
 module.exports = { createMatrixLedgerCommand };

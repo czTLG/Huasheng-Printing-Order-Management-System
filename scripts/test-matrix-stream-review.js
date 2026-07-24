@@ -233,6 +233,15 @@ try {
     key: 'registrable-couk-create'
   }));
   assert.strictEqual(validMultiLevelDomain.recipient_email, 'sales@mail.alpha.co.uk');
+  const canonicalCustomerId = Number(db.prepare(`
+    INSERT INTO customers (name, active, created_at, updated_at)
+    VALUES ('Alpha', 1, ?, ?)
+  `).run(now, now).lastInsertRowid);
+  db.prepare(`
+    INSERT INTO matrix_customer_links (
+      canonical_customer_id, source_kind, source_id, normalized_domain, confidence, created_at
+    ) VALUES (?, 'candidate', '900000', 'alpha.test', 'reviewed', ?)
+  `).run(canonicalCustomerId, now);
   const v1 = review.createInitialVersion(db, {
     actorUserId: userId,
     workItemId: reviewWorkItemId,
@@ -251,6 +260,7 @@ try {
     idempotencyKey: 'version-create-1'
   });
   assert.strictEqual(v1.revision, 1);
+  assert.strictEqual(v1.canonical_customer_id, canonicalCustomerId);
   assert.notStrictEqual(v1.quality_json, '{}');
   assert.strictEqual(v1.quality_score, JSON.parse(v1.quality_json).score);
   assert.ok(v1.quality_score < 80);

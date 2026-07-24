@@ -343,10 +343,10 @@ function deliveryErrorDescriptor(error) {
   if (/active actor binding|administrator role|matrixSend capability|not authorized/.test(message)) {
     return { status: 403, code: 'delivery_forbidden', message: 'Delivery confirmation is not authorized.' };
   }
-  if (/stale work version|stale research or route readiness|idempotency(?: request)? conflict|blocks resend|not current|result conflict/.test(message)) {
+  if (/expired|stale work version|stale research or route readiness|idempotency(?: request)? conflict|blocks resend|not current|result conflict/.test(message)) {
     return { status: 409, code: 'delivery_conflict', message: 'Delivery confirmation conflicts with current state.' };
   }
-  if (/not found/.test(message)) {
+  if (/not found|delivery confirmation (?:version|customer|contact|resource) missing/.test(message)) {
     return { status: 404, code: 'delivery_not_found', message: 'Delivery confirmation resource was not found.' };
   }
   if (/required|invalid|unknown|mismatch|blocked|suppressed|approved|provenance|quality|readiness|policy|official evidence|canonical customer|canonical contact/.test(message)) {
@@ -1394,6 +1394,39 @@ function createMatrixRouter({
     }
   });
 
+  router.get('/customers/:customerId', (req, res) => {
+    try {
+      requireReviewAccess(req);
+      rejectUnknown(req.query, new Set(), 'query');
+      if (!command) throw new Error('ledger command unavailable');
+      const identity = reviewIdentity(req);
+      const customerId = positiveInteger(req.params.customerId, 'customer id');
+      res.json(command.customerSnapshot({ actorUserId: identity.actorUserId, customerId }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.get('/customers/:customerId/threads', (req, res) => {
+    try {
+      requireReviewAccess(req);
+      rejectUnknown(req.query, new Set(), 'query');
+      if (!command) throw new Error('ledger command unavailable');
+      const identity = reviewIdentity(req);
+      const customerId = positiveInteger(req.params.customerId, 'customer id');
+      res.json(command.threadList({ actorUserId: identity.actorUserId, customerId }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.get('/customers/:customerId/tasks', (req, res) => {
+    try {
+      requireReviewAccess(req);
+      rejectUnknown(req.query, new Set(), 'query');
+      if (!command) throw new Error('ledger command unavailable');
+      const identity = reviewIdentity(req);
+      const customerId = positiveInteger(req.params.customerId, 'customer id');
+      res.json(command.taskList({ actorUserId: identity.actorUserId, customerId }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
   router.get('/customers/:customerId/final-preview', async (req, res) => {
     try {
       requireReviewAccess(req);
@@ -1401,7 +1434,9 @@ function createMatrixRouter({
       if (!command) throw new Error('ledger command unavailable');
       const identity = reviewIdentity(req);
       const customerId = positiveInteger(req.params.customerId, 'customer id');
-      const versionId = positiveInteger(req.query.version_id, 'version id');
+      const versionId = req.query.version_id === undefined
+        ? undefined
+        : positiveInteger(req.query.version_id, 'version id');
       res.json(await command.finalPreview({ actorUserId: identity.actorUserId, customerId, versionId }));
     } catch (error) { sendReviewError(res, error); }
   });

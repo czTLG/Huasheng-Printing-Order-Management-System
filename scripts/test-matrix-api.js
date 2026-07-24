@@ -713,6 +713,21 @@ function reviewState(workItemId) {
     };
     const ledgerCommandCalls = [];
     const injectedLedgerCommand = {
+      customerSnapshot(input) {
+        return {
+          customer_id: input.customerId,
+          stage: 'waiting_customer',
+          last_delivery_state: 'accepted',
+          pending_task: { type: 'check_reply', due_at: '2026-07-26T11:32:16.000Z' },
+          next_action: '等待客户回复'
+        };
+      },
+      threadList(input) {
+        return { customer_id: input.customerId, rows: [{ id: 31, state: 'waiting_customer' }] };
+      },
+      taskList(input) {
+        return { customer_id: input.customerId, rows: [{ id: 41, type: 'check_reply', state: 'pending' }] };
+      },
       async finalPreview(input) {
         if (input.customerId === 404) throw new Error('canonical customer not found');
         ledgerCommandCalls.push({ kind: 'preview', ...input });
@@ -721,6 +736,8 @@ function reviewState(workItemId) {
       async confirmDelivery(input) {
         if (input.customerId === 88) throw new Error('stale research or route readiness');
         if (input.customerId === 404) throw new Error('canonical customer not found');
+        if (input.customerId === 77) throw new Error('delivery confirmation expired');
+        if (input.customerId === 78) throw new Error('delivery confirmation version missing');
         ledgerCommandCalls.push({ kind: 'confirm', ...input });
         return { state: 'accepted', error_class: '', work_item_version: 4 };
       }
@@ -776,6 +793,27 @@ function reviewState(workItemId) {
       });
       assert.strictEqual(ledgerPreview.status, 200, JSON.stringify(ledgerPreview.body));
       assert.strictEqual(ledgerPreview.body.allowed, true);
+      const ledgerCustomer = await request('/api/matrix/customers/1', {
+        port: injectedPort, serviceToken: bridgeToken, openId: 'ou-service'
+      });
+      assert.strictEqual(ledgerCustomer.status, 200, JSON.stringify(ledgerCustomer.body));
+      assert.deepStrictEqual(ledgerCustomer.body, {
+        customer_id: 1,
+        stage: 'waiting_customer',
+        last_delivery_state: 'accepted',
+        pending_task: { type: 'check_reply', due_at: '2026-07-26T11:32:16.000Z' },
+        next_action: '等待客户回复'
+      });
+      const ledgerThreads = await request('/api/matrix/customers/1/threads', {
+        port: injectedPort, serviceToken: bridgeToken, openId: 'ou-service'
+      });
+      assert.strictEqual(ledgerThreads.status, 200, JSON.stringify(ledgerThreads.body));
+      assert.strictEqual(ledgerThreads.body.rows[0].state, 'waiting_customer');
+      const ledgerTasks = await request('/api/matrix/customers/1/tasks', {
+        port: injectedPort, serviceToken: bridgeToken, openId: 'ou-service'
+      });
+      assert.strictEqual(ledgerTasks.status, 200, JSON.stringify(ledgerTasks.body));
+      assert.strictEqual(ledgerTasks.body.rows[0].type, 'check_reply');
       const missingLedgerPreview = await request(`/api/matrix/customers/404/final-preview?version_id=${createdVersion.body.id}`, {
         port: injectedPort, serviceToken: bridgeToken, openId: 'ou-service'
       });
@@ -817,6 +855,16 @@ function reviewState(workItemId) {
         body: { ...ledgerConfirmBody, idempotency_key: 'ledger-api-missing-version' }
       });
       assert.strictEqual(missingLedgerConfirm.status, 404, JSON.stringify(missingLedgerConfirm.body));
+      const expiredLedgerConfirm = await request(`/api/matrix/customers/77/final-preview/${createdVersion.body.id}/confirm`, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...ledgerConfirmBody, idempotency_key: 'ledger-api-expired' }
+      });
+      assert.strictEqual(expiredLedgerConfirm.status, 409, JSON.stringify(expiredLedgerConfirm.body));
+      const missingStateLedgerConfirm = await request(`/api/matrix/customers/78/final-preview/${createdVersion.body.id}/confirm`, {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...ledgerConfirmBody, idempotency_key: 'ledger-api-missing-state' }
+      });
+      assert.strictEqual(missingStateLedgerConfirm.status, 404, JSON.stringify(missingStateLedgerConfirm.body));
       assert.strictEqual(ledgerCommandCalls.filter(call => call.kind === 'confirm').length, 1, 'failed canonical validation must not invoke delivery');
       const sendRoute = `${versionRoute}/${createdVersion.body.id}/send`;
       const sendBody = {

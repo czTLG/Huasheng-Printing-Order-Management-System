@@ -91,14 +91,7 @@ function seed() {
     sourceSnapshot,
     idempotencyKey: 'ledger-command-version-create'
   });
-  const version = review.approveVersion(db, {
-    actorUserId,
-    workItemId,
-    versionId: created.id,
-    expectedWorkVersion: 2,
-    expectedContentHash: created.content_hash,
-    idempotencyKey: 'ledger-command-version-approve'
-  });
+  const version = created;
   db.prepare(`
     INSERT INTO matrix_stream_sender_checks (
       sender_domain, checked_at, expires_at, spf_ok, dkim_ok, dmarc_ok, tls_ok, smtp_ok, detail_json
@@ -152,6 +145,11 @@ function seed() {
       customerId: fixture.customerId,
       versionId: fixture.version.id
     });
+    assert.strictEqual(
+      db.prepare('SELECT status FROM matrix_stream_versions WHERE id = ?').get(fixture.version.id).status,
+      'draft',
+      'opening the final preview must not approve the draft'
+    );
     assert.deepStrictEqual(preview, {
       customer_id: fixture.customerId,
       customer_name: 'UNITEA Kazakhstan',
@@ -244,6 +242,11 @@ function seed() {
     );
     const result = await command.confirmDelivery({ ...common, confirmationText: ' 确认发送 UNITEA Kazakhstan ' });
     assert.strictEqual(result.state, 'accepted');
+    assert.strictEqual(
+      db.prepare('SELECT status FROM matrix_stream_versions WHERE id = ?').get(fixture.version.id).status,
+      'approved',
+      'the exact final confirmation must atomically persist approval before delivery'
+    );
     assert.strictEqual(jobCount(), 1, 'only the exact confirmation creates one delivery job');
     assert.strictEqual(
       db.prepare(`

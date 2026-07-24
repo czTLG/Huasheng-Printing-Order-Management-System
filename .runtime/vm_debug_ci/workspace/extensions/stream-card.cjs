@@ -5,7 +5,7 @@ const fs = require('fs');
 const defaultChoiceContext = require('../scripts/matrix-choice-context.js');
 const defaultAssetContext = require('../scripts/matrix-asset-context.js');
 
-const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.reply_draft', 'mx.retry_translation', 'mx.thread_approve', 'mx.thread_preview', 'mx.thread_confirm'];
+const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.ledger_preview', 'mx.ledger_confirm', 'mx.reply_draft', 'mx.retry_translation', 'mx.thread_approve', 'mx.thread_preview', 'mx.thread_confirm'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REVISION_TTL_MS = 10 * 60 * 1000;
@@ -404,6 +404,7 @@ function actionKey(kind, ...values) {
 function versionAction(version, action, extra = {}) {
   return {
     a: action,
+    ...(Number(version.canonical_customer_id) > 0 ? { c: Number(version.canonical_customer_id) } : {}),
     w: Number(version.work_item_id),
     x: Number(version.id),
     v: Number(version.work_item_version),
@@ -426,11 +427,11 @@ function renderVersionReview(version, cardHelpers) {
     md(`**英文草稿**\n\n${formattedBody(version.body_en)}`),
     md(`**中文翻译**\n\n${formattedBody(version.body_cn)}`),
     actions([
-      button('确认采用', versionAction(version, 'mx.approve'), 'primary'),
+      button('查看最终预览', versionAction(version, 'mx.ledger_preview'), 'primary'),
       button('修改草稿', versionAction(version, 'mx.revise'), 'default'),
       button('暂不处理', versionAction(version, 'mx.review'), 'default')
     ]),
-    note('尚未发送。确认采用仅记录审批，仍需打开最终预览并再次确认。')
+    note('尚未发送。最终预览会完整展示收件人、正文、附件和不可变版本；只有明确的“确认发送 公司名”操作才会提交。')
   ], { header: { title: `草稿 v${Number(version.revision || 1)} 待审阅`, template: 'blue' }, summary: '草稿待审阅' });
 }
 
@@ -577,6 +578,46 @@ function renderDeliveryResult(result, versionValue, cardHelpers) {
   throw new Error('invalid delivery result');
 }
 
+function fullTextChunks(value, maximum = 2400) {
+  const text = String(value || '').replace(/\r\n?/g, '\n');
+  if (!text) return [''];
+  const chunks = [];
+  for (let offset = 0; offset < text.length; offset += maximum) chunks.push(text.slice(offset, offset + maximum));
+  return chunks;
+}
+
+function canonicalPreviewValue(preview, action) {
+  return {
+    a: action,
+    c: Number(preview.customer_id),
+    x: Number(preview.version_id),
+    h: String(preview.content_hash || '')
+  };
+}
+
+function renderCanonicalPreview(preview, cardHelpers) {
+  const { card, md, note, actions, button } = cardHelpers;
+  const elements = [
+    md(`**收件人**：${String(preview.recipient || '')}\n**主题**：${String(preview.subject || '')}\n**版本 ID：${Number(preview.version_id)}`),
+    md(`**英文正文**\n\n${String(preview.body_en || '')}`),
+    md(`**中文翻译**\n\n${String(preview.body_cn || '')}`),
+    md(`**附件**\n${(preview.attachments || []).length
+      ? preview.attachments.map(item => `• ${String(item.filename || item.name || 'attachment')}`).join('\n')
+      : '无附件'}`)
+  ];
+  if (preview.allowed === true && Array.isArray(preview.blockers) && preview.blockers.length === 0) {
+    const label = `确认发送 ${String(preview.customer_name || '').trim()}`;
+    elements.push(actions([button(label, canonicalPreviewValue(preview, 'mx.ledger_confirm'), 'primary')]));
+    elements.push(note(`只有点击“${label}”才会提交这一不可变版本；普通“确认”不会发送。`));
+  } else {
+    elements.push(note(`当前阻断：${(preview.blockers || []).join('、') || '状态未通过'}。未提供发送操作。`));
+  }
+  return card(elements, {
+    header: { title: preview.allowed === true ? '最终预览' : '最终预览已阻断', template: preview.allowed === true ? 'blue' : 'red' },
+    summary: '最终预览'
+  });
+}
+
 function renderFilters(facets, state, cardHelpers) {
   const { card, md, note, hr, actions, button } = cardHelpers;
   const regions = (facets.regions || []).filter(item => ['africa', 'americas', 'asia', 'europe', 'oceania'].includes(item.value));
@@ -635,6 +676,7 @@ function register(context) {
   const selectionEvents = new Map();
   const revisionContexts = new Map();
   const sendConfirmationContexts = new Map();
+  const ledgerConfirmationContexts = new Map();
   const threadConfirmationContexts = new Map();
   const unmentionedFollowups = new Map();
   const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
@@ -1040,6 +1082,59 @@ function register(context) {
     await sendForEvent(evt, renderDeliveryResult(result, value, cardHelpers));
   }
 
+  function ledgerActionValue(evt, value) {
+    const openId = String(evt?.operator?.openId || '').trim();
+    const customerId = Number(value?.c);
+    const versionId = Number(value?.x);
+    const hash = String(value?.h || '').trim().toLowerCase();
+    if (!openId || !Number.isInteger(customerId) || customerId < 1
+        || !Number.isInteger(versionId) || versionId < 1
+        || !/^[a-f0-9]{64}$/.test(hash)) throw new Error('valid canonical ledger action required');
+    return { openId, customerId, versionId, hash };
+  }
+
+  async function ledgerPreviewAction({ evt, value }) {
+    const binding = ledgerActionValue(evt, value);
+    if (typeof client.finalPreview !== 'function') throw new Error('canonical preview service unavailable');
+    const preview = await client.finalPreview(binding.openId, binding.customerId, binding.versionId);
+    if (Number(preview.customer_id) !== binding.customerId
+        || Number(preview.version_id) !== binding.versionId
+        || String(preview.content_hash || '').toLowerCase() !== binding.hash) {
+      throw new Error('canonical preview identity mismatch');
+    }
+    const key = sessionKey(evt.chatId, binding.openId, evt.threadId);
+    if (preview.allowed === true && Array.isArray(preview.blockers) && preview.blockers.length === 0) {
+      ledgerConfirmationContexts.set(key, { preview, expiresAt: clockMillis() + REVISION_TTL_MS });
+    } else {
+      ledgerConfirmationContexts.delete(key);
+    }
+    await sendForEvent(evt, renderCanonicalPreview(preview, cardHelpers));
+  }
+
+  async function ledgerConfirmAction({ evt, value }) {
+    const binding = ledgerActionValue(evt, value);
+    const key = sessionKey(evt.chatId, binding.openId, evt.threadId);
+    const held = ledgerConfirmationContexts.get(key);
+    if (!held || held.expiresAt <= clockMillis()
+        || Number(held.preview.customer_id) !== binding.customerId
+        || Number(held.preview.version_id) !== binding.versionId
+        || String(held.preview.content_hash || '').toLowerCase() !== binding.hash) {
+      ledgerConfirmationContexts.delete(key);
+      await sendForEvent(evt, infoCard(cardHelpers, '当前没有绑定到本会话的最终预览，尚未发送。'));
+      return;
+    }
+    ledgerConfirmationContexts.delete(key);
+    if (typeof client.confirmDelivery !== 'function') throw new Error('canonical confirmation service unavailable');
+    const result = await client.confirmDelivery(binding.openId, binding.customerId, binding.versionId, {
+      expected_content_hash: binding.hash,
+      confirmation_text: `确认发送 ${String(held.preview.customer_name || '').trim()}`,
+      chat_id: String(evt.chatId || ''),
+      card_event_id: String(evt.messageId || ''),
+      idempotency_key: actionKey('ledger-confirm', binding.openId, binding.customerId, binding.versionId, binding.hash)
+    });
+    await sendForEvent(evt, renderDeliveryResult(result, value, cardHelpers));
+  }
+
   async function workAction({ evt, value }) {
     const { openId, state } = await callbackState(evt, value);
     const result = await client.workItems(openId, {});
@@ -1123,6 +1218,8 @@ function register(context) {
     'mx.approve': approveAction,
     'mx.preview': previewAction,
     'mx.confirm': confirmAction,
+    'mx.ledger_preview': ledgerPreviewAction,
+    'mx.ledger_confirm': ledgerConfirmAction,
     'mx.reply_draft': replyDraftAction,
     'mx.retry_translation': retryTranslationAction
     , 'mx.thread_approve': threadApproveAction
@@ -1151,6 +1248,7 @@ function register(context) {
       clearReminderPoll(reminderTimer);
       unmentionedFollowups.clear();
       sendConfirmationContexts.clear();
+      ledgerConfirmationContexts.clear();
       threadConfirmationContexts.clear();
     },
     async shouldHandleUnmentioned({ msg }) {
@@ -1333,4 +1431,11 @@ function register(context) {
   };
 }
 
-module.exports = { register, deliverQueuedReminder, deliverQueuedReply, parseQuickChoice, authoritativeContextBlock };
+module.exports = {
+  register,
+  deliverQueuedReminder,
+  deliverQueuedReply,
+  parseQuickChoice,
+  authoritativeContextBlock,
+  renderCanonicalPreview
+};

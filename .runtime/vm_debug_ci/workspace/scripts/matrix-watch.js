@@ -154,6 +154,11 @@ function renderReminderContent(selected, budgets) {
       `推荐理由：${clip(withoutQualification(row.assessment_cn), budgets.reason)}`,
       `主营类目：${clip((row.categories || []).join('、'), budgets.categories)}`,
       `阶段：${stageLabel(row.stage_code)}`,
+      ...(row.canonical_snapshot ? [
+        `统一进度：${clip(row.canonical_snapshot.stage, 40)}`,
+        `最近投递：${clip(row.canonical_snapshot.last_delivery_state, 40)}`,
+        `统一下一步：${clip(row.canonical_snapshot.next_action, budgets.nextAction)}`
+      ] : []),
       `供应商：${supplierLabel(row.supplier_signal)}`,
       `切入策略：${clip(row.strategy_signal?.differentiation_angle || row.next_action_cn, budgets.strategy)}`,
       ...(signals.specifications.length ? [`已确认规格：${clip(signals.specifications.join('、'), budgets.specifications)}`] : []),
@@ -335,7 +340,15 @@ async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatI
   const passed = current.hour > hour || (current.hour === hour && current.minute >= minute);
   if (!passed || clean.last_success_date === current.date) return clean;
   const result = await client.today(ownerOpenId, { page_size: 5 });
-  const messageId = await send(reminderCard((result.rows || []).slice(0, 5)), chatId, current.date);
+  const selected = await Promise.all((result.rows || []).slice(0, 5).map(async row => {
+    const customerId = Number(row?.canonical_customer_id);
+    if (!Number.isInteger(customerId) || customerId < 1) return row;
+    if (typeof client.customerGet !== 'function') throw new Error('canonical customer reader required');
+    const snapshot = await client.customerGet(ownerOpenId, customerId);
+    if (Number(snapshot?.customer_id) !== customerId) throw new Error('canonical customer snapshot mismatch');
+    return { ...row, canonical_snapshot: snapshot };
+  }));
+  const messageId = await send(reminderCard(selected), chatId, current.date);
   return { last_success_date: current.date, last_message_id: String(messageId || '') };
 }
 

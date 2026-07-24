@@ -97,7 +97,19 @@ function timestamp() {
 }
 
 function versionById(db, versionId) {
-  return db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ?').get(versionId) || null;
+  return db.prepare(`
+    SELECT v.*, (
+      SELECT l.canonical_customer_id
+      FROM matrix_work_items w
+      JOIN matrix_customer_links l
+        ON l.source_kind = 'candidate' AND l.source_id = CAST(w.candidate_id AS TEXT)
+      WHERE w.id = v.work_item_id
+      ORDER BY l.id ASC
+      LIMIT 1
+    ) AS canonical_customer_id
+    FROM matrix_stream_versions v
+    WHERE v.id = ?
+  `).get(versionId) || null;
 }
 
 function domainIdentity(value) {

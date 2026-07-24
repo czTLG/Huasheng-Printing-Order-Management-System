@@ -237,12 +237,42 @@ function notificationStatus(openId, notificationId, input) {
   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/status`, { method: 'POST', body });
 }
 
+function customerGet(openId, customerId) {
+  return call(openId, `/customers/${positiveId(customerId, 'customer id')}`);
+}
+
+function finalPreview(openId, customerId, versionId) {
+  const query = versionId == null ? undefined : { version_id: positiveId(versionId, 'version id') };
+  return call(openId, `/customers/${positiveId(customerId, 'customer id')}/final-preview`, { query });
+}
+
+function confirmDelivery(openId, customerId, versionId, input) {
+  const body = exactObject(input, new Set([
+    'expected_content_hash', 'confirmation_text', 'chat_id',
+    'card_event_id', 'idempotency_key'
+  ]), 'canonical delivery confirmation');
+  return call(
+    openId,
+    `/customers/${positiveId(customerId, 'customer id')}/final-preview/${positiveId(versionId, 'version id')}/confirm`,
+    { method: 'POST', body }
+  );
+}
+
+function threadList(openId, customerId) {
+  return call(openId, `/customers/${positiveId(customerId, 'customer id')}/threads`);
+}
+
+function taskList(openId, customerId) {
+  return call(openId, `/customers/${positiveId(customerId, 'customer id')}/tasks`);
+}
+
 module.exports = {
   facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
   selectCandidate, workItems, getVersion, claimInboxJob, inboxWorkbench, contextSearch,
   contextResolve, contextRecord, ackInboxJob, failInboxJob, startReplyDraft,
   retryTranslation, claimNotification, ackNotification, nackNotification,
   notificationStatus, createVersion, reviseVersion, approveVersion,
-  versionPreview, confirmSend
+  versionPreview, confirmSend, customerGet, finalPreview, confirmDelivery,
+  threadList, taskList
   , prepareThreadRoute, resumeThreadRoute, approveThreadRoute, previewThreadRoute, confirmThreadRoute
 };
