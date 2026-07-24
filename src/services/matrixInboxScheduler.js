@@ -29,11 +29,83 @@ function releaseLease(db, owner) {
   db.prepare('DELETE FROM matrix_inbox_leases WHERE lease_key = ? AND owner_token = ?').run(LEASE_KEY, owner);
 }
 
-function createInboxScheduler({ db, sync, cronImpl, clock = () => new Date(), enabled = false, log = () => {} }) {
+function createInboxScheduler({
+  db,
+  sync,
+  reconcileLifecycle = null,
+  cronImpl,
+  clock = () => new Date(),
+  enabled = false,
+  log = () => {}
+}) {
   if (!db || typeof sync !== 'function') throw new Error('database and inbox sync are required');
   if (!cronImpl || typeof cronImpl.schedule !== 'function') throw new Error('cron implementation is required');
+  if (reconcileLifecycle != null && typeof reconcileLifecycle !== 'function') throw new Error('valid lifecycle reconciler required');
   let inFlight = false;
   let timer = null;
+
+  function recordReconcile(emailMessageId, folder, state, errorClass = '') {
+    const id = Number(emailMessageId);
+    if (!Number.isInteger(id) || id <= 0) throw new Error('valid reconciled email message id required');
+    const ts = asDate(clock()).toISOString();
+    db.prepare(`
+      INSERT INTO matrix_lifecycle_reconcile_jobs (
+        email_message_id, folder, state, attempt_count, last_error_class, created_at, updated_at
+      ) VALUES (?, ?, ?, 1, ?, ?, ?)
+      ON CONFLICT(email_message_id) DO UPDATE SET
+        folder = excluded.folder,
+        state = excluded.state,
+        attempt_count = matrix_lifecycle_reconcile_jobs.attempt_count + 1,
+        last_error_class = excluded.last_error_class,
+        updated_at = excluded.updated_at
+    `).run(id, folder, state, errorClass, ts, ts);
+  }
+
+  function reconcileInserted(result, folder) {
+    if (!reconcileLifecycle) return { completed: 0, retry: 0 };
+    const ids = [...new Set((Array.isArray(result?.inserted) ? result.inserted : [])
+      .map(Number).filter(id => Number.isInteger(id) && id > 0))];
+    let completed = 0;
+    let retry = 0;
+    for (const emailMessageId of ids) {
+      try {
+        reconcileLifecycle({ emailMessageId });
+        recordReconcile(emailMessageId, folder, 'completed');
+        completed += 1;
+      } catch (error) {
+        const errorClass = String(error?.code || error?.name || 'Error').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64) || 'Error';
+        recordReconcile(emailMessageId, folder, 'retry', errorClass);
+        retry += 1;
+        log(`lifecycle reconciliation queued for retry: ${errorClass}`);
+      }
+    }
+    return { completed, retry };
+  }
+
+  function retryLifecycleJobs(limit = 100) {
+    if (!reconcileLifecycle) return { recovered: 0, retry: 0 };
+    const rows = db.prepare(`
+      SELECT email_message_id, folder
+      FROM matrix_lifecycle_reconcile_jobs
+      WHERE state = 'retry'
+      ORDER BY updated_at, id
+      LIMIT ?
+    `).all(Math.max(1, Math.min(500, Number(limit) || 100)));
+    let recovered = 0;
+    let retry = 0;
+    for (const row of rows) {
+      try {
+        reconcileLifecycle({ emailMessageId: Number(row.email_message_id) });
+        recordReconcile(row.email_message_id, row.folder, 'completed');
+        recovered += 1;
+      } catch (error) {
+        const errorClass = String(error?.code || error?.name || 'Error').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64) || 'Error';
+        recordReconcile(row.email_message_id, row.folder, 'retry', errorClass);
+        retry += 1;
+      }
+    }
+    return { recovered, retry };
+  }
 
   async function runCycle({ syncType = 'scheduled', days = 2, limit = 200 } = {}) {
     if (!enabled) return { status: 'disabled' };
@@ -42,9 +114,13 @@ function createInboxScheduler({ db, sync, cronImpl, clock = () => new Date(), en
     if (!acquireLease(db, owner, clock)) return { status: 'skipped', reason: 'lease_held' };
     inFlight = true;
     try {
+      const retried = retryLifecycleJobs(limit);
       const results = [];
+      const lifecycle = [];
       for (const folder of ['INBOX', 'Sent']) {
-        results.push(await sync({ folder, syncType, days, limit, operator: `matrix-${syncType}` }));
+        const result = await sync({ folder, syncType, days, limit, operator: `matrix-${syncType}` });
+        results.push(result);
+        lifecycle.push(reconcileInserted(result, folder));
       }
       return {
         status: results.every(item => item.status === 'completed') ? 'completed' : 'partial',
@@ -52,7 +128,10 @@ function createInboxScheduler({ db, sync, cronImpl, clock = () => new Date(), en
         scanned_count: results.reduce((sum, item) => sum + Number(item.scanned_count || 0), 0),
         inserted_count: results.reduce((sum, item) => sum + Number(item.inserted_count || 0), 0),
         skipped_count: results.reduce((sum, item) => sum + Number(item.skipped_count || 0), 0),
-        error_count: results.reduce((sum, item) => sum + Number(item.error_count || 0), 0)
+        error_count: results.reduce((sum, item) => sum + Number(item.error_count || 0), 0),
+        lifecycle_completed_count: lifecycle.reduce((sum, item) => sum + item.completed, 0),
+        lifecycle_retry_count: lifecycle.reduce((sum, item) => sum + item.retry, 0) + retried.retry,
+        lifecycle_recovered_count: retried.recovered
       };
     } finally {
       inFlight = false;

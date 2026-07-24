@@ -19,15 +19,38 @@ const { createInboxScheduler, getInboxHealth } = require('../src/services/matrix
 
     const scheduled = [];
     const calls = [];
+    const reconciled = [];
+    let failSent = true;
+    const inboxMessageId = Number(db.prepare(`
+      INSERT INTO email_messages (
+        mailbox, folder, message_uid, message_id, direction, created_at, updated_at
+      ) VALUES ('masked', 'INBOX', 'scheduler-inbox', '<scheduler-inbox@test>', 'inbound', ?, ?)
+    `).run(now(), now()).lastInsertRowid);
+    const sentMessageId = Number(db.prepare(`
+      INSERT INTO email_messages (
+        mailbox, folder, message_uid, message_id, direction, created_at, updated_at
+      ) VALUES ('masked', 'Sent', 'scheduler-sent', '<scheduler-sent@test>', 'outbound', ?, ?)
+    `).run(now(), now()).lastInsertRowid);
     let release = null;
     const sync = async input => {
       calls.push(input);
       if (input.syncType === 'scheduled-blocked' && input.folder === 'INBOX') await new Promise(resolve => { release = resolve; });
-      return { id: calls.length, status: 'completed', scanned_count: 0, inserted_count: 0, skipped_count: 0, error_count: 0 };
+      const inserted = input.syncType === 'startup'
+        ? [input.folder === 'INBOX' ? inboxMessageId : sentMessageId]
+        : [];
+      return {
+        id: calls.length, status: 'completed', scanned_count: inserted.length,
+        inserted_count: inserted.length, skipped_count: 0, error_count: 0, inserted
+      };
     };
     const scheduler = createInboxScheduler({
       db,
       sync,
+      reconcileLifecycle: ({ emailMessageId }) => {
+        reconciled.push(emailMessageId);
+        if (emailMessageId === sentMessageId && failSent) throw new Error('fixture reconciliation failure');
+        return { email_message_id: emailMessageId };
+      },
       enabled: true,
       clock: () => new Date('2026-07-19T03:00:00.000Z'),
       cronImpl: { schedule: (expression, callback, options) => { scheduled.push({ expression, callback, options }); return { stop() {} }; } }
@@ -38,6 +61,27 @@ const { createInboxScheduler, getInboxHealth } = require('../src/services/matrix
     assert.strictEqual(calls[0].syncType, 'startup');
     assert.strictEqual(calls[0].days, 7);
     assert.deepStrictEqual(calls.slice(0, 2).map(item => item.folder), ['INBOX', 'Sent']);
+    assert.deepStrictEqual(reconciled, [inboxMessageId, sentMessageId]);
+    assert.deepStrictEqual(
+      db.prepare(`
+        SELECT email_message_id, folder, state, attempt_count, last_error_class
+        FROM matrix_lifecycle_reconcile_jobs ORDER BY email_message_id
+      `).all(),
+      [
+        { email_message_id: inboxMessageId, folder: 'INBOX', state: 'completed', attempt_count: 1, last_error_class: '' },
+        { email_message_id: sentMessageId, folder: 'Sent', state: 'retry', attempt_count: 1, last_error_class: 'Error' }
+      ]
+    );
+    failSent = false;
+    const recovered = await scheduler.runCycle({ syncType: 'scheduled-retry', days: 2, limit: 200 });
+    assert.strictEqual(recovered.lifecycle_recovered_count, 1);
+    assert.deepStrictEqual(
+      db.prepare(`
+        SELECT state, attempt_count, last_error_class
+        FROM matrix_lifecycle_reconcile_jobs WHERE email_message_id = ?
+      `).get(sentMessageId),
+      { state: 'completed', attempt_count: 2, last_error_class: '' }
+    );
     assert.strictEqual(scheduled.length, 1);
     assert.strictEqual(scheduled[0].expression, '*/5 * * * *');
     assert.deepStrictEqual(scheduled[0].options, { timezone: 'Asia/Shanghai' });

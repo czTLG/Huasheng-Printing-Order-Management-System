@@ -245,6 +245,14 @@ function seed() {
     const result = await command.confirmDelivery({ ...common, confirmationText: ' 确认发送 UNITEA Kazakhstan ' });
     assert.strictEqual(result.state, 'accepted');
     assert.strictEqual(jobCount(), 1, 'only the exact confirmation creates one delivery job');
+    assert.strictEqual(
+      db.prepare(`
+        SELECT COUNT(*) AS total FROM matrix_tasks
+        WHERE canonical_customer_id = ? AND task_type = 'check_reply' AND state = 'pending'
+      `).get(fixture.customerId).total,
+      1,
+      'accepted canonical delivery must create one canonical check-reply task'
+    );
     assert.strictEqual(deliveries.length, 1);
     assert.deepStrictEqual(await command.confirmDelivery({ ...common, confirmationText: '确认发送 UNITEA Kazakhstan' }), result);
     assert.strictEqual(jobCount(), 1, 'repeated exact confirmation must replay one job');

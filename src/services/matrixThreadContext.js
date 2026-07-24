@@ -92,7 +92,8 @@ function buildThreadContext(db, emailMessageId) {
   const ids = thread.map(row => Number(row.id));
   const placeholders = ids.map(() => '?').join(',');
   const attachments = ids.length ? db.prepare(`
-    SELECT email_message_id, media_order, storage_key, original_file_name, detected_mime_type, file_size, availability_state
+    SELECT email_message_id, media_order, storage_key, original_file_name, detected_mime_type,
+           file_size, availability_state, canonical_thread_id, canonical_customer_id
     FROM matrix_inbox_attachments WHERE email_message_id IN (${placeholders})
     ORDER BY email_message_id, media_order
   `).all(...ids) : [];
@@ -157,6 +158,10 @@ function buildThreadContext(db, emailMessageId) {
         email_message_id: Number(item.email_message_id), order: Number(item.media_order),
         filename: text(item.original_file_name), mime_type: text(item.detected_mime_type),
         file_size: Number(item.file_size || 0), availability: text(item.availability_state),
+        canonical_thread_id: item.canonical_thread_id ? Number(item.canonical_thread_id) : null,
+        canonical_customer_id: item.canonical_customer_id ? Number(item.canonical_customer_id) : null,
+        reusable_externally: item.availability_state === 'available'
+          && Boolean(item.canonical_thread_id) && Boolean(item.canonical_customer_id),
         local_path: item.availability_state === 'available' ? attachmentPath(item.storage_key) : '',
         crm_attachment_id: review ? Number(review.id) : null,
         customer_id: review?.customer_id ? Number(review.customer_id) : customerId,

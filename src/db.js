@@ -1362,6 +1362,18 @@ function initDb() {
       UNIQUE(source_kind, source_id, source_fingerprint)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_lifecycle_reconcile_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email_message_id INTEGER NOT NULL UNIQUE,
+      folder TEXT NOT NULL CHECK(folder IN ('INBOX','Sent')),
+      state TEXT NOT NULL CHECK(state IN ('pending','retry','completed')),
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error_class TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(email_message_id) REFERENCES email_messages(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
@@ -1383,6 +1395,7 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_matrix_tasks_state_due ON matrix_tasks(state, due_at);
     CREATE INDEX IF NOT EXISTS idx_matrix_lifecycle_events_customer ON matrix_lifecycle_events(canonical_customer_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_matrix_lifecycle_events_source ON matrix_lifecycle_events(source_kind, source_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_matrix_lifecycle_reconcile_jobs_state ON matrix_lifecycle_reconcile_jobs(state, updated_at, id);
 
     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
     BEFORE UPDATE ON matrix_selection_events
@@ -1593,6 +1606,10 @@ function initDb() {
 
   const matrixInboundLinkColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_inbound_links)').all().map(column => column.name));
   if (!matrixInboundLinkColumns.has('email_message_row_id')) db.exec('ALTER TABLE matrix_stream_inbound_links ADD COLUMN email_message_row_id INTEGER');
+
+  const matrixInboxAttachmentColumns = new Set(db.prepare('PRAGMA table_info(matrix_inbox_attachments)').all().map(column => column.name));
+  if (!matrixInboxAttachmentColumns.has('canonical_thread_id')) db.exec('ALTER TABLE matrix_inbox_attachments ADD COLUMN canonical_thread_id INTEGER');
+  if (!matrixInboxAttachmentColumns.has('canonical_customer_id')) db.exec('ALTER TABLE matrix_inbox_attachments ADD COLUMN canonical_customer_id INTEGER');
 
   const notificationSql = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='matrix_stream_notification_spool'").get()?.sql || '');
   if (/\bclaimed\b/.test(notificationSql) || !/\bmanual_review\b/.test(notificationSql) || !/\bgeneration\b/.test(notificationSql)) {

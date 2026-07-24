@@ -37,6 +37,8 @@ const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant'
 const { createMatrixBridgeAuth, createMatrixRouter } = require('./routes/matrix');
 const { syncMailbox } = require('./lib/imapSync');
 const { createInboxScheduler } = require('./services/matrixInboxScheduler');
+const { createMatrixLedgerStore } = require('./services/matrixLedgerStore');
+const { createMatrixLedgerReconciler } = require('./services/matrixStreamCorrelation');
 const { createMatrixRelayFactory } = require('./services/matrixRelayFactory');
 const { createMatrixStreamDelivery } = require('./services/matrixStreamDelivery');
 const { createMatrixStreamReadiness } = require('./services/matrixStreamReadiness');
@@ -47,9 +49,12 @@ const { createMatrixThreadDelivery } = require('./services/matrixThreadDelivery'
 
 initDb();
 
+const matrixLedgerStore = createMatrixLedgerStore({ db });
+const matrixLedgerReconciler = createMatrixLedgerReconciler({ db, store: matrixLedgerStore });
 const inboxScheduler = createInboxScheduler({
   db,
   sync: syncMailbox,
+  reconcileLifecycle: matrixLedgerReconciler.reconcileLifecycle,
   cronImpl: cron,
   enabled: process.env.MATRIX_INBOX_ENABLED === '1',
   log: message => console.warn(`[matrix-inbox] ${message}`)
