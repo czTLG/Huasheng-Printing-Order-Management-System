@@ -4,7 +4,7 @@ const ONTOLOGY = Object.freeze({
   material: [
     ['pet', /\bpet\b/i, /(?:PET(?![A-Z])|聚酯)/iu], ['pe', /\bpe\b/i, /(?:PE(?![A-Z])|聚乙烯)/iu],
     ['nylon', /\b(?:pa|ny|nylon)\b/i, /(?:PA|NY|尼龙)/iu], ['evoh', /\bevoh\b/i, /EVOH/iu],
-    ['aluminum', /\b(?:al|aluminum\s*foil)\b/i, /(?:AL|铝箔)/iu], ['vmpet', /\bvmpet\b/i, /VMPET/iu],
+    ['aluminum', /\b(?:al|aluminum\s*foil)\b/i, /(?:\bAL\b|铝箔)/iu], ['vmpet', /\bvmpet\b/i, /VMPET/iu],
     ['cpp', /\bcpp\b/i, /CPP/iu]
   ],
   finish: [['matte', /\b(?:matte|matt)\b/i, /(?:哑光|磨砂)/u], ['glossy', /\b(?:glossy|gloss)\b/i, /(?:亮光|光面)/u]],

@@ -2,7 +2,7 @@
 
 const assert = require('node:assert');
 const Database = require('better-sqlite3');
-const { scoreDraft } = require('../src/services/matrixStreamGate');
+const { scoreDraft, extractBilingualFacts } = require('../src/services/matrixStreamGate');
 
 const base = {
   subject: '250g and 500g coffee pouch options for Alpha Coffee',
@@ -95,6 +95,18 @@ const textualAlignedFacts = scoreDraft({
 });
 assert.strictEqual(textualAlignedFacts.components.bilingual_consistency.points, 10);
 assert.ok(!textualAlignedFacts.hardFailures.includes('bilingual_key_fact_conflict'));
+const localizedUrlsDoNotCreateFacts = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nProduct reference:\nhttps://gdhspack.com/id/applications/daily-chemical-packaging`,
+  bodyCn: `${base.bodyCn}\n产品参考：\nhttps://gdhspack.com/id/applications/daily-chemical-packaging`
+});
+assert.strictEqual(localizedUrlsDoNotCreateFacts.components.bilingual_consistency.points, 10);
+assert.ok(!localizedUrlsDoNotCreateFacts.hardFailures.includes('bilingual_key_fact_conflict'));
+assert.deepStrictEqual(
+  extractBilingualFacts('PT Nose Herbal Indo', 'cn').material || [],
+  [],
+  'the letters AL inside a company name must not be treated as aluminum film'
+);
 
 for (const recipient of [
   { ...base.recipient, sourceUrl: 'https://test/contact' },
@@ -423,8 +435,14 @@ assert.strictEqual(thirdCalendarDayAtTen('2026-07-18T14:00:00+08:00'), '2026-07-
 const followupDb = new Database(':memory:');
 followupDb.exec(`
   CREATE TABLE matrix_work_items (
-    id INTEGER PRIMARY KEY, next_action TEXT NOT NULL DEFAULT '', next_followup_at TEXT,
+    id INTEGER PRIMARY KEY, candidate_id INTEGER, next_action TEXT NOT NULL DEFAULT '', next_followup_at TEXT,
     updated_at TEXT NOT NULL
+  );
+  CREATE TABLE matrix_customer_links (
+    canonical_customer_id INTEGER NOT NULL, source_kind TEXT NOT NULL, source_id TEXT NOT NULL
+  );
+  CREATE TABLE customers (
+    id INTEGER PRIMARY KEY, active INTEGER NOT NULL DEFAULT 1
   );
   CREATE TABLE matrix_stream_jobs (
     id INTEGER PRIMARY KEY, work_item_id INTEGER NOT NULL, state TEXT NOT NULL,
@@ -437,7 +455,7 @@ followupDb.exec(`
     created_at TEXT NOT NULL, closed_at TEXT
   );
 `);
-followupDb.prepare('INSERT INTO matrix_work_items VALUES (1, ?, NULL, ?)').run('', '2026-07-17T06:00:00.000Z');
+followupDb.prepare('INSERT INTO matrix_work_items VALUES (1, 39, ?, NULL, ?)').run('', '2026-07-17T06:00:00.000Z');
 followupDb.prepare('INSERT INTO matrix_stream_jobs VALUES (11, 1, ?, ?)').run('accepted', '2026-07-17T06:00:00.000Z');
 followupDb.prepare('INSERT INTO matrix_stream_jobs VALUES (12, 1, ?, ?)').run('pending', '2026-07-17T06:00:00.000Z');
 followupDb.prepare('INSERT INTO matrix_stream_jobs VALUES (13, 1, ?, ?)').run('accepted', '2026-07-20T06:00:00.000Z');

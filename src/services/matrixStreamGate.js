@@ -122,6 +122,10 @@ function normalizeTextNumbers(value) {
     .replace(/[零〇一二两三四五六七八九十百千万]+/gu, word => String(chineseNumber(word) ?? word));
 }
 
+function withoutUrls(value) {
+  return String(value || '').replace(/https?:\/\/[^\s<>()]+/giu, ' ');
+}
+
 const CONCEPTS = Object.freeze([
   ['coffee', /\bcoffee\b/i, /咖啡/u], ['tea', /\btea\b/i, /茶/u],
   ['shampoo', /\bshampoo\b/i, /洗发/u], ['body_wash', /\bbody[ -]?wash\b/i, /沐浴/u],
@@ -172,7 +176,7 @@ function durationDays(number, unit) {
 }
 
 function bilingualFacts(text, language, evidenceMode = false) {
-  const value = normalizeTextNumbers(text);
+  const value = normalizeTextNumbers(withoutUrls(text));
   const facts = {};
   const add = (role, item) => { if (item !== undefined) (facts[role] ||= new Set()).add(String(item).toLowerCase()); };
   const annual = language === 'en' ? /annual\s+(?:volume|quantity)\s*(?:is|:)?\s*(\d[\d,.]*)/gi : /年(?:用量|需求|数量)\s*(?:为|是|约|:|：)\s*(\d[\d,.]*)/gu;
