@@ -534,7 +534,7 @@ function reviewState(workItemId) {
 
     mutateCandidate(db => {
       db.prepare(`INSERT INTO cache_records VALUES (5,'Gamma Personal Care','ID','','gamma.test','https://gamma.test/',
-        '["liquid detergent","hand soap","shampoo"]','["bottles","OEM/ODM"]','["exports"]','medium',
+        '["liquid detergent","hand soap","body soap","shampoo"]','["bottles","OEM/ODM"]','["exports"]','medium',
         'packaging@gamma.test','','','https://gamma.test/contact','P0',92,92,80,0.9,'valid',
         '公开信息确认','确认补充装产品线与年度计划','observed','audited',NULL,
         '2026-07-17T00:00:00Z','2026-07-17T00:00:00Z','SECRET-COST-FORMULA')`).run();
@@ -545,7 +545,7 @@ function reviewState(workItemId) {
       db.prepare("INSERT INTO cache_evidence VALUES (54,5,'https://gamma.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable mono material, material efficiency and product waste reduction','e54')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (55,5,'https://gamma.test/contact','official_website','Supplier contact','2026-07-18T00:00:00Z','Packaging sourcing and procurement contact','e55')").run();
       db.prepare(`INSERT INTO cache_strategy_signals VALUES
-        (5,5,'Printed refill formats or spouted pouches for liquid detergent, hand soap and shampoo',
+        (5,5,'Printed refill formats or spouted pouches for liquid detergent, hand soap, body soap and shampoo',
         'Compatibility, leak resistance, filling-line fit and repeat-print consistency',
         'Reach packaging sourcing or procurement','["size","quantity"]','["Current pouch use is not confirmed"]',
         'https://gamma.test/products','2026-07-17T00:00:00Z','strategy-5')`).run();
@@ -566,7 +566,7 @@ function reviewState(workItemId) {
     assert.ok(/flexible packaging/i.test(personalCareVersion.body.subject));
     assert.ok(/liquid detergent/i.test(personalCareVersion.body.subject));
     assert.ok(!/\b\d+\s*(?:kg|g)\b/i.test(personalCareVersion.body.subject));
-    assert.ok(/public liquid detergent, hand soap, and shampoo capabilities/i.test(personalCareVersion.body.body_en));
+    assert.ok(/public liquid detergent, hand soap, body soap, and shampoo capabilities/i.test(personalCareVersion.body.body_en));
     assert.ok(/packaging sourcing or procurement/i.test(personalCareVersion.body.body_en));
     assert.ok(/leak resistance/i.test(personalCareVersion.body.body_en));
     assert.ok(/https:\/\/gdhspack\.com\/id\/applications\/daily-chemical-packaging/.test(personalCareVersion.body.body_en));

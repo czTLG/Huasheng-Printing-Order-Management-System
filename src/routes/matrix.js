@@ -820,12 +820,13 @@ function createMatrixRouter({
       'personal care': '个护产品', 'home care': '家清产品',
       'baby care': '婴童护理产品', 'oral care': '口腔护理产品'
     };
-    const liquidCategories = categories.filter(value => Object.prototype.hasOwnProperty.call(liquidCategoryCn, value)).slice(0, 3);
+    const liquidCategories = categories.filter(value => Object.prototype.hasOwnProperty.call(liquidCategoryCn, value));
     const liquidCare = liquidCategories.length > 0;
     const joinEnglish = values => values.length <= 1 ? (values[0] || '') : values.length === 2
       ? `${values[0]} and ${values[1]}` : `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
     const liquidCategoryText = joinEnglish(liquidCategories);
     const liquidCategoryTextCn = liquidCategories.map(value => liquidCategoryCn[value]).join('、');
+    const subjectCategoryText = joinEnglish(liquidCategories.slice(0, 3));
     const reviewCategories = liquidCategories.slice(0, 2);
     const reviewCategoryText = joinEnglish(reviewCategories);
     const reviewCategoryTextCn = reviewCategories.map(value => liquidCategoryCn[value]).join('或');
@@ -844,7 +845,7 @@ function createMatrixRouter({
       });
     }
     const subject = liquidCare
-      ? `Flexible packaging options for ${company}'s ${liquidCategoryText} lines`
+      ? `Flexible packaging options for ${company}'s ${subjectCategoryText} lines`
       : `${specPrefix}${category} ${entryProduct} options for ${company}`;
     const localizedLinks = localizedRoutes
       ? `\n\nPersonal-care packaging reference:\nhttps://gdhspack.com${localizedRoutes.application}\n\nSpout pouch reference:\nhttps://gdhspack.com${localizedRoutes.product}\n\nAbout Huasheng:\nhttps://gdhspack.com${localizedRoutes.about}\n\n${localizedRoutes.courtesy}`
