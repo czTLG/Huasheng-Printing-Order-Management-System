@@ -727,15 +727,32 @@ function createMatrixRouter({
     } catch (_) { return ''; }
   }
 
-  async function verifyThailandLiquidRouteSet() {
-    if (process.env.NODE_ENV === 'test') return;
-    const routes = [
-      '/th',
-      '/th/about',
-      '/th/markets/thailand-food-packaging',
-      '/th/applications/daily-chemical-packaging',
-      '/th/products/spout-pouches'
-    ];
+  const LIQUID_ROUTE_SETS = Object.freeze({
+    TH: {
+      language: 'th',
+      home: '/th',
+      about: '/th/about',
+      market: '/th/markets/thailand-food-packaging',
+      application: '/th/applications/daily-chemical-packaging',
+      product: '/th/products/spout-pouches',
+      courtesy: 'ขอบคุณที่สละเวลาอ่านอีเมลฉบับนี้ เราหวังว่าจะได้พูดคุยกับทีมจัดซื้อบรรจุภัณฑ์ของคุณ'
+    },
+    ID: {
+      language: 'id',
+      home: '/id',
+      about: '/id/about',
+      market: '/id/markets/indonesia',
+      application: '/id/applications/daily-chemical-packaging',
+      product: '/id/products/spout-pouches',
+      courtesy: 'Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim pengadaan kemasan CSE.'
+    }
+  });
+
+  async function verifyLiquidRouteSet(countryCode) {
+    const routeSet = LIQUID_ROUTE_SETS[countryCode];
+    if (!routeSet) return null;
+    if (process.env.NODE_ENV === 'test') return routeSet;
+    const routes = [routeSet.home, routeSet.about, routeSet.market, routeSet.application, routeSet.product];
     const origin = String(process.env.MATRIX_PUBLIC_SITE_ORIGIN || 'https://gdhspack.com').replace(/\/$/, '');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
@@ -745,10 +762,11 @@ function createMatrixRouter({
         if (!response.ok) throw new Error(`localized website route unavailable: ${route}`);
         return { route, html: await response.text() };
       }));
-      const application = responses.find(row => row.route === '/th/applications/daily-chemical-packaging');
-      if (!application?.html.includes('lang="th"') || !application.html.includes('/th/applications/daily-chemical-packaging')) {
-        throw new Error('localized website route set did not return the expected Thai canonical page');
+      const application = responses.find(row => row.route === routeSet.application);
+      if (!application?.html.includes(`lang="${routeSet.language}"`) || !application.html.includes(routeSet.application)) {
+        throw new Error('localized website route set did not return the expected canonical page');
       }
+      return routeSet;
     } finally {
       clearTimeout(timer);
     }
@@ -782,18 +800,19 @@ function createMatrixRouter({
     const products = [...evidence.map(row => String(row.excerpt || row.page_title || '').trim()).filter(Boolean), ...formats];
     const specs = [...new Set(products.join(' ').match(/\b\d+(?:\.\d+)?\s*(?:kg|g)\b/gi) || [])];
     const company = String(detail.company_name || '').trim();
+    const researchedEntryProduct = String(detail.strategy_signal?.entry_product || '').trim();
     const preferredFormat = formats.find(value => /refill\s+pouch/i.test(value)) || formats.find(value => /pouch/i.test(value));
-    const entryProduct = preferredFormat || `${category} pouch`;
+    const entryProduct = researchedEntryProduct || preferredFormat || `${category} pouch`;
     const entryProductCn = /refill\s+pouch/i.test(entryProduct) ? '补充袋' : `${categoryCn}袋`;
     const categoryText = categories.join(', ');
     const categoryTextCn = categories.map(value => categoryCnMap[value] || value).join('、');
     const specPrefix = specs.length ? `${specs.join(' and ')} ` : '';
     const specPrefixCn = specs.length ? specs.join('和') : '';
     const liquidCare = categories.some(value => ['shampoo', 'body wash', 'personal care', 'home care', 'baby care', 'oral care'].includes(value));
-    const thailandLiquidCare = liquidCare && String(detail.country_code || '').trim().toUpperCase() === 'TH';
-    if (thailandLiquidCare) await verifyThailandLiquidRouteSet();
+    const countryCode = String(detail.country_code || '').trim().toUpperCase();
+    const localizedRoutes = liquidCare ? await verifyLiquidRouteSet(countryCode) : null;
     const strategyMatch = scoreSignalMatch(detail, {
-      localizedRouteStatus: thailandLiquidCare ? 'ready' : 'not_required'
+      localizedRouteStatus: localizedRoutes ? 'ready' : 'not_required'
     });
     if (!strategyMatch.passed) {
       throw reviewFailure('strategy_match_blocked', {
@@ -805,29 +824,32 @@ function createMatrixRouter({
       });
     }
     const subject = liquidCare
-      ? `Refill pouch idea for ${company}'s shampoo and body wash lines`
+      ? `Flexible packaging options for ${company}'s shampoo and body wash lines`
       : `${specPrefix}${category} ${entryProduct} options for ${company}`;
+    const localizedLinks = localizedRoutes
+      ? `\n\nPersonal-care packaging reference:\nhttps://gdhspack.com${localizedRoutes.application}\n\nSpout pouch reference:\nhttps://gdhspack.com${localizedRoutes.product}\n\nAbout Huasheng:\nhttps://gdhspack.com${localizedRoutes.about}\n\n${localizedRoutes.courtesy}`
+      : '';
     const bodyEn = liquidCare
-      ? `Dear ${company} Sourcing Team,\n\nI noticed ${company}'s public product range includes shampoo and body wash products, with refill pouches among its packaging formats.\n\nFor liquid refill pouches, we would focus the first review on leak prevention, filling-line fit, and repeat-print consistency—rather than sending a generic catalog.\n\nWould you like us to prepare a one-page recommendation for one shampoo or body-wash SKU based on its current pouch size?\n\nBest regards,\nGavin\nHuasheng Printing Co., Ltd.`
+      ? `Dear ${company} Sourcing Team,\n\nI reviewed ${company}'s public shampoo and body wash capabilities, including its packaging sourcing and compatibility-testing process.\n\nWe are Huasheng Printing Co., Ltd. in China. For a suitable liquid product, we can assess printed refill formats, spout pouches, sachets, or roll film, focusing on compatibility, leak resistance, filling-line fit, and repeat-print consistency.\n\nCould you share one current shampoo or body-wash pack photo, package size, and estimated quantity for an initial refill format, spout pouch, sachet, or roll film assessment, or forward this message to your packaging sourcing or procurement team?${localizedLinks}\n\nBest regards,\nGavin\nHuasheng Printing Co., Ltd.`
       : `Dear ${company} team,\nWe reviewed your publicly available ${specPrefix}${categoryText} product range. We would like to discuss ${entryProduct} options. Could you share your current material structure and expected annual volume?\nBest regards`;
     const bodyCn = liquidCare
-      ? `您好，\n\n我留意到贵司公开产品系列包含洗发和沐浴产品，并使用补充袋等包装形式。\n\n针对液体补充袋，我们建议首轮先聚焦防漏、灌装线适配和重复订单的印刷一致性，而不是发送一份泛泛的产品目录。\n\n您是否愿意让我们先根据一个洗发或沐浴产品的现有袋子尺寸，整理一页针对性建议？\n\n此致敬礼\nGavin\n华胜印刷有限公司`
+      ? `您好，\n\n我们查看了贵司公开的洗发水和沐浴露能力，以及包装采购和相容性测试流程。\n\n我们是中国的华胜印刷有限公司。对于适合采用软包装的液体产品，我们可以评估印刷补充装、吸嘴袋、小袋或卷膜，重点关注相容性、防漏、灌装线适配和重复印刷的一致性。\n\n能否提供一个现有洗发水或沐浴露包装图片、包装尺寸和预计数量，以便初步评估补充装、吸嘴袋、小袋或卷膜，或者将这封邮件转交包装采购负责人？${localizedRoutes ? `\n\n当地语言参考页面：\nhttps://gdhspack.com${localizedRoutes.application}\nhttps://gdhspack.com${localizedRoutes.product}\nhttps://gdhspack.com${localizedRoutes.about}` : ''}\n\n此致敬礼\nGavin\n华胜印刷有限公司`
       : `您好，\n我们查看了贵司公开展示的${specPrefixCn}${categoryTextCn}产品，希望沟通${entryProductCn}方案。请问能否提供当前材料结构和预计年用量？\n此致敬礼`;
     const snapshot = {
       organization_domain: organizationDomain,
       recipient_email: email,
       source_url: sourceUrl,
-      country_code: String(detail.country_code || '').trim().toUpperCase(),
+      country_code: countryCode,
       company,
       categories,
       products,
       entryProduct,
-      localizedRouteSet: thailandLiquidCare ? {
+      localizedRouteSet: localizedRoutes ? {
         status: 'verified_at_draft_time',
-        primary: 'https://gdhspack.com/th/applications/daily-chemical-packaging',
-        about: 'https://gdhspack.com/th/about',
-        market: 'https://gdhspack.com/th/markets/thailand-food-packaging',
-        product: 'https://gdhspack.com/th/products/spout-pouches'
+        primary: `https://gdhspack.com${localizedRoutes.application}`,
+        about: `https://gdhspack.com${localizedRoutes.about}`,
+        market: `https://gdhspack.com${localizedRoutes.market}`,
+        product: `https://gdhspack.com${localizedRoutes.product}`
       } : null,
       supportedClaims: [],
       strategy_match: strategyMatch,

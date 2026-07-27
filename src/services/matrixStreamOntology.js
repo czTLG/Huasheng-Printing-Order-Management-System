@@ -16,7 +16,7 @@ const ONTOLOGY = Object.freeze({
   ],
   bag_type: [
     ['valve_pouch', /valve\s+pouch/i, /带阀袋/u], ['stand_up_pouch', /stand[ -]?up\s+pouch/i, /自立袋/u],
-    ['flat_bottom', /flat[ -]?bottom/i, /方底袋/u], ['spout_pouch', /spout\s+pouch/i, /吸嘴袋/u],
+    ['flat_bottom', /flat[ -]?bottom/i, /方底袋/u], ['spout_pouch', /spout(?:ed)?\s+pouch/i, /吸嘴袋/u],
     ['three_side_seal', /three[ -]?side[ -]?seal/i, /三边封/u]
   ],
   product_category: [

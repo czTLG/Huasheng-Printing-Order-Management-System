@@ -125,6 +125,12 @@ function seedCandidateDb() {
       discovered_via TEXT, discovery_url TEXT, official_url TEXT, source_type TEXT,
       verified_at TEXT, fingerprint TEXT
     );
+    CREATE TABLE cache_strategy_signals (
+      id INTEGER PRIMARY KEY, record_id INTEGER NOT NULL, entry_product TEXT NOT NULL,
+      differentiation_angle TEXT NOT NULL, first_contact_goal TEXT NOT NULL,
+      questions_json TEXT NOT NULL, risks_json TEXT NOT NULL, source_url TEXT NOT NULL,
+      observed_at TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE
+    );
   `);
   const insert = db.prepare(`
     INSERT INTO cache_records VALUES (
@@ -527,8 +533,8 @@ function reviewState(workItemId) {
     });
 
     mutateCandidate(db => {
-      db.prepare(`INSERT INTO cache_records VALUES (5,'Gamma Personal Care','TH','','gamma.test','https://gamma.test/',
-        '["shampoo","body wash","personal care"]','["refill pouches","bottles"]','["exports"]','medium',
+      db.prepare(`INSERT INTO cache_records VALUES (5,'Gamma Personal Care','ID','','gamma.test','https://gamma.test/',
+        '["shampoo","body wash","personal care"]','["bottles","OEM/ODM"]','["exports"]','medium',
         'packaging@gamma.test','','','https://gamma.test/contact','P0',92,92,80,0.9,'valid',
         '公开信息确认','确认补充装产品线与年度计划','observed','audited',NULL,
         '2026-07-17T00:00:00Z','2026-07-17T00:00:00Z','SECRET-COST-FORMULA')`).run();
@@ -538,6 +544,11 @@ function reviewState(workItemId) {
       db.prepare("INSERT INTO cache_evidence VALUES (53,5,'https://gamma.test/quality','official_website','Quality and regulatory','2026-07-17T00:00:00Z','Laboratory testing, regulatory review and traceability','e53')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (54,5,'https://gamma.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable mono material, material efficiency and product waste reduction','e54')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (55,5,'https://gamma.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e55')").run();
+      db.prepare(`INSERT INTO cache_strategy_signals VALUES
+        (5,5,'Printed refill or spouted pouches, sachets and roll film for shampoo and body wash',
+        'Compatibility, leak resistance, filling-line fit and repeat-print consistency',
+        'Reach packaging sourcing or procurement','["size","quantity"]','["Current pouch use is not confirmed"]',
+        'https://gamma.test/products','2026-07-17T00:00:00Z','strategy-5')`).run();
     });
     let personalCareWorkItemId;
     mutateApp(db => {
@@ -551,12 +562,17 @@ function reviewState(workItemId) {
     });
     assert.strictEqual(personalCareVersion.status, 201, JSON.stringify(personalCareVersion.body));
     assert.strictEqual(personalCareVersion.body.recipient_email, 'packaging@gamma.test');
-    assert.ok(/refill pouch/i.test(personalCareVersion.body.subject));
+    assert.ok(/flexible packaging/i.test(personalCareVersion.body.subject));
     assert.ok(!/\b\d+\s*(?:kg|g)\b/i.test(personalCareVersion.body.subject));
-    assert.ok(/one-page recommendation/i.test(personalCareVersion.body.body_en));
-    assert.ok(/leak prevention/i.test(personalCareVersion.body.body_en));
+    assert.ok(/packaging sourcing or procurement/i.test(personalCareVersion.body.body_en));
+    assert.ok(/leak resistance/i.test(personalCareVersion.body.body_en));
+    assert.ok(/https:\/\/gdhspack\.com\/id\/applications\/daily-chemical-packaging/.test(personalCareVersion.body.body_en));
+    assert.ok(/https:\/\/gdhspack\.com\/id\/products\/spout-pouches/.test(personalCareVersion.body.body_en));
+    assert.ok(/https:\/\/gdhspack\.com\/id\/about/.test(personalCareVersion.body.body_en));
+    assert.ok(/Terima kasih atas waktu Anda/.test(personalCareVersion.body.body_en));
     assert.ok(/Gavin\nHuasheng Printing Co\., Ltd\./.test(personalCareVersion.body.body_en));
-    assert.ok(/一页针对性建议/.test(personalCareVersion.body.body_cn));
+    assert.ok(!/with refill pouches among its packaging formats/i.test(personalCareVersion.body.body_en));
+    assert.ok(!/一页针对性建议/.test(personalCareVersion.body.body_cn));
     assert.ok(/Gavin\n华胜印刷有限公司/.test(personalCareVersion.body.body_cn));
     assert.ok(!/shampoo, body wash, personal care/i.test(personalCareVersion.body.body_en));
     assert.ok(!/current material structure and expected annual volume/i.test(personalCareVersion.body.body_en));
