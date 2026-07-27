@@ -123,6 +123,53 @@ assert.deepStrictEqual(
   },
   'Chinese food categories and flexible formats must map to the same canonical ontology facts'
 );
+assert.deepStrictEqual(
+  extractBilingualFacts('official factory and supplier-evaluation process', 'en').supplier || [],
+  [],
+  'a published supplier-evaluation process is not a named supplier relationship'
+);
+
+const dhFoodsDraft = scoreDraft({
+  subject: 'Sauce sachet and roll-film sourcing for Dh Foods',
+  bodyEn: [
+    'Dear Dh Foods Purchasing Team,',
+    'We reviewed your official factory and supplier-evaluation process, as well as your sauce, soup-base, and seasoning portfolio.',
+    'Is your team currently evaluating printed sachets, pouches, or roll film for any sauce or seasoning line? If yes, could you share one current pack photo, size, fill weight, estimated quantity, and packing-machine type?',
+    'Best regards,',
+    'Gavin'
+  ].join('\n\n'),
+  bodyCn: [
+    'Dh Foods采购团队，您好：',
+    '我们查看了贵司官网公开的工厂及供应商评价流程，以及酱料、汤底和调味品产品系列。',
+    '贵司目前是否正在评估用于酱料或调味品产品线的印刷小袋、包装袋或卷膜？如果是，能否提供一个现有包装的照片、尺寸、灌装重量、预计数量和包装机类型？',
+    '此致',
+    'Gavin'
+  ].join('\n\n'),
+  recipient: {
+    email: 'purchase@dhfoods.com.vn',
+    sourceUrl: 'https://www.dhfoods.com.vn/en/nha-may',
+    verifiedAt: '2026-07-27T00:00:00.000Z',
+    kind: 'public_company'
+  },
+  evidence: {
+    company: 'Dh Foods',
+    categories: ['sauce', 'soup base', 'seasoning'],
+    products: ['sauce', 'soup base', 'seasoning'],
+    entryProduct: 'printed sachets, pouches, and roll film for sauce or seasoning lines',
+    supportedClaims: [],
+    evidenceIds: [1, 2, 3, 4]
+  },
+  now: '2026-07-27T10:00:00.000Z'
+});
+assert.strictEqual(dhFoodsDraft.score, 100);
+assert.strictEqual(dhFoodsDraft.passed, true, JSON.stringify(dhFoodsDraft));
+assert.ok(!dhFoodsDraft.hardFailures.includes('unsupported_supplier'));
+const namedSupplierStillBlocked = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nTheir current supplier is Brand A.`,
+  evidence: { ...base.evidence, supportedClaims: [] }
+});
+assert.ok(namedSupplierStillBlocked.hardFailures.includes('unsupported_supplier'));
 
 for (const recipient of [
   { ...base.recipient, sourceUrl: 'https://test/contact' },

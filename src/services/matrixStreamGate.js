@@ -71,7 +71,9 @@ function claimClauses(raw) {
 }
 
 function semanticClaimText(clause, evidence) {
-  const statement = normalized(clause);
+  const statement = normalized(clause)
+    .replace(/\bsupplier[ -](?:evaluation|assessment|qualification)(?:\s+process)?\b/giu, ' ')
+    .replace(/供应商(?:评价|评估|审核|准入)(?:流程|制度|程序)?/gu, ' ');
   if (!evidence || !(/^(?:we (?:would like|want) to discuss)\b/i.test(statement) || /(?:希望|想要)(?:沟通|了解)/u.test(statement))) return statement;
   const evidenceText = [evidence.entryProduct, ...(Array.isArray(evidence.products) ? evidence.products : [])].join('\n');
   const statementFacts = [extractOntologyFacts(statement, 'en'), extractOntologyFacts(statement, 'cn')];
