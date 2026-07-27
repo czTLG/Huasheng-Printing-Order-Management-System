@@ -744,7 +744,7 @@ function createMatrixRouter({
       market: '/id/markets/indonesia',
       application: '/id/applications/daily-chemical-packaging',
       product: '/id/products/spout-pouches',
-      courtesy: 'Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim pengadaan kemasan CSE.'
+      courtesy: 'Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim pengadaan kemasan perusahaan Anda.'
     }
   });
 
@@ -793,7 +793,13 @@ function createMatrixRouter({
 
     const categories = (detail.categories || []).map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
     const category = categories[0] || '';
-    const categoryCnMap = { coffee: '咖啡', tea: '茶', snacks: '零食', shampoo: '洗发产品', 'body wash': '沐浴产品', 'personal care': '个护产品', 'home care': '家清产品', 'baby care': '婴童护理产品', 'oral care': '口腔护理产品' };
+    const categoryCnMap = {
+      coffee: '咖啡', tea: '茶', snacks: '零食',
+      'liquid detergent': '洗衣液', 'powder detergent': '洗衣粉',
+      'hand soap': '洗手液', 'body soap': '沐浴皂', 'hand wash': '洗手液',
+      shampoo: '洗发产品', 'body wash': '沐浴产品', 'personal care': '个护产品',
+      'home care': '家清产品', 'baby care': '婴童护理产品', 'oral care': '口腔护理产品'
+    };
     const categoryCn = categoryCnMap[category];
     if (!category || !categoryCn) throw new Error('deterministic draft category is unsupported');
     const formats = (detail.format_signals || []).map(value => String(value || '').trim()).filter(Boolean);
@@ -808,7 +814,21 @@ function createMatrixRouter({
     const categoryTextCn = categories.map(value => categoryCnMap[value] || value).join('、');
     const specPrefix = specs.length ? `${specs.join(' and ')} ` : '';
     const specPrefixCn = specs.length ? specs.join('和') : '';
-    const liquidCare = categories.some(value => ['shampoo', 'body wash', 'personal care', 'home care', 'baby care', 'oral care'].includes(value));
+    const liquidCategoryCn = {
+      'liquid detergent': '洗衣液', 'hand soap': '洗手液', 'body soap': '沐浴皂',
+      shampoo: '洗发水', 'body wash': '沐浴露', 'hand wash': '洗手液',
+      'personal care': '个护产品', 'home care': '家清产品',
+      'baby care': '婴童护理产品', 'oral care': '口腔护理产品'
+    };
+    const liquidCategories = categories.filter(value => Object.prototype.hasOwnProperty.call(liquidCategoryCn, value)).slice(0, 3);
+    const liquidCare = liquidCategories.length > 0;
+    const joinEnglish = values => values.length <= 1 ? (values[0] || '') : values.length === 2
+      ? `${values[0]} and ${values[1]}` : `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
+    const liquidCategoryText = joinEnglish(liquidCategories);
+    const liquidCategoryTextCn = liquidCategories.map(value => liquidCategoryCn[value]).join('、');
+    const reviewCategories = liquidCategories.slice(0, 2);
+    const reviewCategoryText = joinEnglish(reviewCategories);
+    const reviewCategoryTextCn = reviewCategories.map(value => liquidCategoryCn[value]).join('或');
     const countryCode = String(detail.country_code || '').trim().toUpperCase();
     const localizedRoutes = liquidCare ? await verifyLiquidRouteSet(countryCode) : null;
     const strategyMatch = scoreSignalMatch(detail, {
@@ -824,16 +844,16 @@ function createMatrixRouter({
       });
     }
     const subject = liquidCare
-      ? `Flexible packaging options for ${company}'s shampoo and body wash lines`
+      ? `Flexible packaging options for ${company}'s ${liquidCategoryText} lines`
       : `${specPrefix}${category} ${entryProduct} options for ${company}`;
     const localizedLinks = localizedRoutes
       ? `\n\nPersonal-care packaging reference:\nhttps://gdhspack.com${localizedRoutes.application}\n\nSpout pouch reference:\nhttps://gdhspack.com${localizedRoutes.product}\n\nAbout Huasheng:\nhttps://gdhspack.com${localizedRoutes.about}\n\n${localizedRoutes.courtesy}`
       : '';
     const bodyEn = liquidCare
-      ? `Dear ${company} Sourcing Team,\n\nI reviewed ${company}'s public shampoo and body wash capabilities, including its packaging sourcing and compatibility-testing process.\n\nWe are Huasheng Printing Co., Ltd. in China. For a suitable liquid product, we can assess printed refill formats or spout pouches, focusing on compatibility, leak resistance, filling-line fit, and repeat-print consistency.\n\nCould you share one current shampoo or body-wash pack photo, package size, and estimated quantity for an initial refill format or spout pouch assessment, or forward this message to your packaging sourcing or procurement team?${localizedLinks}\n\nBest regards,\nGavin\nHuasheng Printing Co., Ltd.`
+      ? `Dear ${company} Sourcing Team,\n\nI reviewed ${company}'s public ${liquidCategoryText} capabilities, including its packaging sourcing and compatibility-testing process.\n\nWe are Huasheng Printing Co., Ltd. in China. For a suitable liquid product, we can assess printed refill formats or spout pouches, focusing on compatibility, leak resistance, filling-line fit, and repeat-print consistency.\n\nCould you share one current ${reviewCategoryText} pack photo, package size, and estimated quantity for an initial refill format or spout pouch assessment, or forward this message to your packaging sourcing or procurement team?${localizedLinks}\n\nBest regards,\nGavin\nHuasheng Printing Co., Ltd.`
       : `Dear ${company} team,\nWe reviewed your publicly available ${specPrefix}${categoryText} product range. We would like to discuss ${entryProduct} options. Could you share your current material structure and expected annual volume?\nBest regards`;
     const bodyCn = liquidCare
-      ? `您好，\n\n我们查看了贵司公开的洗发水和沐浴露能力，以及包装采购和相容性测试流程。\n\n我们是中国的华胜印刷有限公司。对于适合采用软包装的液体产品，我们可以评估印刷补充装或吸嘴袋，重点关注相容性、防漏、灌装线适配和重复印刷的一致性。\n\n能否提供一个现有洗发水或沐浴露包装图片、包装尺寸和预计数量，以便初步评估补充装或吸嘴袋，或者将这封邮件转交包装采购负责人？${localizedRoutes ? `\n\n当地语言参考页面：\nhttps://gdhspack.com${localizedRoutes.application}\nhttps://gdhspack.com${localizedRoutes.product}\nhttps://gdhspack.com${localizedRoutes.about}` : ''}\n\n此致敬礼\nGavin\n华胜印刷有限公司`
+      ? `您好，\n\n我们查看了贵司公开的${liquidCategoryTextCn}能力，以及包装采购和相容性测试流程。\n\n我们是中国的华胜印刷有限公司。对于适合采用软包装的液体产品，我们可以评估印刷补充装或吸嘴袋，重点关注相容性、防漏、灌装线适配和重复印刷的一致性。\n\n能否提供一个现有${reviewCategoryTextCn}包装图片、包装尺寸和预计数量，以便初步评估补充装或吸嘴袋，或者将这封邮件转交包装采购负责人？${localizedRoutes ? `\n\n当地语言参考页面：\nhttps://gdhspack.com${localizedRoutes.application}\nhttps://gdhspack.com${localizedRoutes.product}\nhttps://gdhspack.com${localizedRoutes.about}` : ''}\n\n此致敬礼\nGavin\n华胜印刷有限公司`
       : `您好，\n我们查看了贵司公开展示的${specPrefixCn}${categoryTextCn}产品，希望沟通${entryProductCn}方案。请问能否提供当前材料结构和预计年用量？\n此致敬礼`;
     const snapshot = {
       organization_domain: organizationDomain,
