@@ -543,7 +543,7 @@ function reviewState(workItemId) {
       db.prepare("INSERT INTO cache_evidence VALUES (52,5,'https://gamma.test/services','official_website','Packaging service and development','2026-07-17T00:00:00Z','Private label development, packaging testing and filling-line review','e52')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (53,5,'https://gamma.test/quality','official_website','Quality and regulatory','2026-07-17T00:00:00Z','Laboratory testing, regulatory review and traceability','e53')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (54,5,'https://gamma.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable mono material, material efficiency and product waste reduction','e54')").run();
-      db.prepare("INSERT INTO cache_evidence VALUES (55,5,'https://gamma.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e55')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (55,5,'https://gamma.test/contact','official_website','Supplier contact','2026-07-18T00:00:00Z','Packaging sourcing and procurement contact','e55')").run();
       db.prepare(`INSERT INTO cache_strategy_signals VALUES
         (5,5,'Printed refill formats or spouted pouches for shampoo and body wash',
         'Compatibility, leak resistance, filling-line fit and repeat-print consistency',
@@ -562,6 +562,7 @@ function reviewState(workItemId) {
     });
     assert.strictEqual(personalCareVersion.status, 201, JSON.stringify(personalCareVersion.body));
     assert.strictEqual(personalCareVersion.body.recipient_email, 'packaging@gamma.test');
+    assert.strictEqual(personalCareVersion.body.recipient_verified_at, '2026-07-18T00:00:00.000Z');
     assert.ok(/flexible packaging/i.test(personalCareVersion.body.subject));
     assert.ok(!/\b\d+\s*(?:kg|g)\b/i.test(personalCareVersion.body.subject));
     assert.ok(/packaging sourcing or procurement/i.test(personalCareVersion.body.body_en));

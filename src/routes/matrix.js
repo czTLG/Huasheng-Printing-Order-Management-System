@@ -787,7 +787,7 @@ function createMatrixRouter({
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('public company email required; contact form is not eligible');
     const sourceUrl = httpsUrl(detail.contacts?.contact_page) || httpsUrl(official.source_url);
     if (!sourceUrl) throw new Error('official recipient source evidence required');
-    const verifiedValue = detail.updated_at || official.observed_at;
+    const verifiedValue = official.observed_at || detail.updated_at;
     const verifiedMs = Date.parse(String(verifiedValue || ''));
     if (!Number.isFinite(verifiedMs)) throw new Error('recipient evidence verification timestamp required');
 
