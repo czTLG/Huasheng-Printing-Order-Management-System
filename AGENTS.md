@@ -9,11 +9,13 @@
 - Do not rename an existing private codename to a business-descriptive name unless the user explicitly revokes this rule.
 - Treat naming as discretion only, not access control. Keep sensitive formulas, prices, margins, contact data, and historical records in private resources with appropriate permissions.
 
-## Distillation Progress
+## Next-Step Choices
 
-- End responses related to private business-knowledge distillation with a concise `蒸馏进度` block.
-- Report confirmed modules, unresolved modules, and the next highest-priority knowledge gap.
-- Do not present uncertain rules as complete.
+- Do not add a `蒸馏进度` block.
+- End every final response with exactly three concise, actionable next-step choices labeled `A`, `B`, and `C`.
+- Make each choice specific to the current conversation and directly selectable by replying with its letter.
+- Put the recommended choice first and mark it `（推荐）`.
+- Do not let the choices replace required results, warnings, approval boundaries, or blocking questions.
 
 ## Agent Capacity Management
 
