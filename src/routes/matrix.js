@@ -809,6 +809,9 @@ function createMatrixRouter({
       });
     }
     const foodSauce = localizedRoutes?.kind === 'food_sauce';
+    const scopedProducts = foodSauce
+      ? products.map(value => value.replace(/\b\d+(?:[.,]\d+)?\s*(?:kg|g)\b/giu, '').replace(/\s{2,}/g, ' ').trim())
+      : products;
     const subject = foodSauce
       ? `Flexible packaging review for ${company}'s sauces and seasonings`
       : liquidCare
@@ -836,7 +839,7 @@ function createMatrixRouter({
       country_code: countryCode,
       company,
       categories,
-      products,
+      products: scopedProducts,
       entryProduct,
       localizedRouteSet: localizedRoutes ? {
         status: 'verified_at_draft_time',

@@ -608,7 +608,7 @@ function reviewState(workItemId) {
         '公开信息确认','联系包装采购','observed','audited',NULL,
         '2026-07-18T00:00:00Z','2026-07-18T00:00:00Z','SECRET-COST-FORMULA')`).run();
       db.prepare("INSERT INTO cache_evidence VALUES (61,6,'https://delta.test/about','official_website','Company profile','2026-07-18T00:00:00Z','Food manufacturer with more than 100 SKUs and export markets','e61')").run();
-      db.prepare("INSERT INTO cache_evidence VALUES (62,6,'https://delta.test/products','official_website','Sauces and seasonings','2026-07-18T00:00:00Z','Sauces, chili sauces, seasonings and soup bases','e62')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (62,6,'https://delta.test/products','official_website','Sauces and seasonings','2026-07-18T00:00:00Z','Sauces, chili sauces, seasonings and soup bases; a separate HORECA range includes 1kg, 5kg and 10kg bulk packs','e62')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (63,6,'https://delta.test/factory','official_website','Manufacturing Process and Packaging Inspection','2026-07-18T00:00:00Z','Factory performs incoming packaging and label inspection','e63')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (64,6,'https://delta.test/purchasing','official_website','Supplier evaluation','2026-07-18T00:00:00Z','Purchasing department performs a periodic supplier-evaluation process','e64')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (65,6,'https://delta.test/quality','official_website','Quality workflow','2026-07-18T00:00:00Z','Quality testing and non-conforming shipment controls','e65')").run();
