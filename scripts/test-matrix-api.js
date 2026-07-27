@@ -545,7 +545,7 @@ function reviewState(workItemId) {
       db.prepare("INSERT INTO cache_evidence VALUES (54,5,'https://gamma.test/sustainability','official_website','Sustainable packaging','2026-07-17T00:00:00Z','Recyclable mono material, material efficiency and product waste reduction','e54')").run();
       db.prepare("INSERT INTO cache_evidence VALUES (55,5,'https://gamma.test/contact','official_website','Supplier contact','2026-07-17T00:00:00Z','Packaging sourcing and procurement contact','e55')").run();
       db.prepare(`INSERT INTO cache_strategy_signals VALUES
-        (5,5,'Printed refill or spouted pouches, sachets and roll film for shampoo and body wash',
+        (5,5,'Printed refill formats or spouted pouches for shampoo and body wash',
         'Compatibility, leak resistance, filling-line fit and repeat-print consistency',
         'Reach packaging sourcing or procurement','["size","quantity"]','["Current pouch use is not confirmed"]',
         'https://gamma.test/products','2026-07-17T00:00:00Z','strategy-5')`).run();
@@ -570,6 +570,7 @@ function reviewState(workItemId) {
     assert.ok(/https:\/\/gdhspack\.com\/id\/products\/spout-pouches/.test(personalCareVersion.body.body_en));
     assert.ok(/https:\/\/gdhspack\.com\/id\/about/.test(personalCareVersion.body.body_en));
     assert.ok(/Terima kasih atas waktu Anda/.test(personalCareVersion.body.body_en));
+    assert.ok(!/\bsachets?\b|\broll film\b/i.test(personalCareVersion.body.body_en));
     assert.ok(/Gavin\nHuasheng Printing Co\., Ltd\./.test(personalCareVersion.body.body_en));
     assert.ok(!/with refill pouches among its packaging formats/i.test(personalCareVersion.body.body_en));
     assert.ok(!/一页针对性建议/.test(personalCareVersion.body.body_cn));
