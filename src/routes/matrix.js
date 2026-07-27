@@ -12,6 +12,7 @@ const { searchMatrixContext, resolveMatrixContext, contextByRecordId } = require
 const { createMatrixStreamText } = require('../services/matrixStreamText');
 const { scoreSignalMatch } = require('../services/matrixSignalMatch');
 const { createMatrixLedgerCommand } = require('../services/matrixLedgerCommand');
+const { profileFor, verifyProfileRoutes } = require('../services/matrixRouteProfiles');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -727,51 +728,6 @@ function createMatrixRouter({
     } catch (_) { return ''; }
   }
 
-  const LIQUID_ROUTE_SETS = Object.freeze({
-    TH: {
-      language: 'th',
-      home: '/th',
-      about: '/th/about',
-      market: '/th/markets/thailand-food-packaging',
-      application: '/th/applications/daily-chemical-packaging',
-      product: '/th/products/spout-pouches',
-      courtesy: 'ขอบคุณที่สละเวลาอ่านอีเมลฉบับนี้ เราหวังว่าจะได้พูดคุยกับทีมจัดซื้อบรรจุภัณฑ์ของคุณ'
-    },
-    ID: {
-      language: 'id',
-      home: '/id',
-      about: '/id/about',
-      market: '/id/markets/indonesia',
-      application: '/id/applications/daily-chemical-packaging',
-      product: '/id/products/spout-pouches',
-      courtesy: 'Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim pengadaan kemasan perusahaan Anda.'
-    }
-  });
-
-  async function verifyLiquidRouteSet(countryCode) {
-    const routeSet = LIQUID_ROUTE_SETS[countryCode];
-    if (!routeSet) return null;
-    if (process.env.NODE_ENV === 'test') return routeSet;
-    const routes = [routeSet.home, routeSet.about, routeSet.market, routeSet.application, routeSet.product];
-    const origin = String(process.env.MATRIX_PUBLIC_SITE_ORIGIN || 'https://gdhspack.com').replace(/\/$/, '');
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const responses = await Promise.all(routes.map(async route => {
-        const response = await fetch(`${origin}${route}`, { signal: controller.signal, redirect: 'follow' });
-        if (!response.ok) throw new Error(`localized website route unavailable: ${route}`);
-        return { route, html: await response.text() };
-      }));
-      const application = responses.find(row => row.route === routeSet.application);
-      if (!application?.html.includes(`lang="${routeSet.language}"`) || !application.html.includes(routeSet.application)) {
-        throw new Error('localized website route set did not return the expected canonical page');
-      }
-      return routeSet;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   async function candidateDraft(detail) {
     const evidence = Array.isArray(detail.official_evidence) ? detail.official_evidence : [];
     const organizationDomain = String(detail.official_domain || '').trim().toLowerCase();
@@ -831,7 +787,14 @@ function createMatrixRouter({
     const reviewCategoryText = joinEnglish(reviewCategories);
     const reviewCategoryTextCn = reviewCategories.map(value => liquidCategoryCn[value]).join('或');
     const countryCode = String(detail.country_code || '').trim().toUpperCase();
-    const localizedRoutes = liquidCare ? await verifyLiquidRouteSet(countryCode) : null;
+    const routeProfile = profileFor({ countryCode, categories });
+    const localizedRoutes = routeProfile
+      ? (process.env.NODE_ENV === 'test'
+          ? routeProfile
+          : await verifyProfileRoutes(routeProfile, {
+              origin: process.env.MATRIX_PUBLIC_SITE_ORIGIN || 'https://gdhspack.com'
+            }))
+      : null;
     const strategyMatch = scoreSignalMatch(detail, {
       localizedRouteStatus: localizedRoutes ? 'ready' : 'not_required'
     });
