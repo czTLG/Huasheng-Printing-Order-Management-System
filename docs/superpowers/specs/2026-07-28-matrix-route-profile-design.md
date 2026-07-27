@@ -1,13 +1,29 @@
 # Matrix Route Profile Design
 
 Date: 2026-07-28  
-Status: proposed for user review
+Status: approved
 
 ## Objective
 
 Extend the deterministic Matrix draft path with one reusable food-product route profile, beginning with the verified Dh Foods case. The profile must support Southeast Asian sauce and seasoning manufacturers without embedding a prospect name or unsupported claim in reusable logic.
 
-The first production outcome is an evidence-bound Dh Foods draft addressed to the official purchasing inbox. Approval and delivery remain separate actions.
+The first production outcome is an evidence-bound Dh Foods draft addressed to the official purchasing inbox. Customer selection authorizes the complete internal preparation workflow; delivery remains a separate final action.
+
+## One-Stop Selection Contract
+
+Selecting a named candidate starts the complete preparation workflow without intermediate business-choice prompts:
+
+1. refresh public organizational research and source evidence;
+2. reconcile the canonical customer and official organizational contact;
+3. audit the localized buyer journey;
+4. improve reusable website content when the selected segment exposes a material content gap;
+5. build, test, deploy, and verify those in-scope reusable website changes under the user's standing selection authorization;
+6. update the deterministic route profile and bilingual ontology when required;
+7. calculate strategy readiness;
+8. create and internally quality-check one canonical draft;
+9. present one final package containing recipient, subject, English body, Chinese translation, local-language closing, links, and attachment state.
+
+The user is not asked to approve research, implementation plans, routine tests, reusable content changes, deployment, record creation, or draft creation separately after selecting the candidate. The final package offers only the consequential customer-facing decision: send or do not send. A material scope expansion unrelated to the selected candidate still requires separate authorization.
 
 ## Confirmed Dh Foods Inputs
 
@@ -75,11 +91,12 @@ Any evidence or route change makes the stored draft stale and requires a new ver
 
 The canonical flow is:
 
-`researched → selected → draft_pending → approved → final preview → explicit send confirmation → accepted/failed/ambiguous → reply check`
+`selected → researched → route/content ready → draft_pending → final package → explicit send confirmation → approved-and-sent/declined → accepted/failed/ambiguous → reply check`
 
-- Creating a draft does not approve it.
-- “Confirm adoption” approves only the exact immutable version.
-- Sending requires a second explicit confirmation for the exact customer, recipient, content hash, and attachment manifest.
+- Internal preparation automatically creates one immutable draft but does not send it.
+- The final package is the sole review surface. Choosing send approves that exact immutable version and confirms its delivery in one idempotent action.
+- Sending still requires explicit confirmation for the exact customer, recipient, content hash, and attachment manifest shown in the final package.
+- Choosing do not send leaves the draft unapproved and creates no delivery job.
 - An SMTP-accepted result creates one reply-check task three calendar days later, because this operation does not distinguish weekends.
 - Failed or ambiguous results do not create a second delivery automatically.
 
@@ -97,7 +114,7 @@ The canonical flow is:
 - Missing purchasing contact: block email generation; a contact form is not silently treated as an email.
 - Bilingual mismatch or unsupported claim: roll back the draft transaction.
 - Existing delivery or domain cooling: block final preview.
-- Stale work version, evidence, or content hash: require regeneration or renewed approval.
+- Stale work version, evidence, or content hash: regenerate the final package and require a new send decision.
 - Delivery uncertainty: record `ambiguous`; never report success and never retry automatically.
 
 ## Test Plan
@@ -123,7 +140,8 @@ The canonical flow is:
 - Run syntax, draft-gate, Matrix API, cache-view, and strategy-match tests.
 - Verify all five Vietnamese production URLs.
 - Create one production draft with score and hard-failure evidence.
-- Confirm zero approval and zero delivery jobs until separately authorized.
+- Present the complete final package without an intermediate approval prompt.
+- Confirm zero approval and zero delivery jobs until the user chooses send.
 - Verify the management service is active with no restart loop.
 
 ## Acceptance Criteria
@@ -135,7 +153,8 @@ The design is complete when:
 - the draft contains no unsupported current-package or supplier assertion;
 - English and Chinese content are aligned and readable;
 - creation is idempotent;
-- no approval or delivery occurs during implementation verification;
+- no approval or delivery occurs before the final send decision;
+- selecting a candidate completes preparation without intermediate user prompts;
 - the existing liquid-care route and previously approved versions continue to pass regression tests.
 
 ## Deferred Scope
