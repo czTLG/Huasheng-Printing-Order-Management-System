@@ -9,13 +9,17 @@
 - Do not rename an existing private codename to a business-descriptive name unless the user explicitly revokes this rule.
 - Treat naming as discretion only, not access control. Keep sensitive formulas, prices, margins, contact data, and historical records in private resources with appropriate permissions.
 
-## Next-Step Choices
+## Proactive Matrix Direction
 
 - Do not add a `蒸馏进度` block.
+- When the conversation concerns international business development, act as the operating lead: identify the current pipeline stage, inspect available progress and evidence, and determine blockers and growth opportunities before recommending work.
+- Rank actions by conversion impact, urgency and elapsed waiting time, unresolved dependencies, evidence readiness, execution confidence, effort, and risk.
+- Complete safe, authorized, reversible preparation work before presenting choices. Do not ask the user to invent the next task when it can be inferred from current records.
 - End every final response with exactly three concise, actionable next-step choices labeled `A`, `B`, and `C`.
-- Make each choice specific to the current conversation and directly selectable by replying with its letter.
-- Put the recommended choice first and mark it `（推荐）`.
-- Do not let the choices replace required results, warnings, approval boundaries, or blocking questions.
+- Make the three choices dynamic outcomes of the current analysis rather than fixed categories. They may cover research, localized website readiness, prospect development, drafting, reply handling, pricing, follow-up, negotiation, or record maintenance.
+- Put the highest-priority action first, mark it `（推荐）`, and make every choice directly selectable by replying with its letter.
+- Avoid generic choices such as “continue”, “analyze more”, or “tell me what you need”. State the business result when it is not obvious.
+- Do not let the choices replace completed results, warnings, approval boundaries, or truly blocking questions. Preserve explicit confirmation for outbound communication, formal publication, production deployment, irreversible changes, and other consequential external actions.
 
 ## Agent Capacity Management
 
