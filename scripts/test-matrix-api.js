@@ -601,6 +601,47 @@ function reviewState(workItemId) {
     assert.strictEqual(restoredPersonalCareItem.current_stream_version_id, personalCareVersion.body.id);
     assert.strictEqual(restoredPersonalCareItem.stream_state, 'draft_pending');
 
+    mutateCandidate(db => {
+      db.prepare(`INSERT INTO cache_records VALUES (6,'Delta Foods','VN','','delta.test','https://delta.test/',
+        '["spices","seasonings","sauces","soup bases"]','["sachets","spout pouches","roll film"]','["100+ SKUs"]','medium',
+        'purchase@delta.test','','','https://delta.test/factory','P0',94,94,90,0.9,'valid',
+        '公开信息确认','联系包装采购','observed','audited',NULL,
+        '2026-07-18T00:00:00Z','2026-07-18T00:00:00Z','SECRET-COST-FORMULA')`).run();
+      db.prepare("INSERT INTO cache_evidence VALUES (61,6,'https://delta.test/about','official_website','Company profile','2026-07-18T00:00:00Z','Food manufacturer with more than 100 SKUs and export markets','e61')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (62,6,'https://delta.test/products','official_website','Sauces and seasonings','2026-07-18T00:00:00Z','Sauces, chili sauces, seasonings and soup bases','e62')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (63,6,'https://delta.test/factory','official_website','Manufacturing Process and Packaging Inspection','2026-07-18T00:00:00Z','Factory performs incoming packaging and label inspection','e63')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (64,6,'https://delta.test/purchasing','official_website','Supplier evaluation','2026-07-18T00:00:00Z','Purchasing department performs a periodic supplier-evaluation process','e64')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (65,6,'https://delta.test/quality','official_website','Quality workflow','2026-07-18T00:00:00Z','Quality testing and non-conforming shipment controls','e65')").run();
+      db.prepare("INSERT INTO cache_evidence VALUES (66,6,'https://delta.test/contact','official_contact','Purchasing contact','2026-07-18T00:00:00Z','Official packaging purchasing email purchase@delta.test','e66')").run();
+      db.prepare(`INSERT INTO cache_strategy_signals VALUES
+        (6,6,'Printed sachets, spout pouches or roll film for sauces, seasonings and soup bases',
+        'Filling method, seal compatibility, contamination control and repeat-print consistency',
+        'Reach packaging purchasing with one representative SKU',
+        '["pack photo","dimensions","fill weight or volume","filling method","quantity"]',
+        '["Current flexible-packaging format and supplier are not confirmed"]',
+        'https://delta.test/factory','2026-07-18T00:00:00Z','strategy-6')`).run();
+    });
+    let foodWorkItemId;
+    mutateApp(db => {
+      foodWorkItemId = Number(db.prepare(`INSERT INTO matrix_work_items
+        (candidate_id,stage,owner_user_id,current_summary,next_action,version,created_at,updated_at,stream_state)
+        VALUES (6,'selected',103,'','联系包装采购',1,?,?, 'selected')`).run('2026-07-18T00:00:00Z','2026-07-18T00:00:00Z').lastInsertRowid);
+    });
+    const foodVersion = await request(`/api/matrix/work-items/${foodWorkItemId}/versions`, {
+      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+      body: { expected_work_version: 1, idempotency_key: 'draft-food-sauce-1' }
+    });
+    assert.strictEqual(foodVersion.status, 201, JSON.stringify(foodVersion.body));
+    assert.match(foodVersion.body.subject, /sauce|seasoning/i);
+    assert.match(foodVersion.body.body_en, /packaging and label inspection/i);
+    assert.match(foodVersion.body.body_en, /supplier-evaluation process/i);
+    assert.match(foodVersion.body.body_en, /one current product pack photo/i);
+    assert.match(foodVersion.body.body_en, /https:\/\/gdhspack\.com\/vi\/applications\/sauce-packaging/);
+    assert.match(foodVersion.body.body_en, /Cảm ơn Quý công ty/);
+    assert.doesNotMatch(foodVersion.body.body_en, /current pouch supplier|guarantee|final structure/i);
+    assert.strictEqual(JSON.parse(foodVersion.body.quality_json).passed, true);
+    assert.strictEqual(foodVersion.body.status, 'draft');
+
     const createdVersion = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}/versions`, {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
       body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
@@ -1296,7 +1337,7 @@ function reviewState(workItemId) {
       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
       assert.deepStrictEqual(
         inspect.prepare('SELECT action FROM matrix_stream_api_requests ORDER BY id').all().map(row => row.action),
-        ['create', 'create', 'approve', 'approve', 'revise', 'revise', 'revise']
+        ['create', 'create', 'create', 'approve', 'approve', 'revise', 'revise', 'revise']
       );
       const persistedSession = JSON.stringify(inspect.prepare('SELECT snapshot_key, candidate_ids_json, filters_json FROM matrix_sessions WHERE id = ?').get(createdSession.body.id));
       assert.ok(!persistedSession.includes('Alpha Foods'));

@@ -751,6 +751,7 @@ function createMatrixRouter({
     const category = categories[0] || '';
     const categoryCnMap = {
       coffee: '咖啡', tea: '茶', snacks: '零食',
+      spices: '香辛料', seasonings: '调味品', sauces: '酱料', 'soup bases': '汤底',
       'liquid detergent': '洗衣液', 'powder detergent': '洗衣粉',
       'hand soap': '洗手液', 'body soap': '沐浴皂', 'hand wash': '洗手液',
       shampoo: '洗发产品', 'body wash': '沐浴产品', 'personal care': '个护产品',
@@ -807,16 +808,25 @@ function createMatrixRouter({
         next_action: 'Complete official-site research and localized content-gap review before drafting.'
       });
     }
-    const subject = liquidCare
+    const foodSauce = localizedRoutes?.kind === 'food_sauce';
+    const subject = foodSauce
+      ? `Flexible packaging review for ${company}'s sauces and seasonings`
+      : liquidCare
       ? `Flexible packaging options for ${company}'s ${subjectCategoryText} lines`
       : `${specPrefix}${category} ${entryProduct} options for ${company}`;
-    const localizedLinks = localizedRoutes
+    const localizedLinks = localizedRoutes && foodSauce
+      ? `\n\nSauce packaging reference:\nhttps://gdhspack.com${localizedRoutes.application}\n\nAbout Huasheng:\nhttps://gdhspack.com${localizedRoutes.about}\n\n${localizedRoutes.courtesy}`
+      : localizedRoutes
       ? `\n\nPersonal-care packaging reference:\nhttps://gdhspack.com${localizedRoutes.application}\n\nSpout pouch reference:\nhttps://gdhspack.com${localizedRoutes.product}\n\nAbout Huasheng:\nhttps://gdhspack.com${localizedRoutes.about}\n\n${localizedRoutes.courtesy}`
       : '';
-    const bodyEn = liquidCare
+    const bodyEn = foodSauce
+      ? `Dear ${company} Purchasing Team,\n\nWe reviewed ${company}'s public sauce, chili sauce, seasoning and soup-base range, together with its published packaging and label inspection and purchasing supplier-evaluation process.\n\nHuasheng Printing Co., Ltd. manufactures printed flexible packaging in China. For one representative product, we can assess sachets, spout pouches or roll film around filling method, seal compatibility, contamination control and repeat-print consistency.\n\nCould you share one current product pack photo, size, fill weight or volume, filling method and estimated quantity, or forward this message to the packaging purchasing colleague responsible?${localizedLinks}\n\nBest regards,\nGavin\nHuasheng Printing Co., Ltd.`
+      : liquidCare
       ? `Dear ${company} Sourcing Team,\n\nI reviewed ${company}'s public ${liquidCategoryText} capabilities, including its packaging sourcing and compatibility-testing process.\n\nWe are Huasheng Printing Co., Ltd. in China. For a suitable liquid product, we can assess printed refill formats or spout pouches, focusing on compatibility, leak resistance, filling-line fit, and repeat-print consistency.\n\nCould you share one current ${reviewCategoryText} pack photo, package size, and estimated quantity for an initial refill format or spout pouch assessment, or forward this message to your packaging sourcing or procurement team?${localizedLinks}\n\nBest regards,\nGavin\nHuasheng Printing Co., Ltd.`
       : `Dear ${company} team,\nWe reviewed your publicly available ${specPrefix}${categoryText} product range. We would like to discuss ${entryProduct} options. Could you share your current material structure and expected annual volume?\nBest regards`;
-    const bodyCn = liquidCare
+    const bodyCn = foodSauce
+      ? `您好，\n\n我们查看了贵司公开的酱料、辣椒酱、调味品和汤底产品系列，以及公开的包装与标签检验流程和采购部门供应商评价流程。\n\n华胜印刷有限公司在中国生产印刷软包装。针对一个代表性产品，我们可以评估小袋、吸嘴袋或卷膜，重点核对灌装方式、封口适配、污染控制和重复印刷一致性。\n\n能否提供一个现有产品包装照片、尺寸、灌装重量或容量、灌装方式和预计数量，或者将这封邮件转交负责包装采购的同事？${localizedRoutes ? `\n\n越南语参考页面：\nhttps://gdhspack.com${localizedRoutes.application}\nhttps://gdhspack.com${localizedRoutes.about}` : ''}\n\n此致敬礼\nGavin\n华胜印刷有限公司`
+      : liquidCare
       ? `您好，\n\n我们查看了贵司公开的${liquidCategoryTextCn}能力，以及包装采购和相容性测试流程。\n\n我们是中国的华胜印刷有限公司。对于适合采用软包装的液体产品，我们可以评估印刷补充装或吸嘴袋，重点关注相容性、防漏、灌装线适配和重复印刷的一致性。\n\n能否提供一个现有${reviewCategoryTextCn}包装图片、包装尺寸和预计数量，以便初步评估补充装或吸嘴袋，或者将这封邮件转交包装采购负责人？${localizedRoutes ? `\n\n当地语言参考页面：\nhttps://gdhspack.com${localizedRoutes.application}\nhttps://gdhspack.com${localizedRoutes.product}\nhttps://gdhspack.com${localizedRoutes.about}` : ''}\n\n此致敬礼\nGavin\n华胜印刷有限公司`
       : `您好，\n我们查看了贵司公开展示的${specPrefixCn}${categoryTextCn}产品，希望沟通${entryProductCn}方案。请问能否提供当前材料结构和预计年用量？\n此致敬礼`;
     const snapshot = {
