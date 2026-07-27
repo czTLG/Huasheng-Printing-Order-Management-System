@@ -102,6 +102,8 @@ try {
   ].forEach(row => insertRecord.run(row));
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-16T00:00:00Z', 'Coffee products', 'e1');
   db.prepare('INSERT INTO cache_evidence VALUES (2,1,?,?,?,?,?,?)').run('https://association.test/members', 'official_association_directory', 'Member directory', '2026-07-15T00:00:00Z', 'Association listing', 'e2');
+  db.prepare('INSERT INTO cache_evidence VALUES (3,1,?,?,?,?,?,?)').run('https://regulator.test/certificate', 'official_regulator', 'Quality certificate', '2026-07-16T00:00:00Z', 'Current manufacturing certificate', 'e3');
+  db.prepare('INSERT INTO cache_evidence VALUES (4,1,?,?,?,?,?,?)').run('https://registry.test/company', 'official_registry', 'Company registry', '2026-07-16T00:00:00Z', 'Current legal entity record', 'e4');
   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members', 'https://alpha.test/', 'official_association_directory', '2026-07-16T00:00:00Z', 'd1');
   let evidenceId = 10;
   let discoveryId = 10;
@@ -162,8 +164,13 @@ try {
   const detail = view.detail(1);
   assert.strictEqual(detail.discovery.discovered_via, 'official_association_directory');
   assert.deepStrictEqual(detail.evidence, detail.official_evidence);
-  assert.deepStrictEqual(detail.official_evidence.map(item => item.source_url), ['https://alpha.test/products']);
-  assert.deepStrictEqual(detail.supporting_evidence.map(item => item.source_url), ['https://association.test/members']);
+  assert.deepStrictEqual(detail.official_evidence.map(item => item.source_url), [
+    'https://alpha.test/products',
+    'https://regulator.test/certificate',
+    'https://registry.test/company',
+    'https://association.test/members'
+  ]);
+  assert.deepStrictEqual(detail.supporting_evidence, []);
   assert.strictEqual(detail.contacts.email, 't***@alpha.test');
   assert.strictEqual(detail.contacts.contact_page, '[available]');
   assert.strictEqual(detail.discovery.discovery_url, 'https://association.test/members');

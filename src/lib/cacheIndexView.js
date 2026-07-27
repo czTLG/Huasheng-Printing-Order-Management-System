@@ -305,13 +305,13 @@ function detail(db, id, { revealContacts = false } = {}) {
   const officialEvidence = db.prepare(`
     SELECT source_url, source_type, page_title, observed_at, excerpt
     FROM cache_evidence
-    WHERE record_id = ? AND source_type = 'official_website'
+    WHERE record_id = ? AND source_type LIKE 'official_%'
     ORDER BY observed_at DESC, id ASC
   `).all(id);
   const supportingEvidence = db.prepare(`
     SELECT source_url, source_type, page_title, observed_at, excerpt
     FROM cache_evidence
-    WHERE record_id = ? AND (source_type IS NULL OR source_type <> 'official_website')
+    WHERE record_id = ? AND (source_type IS NULL OR source_type NOT LIKE 'official_%')
     ORDER BY observed_at DESC, id ASC
   `).all(id);
   const discovery = db.prepare(`
