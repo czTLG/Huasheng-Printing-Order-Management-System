@@ -23,7 +23,11 @@ const ONTOLOGY = Object.freeze({
     ['sauce', /\bsauces?\b/i, /(?:酱料|酱汁)/u],
     ['seasoning_powder', /\bseasoning\s+powders?\b/i, /调味粉/u],
     ['seasoning', /\bseasonings?\b(?!\s+powders?\b)/i, /(?:调味料|调味品)/u],
-    ['soup_base', /\bsoup[ -]?bases?\b/i, /(?:汤底|汤料)/u]
+    ['soup_base', /\bsoup[ -]?bases?\b/i, /(?:汤底|汤料)/u],
+    ['liquid_detergent', /\bliquid\s+detergents?\b/i, /洗衣液/u],
+    ['hand_soap', /\bhand\s+soaps?\b/i, /洗手液/u],
+    ['body_soap', /\bbody\s+soaps?\b/i, /沐浴皂/u],
+    ['shampoo', /\bshampoos?\b/i, /洗发(?:水|产品)?/u]
   ],
   package_format: [
     ['sachet', /\bsachets?\b/i, /小袋/u],

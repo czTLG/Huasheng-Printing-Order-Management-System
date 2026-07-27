@@ -124,6 +124,16 @@ assert.deepStrictEqual(
   'Chinese food categories and flexible formats must map to the same canonical ontology facts'
 );
 assert.deepStrictEqual(
+  extractBilingualFacts('liquid detergent, hand soap, body soap and shampoo', 'en').product_category,
+  ['body_soap', 'hand_soap', 'liquid_detergent', 'shampoo'],
+  'English liquid-care categories must map to canonical ontology facts'
+);
+assert.deepStrictEqual(
+  extractBilingualFacts('洗衣液、洗手液、沐浴皂和洗发水', 'cn').product_category,
+  ['body_soap', 'hand_soap', 'liquid_detergent', 'shampoo'],
+  'Chinese liquid-care categories must map to the same canonical ontology facts'
+);
+assert.deepStrictEqual(
   extractBilingualFacts('official factory and supplier-evaluation process', 'en').supplier || [],
   [],
   'a published supplier-evaluation process is not a named supplier relationship'
