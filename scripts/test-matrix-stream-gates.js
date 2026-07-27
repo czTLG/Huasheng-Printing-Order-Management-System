@@ -107,6 +107,22 @@ assert.deepStrictEqual(
   [],
   'the letters AL inside a company name must not be treated as aluminum film'
 );
+assert.deepStrictEqual(
+  extractBilingualFacts('sauce, seasoning powder, soup base, sachet and printed roll film', 'en'),
+  {
+    product_category: ['sauce', 'seasoning_powder', 'soup_base'],
+    package_format: ['roll_film', 'sachet']
+  },
+  'English food categories and flexible formats must map to canonical ontology facts'
+);
+assert.deepStrictEqual(
+  extractBilingualFacts('酱料、调味粉、汤底、印刷小袋和卷膜', 'cn'),
+  {
+    product_category: ['sauce', 'seasoning_powder', 'soup_base'],
+    package_format: ['roll_film', 'sachet']
+  },
+  'Chinese food categories and flexible formats must map to the same canonical ontology facts'
+);
 
 for (const recipient of [
   { ...base.recipient, sourceUrl: 'https://test/contact' },

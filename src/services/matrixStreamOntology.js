@@ -12,12 +12,22 @@ const ONTOLOGY = Object.freeze({
     ['red', /\bred\b/i, /红/u], ['orange', /\borange\b/i, /橙/u], ['yellow', /\byellow\b/i, /黄/u],
     ['green', /\bgreen\b/i, /绿/u], ['blue', /\bblue\b/i, /蓝/u], ['purple', /\bpurple\b/i, /紫/u],
     ['black', /\bblack\b/i, /黑/u], ['white', /\bwhite\b/i, /白/u], ['gray', /\bgr[ae]y\b/i, /灰/u],
-    ['brown', /\bbrown\b/i, /棕|褐/u], ['pink', /\bpink\b/i, /粉/u]
+    ['brown', /\bbrown\b/i, /棕|褐/u], ['pink', /\bpink\b/i, /(?:粉色|粉红)/u]
   ],
   bag_type: [
     ['valve_pouch', /valve\s+pouch/i, /带阀袋/u], ['stand_up_pouch', /stand[ -]?up\s+pouch/i, /自立袋/u],
     ['flat_bottom', /flat[ -]?bottom/i, /方底袋/u], ['spout_pouch', /spout\s+pouch/i, /吸嘴袋/u],
     ['three_side_seal', /three[ -]?side[ -]?seal/i, /三边封/u]
+  ],
+  product_category: [
+    ['sauce', /\bsauces?\b/i, /(?:酱料|酱汁)/u],
+    ['seasoning_powder', /\bseasoning\s+powders?\b/i, /调味粉/u],
+    ['seasoning', /\bseasonings?\b(?!\s+powders?\b)/i, /(?:调味料|调味品)/u],
+    ['soup_base', /\bsoup[ -]?bases?\b/i, /(?:汤底|汤料)/u]
+  ],
+  package_format: [
+    ['sachet', /\bsachets?\b/i, /小袋/u],
+    ['roll_film', /\b(?:(?:printed|packaging)\s+)?roll\s+(?:film|stock)\b/i, /(?:印刷卷膜|包装卷膜|卷膜)/u]
   ],
   transparency: [['transparent', /\btransparent\b/i, /透明/u], ['opaque', /\bopaque\b/i, /不透明/u]],
   closure: [['velcro', /\bvelcro\b/i, /魔术贴/u], ['wire_tie', /\bwire[ -]?tie\b/i, /扎丝/u], ['none', /\bno\s+closure\b/i, /无封口/u]]

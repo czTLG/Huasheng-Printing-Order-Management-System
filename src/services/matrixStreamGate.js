@@ -128,10 +128,16 @@ function withoutUrls(value) {
 
 const CONCEPTS = Object.freeze([
   ['coffee', /\bcoffee\b/i, /咖啡/u], ['tea', /\btea\b/i, /茶/u],
+  ['sauce', /\bsauces?\b/i, /(?:酱料|酱汁)/u],
+  ['seasoning_powder', /\bseasoning\s+powders?\b/i, /调味粉/u],
+  ['seasoning', /\bseasonings?\b(?!\s+powders?\b)/i, /(?:调味料|调味品)/u],
+  ['soup_base', /\bsoup[ -]?bases?\b/i, /(?:汤底|汤料)/u],
   ['shampoo', /\bshampoo\b/i, /洗发/u], ['body_wash', /\bbody[ -]?wash\b/i, /沐浴/u],
   ['personal_care', /\bpersonal[ -]?care\b/i, /个护/u], ['home_care', /\bhome[ -]?care\b/i, /家清/u],
   ['refill', /\brefill\b/i, /补充/u],
   ['pouch', /\bpouches?\b/i, /袋/u], ['valve', /\bvalve\b/i, /阀/u],
+  ['sachet', /\bsachets?\b/i, /小袋/u],
+  ['roll_film', /\b(?:(?:printed|packaging)\s+)?roll\s+(?:film|stock)\b/i, /(?:印刷卷膜|包装卷膜|卷膜)/u],
   ['barrier', /\bbarrier\b/i, /阻隔/u], ['printing', /\bprint(?:ing)?\b/i, /(?:印刷|套色)/u]
 ]);
 const QUESTION_INTENTS = Object.freeze([
