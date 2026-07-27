@@ -124,6 +124,24 @@ assert.deepStrictEqual(
   'Chinese food categories and flexible formats must map to the same canonical ontology facts'
 );
 assert.deepStrictEqual(
+  extractBilingualFacts('sauces, chili sauces, seasonings, soup bases, sachets, spout pouches and roll film', 'en'),
+  {
+    bag_type: ['spout_pouch'],
+    product_category: ['chili_sauce', 'sauce', 'seasoning', 'soup_base'],
+    package_format: ['roll_film', 'sachet']
+  },
+  'English sauce-route categories and formats must map to canonical ontology facts'
+);
+assert.deepStrictEqual(
+  extractBilingualFacts('酱料、辣椒酱、调味品、汤底、小袋、吸嘴袋和卷膜', 'cn'),
+  {
+    bag_type: ['spout_pouch'],
+    product_category: ['chili_sauce', 'sauce', 'seasoning', 'soup_base'],
+    package_format: ['roll_film', 'sachet']
+  },
+  'Chinese sauce-route categories and formats must map to the same canonical ontology facts'
+);
+assert.deepStrictEqual(
   extractBilingualFacts('liquid detergent, hand soap, body soap and shampoo', 'en').product_category,
   ['body_soap', 'hand_soap', 'liquid_detergent', 'shampoo'],
   'English liquid-care categories must map to canonical ontology facts'

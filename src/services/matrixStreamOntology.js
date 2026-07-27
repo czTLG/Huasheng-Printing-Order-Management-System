@@ -20,6 +20,7 @@ const ONTOLOGY = Object.freeze({
     ['three_side_seal', /three[ -]?side[ -]?seal/i, /三边封/u]
   ],
   product_category: [
+    ['chili_sauce', /\bchili\s+sauces?\b/i, /辣椒酱/u],
     ['sauce', /\bsauces?\b/i, /(?:酱料|酱汁)/u],
     ['seasoning_powder', /\bseasoning\s+powders?\b/i, /调味粉/u],
     ['seasoning', /\bseasonings?\b(?!\s+powders?\b)/i, /(?:调味料|调味品)/u],

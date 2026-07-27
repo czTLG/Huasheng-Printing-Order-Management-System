@@ -130,6 +130,7 @@ function withoutUrls(value) {
 
 const CONCEPTS = Object.freeze([
   ['coffee', /\bcoffee\b/i, /咖啡/u], ['tea', /\btea\b/i, /茶/u],
+  ['chili_sauce', /\bchili\s+sauces?\b/i, /辣椒酱/u],
   ['sauce', /\bsauces?\b/i, /(?:酱料|酱汁)/u],
   ['seasoning_powder', /\bseasoning\s+powders?\b/i, /调味粉/u],
   ['seasoning', /\bseasonings?\b(?!\s+powders?\b)/i, /(?:调味料|调味品)/u],
