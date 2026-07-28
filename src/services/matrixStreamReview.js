@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const { parse: parseDomain } = require('tldts');
+const { renderMatrixMail } = require('./matrixMailRender');
 const { scoreDraft } = require('./matrixStreamGate');
 const { validateSnapshotRecipientProvenance } = require('./matrixRecipientProvenance');
 
@@ -18,12 +19,23 @@ function normalizeBody(value) {
 }
 
 function contentHash(value) {
+  const rendered = renderMatrixMail({
+    bodyEn: normalizeBody(value.bodyEn),
+    signature: value.mailSignature
+  });
   return crypto.createHash('sha256').update(JSON.stringify({
     recipient: normalizeEmail(value.recipientEmail),
     source: String(value.recipientSourceUrl),
     subject: String(value.subject).trim(),
     body_en: normalizeBody(value.bodyEn),
-    body_cn: normalizeBody(value.bodyCn)
+    body_cn: normalizeBody(value.bodyCn),
+    mail: {
+      template_version: rendered.templateVersion,
+      text: rendered.text,
+      html: rendered.html,
+      signature: rendered.signature,
+      render_hash: rendered.renderHash
+    }
   })).digest('hex');
 }
 

@@ -14,6 +14,7 @@ const { db, initDb } = require('../src/db');
 const review = require('../src/services/matrixStreamReview');
 const { createMatrixStreamPreview } = require('../src/services/matrixStreamPreview');
 const { createMatrixStreamDelivery } = require('../src/services/matrixStreamDelivery');
+const { MATRIX_MAIL_SIGNATURE, renderMatrixMail } = require('../src/services/matrixMailRender');
 
 const NOW = '2026-07-18T01:00:00.000Z';
 const exactBody = 'Dear UNITEA Kazakhstan procurement team,\nWe reviewed your public tea range and would like to discuss one tea pouch with a zipper and roll-film SKU. Could you share the current material structure and annual volume?\nBest regards';
@@ -150,6 +151,7 @@ function seed() {
       'draft',
       'opening the final preview must not approve the draft'
     );
+    const renderedMail = renderMatrixMail({ bodyEn: exactBody });
     assert.deepStrictEqual(preview, {
       customer_id: fixture.customerId,
       customer_name: 'UNITEA Kazakhstan',
@@ -158,6 +160,13 @@ function seed() {
       subject: 'Tea pouch and roll-film review for one UNITEA SKU',
       body_en: exactBody,
       body_cn: exactChinese,
+      mail: {
+        template_version: renderedMail.templateVersion,
+        text: renderedMail.text,
+        html: renderedMail.html,
+        logo_url: MATRIX_MAIL_SIGNATURE.logoUrl,
+        render_hash: renderedMail.renderHash
+      },
       attachments: [],
       version_id: fixture.version.id,
       content_hash: fixture.version.content_hash,

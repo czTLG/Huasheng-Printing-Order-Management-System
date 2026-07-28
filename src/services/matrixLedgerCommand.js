@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { MATRIX_MAIL_SIGNATURE, renderMatrixMail } = require('./matrixMailRender');
 
 const CONFIRMATION_FIELDS = new Set([
   'actorUserId', 'bindingId', 'customerId', 'versionId', 'expectedContentHash',
@@ -232,6 +233,7 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
     `).get(resolved.version.recipient_email, recipientDomain);
     if (delivery) blockers.push(`existing_${delivery.state}_delivery`);
     const normalizedBlockers = reasons(blockers);
+    const renderedMail = renderMatrixMail({ bodyEn: resolved.version.body_en });
     return Object.freeze({
       customer_id: resolved.customer.id,
       customer_name: resolved.customer.name,
@@ -240,6 +242,13 @@ function createMatrixLedgerCommand({ db, reviewService, previewService, delivery
       subject: resolved.version.subject,
       body_en: resolved.version.body_en,
       body_cn: resolved.version.body_cn,
+      mail: Object.freeze({
+        template_version: renderedMail.templateVersion,
+        text: renderedMail.text,
+        html: renderedMail.html,
+        logo_url: MATRIX_MAIL_SIGNATURE.logoUrl,
+        render_hash: renderedMail.renderHash
+      }),
       attachments: attachmentManifest(resolved.version.attachment_manifest_json),
       version_id: resolved.version.id,
       content_hash: resolved.version.content_hash,

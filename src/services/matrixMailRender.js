@@ -77,7 +77,6 @@ function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
   const text = [
     body,
     '',
-    'Best regards,',
     normalizedSignature.name,
     normalizedSignature.company,
     `Website: ${normalizedSignature.website}`,
