@@ -45,7 +45,17 @@ const PROFILES = Object.freeze({
       market: '/ar/markets/middle-east-food-packaging',
       application: '/ar/applications/snack-packaging',
       product: '/ar/products/food-packaging-roll-film',
-      courtesy: 'شكرًا لوقتكم، ونتطلع إلى فرصة للتواصل مع فريق مشتريات التغليف لديكم.'
+      courtesy: 'شكرًا لوقتكم، ونتطلع إلى فرصة للتواصل مع فريق مشتريات التغليف لديكم.',
+      supportedClaims: Object.freeze([
+        'We are Guangdong Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是广东华胜包装有限公司，一家位于中国的软包装制造商。',
+        'moisture and aroma protection based on the product and required shelf life;',
+        'seal and roll-film specifications matched to the packing machine;',
+        'print and artwork consistency across multiple private-label SKUs.',
+        '根据产品和所需保质期确定防潮及保香要求；',
+        '使封口与卷膜规格匹配包装机；',
+        '确保多个私牌 SKU 的印刷和稿件一致性。'
+      ])
     })
   })
 });

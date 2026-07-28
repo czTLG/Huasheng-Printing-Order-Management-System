@@ -29,6 +29,13 @@ function includesPhrase(text, phrase) {
   return Boolean(needle && haystack.includes(needle));
 }
 
+function includesCompany(text, company) {
+  if (includesPhrase(text, company)) return true;
+  const words = normalized(company).split(/\s+/)
+    .filter(word => !/^(?:llc|ltd|limited|inc|corp|corporation|company|co)$/i.test(word));
+  return words.length >= 2 && includesPhrase(text, words.slice(0, 2).join(' '));
+}
+
 function component(points, maximum, reasons, evidenceIds) {
   return { points, maximum, reasons, evidence_ids: evidenceIds };
 }
@@ -125,11 +132,15 @@ function normalizeTextNumbers(value) {
 }
 
 function withoutUrls(value) {
-  return String(value || '').replace(/https?:\/\/[^\s<>()]+/giu, ' ');
+  return String(value || '')
+    .replace(/(^|\n)[^\n]*:\s*\nhttps?:\/\/[^\s<>()]+/giu, '$1 ')
+    .replace(/https?:\/\/[^\s<>()]+/giu, ' ');
 }
 
 const CONCEPTS = Object.freeze([
   ['coffee', /\bcoffee\b/i, /咖啡/u], ['tea', /\btea\b/i, /茶/u],
+  ['nuts', /\bnuts?\b/i, /坚果/u], ['dried_fruit', /\bdried\s+fruits?\b/i, /干果/u],
+  ['snacks', /\bsnacks?\b/i, /零食/u], ['spices', /\bspices?\b/i, /香辛料/u],
   ['chili_sauce', /\bchili\s+sauces?\b/i, /辣椒酱/u],
   ['sauce', /\bsauces?\b/i, /(?:酱料|酱汁)/u],
   ['seasoning_powder', /\bseasoning\s+powders?\b/i, /调味粉/u],
@@ -149,8 +160,10 @@ const CONCEPTS = Object.freeze([
 const QUESTION_INTENTS = Object.freeze([
   ['structure', /\bstructure\b/i, /结构/u],
   ['volume', /(?:annual\s+volume|yearly\s+volume|volume|quantity)/i, /(?:年用量|年需求|数量|用量)/u],
-  ['size', /\b(?:size|format)\b/i, /(?:尺寸|规格)/u],
-  ['structure', /\bmaterial\b/i, /材料/u]
+  ['size', /\b(?:size|format)\b/i, /尺寸/u],
+  ['structure', /\bmaterial\b/i, /材料/u],
+  ['specification', /\bspecifications?\b/i, /规格/u],
+  ['sample', /\b(?:photos?|samples?)\b/i, /(?:图片|照片|样品)/u]
 ]);
 
 function numericSpecs(text) {
@@ -242,6 +255,9 @@ function unsupportedProductFacts(bodyEn, bodyCn, evidence) {
 function hasUnknownProductFact(bodyEn, bodyCn) {
   return [[bodyEn, 'en'], [bodyCn, 'cn']].some(([body, language]) => splitSentences(body).some(sentence => {
     if (isNonAssertionRequest(sentence)) return false;
+    if (language === 'en'
+      ? /\b(?:check|review|assess|evaluate)\b/i.test(sentence)
+      : /(?:核对|检查|评估)/u.test(sentence)) return false;
     const property = language === 'en'
       ? /\b(?:material|finish|surface|closure|color|colour|transparen|opaque|zipper|velcro|valve|pouch)\b/i.test(sentence)
       : /(?:材料|表面|封口|颜色|透明|不透明|拉链|魔术贴|阀|袋型)/u.test(sentence);
@@ -250,7 +266,10 @@ function hasUnknownProductFact(bodyEn, bodyCn) {
 }
 
 function questionIntents(text, language) {
-  const questions = splitSentences(text).filter(part => /[?？]$/u.test(part));
+  const questions = splitSentences(text).filter(part => /[?？]$/u.test(part)
+    || (language === 'en'
+      ? /\b(?:could you|can you|you may|please (?:send|share|provide))\b/i.test(part)
+      : /(?:能否|可以|请)(?:向我们)?(?:提供|发送|分享)/u.test(part)));
   const intents = new Set();
   for (const question of questions) {
     for (const [name, en, cn] of QUESTION_INTENTS) if ((language === 'en' ? en : cn).test(question)) intents.add(name);
@@ -304,7 +323,8 @@ function scoreDraft(input = {}) {
   const specsMatch = expectedSpecs.length > 0 && expectedSpecs.every(value => numericSpecs(bodyEn).includes(value) && numericSpecs(bodyCn).includes(value));
   const productMatch = sharedProductConcepts.length > 0 && (expectedSpecs.length === 0 || specsMatch);
   const productPoints = productMatch ? MAXIMUMS.product_match : 0;
-  const companyMatch = includesPhrase(bodyEn, evidence.company) && /(?:贵司|您(?:司|们)?|公司)/u.test(bodyCn) && productMatch;
+  const companyMatch = includesCompany(bodyEn, evidence.company)
+    && /(?:贵司|您(?:司|们)?|公司)/u.test(bodyCn) && productMatch;
   const companyPoints = companyMatch ? MAXIMUMS.company_specific : 0;
   const expectedEntryConcepts = conceptMatches(evidence.entryProduct, 'en');
   const entryMatch = expectedEntryConcepts.length > 0
@@ -316,7 +336,7 @@ function scoreDraft(input = {}) {
     && enQuestions.intents.length > 0 && JSON.stringify(enQuestions.intents) === JSON.stringify(cnQuestions.intents);
   const questionPoints = questionMatch ? MAXIMUMS.questions : 0;
   const subjectPoints = subject.length >= 12 && subject.length <= 120
-    && includesPhrase(subject, evidence.company)
+    && includesCompany(subject, evidence.company)
     && (expectedSpecs.some(value => numericSpecs(subject).includes(value)) || categories.some(value => includesPhrase(subject, value)))
     ? MAXIMUMS.subject : 0;
   const bilingualMatch = productMatch && entryMatch && questionMatch
@@ -324,7 +344,7 @@ function scoreDraft(input = {}) {
   const bilingualPoints = bilingualMatch ? MAXIMUMS.bilingual_consistency : 0;
   const readabilityPoints = bodyEn.length >= 80 && bodyEn.length <= 1200 && bodyCn.length >= 30 && bodyCn.length <= 800
     && String(input.bodyEn || '').split(/\r?\n/).filter(line => line.trim()).length >= 2
-    && /\b(?:dear|hello|hi)\b/i.test(bodyEn) && /(?:您好|你好)/u.test(bodyCn)
+    && /\b(?:dear|hello|hi)\b/i.test(bodyEn) && /(?:您好|你好|尊敬)/u.test(bodyCn)
     ? MAXIMUMS.readability : 0;
 
   const recipient = input.recipient && typeof input.recipient === 'object' ? input.recipient : {};
@@ -336,7 +356,9 @@ function scoreDraft(input = {}) {
     product_match: component(productPoints, MAXIMUMS.product_match, productMatch ? [expectedSpecs.length ? 'same_evidence_product_specs_in_both_languages' : 'same_evidence_product_categories_in_both_languages'] : ['product_evidence_not_bilingual'], productMatch ? evidenceIds : []),
     company_specific: component(companyPoints, MAXIMUMS.company_specific, companyMatch ? ['company_and_observed_range_specific'] : ['company_context_not_bilingual'], companyMatch ? evidenceIds : []),
     entry_value: component(entryPoints, MAXIMUMS.entry_value, entryMatch ? ['same_entry_value_concepts_in_both_languages'] : ['entry_value_not_bilingual'], entryMatch ? evidenceIds : []),
-    questions: component(questionPoints, MAXIMUMS.questions, questionMatch ? [`matching_question_intents:${enQuestions.intents.join(',')}`] : ['question_intents_not_aligned'], []),
+    questions: component(questionPoints, MAXIMUMS.questions, questionMatch
+      ? [`matching_question_intents:${enQuestions.intents.join(',')}`]
+      : [`question_intents_not_aligned:en=${enQuestions.intents.join(',')}:cn=${cnQuestions.intents.join(',')}`], []),
     subject: component(subjectPoints, MAXIMUMS.subject, subjectPoints ? ['company_and_evidence_product_in_subject'] : ['subject_not_evidence_specific'], subjectPoints ? evidenceIds : []),
     bilingual_consistency: component(bilingualPoints, MAXIMUMS.bilingual_consistency, bilingualMatch ? ['company_product_entry_and_question_facts_aligned'] : ['key_facts_not_aligned'], bilingualMatch ? evidenceIds : []),
     readability: component(readabilityPoints, MAXIMUMS.readability, readabilityPoints ? ['bounded_greeting_and_paragraph_structure'] : ['readability_boundary_failed'], []),

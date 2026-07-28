@@ -760,7 +760,7 @@ function createMatrixRouter({
     const categories = (detail.categories || []).map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
     const category = categories[0] || '';
     const categoryCnMap = {
-      coffee: '咖啡', tea: '茶', snacks: '零食',
+      coffee: '咖啡', tea: '茶', nuts: '坚果', 'dried fruit': '干果', snacks: '零食',
       spices: '香辛料', seasonings: '调味品', sauces: '酱料', 'soup bases': '汤底',
       'liquid detergent': '洗衣液', 'powder detergent': '洗衣粉',
       'hand soap': '洗手液', 'body soap': '沐浴皂', 'hand wash': '洗手液',
@@ -879,7 +879,7 @@ function createMatrixRouter({
           market: `https://gdhspack.com${localizedRoutes.market}`,
           product: `https://gdhspack.com${localizedRoutes.product}`
         } : null),
-      supportedClaims: [],
+      supportedClaims: localizedRoutes?.supportedClaims || [],
       strategy_match: strategyMatch,
       evidenceIds: evidence.map(row => row.source_url).filter(Boolean),
       official_evidence: evidence.map(row => ({

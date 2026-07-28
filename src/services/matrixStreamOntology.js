@@ -3,7 +3,7 @@
 const ONTOLOGY = Object.freeze({
   material: [
     ['pet', /\bpet\b/i, /(?:PET(?![A-Z])|聚酯)/iu], ['pe', /\bpe\b/i, /(?:PE(?![A-Z])|聚乙烯)/iu],
-    ['nylon', /\b(?:pa|ny|nylon)\b/i, /(?:PA|NY|尼龙)/iu], ['evoh', /\bevoh\b/i, /EVOH/iu],
+    ['nylon', /\b(?:pa|ny|nylon)\b/i, /(?:\bPA\b|\bNY\b|尼龙)/iu], ['evoh', /\bevoh\b/i, /EVOH/iu],
     ['aluminum', /\b(?:al|aluminum\s*foil)\b/i, /(?:\bAL\b|铝箔)/iu], ['vmpet', /\bvmpet\b/i, /VMPET/iu],
     ['cpp', /\bcpp\b/i, /CPP/iu]
   ],
@@ -17,7 +17,8 @@ const ONTOLOGY = Object.freeze({
   bag_type: [
     ['valve_pouch', /valve\s+pouch/i, /带阀袋/u], ['stand_up_pouch', /stand[ -]?up\s+pouch/i, /自立袋/u],
     ['flat_bottom', /flat[ -]?bottom/i, /方底袋/u], ['spout_pouch', /spout(?:ed)?\s+pouch/i, /吸嘴袋/u],
-    ['three_side_seal', /three[ -]?side[ -]?seal/i, /三边封/u]
+    ['three_side_seal', /three[ -]?side[ -]?seal/i, /三边封/u],
+    ['pillow_pouch', /pillow[ -]?pouch/i, /枕式袋/u]
   ],
   product_category: [
     ['chili_sauce', /\bchili\s+sauces?\b/i, /辣椒酱/u],
@@ -25,6 +26,10 @@ const ONTOLOGY = Object.freeze({
     ['seasoning_powder', /\bseasoning\s+powders?\b/i, /调味粉/u],
     ['seasoning', /\bseasonings?\b(?!\s+powders?\b)/i, /(?:调味料|调味品)/u],
     ['soup_base', /\bsoup[ -]?bases?\b/i, /(?:汤底|汤料)/u],
+    ['nuts', /\bnuts?\b/i, /坚果/u],
+    ['dried_fruit', /\bdried\s+fruits?\b/i, /干果/u],
+    ['snacks', /\bsnacks?\b/i, /零食/u],
+    ['spices', /\bspices?\b/i, /香辛料/u],
     ['liquid_detergent', /\bliquid\s+detergents?\b/i, /洗衣液/u],
     ['hand_soap', /\bhand\s+soaps?\b/i, /洗手液/u],
     ['body_soap', /\bbody\s+soaps?\b/i, /沐浴皂/u],

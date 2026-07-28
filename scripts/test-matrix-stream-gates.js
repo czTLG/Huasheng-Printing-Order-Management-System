@@ -49,6 +49,35 @@ assert.deepStrictEqual(good.components.product_match.evidence_ids, [11, 12]);
 assert.deepStrictEqual(good.components.readability.evidence_ids, []);
 assert.deepStrictEqual(good.components.recipient_provenance.evidence_ids, []);
 
+const gulfSnack = scoreDraft({
+  subject: 'Pillow pouch and roll-film options for Gulf Nuts private-label snacks',
+  bodyEn: 'Dear Gulf Nuts Sales Team,\n\nWe reviewed your private-label range for nuts, dried fruits, spices and other dry foods, including pillow pouches and portion-controlled packs.\n\nWe are Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.\n\nFor these applications, we focus on moisture and aroma protection, seal and roll-film specifications, and print consistency.\n\nIf you have any pillow-pouch or roll-film projects currently under review, you may send us one existing specification, product photo or sample.\n\nBest regards',
+  bodyCn: '尊敬的 Gulf Nuts 销售团队：\n\n我们查看了贵司面向坚果、干果、香辛料及其他干货食品的私牌产品系列，其中包括枕式袋及小份量包装。\n\n我们是华胜包装有限公司，一家位于中国的软包装制造商。\n\n针对这些应用，我们重点关注防潮及保香、封口与卷膜规格，以及印刷一致性。\n\n如果贵司目前有正在评估的枕式袋或卷膜项目，可以向我们提供一份现有规格、产品图片或样品。\n\n此致',
+  recipient: {
+    email: 'sales@gulf-nuts.test',
+    sourceUrl: 'https://gulf-nuts.test/contact',
+    verifiedAt: '2026-07-27T00:00:00Z',
+    kind: 'public_company'
+  },
+  evidence: {
+    company: 'Gulf Nuts Foodstuff Factory LLC',
+    categories: ['nuts', 'dried fruit', 'snacks', 'spices'],
+    products: ['nuts', 'dried fruits', 'spices', 'pillow pouches', 'portion-controlled packs', 'roll film'],
+    entryProduct: 'pillow pouch and roll film',
+    supportedClaims: [
+      'We are Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+      '我们是华胜包装有限公司，一家位于中国的软包装制造商。',
+      'For these applications, we focus on moisture and aroma protection, seal and roll-film specifications, and print consistency.',
+      '针对这些应用，我们重点关注防潮及保香、封口与卷膜规格，以及印刷一致性。'
+    ],
+    evidenceIds: [21, 22, 23]
+  },
+  now: '2026-07-28T00:00:00Z'
+});
+assertAllComponentsMax(gulfSnack, 'gulf-snack');
+assert.strictEqual(gulfSnack.score, 100);
+assert.strictEqual(gulfSnack.passed, true);
+
 const inconsistent = scoreDraft({
   ...base,
   bodyEn: 'Dear Alpha Coffee team,\nWe reviewed your 250g and 500g coffee range and can discuss pouches. Is anyone available?\nBest regards',
