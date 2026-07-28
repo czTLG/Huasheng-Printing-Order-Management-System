@@ -23,7 +23,13 @@ const { profileFor, verifyProfileRoutes } = require('../src/services/matrixRoute
   assert.strictEqual(uaeSnack.about, '/ar/about');
   assert.strictEqual(uaeSnack.expectedLanguage, 'ar');
   assert.strictEqual(profileFor({ countryCode: 'AE', categories: ['industrial chemicals'] }), null);
-  assert.strictEqual(profileFor({ countryCode: 'MY', categories: ['nuts', 'snacks'] }), null);
+  const malaysiaSeasoning = profileFor({ countryCode: 'MY', categories: ['spices', 'seasonings'] });
+  assert.strictEqual(malaysiaSeasoning.kind, 'malaysia_seasoning');
+  assert.strictEqual(malaysiaSeasoning.language, 'en');
+  assert.strictEqual(malaysiaSeasoning.market, '/markets/malaysia-food-packaging');
+  assert.strictEqual(malaysiaSeasoning.application, '/applications/food-snack-packaging');
+  assert.strictEqual(malaysiaSeasoning.product, '/products/food-packaging-roll-film');
+  assert.match(malaysiaSeasoning.courtesy, /Terima kasih/);
 
   assert.strictEqual(profileFor({ countryCode: 'VN', categories: ['steel'] }), null);
 

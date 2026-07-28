@@ -373,8 +373,12 @@ function createCacheIndexView({ dbPath, afterRecommendationMembership } = {}) {
   function reviewedIntake(id) {
     const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cache_reviewed_intakes'").get();
     if (!exists) return null;
+    const columns = new Set(db.prepare('PRAGMA table_info(cache_reviewed_intakes)').all().map(row => row.name));
+    const provenance = columns.has('recipient_provenance_json')
+      ? 'recipient_provenance_json'
+      : "'{}' AS recipient_provenance_json";
     return db.prepare(`
-      SELECT candidate_key, record_id, request_fingerprint, route_readiness_json, created_at
+      SELECT candidate_key, record_id, request_fingerprint, route_readiness_json, ${provenance}, created_at
       FROM cache_reviewed_intakes WHERE record_id = ?
     `).get(Number(id)) || null;
   }

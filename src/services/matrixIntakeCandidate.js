@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { validateRecipientProvenance } = require('./matrixRecipientProvenance');
 
 const TOP_KEYS = ['candidate_key', 'categories', 'company_name', 'confidence', 'country_code', 'discovery', 'fit_score', 'formats', 'normalized_domain', 'official_url', 'priority', 'recipient', 'route_readiness', 'scale_tier', 'size_signals', 'sources'];
 const REQUIRED_SOURCE_ROLES = new Set(['home', 'profile', 'products', 'process', 'contact']);
@@ -72,12 +73,11 @@ function parseInput(input, now) {
   const domain = cleanDomain(input.normalized_domain);
   const officialUrl = httpsUrl(input.official_url, 'official_url');
   if (!onDomain(officialUrl, domain)) throw new Error('official URL domain mismatch');
-  exactKeys(input.recipient, ['email', 'role', 'source_url', 'verified_at'], 'recipient');
-  const email = cleanText(input.recipient.email, 'recipient.email', 254).toLowerCase();
-  const emailParts = email.split('@');
-  if (emailParts.length !== 2 || cleanDomain(emailParts[1]) !== domain) throw new Error('recipient domain mismatch');
-  const recipientSource = httpsUrl(input.recipient.source_url, 'recipient.source_url');
-  if (!onDomain(recipientSource, domain)) throw new Error('recipient source domain mismatch');
+  const recipient = validateRecipientProvenance(input.recipient, {
+    organizationDomain: domain,
+    organizationName: input.company_name,
+    now
+  });
 
   if (!Array.isArray(input.sources)) throw new Error('sources must be an array');
   const roles = new Set();
@@ -116,12 +116,7 @@ function parseInput(input, now) {
     country_code: cleanText(input.country_code, 'country_code', 2).toUpperCase(),
     normalized_domain: domain,
     official_url: officialUrl,
-    recipient: {
-      email,
-      role: cleanText(input.recipient.role, 'recipient.role', 120),
-      source_url: recipientSource,
-      verified_at: recent(input.recipient.verified_at, now, 'recipient.verified_at')
-    },
+    recipient,
     categories: stringArray(input.categories, 'categories'),
     formats: stringArray(input.formats, 'formats'),
     size_signals: stringArray(input.size_signals, 'size_signals'),
@@ -157,10 +152,15 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
       record_id INTEGER NOT NULL UNIQUE,
       request_fingerprint TEXT NOT NULL,
       route_readiness_json TEXT NOT NULL,
+      recipient_provenance_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       FOREIGN KEY(record_id) REFERENCES cache_records(id) ON DELETE CASCADE
     )
   `);
+  const reviewedColumns = new Set(db.prepare('PRAGMA table_info(cache_reviewed_intakes)').all().map(row => row.name));
+  if (!reviewedColumns.has('recipient_provenance_json')) {
+    db.exec("ALTER TABLE cache_reviewed_intakes ADD COLUMN recipient_provenance_json TEXT NOT NULL DEFAULT '{}'");
+  }
   const execute = db.transaction(() => {
     const prior = db.prepare('SELECT record_id, request_fingerprint FROM cache_reviewed_intakes WHERE candidate_key = ?').get(candidate.candidate_key);
     if (prior) {
@@ -210,8 +210,20 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
       VALUES (?,?,?,?,?,?,?,?,?)
     `).run(recordId, candidate.normalized_domain, candidate.discovery.source_adapter, candidate.discovery.source_url,
       candidate.official_url, 'reviewed_public_source', candidate.discovery.collected_at, digest(candidate.discovery), now);
-    db.prepare('INSERT INTO cache_reviewed_intakes VALUES (?,?,?,?,?)').run(
-      candidate.candidate_key, recordId, fingerprint, JSON.stringify(candidate.route_readiness), now
+    db.prepare(`
+      INSERT INTO cache_reviewed_intakes (
+        candidate_key,record_id,request_fingerprint,route_readiness_json,recipient_provenance_json,created_at
+      ) VALUES (?,?,?,?,?,?)
+    `).run(
+      candidate.candidate_key,
+      recordId,
+      fingerprint,
+      JSON.stringify(candidate.route_readiness),
+      JSON.stringify({
+        evidence_mode: candidate.recipient.evidence_mode,
+        ...(candidate.recipient.corroboration ? { corroboration: candidate.recipient.corroboration } : {})
+      }),
+      now
     );
     return { candidate_id: recordId, resolution: 'inserted', fingerprint };
   });

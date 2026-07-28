@@ -6,6 +6,7 @@ const { normalizePermissions } = require('../lib/permissions');
 const review = require('./matrixStreamReview');
 const { scoreDraft, evaluateInitialContact } = require('./matrixStreamGate');
 const { scheduleReplyCheck } = require('./matrixStreamFollowup');
+const { validateSnapshotRecipientProvenance } = require('./matrixRecipientProvenance');
 
 const INPUT_FIELDS = new Set([
   'actorUserId', 'bindingId', 'workItemId', 'versionId', 'expectedWorkVersion',
@@ -230,10 +231,21 @@ function freshDeliveryGate(db, input, context) {
   if (review.canonicalJson(evidenceSnapshot) !== review.canonicalJson(versionSnapshot)) throw new Error('recipient provenance snapshot mismatch');
   let sourceHost;
   try { sourceHost = new URL(recipient.sourceUrl).hostname; } catch (_) { throw new Error('recipient provenance source invalid'); }
-  const recipientDomain = recipient.email.split('@')[1];
   const organizationDomain = domainIdentity(evidence.organization_domain);
-  if (!organizationDomain || domainIdentity(recipientDomain) !== organizationDomain
-      || domainIdentity(sourceHost) !== organizationDomain) throw new Error('recipient provenance domain mismatch');
+  if (!organizationDomain || domainIdentity(sourceHost) !== organizationDomain) throw new Error('recipient provenance domain mismatch');
+  try {
+    validateSnapshotRecipientProvenance({
+      email: recipient.email,
+      sourceUrl: recipient.sourceUrl,
+      verifiedAt: recipient.verifiedAt,
+      organizationDomain,
+      organizationName: versionSnapshot.company,
+      snapshot: versionSnapshot,
+      now: context.iso
+    });
+  } catch (_) {
+    throw new Error('recipient provenance domain mismatch');
+  }
 
   const storedQuality = jsonObject(version.quality_json, 'stored quality');
   const quality = scoreDraft({
@@ -250,7 +262,7 @@ function freshDeliveryGate(db, input, context) {
   canonicalContactAuthorized(db, input, version, row);
   const identity = evaluateInitialContact(db, {
     email: recipient.email,
-    domain: recipientDomain,
+    domain: organizationDomain,
     companyName: versionSnapshot.company,
     aliases: versionSnapshot.aliases,
     excludeCustomerIds: input.canonicalCustomerId ? [input.canonicalCustomerId] : [],
@@ -280,7 +292,7 @@ function freshDeliveryGate(db, input, context) {
       || !Number.isFinite(expiresAt) || expiresAt <= context.ms
       || !httpsSources(policy.source_urls_json)) throw new Error('country channel policy blocked');
 
-  return { row, version };
+  return { row, version, organizationDomain };
 }
 
 function createMatrixStreamDelivery({
@@ -379,7 +391,7 @@ function createMatrixStreamDelivery({
         ORDER BY id DESC LIMIT 1
       `).get(input.versionId, input.expectedContentHash);
       if (blocking) throw new Error(`delivery ${blocking.state} blocks resend`);
-      const recipientDomain = domainIdentity(normalizedEmail(gated.version.recipient_email).split('@')[1]);
+      const recipientDomain = gated.organizationDomain;
       if (!recipientDomain) throw new Error('valid recipient reservation domain required');
       reserveCapacity(recipientDomain, context);
       const ownerToken = crypto.randomUUID();

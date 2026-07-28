@@ -53,4 +53,3 @@ Regression coverage must prove:
 - unrelated organizations using the same provider do not share cooling state;
 - the organization domain still enforces duplicate and cooling protection;
 - Hock Xeng can reach draft and preview state without creating a delivery job.
-

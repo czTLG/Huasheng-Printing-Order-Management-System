@@ -56,12 +56,57 @@ const NOW = new Date('2026-07-28T08:00:00.000Z');
         urls: { application: 'https://gdhspack.com/ar/applications/snack-packaging' }
       }
     };
+    const publicCandidate = {
+      id: 72,
+      company_name: 'Hock Xeng Sdn Bhd',
+      normalized_domain: 'hockxeng.com',
+      public_email: 'hockxeng@gmail.com',
+      contact_url: 'https://www.hockxeng.com/contact-us/',
+      contact_role: 'public business',
+      status: 'valid',
+      audit_state: 'audited',
+      audited_at: '2026-07-28T07:00:00.000Z',
+      updated_at: '2026-07-28T07:00:00.000Z'
+    };
+    const publicProvenance = {
+      evidence_mode: 'official_public_mailbox',
+      corroboration: {
+        source_url: 'https://example-exhibition.test/hock-xeng',
+        source_class: 'official_exhibition',
+        observed_at: '2026-07-28T07:10:00.000Z',
+        email: 'hockxeng@gmail.com',
+        organization_name: 'Hock Xeng Sdn Bhd',
+        official_domain: 'hockxeng.com',
+        identity_matches: { address: true, phone: true }
+      }
+    };
+    const publicSnapshot = {
+      ...sourceSnapshot,
+      candidateId: 72,
+      organization_domain: 'hockxeng.com',
+      recipient_email: 'hockxeng@gmail.com',
+      source_url: 'https://www.hockxeng.com/contact-us/',
+      company: 'Hock Xeng Sdn Bhd',
+      categories: ['spices', 'seasonings'],
+      products: ['spices', 'seasonings', 'seasoning pouches', 'roll film'],
+      entryProduct: 'spice pouch and roll film',
+      recipient_provenance: publicProvenance
+    };
     const bridge = createMatrixIntakeBridge({
       db,
       store: createMatrixLedgerStore({ db, clock: () => NOW }),
       reviewService,
       clock: () => NOW,
-      prepareCandidate: async () => ({
+      prepareCandidate: async value => value.id === 72 ? ({
+        organizationDomain: 'hockxeng.com',
+        recipient: {
+          email: 'hockxeng@gmail.com',
+          sourceUrl: 'https://www.hockxeng.com/contact-us/',
+          verifiedAt: '2026-07-28T07:00:00.000Z',
+          kind: 'public_company'
+        },
+        sourceSnapshot: publicSnapshot
+      }) : ({
         organizationDomain: 'nutty-nuts.com',
         recipient: {
           email: 'sales@nutty-nuts.com',
@@ -120,7 +165,22 @@ const NOW = new Date('2026-07-28T08:00:00.000Z');
       () => bridge.create({ ...input, idempotencyKey: 'intake:bad', candidate: { ...candidate, public_email: 'wrong@outside.test' } }),
       /candidate recipient mismatch/
     );
-    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_versions').get().count, 2);
+    const publicCreated = await bridge.create({
+      ...input,
+      candidate: publicCandidate,
+      subject: 'Spice pouch and roll-film options for Hock Xeng',
+      bodyEn: 'Dear Hock Xeng Team,\n\nWe reviewed your spices and seasonings, including spice pouches and roll film.\n\nWe are Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.\n\nFor these applications, we focus on moisture protection and print consistency.\n\nIf you have a current project, could you share one specification, product photo or sample?\n\nBest regards,\nGavin',
+      bodyCn: '您好，Hock Xeng 团队：\n\n我们查看了贵司的香辛料和调味品，包括香辛料袋和卷膜。\n\n我们是华胜包装有限公司，一家位于中国的软包装制造商。\n\n针对这些应用，我们重点关注防潮和印刷一致性。\n\n如果贵司有当前项目，能否提供一份规格、产品图片或样品？\n\n此致\nGavin',
+      idempotencyKey: 'intake:hock-xeng:public-mailbox'
+    });
+    assert.strictEqual(publicCreated.status, 'draft');
+    assert.strictEqual(db.prepare(
+      'SELECT organization_domain FROM matrix_stream_recipient_evidence WHERE work_item_id=?'
+    ).get(publicCreated.work_item_id).organization_domain, 'hockxeng.com');
+    assert.strictEqual(JSON.parse(db.prepare(
+      'SELECT snapshot_json FROM matrix_stream_recipient_evidence WHERE work_item_id=?'
+    ).get(publicCreated.work_item_id).snapshot_json).recipient_provenance.evidence_mode, 'official_public_mailbox');
+    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_versions').get().count, 3);
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

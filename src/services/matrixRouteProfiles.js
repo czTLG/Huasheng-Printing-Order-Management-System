@@ -35,6 +35,29 @@ const PROFILES = Object.freeze({
       courtesy: 'Cảm ơn Quý công ty đã dành thời gian xem thư. Chúng tôi mong có cơ hội trao đổi cùng đội ngũ thu mua bao bì của Quý công ty.'
     })
   }),
+  malaysia_seasoning: Object.freeze({
+    MY: Object.freeze({
+      kind: 'malaysia_seasoning',
+      language: 'en',
+      expectedLanguage: 'en',
+      home: '/',
+      about: '/about',
+      market: '/markets/malaysia-food-packaging',
+      application: '/applications/food-snack-packaging',
+      product: '/products/food-packaging-roll-film',
+      courtesy: 'Terima kasih atas masa pihak tuan/puan. Kami berharap dapat berbincang dengan pasukan anda.',
+      supportedClaims: Object.freeze([
+        'We are Guangdong Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是广东华胜包装有限公司，一家位于中国的软包装制造商。',
+        'moisture and aroma protection based on the product and required shelf life;',
+        'seal and roll-film specifications matched to the packing machine;',
+        'print and artwork consistency across multiple private-label SKUs.',
+        '根据产品和所需保质期确定防潮及保香要求；',
+        '使封口与卷膜规格匹配包装机；',
+        '确保多个私牌 SKU 的印刷和稿件一致性。'
+      ])
+    })
+  }),
   food_snack_ar: Object.freeze({
     AE: Object.freeze({
       kind: 'food_snack_ar',
@@ -67,6 +90,9 @@ const FOOD_SNACK_AR_CATEGORY = /(?:nuts?|dried fruits?|snacks?|spices?|beans?|le
 function profileFor({ countryCode, categories } = {}) {
   const country = String(countryCode || '').trim().toUpperCase();
   const values = Array.isArray(categories) ? categories.map(value => String(value || '').trim()).filter(Boolean) : [];
+  if (country === 'MY' && values.some(value => FOOD_SAUCE_CATEGORY.test(value))) {
+    return PROFILES.malaysia_seasoning.MY;
+  }
   if (values.some(value => LIQUID_CATEGORY.test(value)) && PROFILES.liquid_care[country]) {
     return PROFILES.liquid_care[country];
   }

@@ -3,6 +3,7 @@
 const { parse: parseDomain } = require('tldts');
 const { isNonAssertionRequest, splitSentences } = require('./matrixStreamText');
 const { extractOntologyFacts } = require('./matrixStreamOntology');
+const { validateSnapshotRecipientProvenance } = require('./matrixRecipientProvenance');
 
 const MAXIMUMS = Object.freeze({
   product_match: 20,
@@ -293,18 +294,23 @@ function domainIdentity(value) {
   return supported && !parsed.isIp && parsed.hostname && parsed.domain ? parsed.domain : null;
 }
 
-function validProvenance(recipient, nowMs) {
+function validProvenance(recipient, evidence, nowMs) {
   try {
     const email = normalized(recipient.email);
-    const emailDomain = email.split('@')[1];
     const source = new URL(String(recipient.sourceUrl || ''));
     const verifiedAt = Date.parse(String(recipient.verifiedAt || ''));
-    const emailIdentity = domainIdentity(emailDomain);
-    const sourceIdentity = domainIdentity(source.hostname);
-    const bound = emailIdentity !== null && emailIdentity === sourceIdentity;
-    return recipient.kind === 'public_company' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-      && source.protocol === 'https:' && bound && Number.isFinite(verifiedAt) && verifiedAt <= nowMs
-      && nowMs - verifiedAt <= 180 * 86400000;
+    if (recipient.kind !== 'public_company' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+        || source.protocol !== 'https:' || !Number.isFinite(verifiedAt)) return false;
+    validateSnapshotRecipientProvenance({
+      email,
+      sourceUrl: source.toString(),
+      verifiedAt: new Date(verifiedAt).toISOString(),
+      organizationDomain: evidence.organization_domain || domainIdentity(source.hostname),
+      organizationName: evidence.company,
+      snapshot: evidence,
+      now: new Date(nowMs).toISOString()
+    });
+    return true;
   } catch (_) { return false; }
 }
 
@@ -350,7 +356,7 @@ function scoreDraft(input = {}) {
 
   const recipient = input.recipient && typeof input.recipient === 'object' ? input.recipient : {};
   const nowMs = Date.parse(String(input.now || ''));
-  const provenanceOk = Number.isFinite(nowMs) && validProvenance(recipient, nowMs);
+  const provenanceOk = Number.isFinite(nowMs) && validProvenance(recipient, evidence, nowMs);
   const provenancePoints = provenanceOk ? MAXIMUMS.recipient_provenance : 0;
 
   const components = {
@@ -419,7 +425,7 @@ function evaluateInitialContact(db, input = {}) {
     .map(Number).filter(value => Number.isInteger(value) && value > 0));
   const nowMs = Date.parse(String(input.now || ''));
   if (!db || typeof db.prepare !== 'function' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-      || !domain || domain !== emailDomain || !companyName || !Number.isFinite(nowMs)) {
+      || !domain || !emailDomain || !companyName || !Number.isFinite(nowMs)) {
     return { allowed: false, route: 'blocked', reasons: ['invalid_identity_input'], matchedCustomerIds: [] };
   }
 
@@ -481,7 +487,10 @@ function evaluateInitialContact(db, input = {}) {
         if (job.state !== 'accepted') return false;
         const version = versionById.get(Number(job.version_id));
         const at = Date.parse(String(job.updated_at || job.created_at || ''));
-        return version && contactDomain(version.recipient_email) === domain
+        let versionDomain = '';
+        try { versionDomain = normalizedDomain(JSON.parse(version?.source_snapshot_json || '{}').organization_domain); } catch (_) {}
+        if (!versionDomain) versionDomain = contactDomain(version?.recipient_email);
+        return version && versionDomain === domain
           && Number.isFinite(at) && at >= coolingStart && at <= nowMs;
       });
       if (recentDomainContact || recentAcceptedDomain) {

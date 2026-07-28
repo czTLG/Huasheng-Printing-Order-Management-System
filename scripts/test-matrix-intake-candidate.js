@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Database = require('better-sqlite3');
-const { admitReviewedCandidate } = require('../src/services/matrixIntakeCandidate');
+const { admitReviewedCandidate, parseReviewedCandidate } = require('../src/services/matrixIntakeCandidate');
 
 const NOW = '2026-07-28T08:00:00.000Z';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-intake-candidate-'));
@@ -68,6 +68,69 @@ function fixture(overrides = {}) {
   return { ...value, ...overrides };
 }
 
+function publicMailboxFixture(overrides = {}) {
+  const value = fixture({
+    candidate_key: 'my-hock-xeng-20260728',
+    company_name: 'Hock Xeng Sdn Bhd',
+    country_code: 'MY',
+    normalized_domain: 'hockxeng.com',
+    official_url: 'https://www.hockxeng.com/',
+    recipient: {
+      email: 'hockxeng@gmail.com',
+      source_url: 'https://www.hockxeng.com/contact-us/',
+      verified_at: '2026-07-28T07:00:00.000Z',
+      role: 'public business',
+      evidence_mode: 'official_public_mailbox',
+      corroboration: {
+        source_url: 'https://example-exhibition.test/hock-xeng',
+        source_class: 'official_exhibition',
+        observed_at: '2026-07-28T07:10:00.000Z',
+        email: 'hockxeng@gmail.com',
+        organization_name: 'Hock Xeng Sdn Bhd',
+        official_domain: 'hockxeng.com',
+        identity_matches: {
+          address: true,
+          phone: true
+        }
+      }
+    },
+    sources: [
+      ['home', '/', 'Official home'],
+      ['profile', '/company-profile/', 'Company profile and process'],
+      ['products', '/our-products/seasoning/', 'Seasoning products'],
+      ['process', '/company-profile/', 'OEM and automatic packaging'],
+      ['contact', '/contact-us/', 'Public business contact']
+    ].map(([role, suffix, excerpt]) => ({
+      role,
+      source_url: `https://www.hockxeng.com${suffix}`,
+      page_title: role,
+      observed_at: '2026-07-28T07:00:00.000Z',
+      excerpt
+    })),
+    discovery: {
+      source_adapter: 'matrix_atlas',
+      source_url: 'https://www.hockxeng.com/',
+      source_query: 'Malaysia seasoning OEM manufacturer',
+      collected_at: '2026-07-28T07:00:00.000Z'
+    },
+    route_readiness: {
+      id: 'malaysia_seasoning_en:MY',
+      status: 'ready',
+      expected_language: 'en',
+      commit: '8243066',
+      verified_at: '2026-07-28T07:20:00.000Z',
+      urls: {
+        home: 'https://gdhspack.com/',
+        about: 'https://gdhspack.com/about',
+        market: 'https://gdhspack.com/markets/malaysia-food-packaging',
+        application: 'https://gdhspack.com/applications/food-snack-packaging',
+        product: 'https://gdhspack.com/products/food-packaging-roll-film'
+      }
+    }
+  });
+  return { ...value, ...overrides };
+}
+
 try {
   db.pragma('foreign_keys = ON');
   db.exec(`
@@ -105,9 +168,65 @@ try {
   const mismatchedEmail = fixture({ candidate_key: 'mismatch', recipient: { ...fixture().recipient, email: 'sales@outside.test' } });
   assert.throws(() => admitReviewedCandidate(db, mismatchedEmail, { clock: () => NOW }), /recipient domain mismatch/);
 
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_records').get().count, 1);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 5);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_discovery').get().count, 1);
+  const publicMailbox = admitReviewedCandidate(db, publicMailboxFixture(), { clock: () => NOW });
+  assert.strictEqual(publicMailbox.resolution, 'inserted');
+  const publicParsed = parseReviewedCandidate(publicMailboxFixture(), NOW);
+  assert.strictEqual(publicParsed.recipient.evidence_mode, 'official_public_mailbox');
+  assert.strictEqual(publicParsed.recipient.corroboration.source_class, 'official_exhibition');
+  const storedPublicProvenance = JSON.parse(db.prepare(
+    'SELECT recipient_provenance_json FROM cache_reviewed_intakes WHERE record_id=?'
+  ).get(publicMailbox.candidate_id).recipient_provenance_json);
+  assert.strictEqual(storedPublicProvenance.evidence_mode, 'official_public_mailbox');
+  assert.strictEqual(storedPublicProvenance.corroboration.email, 'hockxeng@gmail.com');
+  assert.throws(
+    () => parseReviewedCandidate(publicMailboxFixture({
+      recipient: { ...publicMailboxFixture().recipient, corroboration: undefined }
+    }), NOW),
+    /corroboration/
+  );
+  assert.throws(
+    () => parseReviewedCandidate(publicMailboxFixture({
+      recipient: {
+        ...publicMailboxFixture().recipient,
+        corroboration: { ...publicMailboxFixture().recipient.corroboration, email: 'other@gmail.com' }
+      }
+    }), NOW),
+    /corroboration email mismatch/
+  );
+  assert.throws(
+    () => parseReviewedCandidate(publicMailboxFixture({
+      recipient: {
+        ...publicMailboxFixture().recipient,
+        corroboration: { ...publicMailboxFixture().recipient.corroboration, source_class: 'business_directory' }
+      }
+    }), NOW),
+    /corroboration source class/
+  );
+  assert.throws(
+    () => parseReviewedCandidate(publicMailboxFixture({
+      recipient: {
+        ...publicMailboxFixture().recipient,
+        corroboration: { ...publicMailboxFixture().recipient.corroboration, observed_at: '2025-01-01T00:00:00.000Z' }
+      }
+    }), NOW),
+    /corroboration.*stale/
+  );
+  assert.throws(
+    () => parseReviewedCandidate(publicMailboxFixture({
+      recipient: {
+        ...publicMailboxFixture().recipient,
+        corroboration: {
+          ...publicMailboxFixture().recipient.corroboration,
+          identity_matches: { address: true, phone: false }
+        }
+      }
+    }), NOW),
+    /at least two corroborated identity fields/
+  );
+
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_records').get().count, 2);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 10);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_discovery').get().count, 2);
   assert.strictEqual(db.prepare("SELECT audit_state FROM cache_records").get().audit_state, 'audited');
 } finally {
   db.close();

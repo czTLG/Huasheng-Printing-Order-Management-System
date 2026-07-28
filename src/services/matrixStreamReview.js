@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { parse: parseDomain } = require('tldts');
 const { scoreDraft } = require('./matrixStreamGate');
+const { validateSnapshotRecipientProvenance } = require('./matrixRecipientProvenance');
 
 function positiveInteger(value, name) {
   const number = Number(value);
@@ -139,17 +140,29 @@ function checkedRecipientEvidence(db, { workItemId, recipient, evidenceId } = {}
     } catch (_) {
       return false;
     }
-    const emailDomain = normalized.email.split('@')[1];
     const verifiedAt = Date.parse(row.verified_at);
     const organization = domainIdentity(row.organization_domain);
-    const emailIdentity = domainIdentity(emailDomain);
     const sourceIdentity = domainIdentity(evidenceSource.hostname);
+    let snapshot;
+    try { snapshot = JSON.parse(row.snapshot_json); } catch (_) { return false; }
+    try {
+      validateSnapshotRecipientProvenance({
+        email: normalized.email,
+        sourceUrl: normalized.sourceUrl,
+        verifiedAt: normalized.verifiedAt,
+        organizationDomain: row.organization_domain,
+        organizationName: snapshot.company,
+        snapshot,
+        now: new Date().toISOString()
+      });
+    } catch (_) {
+      return false;
+    }
     return normalizeEmail(row.recipient_email) === normalized.email
       && evidenceSource.toString() === normalized.sourceUrl
       && new Date(verifiedAt).toISOString() === normalized.verifiedAt
       && organization !== null
       && organization.hostname === organization.registrableDomain
-      && emailIdentity?.registrableDomain === organization.registrableDomain
       && sourceIdentity?.registrableDomain === organization.registrableDomain;
   });
   if (!evidence) throw new Error('trusted recipient evidence binding required');

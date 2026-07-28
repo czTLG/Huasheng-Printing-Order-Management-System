@@ -807,10 +807,14 @@ function createMatrixRouter({
             }))
       : null;
     let reviewedRouteReadiness = null;
+    let reviewedRecipientProvenance = { evidence_mode: 'company_domain' };
     const reviewedIntake = view.reviewedIntake(detail.id);
     if (reviewedIntake) {
       try { reviewedRouteReadiness = JSON.parse(reviewedIntake.route_readiness_json); }
       catch (_) { throw new Error('route readiness evidence invalid'); }
+      try { reviewedRecipientProvenance = JSON.parse(reviewedIntake.recipient_provenance_json || '{}'); }
+      catch (_) { throw new Error('recipient provenance evidence invalid'); }
+      if (!reviewedRecipientProvenance?.evidence_mode) throw new Error('recipient provenance evidence invalid');
       if (!localizedRoutes || reviewedRouteReadiness?.status !== 'ready'
           || reviewedRouteReadiness?.id !== `${localizedRoutes.kind}:${countryCode}`
           || reviewedRouteReadiness?.expected_language !== (localizedRoutes.expectedLanguage || localizedRoutes.language)) {
@@ -867,6 +871,7 @@ function createMatrixRouter({
       organization_domain: organizationDomain,
       recipient_email: email,
       source_url: sourceUrl,
+      recipient_provenance: reviewedRecipientProvenance,
       country_code: countryCode,
       company,
       categories,
@@ -914,6 +919,7 @@ function createMatrixRouter({
     if (JSON.stringify(oldEvidence) !== JSON.stringify(currentEvidence)) staleReasons.push('official_evidence_changed');
     const comparable = value => ({
       organization_domain: value?.organization_domain, recipient_email: value?.recipient_email, source_url: value?.source_url,
+      recipient_provenance: value?.recipient_provenance,
       country_code: value?.country_code, company: value?.company, categories: value?.categories, products: value?.products,
       entryProduct: value?.entryProduct, localizedRouteSet: value?.localizedRouteSet,
       evidenceIds: value?.evidenceIds, official_evidence: value?.official_evidence
