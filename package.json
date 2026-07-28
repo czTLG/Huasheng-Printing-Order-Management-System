@@ -21,6 +21,7 @@
     "test:matrix-ledger": "node scripts/test-matrix-ledger-store.js && node scripts/test-matrix-ledger-migration.js && node scripts/test-matrix-ledger-command.js && node scripts/test-matrix-ledger-inbox.js && node scripts/test-matrix-ledger-cutover.js && node scripts/test-matrix-ledger-e2e.js",
     "verify:matrix-ledger": "npm run test:matrix-ledger && node scripts/verify-matrix-ledger-cutover.js --no-send",
     "verify:matrix-relay-schema": "node scripts/test-matrix-relay-schema.js",
+    "verify:matrix-mail-template": "node scripts/verify-matrix-mail-template.js --no-send",
     "test:private-baseline": "node scripts/test-private-baseline.js",
     "runtime:audit": "node scripts/runtime-audit.js",
     "runtime:backup": "node scripts/runtime-backup.js",
