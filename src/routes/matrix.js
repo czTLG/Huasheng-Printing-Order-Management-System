@@ -14,7 +14,11 @@ const { scoreSignalMatch } = require('../services/matrixSignalMatch');
 const { createMatrixLedgerCommand } = require('../services/matrixLedgerCommand');
 const { createMatrixLedgerStore } = require('../services/matrixLedgerStore');
 const { createMatrixIntakeBridge } = require('../services/matrixIntakeBridge');
-const { profileFor, verifyProfileRoutes } = require('../services/matrixRouteProfiles');
+const {
+  profileFor,
+  scopeProfileProducts,
+  verifyProfileRoutes
+} = require('../services/matrixRouteProfiles');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
 const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
@@ -844,9 +848,7 @@ function createMatrixRouter({
       });
     }
     const foodSauce = localizedRoutes?.kind === 'food_sauce';
-    const scopedProducts = foodSauce
-      ? products.map(value => value.replace(/\b\d+(?:[.,]\d+)?\s*(?:kg|g)\b/giu, '').replace(/\s{2,}/g, ' ').trim())
-      : products;
+    const scopedProducts = scopeProfileProducts(localizedRoutes, products);
     const subject = foodSauce
       ? `Flexible packaging review for ${company}'s sauces and seasonings`
       : liquidCare

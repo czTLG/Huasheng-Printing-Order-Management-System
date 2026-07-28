@@ -33,7 +33,17 @@ const PROFILES = Object.freeze({
       market: '/th/markets/thailand',
       application: '/th/applications/snack-packaging',
       product: '/th/products/food-packaging-roll-film',
-      courtesy: 'ขอบคุณที่สละเวลา หวังว่าจะมีโอกาสได้พูดคุยกับทีมของท่าน'
+      courtesy: 'ขอบคุณที่สละเวลา หวังว่าจะมีโอกาสได้พูดคุยกับทีมของท่าน',
+      supportedClaims: Object.freeze([
+        'We are Huasheng Printing Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是中国的华胜印刷有限公司，专业生产软包装。',
+        'spices, seasonings, snacks and fried vegetables',
+        '香辛料、调味料、零食和炸制蔬菜',
+        'seasoning pouches and automatic packing roll film',
+        '调味料袋和自动包装卷膜',
+        'For seasoning packaging, we focus on moisture and aroma protection, reliable sealing where fine powder may contaminate the seal area, and consistent printing across multiple flavors and SKUs.',
+        '针对调味料包装，我们重点关注防潮保香、细粉污染封口区域时的封口可靠性，以及多个口味和 SKU 的印刷一致性。'
+      ])
     })
   }),
   food_sauce: Object.freeze({
@@ -122,6 +132,15 @@ function profileFor({ countryCode, categories } = {}) {
   return null;
 }
 
+function scopeProfileProducts(profile, products) {
+  const values = Array.isArray(products) ? products : [];
+  if (!['food_sauce', 'thailand_food'].includes(profile?.kind)) return values;
+  return values.map(value => String(value)
+    .replace(/(?:\band\s+)?\b\d+(?:[.,]\d+)?\s*(?:kg|g)\b/giu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim());
+}
+
 async function verifyProfileRoutes(profile, {
   origin = 'https://gdhspack.com',
   fetchImpl = globalThis.fetch,
@@ -151,4 +170,4 @@ async function verifyProfileRoutes(profile, {
   }
 }
 
-module.exports = { PROFILES, profileFor, verifyProfileRoutes };
+module.exports = { PROFILES, profileFor, scopeProfileProducts, verifyProfileRoutes };

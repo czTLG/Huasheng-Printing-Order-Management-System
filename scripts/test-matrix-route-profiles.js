@@ -2,7 +2,11 @@
 'use strict';
 
 const assert = require('node:assert');
-const { profileFor, verifyProfileRoutes } = require('../src/services/matrixRouteProfiles');
+const {
+  profileFor,
+  scopeProfileProducts,
+  verifyProfileRoutes
+} = require('../src/services/matrixRouteProfiles');
 
 (async () => {
   const food = profileFor({ countryCode: 'VN', categories: ['sauces', 'seasonings'] });
@@ -25,6 +29,23 @@ const { profileFor, verifyProfileRoutes } = require('../src/services/matrixRoute
   assert.strictEqual(thaiSeasoning.application, '/th/applications/snack-packaging');
   assert.strictEqual(thaiSeasoning.product, '/th/products/food-packaging-roll-film');
   assert.match(thaiSeasoning.courtesy, /ขอบคุณ/u);
+  assert.ok(thaiSeasoning.supportedClaims.includes(
+    'We are Huasheng Printing Co., Ltd., a flexible packaging manufacturer in China.'
+  ));
+  assert.deepStrictEqual(
+    scopeProfileProducts(thaiSeasoning, [
+      'Official retail range includes 200 g seasoning packs.',
+      'Official industrial range includes 15 kg and 20 kg packs.'
+    ]),
+    [
+      'Official retail range includes seasoning packs.',
+      'Official industrial range includes packs.'
+    ]
+  );
+  assert.deepStrictEqual(
+    scopeProfileProducts(liquid, ['Official product uses a 500 g pack.']),
+    ['Official product uses a 500 g pack.']
+  );
   assert.strictEqual(
     profileFor({ countryCode: 'TH', categories: ['snacks', 'fried vegetables'] }).kind,
     'thailand_food'
