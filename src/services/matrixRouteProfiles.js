@@ -34,11 +34,25 @@ const PROFILES = Object.freeze({
       product: '/vi/products/spout-pouches',
       courtesy: 'Cảm ơn Quý công ty đã dành thời gian xem thư. Chúng tôi mong có cơ hội trao đổi cùng đội ngũ thu mua bao bì của Quý công ty.'
     })
+  }),
+  food_snack_ar: Object.freeze({
+    AE: Object.freeze({
+      kind: 'food_snack_ar',
+      language: 'ar',
+      expectedLanguage: 'ar',
+      home: '/ar',
+      about: '/ar/about',
+      market: '/ar/markets/middle-east-food-packaging',
+      application: '/ar/applications/snack-packaging',
+      product: '/ar/products/food-packaging-roll-film',
+      courtesy: 'شكرًا لوقتكم، ونتطلع إلى فرصة للتواصل مع فريق مشتريات التغليف لديكم.'
+    })
   })
 });
 
 const LIQUID_CATEGORY = /(?:liquid detergent|hand soap|body soap|shampoo|body wash|hand wash|personal care|home care|baby care|oral care)/i;
 const FOOD_SAUCE_CATEGORY = /(?:sauces?|chili sauce|seasonings?|spices?|soup base)/i;
+const FOOD_SNACK_AR_CATEGORY = /(?:nuts?|dried fruits?|snacks?|spices?|beans?|lentils?|herbs?)/i;
 
 function profileFor({ countryCode, categories } = {}) {
   const country = String(countryCode || '').trim().toUpperCase();
@@ -48,6 +62,9 @@ function profileFor({ countryCode, categories } = {}) {
   }
   if (values.some(value => FOOD_SAUCE_CATEGORY.test(value)) && PROFILES.food_sauce[country]) {
     return PROFILES.food_sauce[country];
+  }
+  if (values.some(value => FOOD_SNACK_AR_CATEGORY.test(value)) && PROFILES.food_snack_ar[country]) {
+    return PROFILES.food_snack_ar[country];
   }
   return null;
 }

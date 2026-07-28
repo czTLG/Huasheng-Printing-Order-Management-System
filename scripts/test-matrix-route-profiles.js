@@ -15,6 +15,16 @@ const { profileFor, verifyProfileRoutes } = require('../src/services/matrixRoute
   assert.strictEqual(liquid.kind, 'liquid_care');
   assert.strictEqual(liquid.application, '/id/applications/daily-chemical-packaging');
 
+  const uaeSnack = profileFor({ countryCode: 'AE', categories: ['nuts', 'snacks'] });
+  assert.strictEqual(uaeSnack.kind, 'food_snack_ar');
+  assert.strictEqual(uaeSnack.market, '/ar/markets/middle-east-food-packaging');
+  assert.strictEqual(uaeSnack.application, '/ar/applications/snack-packaging');
+  assert.strictEqual(uaeSnack.product, '/ar/products/food-packaging-roll-film');
+  assert.strictEqual(uaeSnack.about, '/ar/about');
+  assert.strictEqual(uaeSnack.expectedLanguage, 'ar');
+  assert.strictEqual(profileFor({ countryCode: 'AE', categories: ['industrial chemicals'] }), null);
+  assert.strictEqual(profileFor({ countryCode: 'MY', categories: ['nuts', 'snacks'] }), null);
+
   assert.strictEqual(profileFor({ countryCode: 'VN', categories: ['steel'] }), null);
 
   const requested = [];

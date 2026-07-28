@@ -25,8 +25,8 @@
 ### Task 0: UAE snack route profile
 
 **Files:**
-- Modify: `src/services/matrixRouteProfile.js`
-- Modify: `scripts/test-matrix-route-profile.js`
+- Modify: `src/services/matrixRouteProfiles.js`
+- Modify: `scripts/test-matrix-route-profiles.js`
 
 **Interfaces:**
 - Consumes: `profileFor({ countryCode: 'AE', categories })`.
@@ -53,7 +53,7 @@ Also assert that unrelated UAE categories do not inherit the snack profile and t
 Run:
 
 ```bash
-node scripts/test-matrix-route-profile.js
+node scripts/test-matrix-route-profiles.js
 ```
 
 Expected: failure because the UAE snack profile is absent.
@@ -71,7 +71,7 @@ Ensure the verified profile result records `status`, canonical URLs, expected la
 Run:
 
 ```bash
-node scripts/test-matrix-route-profile.js
+node scripts/test-matrix-route-profiles.js
 node scripts/test-matrix-api.js
 ```
 
@@ -80,7 +80,7 @@ Expected: all pass, with no network call in unit tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/services/matrixRouteProfile.js scripts/test-matrix-route-profile.js
+git add src/services/matrixRouteProfiles.js scripts/test-matrix-route-profiles.js
 git commit -m "feat(matrix): add Arabic snack route profile"
 ```
 
