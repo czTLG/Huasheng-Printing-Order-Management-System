@@ -15,6 +15,26 @@ const { profileFor, verifyProfileRoutes } = require('../src/services/matrixRoute
   assert.strictEqual(liquid.kind, 'liquid_care');
   assert.strictEqual(liquid.application, '/id/applications/daily-chemical-packaging');
 
+  const thaiSeasoning = profileFor({ countryCode: 'TH', categories: ['spices', 'seasonings'] });
+  assert.strictEqual(thaiSeasoning.kind, 'thailand_food');
+  assert.strictEqual(thaiSeasoning.language, 'th');
+  assert.strictEqual(thaiSeasoning.expectedLanguage, 'th');
+  assert.strictEqual(thaiSeasoning.home, '/th');
+  assert.strictEqual(thaiSeasoning.about, '/th/about');
+  assert.strictEqual(thaiSeasoning.market, '/th/markets/thailand');
+  assert.strictEqual(thaiSeasoning.application, '/th/applications/snack-packaging');
+  assert.strictEqual(thaiSeasoning.product, '/th/products/food-packaging-roll-film');
+  assert.match(thaiSeasoning.courtesy, /ขอบคุณ/u);
+  assert.strictEqual(
+    profileFor({ countryCode: 'TH', categories: ['snacks', 'fried vegetables'] }).kind,
+    'thailand_food'
+  );
+  assert.strictEqual(
+    profileFor({ countryCode: 'TH', categories: ['shampoo', 'seasonings'] }).kind,
+    'liquid_care'
+  );
+  assert.strictEqual(profileFor({ countryCode: 'PH', categories: ['fried vegetables'] }), null);
+
   const uaeSnack = profileFor({ countryCode: 'AE', categories: ['nuts', 'snacks'] });
   assert.strictEqual(uaeSnack.kind, 'food_snack_ar');
   assert.strictEqual(uaeSnack.market, '/ar/markets/middle-east-food-packaging');

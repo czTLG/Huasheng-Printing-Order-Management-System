@@ -23,6 +23,19 @@ const PROFILES = Object.freeze({
       courtesy: 'Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim pengadaan kemasan perusahaan Anda.'
     })
   }),
+  thailand_food: Object.freeze({
+    TH: Object.freeze({
+      kind: 'thailand_food',
+      language: 'th',
+      expectedLanguage: 'th',
+      home: '/th',
+      about: '/th/about',
+      market: '/th/markets/thailand',
+      application: '/th/applications/snack-packaging',
+      product: '/th/products/food-packaging-roll-film',
+      courtesy: 'ขอบคุณที่สละเวลา หวังว่าจะมีโอกาสได้พูดคุยกับทีมของท่าน'
+    })
+  }),
   food_sauce: Object.freeze({
     VN: Object.freeze({
       kind: 'food_sauce',
@@ -86,6 +99,7 @@ const PROFILES = Object.freeze({
 const LIQUID_CATEGORY = /(?:liquid detergent|hand soap|body soap|shampoo|body wash|hand wash|personal care|home care|baby care|oral care)/i;
 const FOOD_SAUCE_CATEGORY = /(?:sauces?|chili sauce|seasonings?|spices?|soup base)/i;
 const FOOD_SNACK_AR_CATEGORY = /(?:nuts?|dried fruits?|snacks?|spices?|beans?|lentils?|herbs?)/i;
+const THAILAND_FOOD_CATEGORY = /(?:spices?|seasonings?|snacks?|nuts?|dried fruits?|fried vegetables?|dry foods?)/i;
 
 function profileFor({ countryCode, categories } = {}) {
   const country = String(countryCode || '').trim().toUpperCase();
@@ -95,6 +109,9 @@ function profileFor({ countryCode, categories } = {}) {
   }
   if (values.some(value => LIQUID_CATEGORY.test(value)) && PROFILES.liquid_care[country]) {
     return PROFILES.liquid_care[country];
+  }
+  if (country === 'TH' && values.some(value => THAILAND_FOOD_CATEGORY.test(value))) {
+    return PROFILES.thailand_food.TH;
   }
   if (values.some(value => FOOD_SAUCE_CATEGORY.test(value)) && PROFILES.food_sauce[country]) {
     return PROFILES.food_sauce[country];
