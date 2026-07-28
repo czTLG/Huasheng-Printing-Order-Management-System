@@ -22,7 +22,7 @@ async function testNarrowClient() {
   assert.deepStrictEqual(Object.keys(client).sort(), [
     'ackInboxJob', 'ackNotification', 'approveThreadRoute', 'approveVersion', 'candidateDetail',
     'claimInboxJob', 'claimNotification', 'confirmDelivery', 'confirmSend', 'confirmThreadRoute', 'contextRecord',
-    'contextResolve', 'contextSearch', 'createSession', 'createVersion', 'customerGet', 'facets',
+    'contextResolve', 'contextSearch', 'createIntake', 'createSession', 'createVersion', 'customerGet', 'facets',
     'failInboxJob', 'finalPreview', 'getVersion', 'inboxWorkbench', 'listCandidates', 'nackNotification',
     'notificationStatus', 'prepareThreadRoute', 'previewThreadRoute', 'rehydrateSession', 'resumeThreadRoute', 'retryTranslation', 'reviseVersion',
     'selectCandidate', 'startReplyDraft', 'taskList', 'threadList', 'today', 'versionPreview', 'workItems'
@@ -54,6 +54,13 @@ async function testNarrowClient() {
       chat_id: 'chat', card_event_id: 'card-ledger', idempotency_key: 'ledger-302'
     });
     await client.selectCandidate('ou-client', { candidate_id: 4, session_id: 7, expected_version: 2, idempotency_key: 'evt', next_action: 'verify' });
+    await client.createIntake('ou-client', {
+      candidate_id: 4, expected_candidate_fingerprint: 'candidate-fingerprint',
+      subject: 'Exact subject', body_en: 'Exact English body', body_cn: '准确中文正文',
+      strategy_summary: 'Reviewed strategy', attachment_manifest: [],
+      route_readiness_id: 'food_snack_ar:AE', approval_reference: 'current-session:A',
+      idempotency_key: 'intake-4'
+    });
     await client.workItems('ou-client', { stage: 'selected' });
     await client.claimInboxJob('ou-client');
     await client.ackInboxJob('ou-client', 9, { lease_token: 'lease', notification_uuid: 'uuid', status: 'delivered' });
@@ -93,6 +100,7 @@ async function testNarrowClient() {
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/approve')));
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/preview')));
     assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/send')));
+    assert.ok(requests.some(item => item.url.endsWith('/intakes')));
     assert.ok(requests.some(item => item.url.endsWith('/customers/5878')));
     assert.ok(requests.some(item => item.url.endsWith('/customers/5878/final-preview')));
     assert.ok(requests.some(item => item.url.endsWith('/customers/5878/threads')));
