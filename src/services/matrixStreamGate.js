@@ -143,7 +143,7 @@ const CONCEPTS = Object.freeze([
   ['refill', /\brefill\b/i, /补充/u],
   ['pouch', /\bpouches?\b/i, /袋/u], ['valve', /\bvalve\b/i, /阀/u],
   ['sachet', /\bsachets?\b/i, /小袋/u],
-  ['roll_film', /\b(?:(?:printed|packaging)\s+)?roll\s+(?:film|stock)\b/i, /(?:印刷卷膜|包装卷膜|卷膜)/u],
+  ['roll_film', /\b(?:(?:printed|packaging)[ -]+)?roll[ -]+(?:film|stock)\b/i, /(?:印刷卷膜|包装卷膜|卷膜)/u],
   ['barrier', /\bbarrier\b/i, /阻隔/u], ['printing', /\bprint(?:ing)?\b/i, /(?:印刷|套色)/u]
 ]);
 const QUESTION_INTENTS = Object.freeze([

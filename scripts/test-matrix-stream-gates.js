@@ -116,6 +116,14 @@ assert.deepStrictEqual(
   'English food categories and flexible formats must map to canonical ontology facts'
 );
 assert.deepStrictEqual(
+  extractBilingualFacts('tea pouch with a zipper and roll-film SKU', 'en'),
+  {
+    package_format: ['roll_film'],
+    zipper: ['present']
+  },
+  'hyphenated roll-film must map to the same fact as Chinese 卷膜'
+);
+assert.deepStrictEqual(
   extractBilingualFacts('酱料、调味粉、汤底、印刷小袋和卷膜', 'cn'),
   {
     product_category: ['sauce', 'seasoning_powder', 'soup_base'],
