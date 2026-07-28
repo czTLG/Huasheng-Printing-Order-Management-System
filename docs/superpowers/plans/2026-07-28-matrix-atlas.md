@@ -30,12 +30,12 @@
 - Consumes: JSONL candidate records and CLI arguments.
 - Produces: `planQueries(input)`, `normalizeRecord(input, context)`, `dedupeRecords(records)`, `scoreRecord(record)`, `validateRecord(record)`, and CLI subcommands `plan`, `normalize`, `dedupe`, `score`, `verify`, `help`.
 
-- [ ] Write tests that assert query/result limits, local-language query planning, canonical normalization, provenance preservation, deterministic deduplication, evidence-bound scoring, and forbidden-field rejection.
-- [ ] Run `node --test tools/matrix-atlas/matrix-atlas.test.mjs` and confirm the tests fail because the implementation is absent.
-- [ ] Implement the smallest command satisfying the tested interfaces.
-- [ ] Run the focused test and confirm all cases pass.
-- [ ] Run `node --check tools/matrix-atlas/matrix-atlas.mjs`.
-- [ ] Commit the command, fixtures, and tests.
+- [x] Write tests that assert query/result limits, local-language query planning, canonical normalization, provenance preservation, deterministic deduplication, evidence-bound scoring, and forbidden-field rejection.
+- [x] Run `node --test tools/matrix-atlas/matrix-atlas.test.mjs` and confirm the tests fail because the implementation is absent.
+- [x] Implement the smallest command satisfying the tested interfaces.
+- [x] Run the focused test and confirm all cases pass.
+- [x] Run `node --check tools/matrix-atlas/matrix-atlas.mjs`.
+- [x] Commit the command, fixtures, and tests.
 
 ### Task 2: User-level skill package
 
@@ -52,13 +52,13 @@
 - Consumes: tested project command from Task 1 and audited upstream metadata.
 - Produces: a discoverable skill and a mode `0750` user-level command.
 
-- [ ] Create a failing package-validation check requiring valid frontmatter, neutral names, complete provenance, command presence, and no forbidden features.
-- [ ] Build the staged skill with concise trigger metadata and the approved operating sequence.
-- [ ] Record upstream repository, MIT license, skill version `1.12.1`, audited commit, file checksums, network behavior, adopted concepts, and excluded functions.
-- [ ] Generate neutral `agents/openai.yaml` metadata.
-- [ ] Run the official skill validator and package-validation check.
-- [ ] Install the verified package and wrapper with least-privilege permissions.
-- [ ] Run `/home/admin/.local/bin/matrix-atlas help` outside the project directory.
+- [x] Create a failing package-validation check requiring valid frontmatter, neutral names, complete provenance, command presence, and no forbidden features.
+- [x] Build the staged skill with concise trigger metadata and the approved operating sequence.
+- [x] Record upstream repository, MIT license, skill version `1.12.1`, audited commit, file checksums, network behavior, adopted concepts, and excluded functions.
+- [x] Generate neutral `agents/openai.yaml` metadata.
+- [x] Run the official skill validator and package-validation check.
+- [x] Install the verified package and wrapper with least-privilege permissions.
+- [x] Run `/home/admin/.local/bin/matrix-atlas help` outside the project directory.
 
 ### Task 3: Runtime catalog reconciliation
 
@@ -70,11 +70,11 @@
 - Consumes: verified skill and command paths from Task 2.
 - Produces: exactly one `matrix-atlas` catalog entry with verified evidence and approval boundaries.
 
-- [ ] Stage the capability entry and index edit in `/tmp`.
-- [ ] Verify no existing `matrix-atlas` entry is present.
-- [ ] Add authoritative paths, status, limits, last-verified date, and approval boundaries without business records or secrets.
-- [ ] Install the reconciled catalog files.
-- [ ] Confirm the index contains exactly one entry and its link resolves.
+- [x] Stage the capability entry and index edit in `/tmp`.
+- [x] Verify no existing `matrix-atlas` entry is present.
+- [x] Add authoritative paths, status, limits, last-verified date, and approval boundaries without business records or secrets.
+- [x] Install the reconciled catalog files.
+- [x] Confirm the index contains exactly one entry and its link resolves.
 
 ### Task 4: End-to-end verification
 
@@ -86,11 +86,11 @@
 - Consumes: installed command, skill, catalog, and public-source bounded query plan.
 - Produces: reproducible verification evidence with no production side effects.
 
-- [ ] Run the offline fixture through `normalize`, `dedupe`, `score`, and `verify`; compare it byte-for-byte with the expected output.
-- [ ] Run a bounded public-source planning smoke test with concurrency `1`, at most two queries, and no email/review/proxy flags.
-- [ ] From `/tmp`, read only the runtime index, resolve `matrix-atlas`, and invoke its command help.
-- [ ] Scan the installed skill and catalog for credential assignments, tokens, cookies, SMTP Message-IDs, and actual business-record patterns.
-- [ ] Confirm no send, deployment, restart, or production write was invoked.
-- [ ] Re-run the complete unit suite and `git diff --check`.
-- [ ] Mark plan checkboxes complete and commit project-side tests, expected output, plan evidence, and any project documentation.
+- [x] Run the offline fixture through `normalize`, `dedupe`, `score`, and `verify`; compare it byte-for-byte with the expected output.
+- [x] Run a bounded public-source planning smoke test with concurrency `1`, at most two queries, and no email/review/proxy flags.
+- [x] From `/tmp`, read only the runtime index, resolve `matrix-atlas`, and invoke its command help.
+- [x] Scan the installed skill and catalog for credential assignments, tokens, cookies, SMTP Message-IDs, and actual business-record patterns.
+- [x] Confirm no send, deployment, restart, or production write was invoked.
+- [x] Re-run the complete unit suite and `git diff --check`.
+- [x] Mark plan checkboxes complete and commit project-side tests, expected output, plan evidence, and any project documentation.
 
