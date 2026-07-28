@@ -12,6 +12,7 @@ process.env.DB_PATH = path.join(root, 'app.db');
 const { db, initDb } = require('../src/db');
 const review = require('../src/services/matrixStreamReview');
 const { createMatrixStreamDelivery } = require('../src/services/matrixStreamDelivery');
+const { renderMatrixMail } = require('../src/services/matrixMailRender');
 
 initDb();
 
@@ -138,12 +139,15 @@ function confirmationInput(fixture, key) {
     const result = await service.confirm(input);
     assert.strictEqual(result.state, 'accepted');
     assert.strictEqual(accepted.length, 1);
-    assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['from', 'headers', 'messageId', 'replyTo', 'subject', 'text', 'to'].sort());
+    assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['from', 'headers', 'html', 'messageId', 'replyTo', 'subject', 'text', 'to'].sort());
     assert.strictEqual(accepted[0].from, 'sales@sender.test');
     assert.strictEqual(accepted[0].replyTo, 'sales@sender.test');
     assert.strictEqual(accepted[0].to, 'sales@alpha.test');
     assert.strictEqual(accepted[0].subject, fixture.version.subject);
-    assert.strictEqual(accepted[0].text, fixture.approvedBody);
+    const rendered = renderMatrixMail({ bodyEn: fixture.approvedBody });
+    assert.strictEqual(accepted[0].text, rendered.text);
+    assert.strictEqual(accepted[0].html, rendered.html);
+    assert.match(accepted[0].html, /<img[^>]+gdhspack\.com\/media\/brand\/logo\.png/);
     assert.match(accepted[0].messageId, /^<matrix-stream-/);
     assert.deepStrictEqual(accepted[0].headers, { 'X-Matrix-Stream-Version': String(fixture.version.id) });
     assert.deepStrictEqual(await service.confirm(input), result);

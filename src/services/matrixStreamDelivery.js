@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { parse: parseDomain } = require('tldts');
 const { normalizePermissions } = require('../lib/permissions');
 const review = require('./matrixStreamReview');
+const { renderMatrixMail } = require('./matrixMailRender');
 const { scoreDraft, evaluateInitialContact } = require('./matrixStreamGate');
 const { scheduleReplyCheck } = require('./matrixStreamFollowup');
 const { validateSnapshotRecipientProvenance } = require('./matrixRecipientProvenance');
@@ -500,6 +501,7 @@ function createMatrixStreamDelivery({
 
   async function deliver(prepared, input) {
     const { job, version } = prepared;
+    const rendered = renderMatrixMail({ bodyEn: version.body_en });
     let response;
     try {
       response = await transport.sendMail({
@@ -507,7 +509,8 @@ function createMatrixStreamDelivery({
         replyTo,
         to: version.recipient_email,
         subject: version.subject,
-        text: version.body_en,
+        text: rendered.text,
+        html: rendered.html,
         messageId: job.message_id,
         headers: { 'X-Matrix-Stream-Version': String(version.id) }
       });
