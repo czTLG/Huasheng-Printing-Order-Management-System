@@ -45,6 +45,12 @@ function createMatrixIntakeBridge({
     const candidateId = positive(candidate.id, 'candidate id');
     const companyName = required(candidate.company_name, 'company name');
     const normalizedDomain = required(candidate.normalized_domain, 'normalized domain').toLowerCase();
+    if (candidate.status !== 'valid' || candidate.audit_state !== 'audited'
+        || !Number.isFinite(Date.parse(String(candidate.audited_at || '')))
+        || !Number.isFinite(Date.parse(String(candidate.updated_at || '')))
+        || Date.parse(candidate.audited_at) < Date.parse(candidate.updated_at)) {
+      throw new Error('candidate review is not current');
+    }
     const idempotencyKey = required(input.idempotencyKey, 'idempotency key');
     const subject = required(input.subject, 'subject');
     const bodyEn = required(input.bodyEn, 'English body');
@@ -131,6 +137,9 @@ function createMatrixIntakeBridge({
         sourceSnapshot,
         idempotencyKey: `version:${idempotencyKey}`
       });
+      let quality;
+      try { quality = JSON.parse(version.quality_json); } catch (_) { quality = null; }
+      if (!quality?.passed) throw new Error('initial draft quality gate blocked');
       const current = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(workItem.id);
       const response = {
         customer_id: customerId,

@@ -128,12 +128,13 @@ function chineseNumber(value) {
 function normalizeTextNumbers(value) {
   return normalized(value)
     .replace(new RegExp(`\\b${EN_NUMBER_WORD}(?:(?:[ -]+and)?[ -]+${EN_NUMBER_WORD})*\\b`, 'gi'), words => String(englishNumber(words) ?? words))
-    .replace(/[零〇一二两三四五六七八九十百千万]+/gu, word => String(chineseNumber(word) ?? word));
+    .replace(/[零〇一二两三四五六七八九十百千万]+(?=(?:个|件|袋|箱|周|天|月|年|公斤|克|吨|元|%|，|。|、|；|：|\s|$))/gu,
+      word => String(chineseNumber(word) ?? word));
 }
 
 function withoutUrls(value) {
   return String(value || '')
-    .replace(/(^|\n)[^\n]*:\s*\nhttps?:\/\/[^\s<>()]+/giu, '$1 ')
+    .replace(/(^|\n)[^\n]*[:：]\s*\nhttps?:\/\/[^\s<>()]+/giu, '$1 ')
     .replace(/https?:\/\/[^\s<>()]+/giu, ' ');
 }
 

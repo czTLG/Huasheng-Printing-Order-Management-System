@@ -28,13 +28,27 @@ const NOW = new Date('2026-07-28T08:00:00.000Z');
       public_email: 'sales@nutty-nuts.com',
       contact_url: 'https://www.nutty-nuts.com/pages/contact',
       contact_role: 'public sales',
-      audited_at: '2026-07-27T08:00:00.000Z'
+      status: 'valid',
+      audit_state: 'audited',
+      audited_at: '2026-07-27T08:00:00.000Z',
+      updated_at: '2026-07-27T08:00:00.000Z'
     };
     const sourceSnapshot = {
       candidateId: 71,
       organization_domain: 'nutty-nuts.com',
       recipient_email: 'sales@nutty-nuts.com',
       source_url: 'https://www.nutty-nuts.com/pages/contact',
+      company: 'Nutty Nuts Foodstuff Factory LLC',
+      categories: ['nuts', 'snacks'],
+      products: ['nuts', 'snacks', 'pillow pouches', 'roll film'],
+      entryProduct: 'pillow pouch and roll film',
+      supportedClaims: [
+        'We are Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是华胜包装有限公司，一家位于中国的软包装制造商。',
+        'For these applications, we focus on moisture protection and print consistency.',
+        '针对这些应用，我们重点关注防潮和印刷一致性。'
+      ],
+      evidenceIds: [1, 2, 3],
       localizedRouteSet: {
         status: 'ready',
         commit: '650d7b3',
@@ -61,13 +75,24 @@ const NOW = new Date('2026-07-28T08:00:00.000Z');
     const input = {
       candidate,
       actorUserId: 101,
-      subject: 'Retail nut packaging review for Nutty Nuts',
-      bodyEn: 'Dear Nutty Nuts Team,\\n\\nWe reviewed your public nut and snack range. We would like to compare the seal integrity, barrier needs and filling-line fit for one current retail format.\\n\\nArabic packaging route: https://gdhspack.com/ar/applications/snack-packaging\\n\\nBest regards,\\nGavin\\nHuasheng Printing Co., Ltd.',
-      bodyCn: '您好，Nutty Nuts 团队：\\n\\n我们查看了贵司公开的坚果和零食产品系列，希望从一款现有零售包装入手，对封口稳定性、阻隔需求和包装线适配进行比较。\\n\\n此致\\nGavin\\n华胜印刷有限公司',
+      subject: 'Pillow pouch and roll-film options for Nutty Nuts snacks',
+      bodyEn: 'Dear Nutty Nuts Team,\n\nWe reviewed your nuts and snacks, including pillow pouches and roll film.\n\nWe are Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.\n\nFor these applications, we focus on moisture protection and print consistency.\n\nIf you have a current project, could you share one specification, product photo or sample?\n\nBest regards,\nGavin',
+      bodyCn: '您好，Nutty Nuts 团队：\n\n我们查看了贵司的坚果和零食产品，包括枕式袋和卷膜。\n\n我们是华胜包装有限公司，一家位于中国的软包装制造商。\n\n针对这些应用，我们重点关注防潮和印刷一致性。\n\n如果贵司有当前项目，能否提供一份规格、产品图片或样品？\n\n此致\nGavin',
       strategySummary: '以公开产品和现有零售包装为切入点。',
       attachmentManifest: [],
       idempotencyKey: 'intake:nutty-nuts:final-v1'
     };
+
+    await assert.rejects(() => bridge.create({
+      ...input,
+      subject: 'Hello',
+      bodyEn: 'Generic message',
+      bodyCn: '普通消息',
+      idempotencyKey: 'intake:nutty-nuts:blocked'
+    }), /quality gate blocked/);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM customers').get().count, 0);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_work_items').get().count, 0);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_versions').get().count, 0);
 
     const created = await bridge.create(input);
     assert.strictEqual(created.status, 'draft');
