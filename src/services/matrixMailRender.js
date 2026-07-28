@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 
 const MATRIX_MAIL_SIGNATURE = Object.freeze({
-  templateVersion: 'matrix-brand-v1',
+  templateVersion: 'matrix-brand-v2',
   name: 'Gavin',
   company: 'Huasheng Printing Co., Ltd.',
   website: 'https://gdhspack.com',
@@ -55,8 +55,32 @@ function bodyHtml(body) {
   )).join('');
 }
 
+function withoutLegacySignature(body) {
+  const lines = body.split('\n');
+  while (lines.length && !lines.at(-1).trim()) lines.pop();
+  const legacyLine = value => {
+    const line = value.trim();
+    return line === 'Gavin'
+      || /^(?:Guangdong\s+)?Huasheng (?:Printing|Packaging) Co\., Ltd\.?$/i.test(line)
+      || line === 'https://gdhspack.com'
+      || line === 'sales@gdhspack.com'
+      || line === 'WhatsApp: https://wa.me/8615850502651';
+  };
+  let removed = false;
+  while (lines.length && (legacyLine(lines.at(-1)) || !lines.at(-1).trim())) {
+    if (legacyLine(lines.at(-1))) removed = true;
+    lines.pop();
+  }
+  if (removed || /^Best regards,?$/i.test(String(lines.at(-1) || '').trim())) {
+    while (lines.length && !lines.at(-1).trim()) lines.pop();
+    if (/^Best regards,?$/i.test(String(lines.at(-1) || '').trim())) lines.pop();
+  }
+  while (lines.length && !lines.at(-1).trim()) lines.pop();
+  return lines.join('\n');
+}
+
 function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
-  const body = normalizedBody(bodyEn);
+  const body = withoutLegacySignature(normalizedBody(bodyEn));
   const normalizedSignature = Object.freeze({
     templateVersion: requiredText(signature?.templateVersion, 'template version'),
     name: requiredText(signature?.name, 'signature name'),
@@ -77,6 +101,7 @@ function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
   const text = [
     body,
     '',
+    'Best regards,',
     normalizedSignature.name,
     normalizedSignature.company,
     `Website: ${normalizedSignature.website}`,
@@ -90,6 +115,7 @@ function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
     '<div style="max-width:640px;margin:0;padding:0;">',
     bodyHtml(body),
     '<div style="margin-top:22px;padding-top:16px;border-top:1px solid #e5e7eb;">',
+    '<div style="margin:0 0 10px 0;color:#374151;">Best regards,</div>',
     `<a href="${escapeHtml(normalizedSignature.website)}" style="text-decoration:none;color:#14532d;">`,
     `<img src="${escapeHtml(normalizedSignature.logoUrl)}" alt="${escapeHtml(normalizedSignature.logoAlt)}" width="160" style="display:block;width:160px;max-width:100%;height:auto;border:0;margin:0 0 12px 0;">`,
     '</a>',

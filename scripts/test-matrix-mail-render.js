@@ -10,7 +10,7 @@ const rendered = renderMatrixMail({
   bodyEn: 'Hello <Buyer> & team.\r\n\r\nLine two\nLine three\nสวัสดี'
 });
 
-assert.strictEqual(rendered.templateVersion, 'matrix-brand-v1');
+assert.strictEqual(rendered.templateVersion, 'matrix-brand-v2');
 assert.match(rendered.text, /Hello <Buyer> & team\./);
 assert.match(rendered.text, /Line two\nLine three/);
 assert.match(rendered.text, /สวัสดี/);
@@ -41,6 +41,29 @@ assert.notStrictEqual(
     signature: { ...MATRIX_MAIL_SIGNATURE, logoAlt: 'Changed company label' }
   }).renderHash
 );
+
+const legacy = renderMatrixMail({
+  bodyEn: [
+    'Dear Bidor Kwong Heng OEM Team,',
+    '',
+    'We are Guangdong Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+    '',
+    'Could you share a current pack photo or specification?',
+    '',
+    'Best regards,',
+    '',
+    'Gavin',
+    'Guangdong Huasheng Packaging Co., Ltd.',
+    'https://gdhspack.com',
+    'sales@gdhspack.com'
+  ].join('\n')
+});
+for (const marker of ['Gavin', 'https://gdhspack.com', 'sales@gdhspack.com']) {
+  assert.strictEqual((legacy.text.match(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+}
+assert.strictEqual((legacy.text.match(/^Best regards,$/gmi) || []).length, 1);
+assert.strictEqual((legacy.html.match(/Best regards,/g) || []).length, 1);
+assert.match(legacy.text, /We are Guangdong Huasheng Packaging Co\., Ltd\., a flexible packaging manufacturer in China\./);
 
 assert.throws(() => renderMatrixMail({ bodyEn: '' }), /body required/);
 assert.throws(
