@@ -12,6 +12,8 @@ const { searchMatrixContext, resolveMatrixContext, contextByRecordId } = require
 const { createMatrixStreamText } = require('../services/matrixStreamText');
 const { scoreSignalMatch } = require('../services/matrixSignalMatch');
 const { createMatrixLedgerCommand } = require('../services/matrixLedgerCommand');
+const { createMatrixLedgerStore } = require('../services/matrixLedgerStore');
+const { createMatrixIntakeBridge } = require('../services/matrixIntakeBridge');
 const { profileFor, verifyProfileRoutes } = require('../services/matrixRouteProfiles');
 
 const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
@@ -24,6 +26,11 @@ const VERSION_FIELDS = new Set(['expected_work_version', 'base_version_id', 'rev
 const APPROVAL_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']);
 const SEND_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'chat_id', 'card_event_id', 'idempotency_key']);
 const LEDGER_CONFIRM_FIELDS = new Set(['expected_content_hash', 'confirmation_text', 'chat_id', 'card_event_id', 'idempotency_key']);
+const INTAKE_FIELDS = new Set([
+  'candidate_id', 'expected_candidate_fingerprint', 'subject', 'body_en', 'body_cn',
+  'strategy_summary', 'attachment_manifest', 'route_readiness_id',
+  'approval_reference', 'idempotency_key'
+]);
 
 function plainObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -121,7 +128,7 @@ function requireMatrixRole(req, res, next) {
 
 function errorStatus(error) {
   const message = String(error?.message || 'request failed');
-  if (/stale (?:work )?version|session rehydration incomplete|idempotency request conflict/.test(message)) return 409;
+  if (/stale (?:work )?version|session rehydration incomplete|idempotency (?:request )?conflict|identity conflict|already has a draft/.test(message)) return 409;
   if (/not authorized|actor binding|required binding|service binding|inactive|revoked|matrixSend capability/.test(message)) return 403;
   if (/text_provider_unavailable/.test(message)) return 503;
   if (/not found/.test(message)) return 404;
@@ -376,6 +383,7 @@ function createMatrixRouter({
   threadDeliveryService,
   correlationService = require('../services/matrixStreamCorrelation'),
   textService = createMatrixStreamText(),
+  intakeBridge,
   claimOptions = {}
 } = {}) {
   const router = express.Router();
@@ -901,6 +909,46 @@ function createMatrixRouter({
     }
     return currentDraft;
   }
+
+  router.post('/intakes', async (req, res) => {
+    try {
+      requireReviewAccess(req);
+      const body = rejectUnknown(req.body || {}, INTAKE_FIELDS, 'intake');
+      const candidateId = positiveInteger(body.candidate_id, 'candidate id');
+      const expectedFingerprint = String(body.expected_candidate_fingerprint || '').trim();
+      const routeReadinessId = String(body.route_readiness_id || '').trim();
+      if (!expectedFingerprint || !routeReadinessId) throw new Error('reviewed candidate fingerprint and route readiness id required');
+      if (!Array.isArray(body.attachment_manifest)) throw new Error('attachment manifest must be an array');
+      const candidate = view.detail(candidateId, { revealContacts: true });
+      if (!candidate) throw new Error('candidate not found');
+      const reviewed = view.reviewedIntake(candidateId);
+      if (!reviewed || reviewed.request_fingerprint !== expectedFingerprint) throw new Error('candidate identity conflict');
+      let routeReadiness;
+      try { routeReadiness = JSON.parse(reviewed.route_readiness_json); } catch (_) { throw new Error('route readiness evidence invalid'); }
+      if (routeReadiness?.id !== routeReadinessId || routeReadiness?.status !== 'ready') throw new Error('route readiness evidence mismatch');
+      const service = intakeBridge || createMatrixIntakeBridge({
+        db,
+        store: createMatrixLedgerStore({ db, clock }),
+        reviewService,
+        prepareCandidate: candidateDraft,
+        clock
+      });
+      const result = await service.create({
+        candidate,
+        actorUserId: req.user.id,
+        subject: body.subject,
+        bodyEn: body.body_en,
+        bodyCn: body.body_cn,
+        strategySummary: body.strategy_summary,
+        attachmentManifest: body.attachment_manifest,
+        idempotencyKey: body.idempotency_key,
+        approvalReference: body.approval_reference
+      });
+      res.status(result.resolution === 'replayed' ? 200 : 201).json(result);
+    } catch (error) {
+      res.status(errorStatus(error)).json({ error: error.message });
+    }
+  });
 
   function withWorkVersion(version) {
     const item = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(version.work_item_id);

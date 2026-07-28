@@ -117,6 +117,15 @@ function selectCandidate(openId, input) {
   return call(openId, '/selections', { method: 'POST', body });
 }
 
+function createIntake(openId, input) {
+  const body = exactObject(input, new Set([
+    'candidate_id', 'expected_candidate_fingerprint', 'subject', 'body_en', 'body_cn',
+    'strategy_summary', 'attachment_manifest', 'route_readiness_id',
+    'approval_reference', 'idempotency_key'
+  ]), 'intake');
+  return call(openId, '/intakes', { method: 'POST', body });
+}
+
 function workItems(openId, filters = {}) {
   const query = exactObject(filters, new Set(['stage', 'limit']), 'work filters');
   return call(openId, '/work-items', { query });
@@ -268,7 +277,7 @@ function taskList(openId, customerId) {
 
 module.exports = {
   facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
-  selectCandidate, workItems, getVersion, claimInboxJob, inboxWorkbench, contextSearch,
+  selectCandidate, createIntake, workItems, getVersion, claimInboxJob, inboxWorkbench, contextSearch,
   contextResolve, contextRecord, ackInboxJob, failInboxJob, startReplyDraft,
   retryTranslation, claimNotification, ackNotification, nackNotification,
   notificationStatus, createVersion, reviseVersion, approveVersion,

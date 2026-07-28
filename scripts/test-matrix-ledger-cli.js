@@ -1,9 +1,15 @@
 'use strict';
 
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { parseArgs, run } = require('./run-matrix-ledger-command');
 
 (async () => {
+  const intakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-intake-cli-'));
+  const intakePath = path.join(intakeDir, 'request.json');
+  fs.writeFileSync(intakePath, JSON.stringify({ candidate_id: 71, subject: 'Exact' }), { mode: 0o600 });
   assert.deepStrictEqual(parseArgs(['customer', 'get', '--id', '115']), {
     command: 'customer.get', customerId: 115
   });
@@ -26,8 +32,30 @@ const { parseArgs, run } = require('./run-matrix-ledger-command');
     confirmDelivery: async (...args) => { calls.push(['confirmDelivery', ...args]); return { state: 'accepted' }; },
     threadList: async (...args) => { calls.push(['threadList', ...args]); return { rows: [] }; },
     taskList: async (...args) => { calls.push(['taskList', ...args]); return { rows: [] }; }
+    , createIntake: async (...args) => { calls.push(['createIntake', ...args]); return { status: 'draft' }; }
   };
-  const env = { MATRIX_CONTEXT_OPEN_ID: 'ou-current' };
+  const env = { MATRIX_CONTEXT_OPEN_ID: 'ou-current', MATRIX_INTAKE_DIR: intakeDir };
+  assert.deepStrictEqual(await run([
+    'intake', 'create', '--input', intakePath, '--idempotency-key', 'intake-cli-1'
+  ], { client, env }), { status: 'draft' });
+  assert.deepStrictEqual(calls.at(-1), ['createIntake', 'ou-current', {
+    candidate_id: 71, subject: 'Exact', idempotency_key: 'intake-cli-1'
+  }]);
+  fs.chmodSync(intakePath, 0o644);
+  await assert.rejects(() => run([
+    'intake', 'create', '--input', intakePath, '--idempotency-key', 'intake-cli-2'
+  ], { client, env }), /permissions/);
+  fs.chmodSync(intakePath, 0o600);
+  const credentialPath = path.join(intakeDir, 'credential.json');
+  fs.writeFileSync(credentialPath, JSON.stringify({ candidate_id: 71, smtp_token: 'forbidden' }), { mode: 0o600 });
+  await assert.rejects(() => run([
+    'intake', 'create', '--input', credentialPath, '--idempotency-key', 'intake-cli-3'
+  ], { client, env }), /credential-like key/);
+  const symlinkPath = path.join(intakeDir, 'link.json');
+  fs.symlinkSync(intakePath, symlinkPath);
+  await assert.rejects(() => run([
+    'intake', 'create', '--input', symlinkPath, '--idempotency-key', 'intake-cli-4'
+  ], { client, env }), /regular protected file/);
   assert.deepStrictEqual(await run(['customer', 'get', '--id', '115'], { client, env }), { customer_id: 115 });
   assert.deepStrictEqual(await run(['preview', 'get', '--customer-id', '115'], { client, env }), { version_id: 902 });
   assert.deepStrictEqual(await run(['thread', 'list', '--customer-id', '115'], { client, env }), { rows: [] });
@@ -47,6 +75,7 @@ const { parseArgs, run } = require('./run-matrix-ledger-command');
     }
   ]);
   await assert.rejects(() => run(['customer', 'get', '--id', '115'], { client, env: {} }), /open id/);
+  fs.rmSync(intakeDir, { recursive: true, force: true });
   console.log('matrix ledger CLI tests passed');
 })().catch(error => {
   console.error(error);

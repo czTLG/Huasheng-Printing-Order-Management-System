@@ -2,11 +2,12 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs');
 
-const COMMANDS = new Set(['customer.get', 'preview.get', 'delivery.confirm', 'thread.list', 'task.list']);
+const COMMANDS = new Set(['customer.get', 'preview.get', 'delivery.confirm', 'thread.list', 'task.list', 'intake.create']);
 const FLAGS = new Set([
   'id', 'customer-id', 'version-id', 'content-hash', 'confirmation',
-  'idempotency-key', 'chat-id', 'card-event-id'
+  'idempotency-key', 'chat-id', 'card-event-id', 'input'
 ]);
 
 function positiveId(value, label) {
@@ -46,6 +47,14 @@ function parseArgs(argv) {
     if (Object.keys(flags).some(key => key !== 'customer-id')) throw new Error(`${command} accepts only --customer-id`);
     return { command, customerId: positiveId(flags['customer-id'], 'customer-id') };
   }
+  if (command === 'intake.create') {
+    if (Object.keys(flags).some(key => !new Set(['input', 'idempotency-key']).has(key))) throw new Error('intake create accepts only --input and --idempotency-key');
+    return {
+      command,
+      inputPath: required(flags.input, 'input', 1000),
+      idempotencyKey: required(flags['idempotency-key'], 'idempotency-key', 200)
+    };
+  }
   const allowed = new Set(['customer-id', 'version-id', 'content-hash', 'confirmation', 'idempotency-key', 'chat-id', 'card-event-id']);
   if (Object.keys(flags).some(key => !allowed.has(key))) throw new Error('unknown delivery confirmation flag');
   const customerId = positiveId(flags['customer-id'], 'customer-id');
@@ -71,6 +80,27 @@ function openId(env) {
   return required(env.MATRIX_CONTEXT_OPEN_ID || env.MATRIX_OWNER_OPEN_ID, 'open id', 128);
 }
 
+function protectedIntake(inputPath, env) {
+  const root = fs.realpathSync(env.MATRIX_INTAKE_DIR || '/home/admin/.codex/matrix-runtime/intakes');
+  const requested = path.resolve(inputPath);
+  const stat = fs.lstatSync(requested);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('intake input must be a regular protected file');
+  const resolved = fs.realpathSync(requested);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) throw new Error('intake input is outside the protected directory');
+  if ((stat.mode & 0o077) !== 0) throw new Error('intake input permissions must be 0600 or stricter');
+  const value = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('intake input must be an object');
+  const scan = item => {
+    if (!item || typeof item !== 'object') return;
+    for (const [key, child] of Object.entries(item)) {
+      if (/(?:password|token|secret|cookie|oauth|smtp)/i.test(key)) throw new Error('credential-like key is forbidden in intake input');
+      scan(child);
+    }
+  };
+  scan(value);
+  return value;
+}
+
 async function run(argv, options = {}) {
   const input = parseArgs(argv);
   const env = options.env || process.env;
@@ -79,6 +109,10 @@ async function run(argv, options = {}) {
     '../.runtime/vm_debug_ci/workspace/scripts/matrix-client.js'
   ));
   const actor = openId(env);
+  if (input.command === 'intake.create') {
+    const payload = protectedIntake(input.inputPath, env);
+    return client.createIntake(actor, { ...payload, idempotency_key: input.idempotencyKey });
+  }
   if (input.command === 'customer.get') return client.customerGet(actor, input.customerId);
   if (input.command === 'preview.get') return client.finalPreview(actor, input.customerId);
   if (input.command === 'thread.list') return client.threadList(actor, input.customerId);

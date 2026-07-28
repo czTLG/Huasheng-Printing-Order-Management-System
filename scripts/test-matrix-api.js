@@ -131,6 +131,10 @@ function seedCandidateDb() {
       questions_json TEXT NOT NULL, risks_json TEXT NOT NULL, source_url TEXT NOT NULL,
       observed_at TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE
     );
+    CREATE TABLE cache_reviewed_intakes (
+      candidate_key TEXT PRIMARY KEY, record_id INTEGER NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL, route_readiness_json TEXT NOT NULL, created_at TEXT NOT NULL
+    );
   `);
   const insert = db.prepare(`
     INSERT INTO cache_records VALUES (
@@ -145,6 +149,11 @@ function seedCandidateDb() {
   insert.run({ id: 4, company: 'Review Snacks', country: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["snacks"]', email: '', phone: '', whatsapp: '', contact: 'https://review.test/contact', priority: 'P2', score: 70, status: 'needs_review', updated: '2026-07-15T00:00:00Z' });
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-17T00:00:00Z', '250g and 500g roasted coffee', 'e1');
   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members/alpha', 'https://alpha.test/', 'official_association_directory', '2026-07-17T00:00:00Z', 'd1');
+  db.prepare('INSERT INTO cache_reviewed_intakes VALUES (?,?,?,?,?)').run(
+    'alpha-reviewed', 1, 'candidate-fingerprint-1',
+    JSON.stringify({ id: 'food_sauce:VN', status: 'ready' }),
+    '2026-07-17T00:00:00Z'
+  );
   db.close();
 }
 
@@ -806,6 +815,23 @@ function reviewState(workItemId) {
       }
     };
     const replyDraftCalls = [];
+    const intakeCalls = [];
+    let firstIntakeSubject = '';
+    const injectedIntakeBridge = {
+      async create(input) {
+        intakeCalls.push(input);
+        if (firstIntakeSubject && input.subject !== firstIntakeSubject) throw new Error('intake idempotency conflict');
+        if (!firstIntakeSubject) firstIntakeSubject = input.subject;
+        if (intakeCalls.length > 1) return {
+          customer_id: 61, work_item_id: 62, work_item_version: 2,
+          version_id: 63, content_hash: 'intake-hash', status: 'draft', resolution: 'replayed'
+        };
+        return {
+          customer_id: 61, work_item_id: 62, work_item_version: 2,
+          version_id: 63, content_hash: 'intake-hash', status: 'draft', resolution: 'inserted'
+        };
+      }
+    };
     const injectedCorrelationService = {
       startReplyDraft(_db, input) {
         replyDraftCalls.push(input);
@@ -843,6 +869,7 @@ function reviewState(workItemId) {
       deliveryService: injectedDeliveryService,
       ledgerCommand: injectedLedgerCommand,
       correlationService: injectedCorrelationService,
+      intakeBridge: injectedIntakeBridge,
       textService: injectedTextService,
       claimOptions
     }));
@@ -851,6 +878,43 @@ function reviewState(workItemId) {
       server.once('error', reject);
     });
     try {
+      const intakeBody = {
+        candidate_id: 1,
+        expected_candidate_fingerprint: 'candidate-fingerprint-1',
+        subject: 'Exact subject',
+        body_en: 'Exact English body',
+        body_cn: '准确中文正文',
+        strategy_summary: 'Exact reviewed strategy',
+        attachment_manifest: [],
+        route_readiness_id: 'food_sauce:VN',
+        approval_reference: 'current-session:A',
+        idempotency_key: 'intake-api-1'
+      };
+      const intakeCreated = await request('/api/matrix/intakes', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: intakeBody
+      });
+      assert.strictEqual(intakeCreated.status, 201, JSON.stringify(intakeCreated.body));
+      assert.strictEqual(intakeCreated.body.status, 'draft');
+      assert.strictEqual(intakeCalls.length, 1);
+      const intakeReplay = await request('/api/matrix/intakes', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: intakeBody
+      });
+      assert.strictEqual(intakeReplay.status, 200, JSON.stringify(intakeReplay.body));
+      assert.strictEqual(intakeReplay.body.resolution, 'replayed');
+      const intakeConflict = await request('/api/matrix/intakes', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...intakeBody, subject: 'Changed subject' }
+      });
+      assert.strictEqual(intakeConflict.status, 409, JSON.stringify(intakeConflict.body));
+      const intakeUnknown = await request('/api/matrix/intakes', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+        body: { ...intakeBody, send: true }
+      });
+      assert.strictEqual(intakeUnknown.status, 400);
+      const intakeWorker = await request('/api/matrix/intakes', {
+        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-worker', body: intakeBody
+      });
+      assert.strictEqual(intakeWorker.status, 403);
       const ledgerPreview = await request(`/api/matrix/customers/1/final-preview?version_id=${createdVersion.body.id}`, {
         port: injectedPort, serviceToken: bridgeToken, openId: 'ou-service'
       });

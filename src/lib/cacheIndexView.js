@@ -369,12 +369,21 @@ function createCacheIndexView({ dbPath, afterRecommendationMembership } = {}) {
     recommendPage(db, { page: 1, page_size: 1 });
     return true;
   }
+  function reviewedIntake(id) {
+    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cache_reviewed_intakes'").get();
+    if (!exists) return null;
+    return db.prepare(`
+      SELECT candidate_key, record_id, request_fingerprint, route_readiness_json, created_at
+      FROM cache_reviewed_intakes WHERE record_id = ?
+    `).get(Number(id)) || null;
+  }
   return {
     facets: () => facets(db),
     list: filters => list(db, filters),
     recommendPage: filters => recommendPage(db, filters, afterRecommendationMembership),
     recommendationById: id => recommendationById(db, id),
     detail: (id, options) => detail(db, id, options),
+    reviewedIntake,
     recommend: ({ limit = 5, excludeIds = [], filters = {} } = {}) => recommend(db, recommendationLimit(limit), excludeIds, filters),
     ready,
     close: () => db.close()
