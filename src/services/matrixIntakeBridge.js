@@ -56,6 +56,7 @@ function createMatrixIntakeBridge({
     const bodyEn = required(input.bodyEn, 'English body');
     const bodyCn = required(input.bodyCn, 'Chinese body');
     const strategySummary = String(input.strategySummary || '').trim();
+    const allowExistingWorkItem = input.allowExistingWorkItem === true;
     const prepared = await prepareCandidate(candidate);
     const recipient = prepared?.recipient || {};
     if (normalizedEmail(candidate.public_email) !== normalizedEmail(recipient.email)
@@ -68,7 +69,7 @@ function createMatrixIntakeBridge({
     const request = {
       actorUserId, candidateId, companyName, normalizedDomain,
       recipient, subject, bodyEn, bodyCn, strategySummary, sourceSnapshot,
-      attachmentManifest: [], idempotencyKey
+      attachmentManifest: [], idempotencyKey, allowExistingWorkItem
     };
     const requestFingerprint = fingerprint(request);
     const atValue = clock();
@@ -105,7 +106,7 @@ function createMatrixIntakeBridge({
 
       let workItem = db.prepare('SELECT * FROM matrix_work_items WHERE candidate_id = ?').get(candidateId);
       if (workItem && Number(workItem.owner_user_id) !== actorUserId) throw new Error('work item ownership conflict');
-      if (workItem?.current_stream_version_id) throw new Error('candidate already has a draft');
+      if (workItem?.current_stream_version_id && !allowExistingWorkItem) throw new Error('candidate already has a draft');
       if (!workItem) {
         const inserted = db.prepare(`
           INSERT INTO matrix_work_items (

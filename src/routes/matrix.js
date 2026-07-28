@@ -966,6 +966,27 @@ function createMatrixRouter({
         public_email: candidate.public_email || candidate.contacts?.email,
         contact_url: candidate.contact_url || candidate.contacts?.contact_page
       };
+      let allowExistingWorkItem = false;
+      if (!intakeBridge) {
+        const existingItem = db.prepare('SELECT * FROM matrix_work_items WHERE candidate_id = ?').get(candidateId);
+        if (existingItem?.current_stream_version_id) {
+          const existingVersion = reviewService.getVersion(db, {
+            actorUserId: req.user.id,
+            versionId: existingItem.current_stream_version_id
+          });
+          try {
+            await assertVersionStrategyCurrent(existingItem, existingVersion);
+          } catch (error) {
+            const blockers = error?.matrixReviewDetails?.blockers || [];
+            const staleEvidence = blockers.includes('official_evidence_changed')
+              || blockers.includes('authoritative_research_changed')
+              || blockers.includes('legacy_strategy_assessment_missing');
+            const currentPasses = Number(error?.matrixReviewDetails?.score) >= Number(error?.matrixReviewDetails?.threshold);
+            if (error?.matrixReviewCode !== 'strategy_match_blocked' || !staleEvidence || !currentPasses) throw error;
+            allowExistingWorkItem = true;
+          }
+        }
+      }
       const result = await service.create({
         candidate: intakeCandidate,
         actorUserId: req.user.id,
@@ -975,7 +996,8 @@ function createMatrixRouter({
         strategySummary: body.strategy_summary,
         attachmentManifest: body.attachment_manifest,
         idempotencyKey: body.idempotency_key,
-        approvalReference: body.approval_reference
+        approvalReference: body.approval_reference,
+        allowExistingWorkItem
       });
       res.status(result.resolution === 'replayed' ? 200 : 201).json(result);
     } catch (error) {

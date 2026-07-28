@@ -102,12 +102,25 @@ const NOW = new Date('2026-07-28T08:00:00.000Z');
     assert.strictEqual((await bridge.create(input)).resolution, 'replayed');
     assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM customers').get().count, 1);
     assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_versions').get().count, 1);
+    await assert.rejects(
+      () => bridge.create({ ...input, idempotencyKey: 'intake:nutty-nuts:refresh-blocked' }),
+      /candidate already has a draft/
+    );
+    const refreshed = await bridge.create({
+      ...input,
+      allowExistingWorkItem: true,
+      idempotencyKey: 'intake:nutty-nuts:refresh-v2'
+    });
+    assert.strictEqual(refreshed.status, 'draft');
+    assert.strictEqual(refreshed.work_item_version, 3);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_versions').get().count, 2);
+    assert.strictEqual(db.prepare('SELECT status FROM matrix_stream_versions WHERE id=?').get(created.version_id).status, 'superseded');
     await assert.rejects(() => bridge.create({ ...input, attachmentManifest: [{ name: 'file.pdf' }] }), /attachments are not supported/);
     await assert.rejects(
       () => bridge.create({ ...input, idempotencyKey: 'intake:bad', candidate: { ...candidate, public_email: 'wrong@outside.test' } }),
       /candidate recipient mismatch/
     );
-    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_versions').get().count, 1);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM matrix_stream_versions').get().count, 2);
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
