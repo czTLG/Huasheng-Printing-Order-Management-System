@@ -192,6 +192,7 @@ try {
   assert.strictEqual(revealed.contacts.phone, '+1 202 555 0123');
   assert.strictEqual(revealed.contacts.whatsapp, '+1 202 555 0456');
   assert.strictEqual(revealed.contacts.contact_page, 'https://alpha.test/contact');
+  assert.strictEqual(revealed.audited_at, '2026-07-16T00:00:00Z');
 
   assert.strictEqual(view.detail(3), null);
   assert.strictEqual(view.detail(10), null);

@@ -121,6 +121,7 @@ function summary(row, revealContacts = false) {
     status: row.status,
     stage_code: row.stage_code,
     audit_state: row.audit_state,
+    audited_at: row.audited_at,
     assessment_cn: row.assessment_cn || '',
     next_action_cn: row.next_action_cn || '',
     updated_at: row.updated_at,

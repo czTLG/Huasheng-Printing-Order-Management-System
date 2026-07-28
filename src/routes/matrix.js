@@ -960,8 +960,14 @@ function createMatrixRouter({
         prepareCandidate: candidateDraft,
         clock
       });
+      const intakeCandidate = {
+        ...candidate,
+        normalized_domain: candidate.normalized_domain || candidate.official_domain,
+        public_email: candidate.public_email || candidate.contacts?.email,
+        contact_url: candidate.contact_url || candidate.contacts?.contact_page
+      };
       const result = await service.create({
-        candidate,
+        candidate: intakeCandidate,
         actorUserId: req.user.id,
         subject: body.subject,
         bodyEn: body.body_en,

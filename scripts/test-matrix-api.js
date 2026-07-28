@@ -866,7 +866,9 @@ function reviewState(workItemId) {
       correlationService: injectedCorrelationService,
       intakeBridge: injectedIntakeBridge,
       intakeCandidateResolver: id => id === 1 ? {
-        id: 1, company_name: 'Alpha Coffee', normalized_domain: 'alpha.test',
+        id: 1, company_name: 'Alpha Coffee', official_domain: 'alpha.test',
+        status: 'valid', audit_state: 'audited',
+        audited_at: '2026-07-18T00:00:00.000Z', updated_at: '2026-07-18T00:00:00.000Z',
         contacts: { email: 'team@alpha.test', contact_page: 'https://alpha.test/contact' }
       } : null,
       intakeReviewedResolver: id => id === 1 ? {
@@ -899,6 +901,9 @@ function reviewState(workItemId) {
       assert.strictEqual(intakeCreated.status, 201, JSON.stringify(intakeCreated.body));
       assert.strictEqual(intakeCreated.body.status, 'draft');
       assert.strictEqual(intakeCalls.length, 1);
+      assert.strictEqual(intakeCalls[0].candidate.normalized_domain, 'alpha.test');
+      assert.strictEqual(intakeCalls[0].candidate.public_email, 'team@alpha.test');
+      assert.strictEqual(intakeCalls[0].candidate.contact_url, 'https://alpha.test/contact');
       const intakeReplay = await request('/api/matrix/intakes', {
         port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: intakeBody
       });
