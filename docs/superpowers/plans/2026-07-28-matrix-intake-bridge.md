@@ -22,6 +22,70 @@
 
 ---
 
+### Task 0: UAE snack route profile
+
+**Files:**
+- Modify: `src/services/matrixRouteProfile.js`
+- Modify: `scripts/test-matrix-route-profile.js`
+
+**Interfaces:**
+- Consumes: `profileFor({ countryCode: 'AE', categories })`.
+- Produces: a deterministic `food_snack_ar` route profile with Arabic market, application, product, and company URLs.
+
+- [ ] **Step 1: Write the failing UAE route-profile tests**
+
+Assert:
+
+```js
+const profile = profileFor({ countryCode: 'AE', categories: ['nuts', 'snacks'] });
+assert.equal(profile.kind, 'food_snack_ar');
+assert.equal(profile.market, '/ar/markets/middle-east-food-packaging');
+assert.equal(profile.application, '/ar/applications/snack-packaging');
+assert.equal(profile.product, '/ar/products/food-packaging-roll-film');
+assert.equal(profile.about, '/ar/about');
+assert.equal(profile.expectedLanguage, 'ar');
+```
+
+Also assert that unrelated UAE categories do not inherit the snack profile and that another country's snack candidate does not receive the UAE market URL.
+
+- [ ] **Step 2: Run and verify RED**
+
+Run:
+
+```bash
+node scripts/test-matrix-route-profile.js
+```
+
+Expected: failure because the UAE snack profile is absent.
+
+- [ ] **Step 3: Implement the minimal profile**
+
+Add one reusable AE profile selected only when `countryCode === 'AE'` and categories include nuts, dried fruit, snacks, spices, beans, lentils, or herbs. Use the canonical Arabic URLs above and require Arabic title/description, `lang=ar`, production canonical equality, HTTP 200, and no desktop/mobile overflow.
+
+- [ ] **Step 4: Preserve readiness evidence in the snapshot**
+
+Ensure the verified profile result records `status`, canonical URLs, expected language, verification timestamp, and deployed commit. `candidateDraft` and reviewed intake must place this object in `localizedRouteSet`; `assertVersionStrategyCurrent` must invalidate a version when any of these values changes.
+
+- [ ] **Step 5: Run profile and API regressions**
+
+Run:
+
+```bash
+node scripts/test-matrix-route-profile.js
+node scripts/test-matrix-api.js
+```
+
+Expected: all pass, with no network call in unit tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/services/matrixRouteProfile.js scripts/test-matrix-route-profile.js
+git commit -m "feat(matrix): add Arabic snack route profile"
+```
+
+---
+
 ### Task 1: Reviewed candidate-store admission
 
 **Files:**
