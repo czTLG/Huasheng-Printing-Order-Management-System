@@ -384,6 +384,8 @@ function createMatrixRouter({
   correlationService = require('../services/matrixStreamCorrelation'),
   textService = createMatrixStreamText(),
   intakeBridge,
+  intakeCandidateResolver,
+  intakeReviewedResolver,
   claimOptions = {}
 } = {}) {
   const router = express.Router();
@@ -804,6 +806,27 @@ function createMatrixRouter({
               origin: process.env.MATRIX_PUBLIC_SITE_ORIGIN || 'https://gdhspack.com'
             }))
       : null;
+    let reviewedRouteReadiness = null;
+    const reviewedIntake = view.reviewedIntake(detail.id);
+    if (reviewedIntake) {
+      try { reviewedRouteReadiness = JSON.parse(reviewedIntake.route_readiness_json); }
+      catch (_) { throw new Error('route readiness evidence invalid'); }
+      if (!localizedRoutes || reviewedRouteReadiness?.status !== 'ready'
+          || reviewedRouteReadiness?.id !== `${localizedRoutes.kind}:${countryCode}`
+          || reviewedRouteReadiness?.expected_language !== (localizedRoutes.expectedLanguage || localizedRoutes.language)) {
+        throw new Error('route readiness evidence mismatch');
+      }
+      const expectedUrls = {
+        home: `https://gdhspack.com${localizedRoutes.home}`,
+        about: `https://gdhspack.com${localizedRoutes.about}`,
+        market: `https://gdhspack.com${localizedRoutes.market}`,
+        application: `https://gdhspack.com${localizedRoutes.application}`,
+        product: `https://gdhspack.com${localizedRoutes.product}`
+      };
+      if (reviewService.canonicalJson(reviewedRouteReadiness.urls) !== reviewService.canonicalJson(expectedUrls)) {
+        throw new Error('route readiness canonical URL mismatch');
+      }
+    }
     const strategyMatch = scoreSignalMatch(detail, {
       localizedRouteStatus: localizedRoutes ? 'ready' : 'not_required'
     });
@@ -849,13 +872,13 @@ function createMatrixRouter({
       categories,
       products: scopedProducts,
       entryProduct,
-      localizedRouteSet: localizedRoutes ? {
-        status: 'verified_at_draft_time',
-        primary: `https://gdhspack.com${localizedRoutes.application}`,
-        about: `https://gdhspack.com${localizedRoutes.about}`,
-        market: `https://gdhspack.com${localizedRoutes.market}`,
-        product: `https://gdhspack.com${localizedRoutes.product}`
-      } : null,
+      localizedRouteSet: reviewedRouteReadiness || (localizedRoutes ? {
+          status: 'verified_at_draft_time',
+          primary: `https://gdhspack.com${localizedRoutes.application}`,
+          about: `https://gdhspack.com${localizedRoutes.about}`,
+          market: `https://gdhspack.com${localizedRoutes.market}`,
+          product: `https://gdhspack.com${localizedRoutes.product}`
+        } : null),
       supportedClaims: [],
       strategy_match: strategyMatch,
       evidenceIds: evidence.map(row => row.source_url).filter(Boolean),
@@ -919,9 +942,13 @@ function createMatrixRouter({
       const routeReadinessId = String(body.route_readiness_id || '').trim();
       if (!expectedFingerprint || !routeReadinessId) throw new Error('reviewed candidate fingerprint and route readiness id required');
       if (!Array.isArray(body.attachment_manifest)) throw new Error('attachment manifest must be an array');
-      const candidate = view.detail(candidateId, { revealContacts: true });
+      const candidate = intakeCandidateResolver
+        ? await intakeCandidateResolver(candidateId)
+        : view.detail(candidateId, { revealContacts: true });
       if (!candidate) throw new Error('candidate not found');
-      const reviewed = view.reviewedIntake(candidateId);
+      const reviewed = intakeReviewedResolver
+        ? await intakeReviewedResolver(candidateId)
+        : view.reviewedIntake(candidateId);
       if (!reviewed || reviewed.request_fingerprint !== expectedFingerprint) throw new Error('candidate identity conflict');
       let routeReadiness;
       try { routeReadiness = JSON.parse(reviewed.route_readiness_json); } catch (_) { throw new Error('route readiness evidence invalid'); }

@@ -149,11 +149,6 @@ function seedCandidateDb() {
   insert.run({ id: 4, company: 'Review Snacks', country: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["snacks"]', email: '', phone: '', whatsapp: '', contact: 'https://review.test/contact', priority: 'P2', score: 70, status: 'needs_review', updated: '2026-07-15T00:00:00Z' });
   db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-17T00:00:00Z', '250g and 500g roasted coffee', 'e1');
   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members/alpha', 'https://alpha.test/', 'official_association_directory', '2026-07-17T00:00:00Z', 'd1');
-  db.prepare('INSERT INTO cache_reviewed_intakes VALUES (?,?,?,?,?)').run(
-    'alpha-reviewed', 1, 'candidate-fingerprint-1',
-    JSON.stringify({ id: 'food_sauce:VN', status: 'ready' }),
-    '2026-07-17T00:00:00Z'
-  );
   db.close();
 }
 
@@ -870,6 +865,14 @@ function reviewState(workItemId) {
       ledgerCommand: injectedLedgerCommand,
       correlationService: injectedCorrelationService,
       intakeBridge: injectedIntakeBridge,
+      intakeCandidateResolver: id => id === 1 ? {
+        id: 1, company_name: 'Alpha Coffee', normalized_domain: 'alpha.test',
+        contacts: { email: 'team@alpha.test', contact_page: 'https://alpha.test/contact' }
+      } : null,
+      intakeReviewedResolver: id => id === 1 ? {
+        request_fingerprint: 'candidate-fingerprint-1',
+        route_readiness_json: JSON.stringify({ id: 'food_sauce:VN', status: 'ready' })
+      } : null,
       textService: injectedTextService,
       claimOptions
     }));

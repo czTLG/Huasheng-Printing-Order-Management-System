@@ -53,6 +53,7 @@ function fixture(overrides = {}) {
     route_readiness: {
       id: 'food_snack_ar:AE',
       status: 'ready',
+      expected_language: 'ar',
       commit: '650d7b3',
       verified_at: '2026-07-27T09:00:00.000Z',
       urls: {

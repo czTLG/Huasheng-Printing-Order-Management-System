@@ -100,7 +100,7 @@ function parseInput(input, now) {
 
   exactKeys(input.discovery, ['collected_at', 'source_adapter', 'source_query', 'source_url'], 'discovery');
   const discoveryUrl = httpsUrl(input.discovery.source_url, 'discovery.source_url');
-  exactKeys(input.route_readiness, ['commit', 'id', 'status', 'urls', 'verified_at'], 'route_readiness');
+  exactKeys(input.route_readiness, ['commit', 'expected_language', 'id', 'status', 'urls', 'verified_at'], 'route_readiness');
   if (input.route_readiness.status !== 'ready') throw new Error('route readiness must be ready');
   exactKeys(input.route_readiness.urls, ['about', 'application', 'home', 'market', 'product'], 'route_readiness.urls');
   const routeUrls = Object.fromEntries(Object.entries(input.route_readiness.urls).map(([key, value]) => [key, httpsUrl(value, `route_readiness.urls.${key}`)]));
@@ -139,6 +139,7 @@ function parseInput(input, now) {
     route_readiness: {
       id: cleanText(input.route_readiness.id, 'route_readiness.id', 120),
       status: 'ready',
+      expected_language: cleanText(input.route_readiness.expected_language, 'route_readiness.expected_language', 12).toLowerCase(),
       commit: cleanText(input.route_readiness.commit, 'route_readiness.commit', 80),
       verified_at: recent(input.route_readiness.verified_at, now, 'route_readiness.verified_at'),
       urls: routeUrls
