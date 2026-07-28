@@ -34,7 +34,8 @@ function createMatrixStreamPreview({ db, readinessService, clock = () => new Dat
       const version = base?.version || {};
       const snapshot = snapshotOf(version);
       const email = String(version.recipient_email || '').trim().toLowerCase();
-      const recipientDomain = email.split('@')[1] || '';
+      const organizationDomain = String(snapshot?.organization_domain || '').trim().toLowerCase();
+      const recipientDomain = organizationDomain || email.split('@')[1] || '';
       const identity = snapshot && now ? evaluateInitialContact(db, {
         email,
         domain: recipientDomain,

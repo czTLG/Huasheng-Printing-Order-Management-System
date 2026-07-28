@@ -33,6 +33,23 @@ const version = {
   assert.strictEqual(ready.allowed, true);
   for (const key of ['duplicate', 'cooling', 'quota', 'readiness', 'policy']) assert.deepStrictEqual(ready[key], { ok: true, reasons: [] });
 
+  db.prepare(`INSERT INTO crm_messages VALUES (2, 8, 'inbound', 'unrelated@gmail.com', 'sales@gdhspack.com', ?, ?)`).run('2026-07-18T00:00:00.000Z', '2026-07-18T00:00:00.000Z');
+  const publicMailbox = await preview.project({
+    version: {
+      recipient_email: 'official-company@gmail.com',
+      source_snapshot_json: JSON.stringify({
+        company: 'Official Company',
+        organization_domain: 'official-company.test',
+        aliases: [],
+        country_code: 'MY'
+      })
+    },
+    allowed: true,
+    reasons: []
+  });
+  assert.deepStrictEqual(publicMailbox.duplicate, { ok: true, reasons: [] });
+  assert.strictEqual(publicMailbox.allowed, true, 'unrelated provider-mailbox traffic must not create a false relationship');
+
   readinessResult = { ok: false, hardFailures: ['missing_dkim', 'country_channel_policy_not_approved'] };
   const blocked = await preview.project({ version, allowed: true, reasons: [] });
   assert.deepStrictEqual(blocked.readiness, { ok: false, reasons: ['missing_dkim'] });
