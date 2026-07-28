@@ -973,6 +973,17 @@ function initDb() {
       FOREIGN KEY(created_by) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS matrix_intake_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      candidate_id INTEGER NOT NULL,
+      actor_user_id INTEGER NOT NULL,
+      response_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(actor_user_id) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS matrix_thread_routes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       actor_user_id INTEGER NOT NULL,
