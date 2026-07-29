@@ -16,7 +16,8 @@ const {
   assert.deepStrictEqual(inspection, {
     safe_html: true,
     utf8_content: true,
-    remote_image_count: 1,
+    remote_image_count: 0,
+    inline_image_count: 1,
     official_logo_count: 1,
     tracking_marker_count: 0,
     text_contact_complete: true,
@@ -29,16 +30,19 @@ const {
     subject: 'Compatibility fixture',
     rendered
   });
+  assert.match(mime, /Content-Type: multipart\/(?:related|alternative)/i);
   assert.match(mime, /Content-Type: multipart\/alternative/i);
   assert.match(mime, /Content-Type: text\/plain; charset=utf-8/i);
   assert.match(mime, /Content-Type: text\/html; charset=utf-8/i);
   assert.match(mime, /C=E1=BA=A3m =C6=A1n|Cảm ơn/i);
-  assert.match(mime, /gdhspack\.com\/media\/brand\/logo\.png/);
+  assert.match(mime, /Content-ID:\s*<huasheng-logo@gdhspack\.com>/i);
+  assert.match(mime, /Content-Disposition:\s*inline/i);
   assert.doesNotMatch(mime, /Content-Disposition:\s*attachment/i);
   assert.strictEqual(verificationPassed({
     safe_html: true,
     utf8_content: true,
-    remote_image_count: 1,
+    remote_image_count: 0,
+    inline_image_count: 1,
     official_logo_count: 1,
     tracking_marker_count: 0,
     text_contact_complete: true,
@@ -47,6 +51,7 @@ const {
     text_plain_utf8: true,
     text_html_utf8: true,
     attachment_count: 0,
+    inline_attachment_count: 1,
     logo_http_ok: true,
     logo_content_type_ok: true,
     send_invoked: false

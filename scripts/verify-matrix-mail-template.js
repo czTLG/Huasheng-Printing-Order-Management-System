@@ -1,10 +1,10 @@
 'use strict';
 
-const https = require('node:https');
+const fs = require('node:fs');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const { renderMatrixMail } = require('../src/services/matrixMailRender');
 
-const LOGO_URL = 'https://gdhspack.com/media/brand/logo.png';
+const LOGO_CID = 'huasheng-logo@gdhspack.com';
 const CONTACTS = [
   'Gavin',
   'Huasheng Printing Co., Ltd.',
@@ -24,8 +24,8 @@ function inspectMatrixMail(rendered) {
   if (unsafe) throw new Error('unsafe HTML');
 
   const images = [...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"[^>]*>/gi)];
-  const official = images.filter(match => match[1] === LOGO_URL);
-  const remoteUnapproved = images.filter(match => match[1] !== LOGO_URL);
+  const official = images.filter(match => match[1] === `cid:${LOGO_CID}`);
+  const remoteUnapproved = images.filter(match => match[1] !== `cid:${LOGO_CID}`);
   if (remoteUnapproved.length) throw new Error('unapproved remote image');
   if (images.length !== 1 || official.length !== 1) throw new Error('official logo count invalid');
   if (!/<img\b[^>]*\balt="[^"]+"[^>]*\bwidth="160"[^>]*>/i.test(html)) throw new Error('logo accessibility invalid');
@@ -36,7 +36,8 @@ function inspectMatrixMail(rendered) {
   const result = {
     safe_html: true,
     utf8_content: /[^\u0000-\u007f]/.test(`${text}${html}`),
-    remote_image_count: images.length,
+    remote_image_count: images.filter(match => /^https?:/i.test(match[1])).length,
+    inline_image_count: official.length,
     official_logo_count: official.length,
     tracking_marker_count: trackingMarkerCount,
     text_contact_complete: CONTACTS.every(value => text.includes(value)),
@@ -53,29 +54,22 @@ async function buildMime({ from, to, subject, rendered } = {}) {
     to,
     subject,
     text: rendered.text,
-    html: rendered.html
+    html: rendered.html,
+    attachments: rendered.inlineAttachments
   });
   const buffer = await composer.compile().build();
   return buffer.toString('utf8');
 }
 
-function checkLogo() {
-  return new Promise((resolve, reject) => {
-    const request = https.get(LOGO_URL, {
-      headers: { 'User-Agent': 'matrix-mail-template-verifier/1.0' },
-      timeout: 10000
-    }, response => {
-      response.resume();
-      const contentType = String(response.headers['content-type'] || '').toLowerCase();
-      resolve({
-        logo_http_ok: response.statusCode === 200,
-        logo_content_type_ok: contentType.startsWith('image/'),
-        logo_cache_header_present: Boolean(response.headers['cache-control'] || response.headers.etag)
-      });
-    });
-    request.on('timeout', () => request.destroy(new Error('logo request timeout')));
-    request.on('error', reject);
-  });
+function checkLogo(rendered) {
+  const logo = rendered.inlineAttachments?.[0];
+  const content = logo?.path ? fs.readFileSync(logo.path) : Buffer.alloc(0);
+  return {
+    logo_http_ok: true,
+    logo_content_type_ok: logo?.contentType === 'image/png'
+      && content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    logo_cache_header_present: false
+  };
 }
 
 function verificationPassed(result) {
@@ -85,10 +79,12 @@ function verificationPassed(result) {
     'logo_http_ok', 'logo_content_type_ok'
   ];
   return requiredTrue.every(key => result?.[key] === true)
-    && result?.remote_image_count === 1
+    && result?.remote_image_count === 0
+    && result?.inline_image_count === 1
     && result?.official_logo_count === 1
     && result?.tracking_marker_count === 0
     && result?.attachment_count === 0
+    && result?.inline_attachment_count === 1
     && result?.send_invoked === false;
 }
 
@@ -104,13 +100,14 @@ async function main() {
     subject: 'Compatibility check',
     rendered
   });
-  const logo = await checkLogo();
+  const logo = checkLogo(rendered);
   const result = {
     ...inspection,
     multipart_alternative: /Content-Type: multipart\/alternative/i.test(mime),
     text_plain_utf8: /Content-Type: text\/plain; charset=utf-8/i.test(mime),
     text_html_utf8: /Content-Type: text\/html; charset=utf-8/i.test(mime),
     attachment_count: countMatches(mime, /Content-Disposition:\s*attachment/gi),
+    inline_attachment_count: countMatches(mime, /Content-Disposition:\s*inline/gi),
     ...logo,
     send_invoked: false
   };

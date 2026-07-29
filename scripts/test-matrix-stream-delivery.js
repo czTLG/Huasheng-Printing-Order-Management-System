@@ -140,7 +140,7 @@ function confirmationInput(fixture, key) {
     const result = await service.confirm(input);
     assert.strictEqual(result.state, 'accepted');
     assert.strictEqual(accepted.length, 1);
-    assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['from', 'headers', 'html', 'messageId', 'replyTo', 'subject', 'text', 'to'].sort());
+    assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['attachments', 'from', 'headers', 'html', 'messageId', 'replyTo', 'subject', 'text', 'to'].sort());
     assert.strictEqual(accepted[0].from, 'Gavin | Huasheng Packaging <sales@sender.test>');
     assert.strictEqual(accepted[0].replyTo, 'sales@sender.test');
     assert.strictEqual(accepted[0].to, 'sales@alpha.test');
@@ -148,7 +148,10 @@ function confirmationInput(fixture, key) {
     const rendered = renderMatrixMail({ bodyEn: fixture.approvedBody });
     assert.strictEqual(accepted[0].text, rendered.text);
     assert.strictEqual(accepted[0].html, rendered.html);
-    assert.match(accepted[0].html, /<img[^>]+gdhspack\.com\/media\/brand\/logo\.png/);
+    assert.match(accepted[0].html, /<img[^>]+cid:huasheng-logo@gdhspack\.com/);
+    assert.strictEqual(accepted[0].attachments.length, 1);
+    assert.strictEqual(accepted[0].attachments[0].cid, 'huasheng-logo@gdhspack.com');
+    assert.strictEqual(accepted[0].attachments[0].contentDisposition, 'inline');
     assert.match(accepted[0].messageId, /^<matrix-stream-/);
     assert.deepStrictEqual(accepted[0].headers, { 'X-Matrix-Stream-Version': String(fixture.version.id) });
     assert.deepStrictEqual(await service.confirm(input), result);

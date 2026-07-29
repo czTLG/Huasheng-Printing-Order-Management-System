@@ -1,9 +1,14 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const LOGO_PATH = path.resolve(__dirname, '../../assets/mail/huasheng-logo.png');
+const LOGO_CID = 'huasheng-logo@gdhspack.com';
 
 const MATRIX_MAIL_SIGNATURE = Object.freeze({
-  templateVersion: 'matrix-brand-v2',
+  templateVersion: 'matrix-brand-v3',
   name: 'Gavin',
   company: 'Huasheng Printing Co., Ltd.',
   website: 'https://gdhspack.com',
@@ -12,6 +17,22 @@ const MATRIX_MAIL_SIGNATURE = Object.freeze({
   logoUrl: 'https://gdhspack.com/media/brand/logo.png',
   logoAlt: 'Huasheng Printing Co., Ltd.'
 });
+
+function inlineLogo() {
+  const content = fs.readFileSync(LOGO_PATH);
+  if (content.length < 8 || content.length > 200000
+      || !content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    throw new Error('inline logo asset invalid');
+  }
+  return Object.freeze({
+    filename: 'huasheng-logo.png',
+    path: LOGO_PATH,
+    cid: LOGO_CID,
+    contentType: 'image/png',
+    contentDisposition: 'inline',
+    sha256: crypto.createHash('sha256').update(content).digest('hex')
+  });
+}
 
 function normalizedBody(value) {
   const body = String(value || '').replace(/\r\n?/g, '\n').trim();
@@ -82,6 +103,7 @@ function withoutLegacySignature(body) {
 
 function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
   const body = withoutLegacySignature(normalizedBody(bodyEn));
+  const logo = inlineLogo();
   const normalizedSignature = Object.freeze({
     templateVersion: requiredText(signature?.templateVersion, 'template version'),
     name: requiredText(signature?.name, 'signature name'),
@@ -118,7 +140,7 @@ function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
     '<div style="margin-top:22px;padding-top:16px;border-top:1px solid #e5e7eb;">',
     '<div style="margin:0 0 10px 0;color:#374151;">Best regards,</div>',
     `<a href="${escapeHtml(normalizedSignature.website)}" style="text-decoration:none;color:#14532d;">`,
-    `<img src="${escapeHtml(normalizedSignature.logoUrl)}" alt="${escapeHtml(normalizedSignature.logoAlt)}" width="160" style="display:block;width:160px;max-width:100%;height:auto;border:0;margin:0 0 12px 0;">`,
+    `<img src="cid:${escapeHtml(logo.cid)}" alt="${escapeHtml(normalizedSignature.logoAlt)}" width="160" style="display:block;width:160px;max-width:100%;height:auto;border:0;margin:0 0 12px 0;">`,
     '</a>',
     `<div style="font-weight:700;color:#111827;">${escapeHtml(normalizedSignature.name)}</div>`,
     `<div style="color:#374151;">${escapeHtml(normalizedSignature.company)}</div>`,
@@ -133,7 +155,8 @@ function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
     body,
     text,
     html,
-    signature: normalizedSignature
+    signature: normalizedSignature,
+    inline_logo_sha256: logo.sha256
   })).digest('hex');
 
   return Object.freeze({
@@ -141,6 +164,7 @@ function renderMatrixMail({ bodyEn, signature = MATRIX_MAIL_SIGNATURE } = {}) {
     text,
     html,
     signature: normalizedSignature,
+    inlineAttachments: Object.freeze([logo]),
     renderHash
   });
 }

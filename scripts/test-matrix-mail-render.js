@@ -10,7 +10,7 @@ const rendered = renderMatrixMail({
   bodyEn: 'Hello <Buyer> & team.\r\n\r\nLine two\nLine three\nสวัสดี'
 });
 
-assert.strictEqual(rendered.templateVersion, 'matrix-brand-v2');
+assert.strictEqual(rendered.templateVersion, 'matrix-brand-v3');
 assert.match(rendered.text, /Hello <Buyer> & team\./);
 assert.match(rendered.text, /Line two\nLine three/);
 assert.match(rendered.text, /สวัสดี/);
@@ -23,10 +23,15 @@ assert.match(rendered.html, /Hello &lt;Buyer&gt; &amp; team\./);
 assert.match(rendered.html, /Line two<br>Line three/);
 assert.match(rendered.html, /สวัสดี/);
 assert.strictEqual((rendered.html.match(/<img\b/g) || []).length, 1);
-assert.match(rendered.html, /src="https:\/\/gdhspack\.com\/media\/brand\/logo\.png"/);
+assert.match(rendered.html, /src="cid:huasheng-logo@gdhspack\.com"/);
 assert.match(rendered.html, /alt="Huasheng Printing Co\., Ltd\."/);
 assert.match(rendered.html, /width="160"/);
 assert.doesNotMatch(rendered.html, /<script|<form|<iframe|onload=|onclick=|tracking|utm_|display\s*:\s*none/i);
+assert.strictEqual(rendered.inlineAttachments.length, 1);
+assert.strictEqual(rendered.inlineAttachments[0].cid, 'huasheng-logo@gdhspack.com');
+assert.strictEqual(rendered.inlineAttachments[0].contentType, 'image/png');
+assert.strictEqual(rendered.inlineAttachments[0].contentDisposition, 'inline');
+assert.match(rendered.inlineAttachments[0].sha256, /^[a-f0-9]{64}$/);
 
 assert.match(rendered.renderHash, /^[a-f0-9]{64}$/);
 assert.strictEqual(

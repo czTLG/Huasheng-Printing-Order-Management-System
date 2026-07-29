@@ -522,6 +522,9 @@ function createMatrixStreamDelivery({
         subject: version.subject,
         text: rendered.text,
         html: rendered.html,
+        attachments: rendered.inlineAttachments.map(({
+          filename, path, cid, contentType, contentDisposition
+        }) => ({ filename, path, cid, contentType, contentDisposition })),
         messageId: job.message_id,
         headers: { 'X-Matrix-Stream-Version': String(version.id) }
       });
