@@ -3,6 +3,7 @@
 const assert = require('node:assert');
 const Database = require('better-sqlite3');
 const { scoreDraft, extractBilingualFacts } = require('../src/services/matrixStreamGate');
+const { isNonAssertionRequest } = require('../src/services/matrixStreamText');
 
 const base = {
   subject: '250g and 500g coffee pouch options for Alpha Coffee',
@@ -32,6 +33,10 @@ function assertAllComponentsMax(result, label) {
 }
 
 const good = scoreDraft(base);
+assert.strictEqual(
+  isNonAssertionRequest('If COCOME is evaluating an additional packaging supplier, please send us one current pack specification.'),
+  true
+);
 assert.strictEqual(good.score, 100);
 assert.strictEqual(good.passed, true);
 assert.deepStrictEqual(Object.fromEntries(Object.entries(good.components).map(([key, value]) => [key, value.maximum])), {

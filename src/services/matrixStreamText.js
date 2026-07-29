@@ -58,6 +58,7 @@ function isNonAssertionRequest(sentence) {
   const text = normalizedSyntaxSentence(sentence);
   if (/^(?:(?:您|贵司)?是否(?:愿意|有兴趣)|这对(?:您|贵司)是否有帮助)/u.test(text)) return true;
   if (/^(?:would you (?:like|be interested in)|would it be useful|would this be useful)\b/i.test(text)) return true;
+  if (/^if\b[^.!?]{0,240},\s*please\s+(?:provide|confirm|tell|share|send)\b/i.test(text)) return true;
   const chinese = text.match(CHINESE_REQUEST);
   if (chinese) {
     const remainder = chinese[1];

@@ -46,7 +46,9 @@ function includesCompany(text, company) {
   if (includesPhrase(text, company)) return true;
   const words = normalized(company).split(/\s+/)
     .filter(word => !/^(?:llc|ltd|limited|inc|corp|corporation|company|co)$/i.test(word));
-  return words.length >= 2 && includesPhrase(text, words.slice(0, 2).join(' '));
+  if (words.length >= 2 && includesPhrase(text, words.slice(0, 2).join(' '))) return true;
+  const firstDistinctiveWord = words[0]?.replace(/[^\p{L}\p{N}]+/gu, '') || '';
+  return firstDistinctiveWord.length >= 4 && includesPhrase(text, firstDistinctiveWord);
 }
 
 function component(points, maximum, reasons, evidenceIds) {
