@@ -11,19 +11,43 @@ const NOW = '2026-07-28T08:00:00.000Z';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-intake-candidate-'));
 const db = new Database(path.join(dir, 'candidate.db'));
 
+function contactSelection(recipient, alternatives = []) {
+  return {
+    public_only: true,
+    search_complete: true,
+    searched_at: recipient.verified_at,
+    scopes: [
+      'official_contact',
+      'official_about',
+      'official_sales_export_procurement',
+      'independent_organization_sources'
+    ],
+    selected: {
+      channel: 'email',
+      address: recipient.email,
+      role: recipient.role,
+      source_url: recipient.source_url,
+      verified_at: recipient.verified_at
+    },
+    alternatives
+  };
+}
+
 function fixture(overrides = {}) {
+  const recipient = {
+    email: 'sales@nutty-nuts.com',
+    source_url: 'https://www.nutty-nuts.com/pages/contact',
+    verified_at: '2026-07-27T08:00:00.000Z',
+    role: 'public sales'
+  };
   const value = {
     candidate_key: 'ae-nutty-nuts-20260728',
     company_name: 'Nutty Nuts Foodstuff Factory LLC',
     country_code: 'AE',
     normalized_domain: 'nutty-nuts.com',
     official_url: 'https://www.nutty-nuts.com/',
-    recipient: {
-      email: 'sales@nutty-nuts.com',
-      source_url: 'https://www.nutty-nuts.com/pages/contact',
-      verified_at: '2026-07-27T08:00:00.000Z',
-      role: 'public sales'
-    },
+    recipient,
+    contact_selection: contactSelection(recipient),
     categories: ['nuts', 'snacks'],
     formats: ['pouches', 'roll film'],
     size_signals: ['retail packs'],
@@ -69,31 +93,33 @@ function fixture(overrides = {}) {
 }
 
 function publicMailboxFixture(overrides = {}) {
+  const recipient = {
+    email: 'hockxeng@gmail.com',
+    source_url: 'https://www.hockxeng.com/contact-us/',
+    verified_at: '2026-07-28T07:00:00.000Z',
+    role: 'public business',
+    evidence_mode: 'official_public_mailbox',
+    corroboration: {
+      source_url: 'https://example-exhibition.test/hock-xeng',
+      source_class: 'official_exhibition',
+      observed_at: '2026-07-28T07:10:00.000Z',
+      email: 'hockxeng@gmail.com',
+      organization_name: 'Hock Xeng Sdn Bhd',
+      official_domain: 'hockxeng.com',
+      identity_matches: {
+        address: true,
+        phone: true
+      }
+    }
+  };
   const value = fixture({
     candidate_key: 'my-hock-xeng-20260728',
     company_name: 'Hock Xeng Sdn Bhd',
     country_code: 'MY',
     normalized_domain: 'hockxeng.com',
     official_url: 'https://www.hockxeng.com/',
-    recipient: {
-      email: 'hockxeng@gmail.com',
-      source_url: 'https://www.hockxeng.com/contact-us/',
-      verified_at: '2026-07-28T07:00:00.000Z',
-      role: 'public business',
-      evidence_mode: 'official_public_mailbox',
-      corroboration: {
-        source_url: 'https://example-exhibition.test/hock-xeng',
-        source_class: 'official_exhibition',
-        observed_at: '2026-07-28T07:10:00.000Z',
-        email: 'hockxeng@gmail.com',
-        organization_name: 'Hock Xeng Sdn Bhd',
-        official_domain: 'hockxeng.com',
-        identity_matches: {
-          address: true,
-          phone: true
-        }
-      }
-    },
+    recipient,
+    contact_selection: contactSelection(recipient),
     sources: [
       ['home', '/', 'Official home'],
       ['profile', '/company-profile/', 'Company profile and process'],
@@ -173,6 +199,12 @@ try {
       verified_at: '2026-07-28T07:00:00.000Z',
       role: 'public business'
     },
+    contact_selection: contactSelection({
+      email: 'hello@cocome.com.my',
+      source_url: 'https://www.cocome.com.my/contact/',
+      verified_at: '2026-07-28T07:00:00.000Z',
+      role: 'public business'
+    }),
     sources: [
       ['home', '/', 'Official home'],
       ['profile', '/about/', 'Company profile'],
@@ -252,7 +284,7 @@ try {
       candidate_key: 'my-cocome-email-conflict',
       recipient: { ...legacyFixture.recipient, email: 'other@cocome.com.my' }
     }, { clock: () => NOW }),
-    /identity conflict/
+    /selected contact does not match|identity conflict/
   );
 
   const stale = fixture({ candidate_key: 'stale', sources: fixture().sources.map(row => ({ ...row, observed_at: '2025-01-01T00:00:00.000Z' })) });
@@ -261,6 +293,37 @@ try {
   assert.throws(() => admitReviewedCandidate(db, missingProcess, { clock: () => NOW }), /required official source role/);
   const mismatchedEmail = fixture({ candidate_key: 'mismatch', recipient: { ...fixture().recipient, email: 'sales@outside.test' } });
   assert.throws(() => admitReviewedCandidate(db, mismatchedEmail, { clock: () => NOW }), /recipient domain mismatch/);
+  assert.throws(
+    () => parseReviewedCandidate(fixture({
+      candidate_key: 'generic-with-sales',
+      recipient: {
+        email: 'info@nutty-nuts.com',
+        source_url: 'https://www.nutty-nuts.com/pages/contact',
+        verified_at: '2026-07-27T08:00:00.000Z',
+        role: 'general info'
+      },
+      contact_selection: contactSelection({
+        email: 'info@nutty-nuts.com',
+        source_url: 'https://www.nutty-nuts.com/pages/contact',
+        verified_at: '2026-07-27T08:00:00.000Z',
+        role: 'general info'
+      }, [{
+        channel: 'email',
+        address: 'sales@nutty-nuts.com',
+        role: 'public sales',
+        source_url: 'https://www.nutty-nuts.com/pages/contact',
+        verified_at: '2026-07-27T08:00:00.000Z'
+      }])
+    }), NOW),
+    /higher-priority public contact/
+  );
+  assert.throws(
+    () => parseReviewedCandidate(fixture({
+      candidate_key: 'incomplete-contact-search',
+      contact_selection: { ...fixture().contact_selection, search_complete: false }
+    }), NOW),
+    /contact selection review is incomplete/
+  );
 
   const publicMailbox = admitReviewedCandidate(db, publicMailboxFixture(), { clock: () => NOW });
   assert.strictEqual(publicMailbox.resolution, 'inserted');

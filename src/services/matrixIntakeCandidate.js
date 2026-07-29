@@ -2,8 +2,9 @@
 
 const crypto = require('node:crypto');
 const { validateRecipientProvenance } = require('./matrixRecipientProvenance');
+const { validateContactSelection } = require('./matrixContactSelection');
 
-const TOP_KEYS = ['candidate_key', 'categories', 'company_name', 'confidence', 'country_code', 'discovery', 'fit_score', 'formats', 'normalized_domain', 'official_url', 'priority', 'recipient', 'route_readiness', 'scale_tier', 'size_signals', 'sources'];
+const TOP_KEYS = ['candidate_key', 'categories', 'company_name', 'confidence', 'contact_selection', 'country_code', 'discovery', 'fit_score', 'formats', 'normalized_domain', 'official_url', 'priority', 'recipient', 'route_readiness', 'scale_tier', 'size_signals', 'sources'];
 const REQUIRED_SOURCE_ROLES = new Set(['home', 'profile', 'products', 'process', 'contact']);
 
 function exactKeys(value, keys, label) {
@@ -82,6 +83,11 @@ function parseInput(input, now) {
     organizationName: input.company_name,
     now
   });
+  const contactSelection = validateContactSelection(input.contact_selection, {
+    organizationDomain: domain,
+    recipientEmail: recipient.email,
+    now
+  });
 
   if (!Array.isArray(input.sources)) throw new Error('sources must be an array');
   const roles = new Set();
@@ -121,6 +127,7 @@ function parseInput(input, now) {
     normalized_domain: domain,
     official_url: officialUrl,
     recipient,
+    contact_selection: contactSelection,
     categories: stringArray(input.categories, 'categories'),
     formats: stringArray(input.formats, 'formats'),
     size_signals: stringArray(input.size_signals, 'size_signals'),
