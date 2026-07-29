@@ -61,6 +61,7 @@ function withoutLegacySignature(body) {
   const legacyLine = value => {
     const line = value.trim();
     return line === 'Gavin'
+      || /^Huasheng Packaging$/i.test(line)
       || /^(?:Guangdong\s+)?Huasheng (?:Printing|Packaging) Co\., Ltd\.?$/i.test(line)
       || line === 'https://gdhspack.com'
       || line === 'sales@gdhspack.com'

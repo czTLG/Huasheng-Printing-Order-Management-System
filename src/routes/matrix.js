@@ -979,6 +979,12 @@ function createMatrixRouter({
             actorUserId: req.user.id,
             versionId: existingItem.current_stream_version_id
           });
+          const existingJob = db.prepare(
+            'SELECT id FROM matrix_stream_jobs WHERE version_id = ? LIMIT 1'
+          ).get(existingItem.current_stream_version_id);
+          if (existingVersion?.status === 'draft' && !existingJob) {
+            allowExistingWorkItem = true;
+          }
           try {
             await assertVersionStrategyCurrent(existingItem, existingVersion);
           } catch (error) {

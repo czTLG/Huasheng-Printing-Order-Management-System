@@ -65,6 +65,13 @@ assert.strictEqual((legacy.text.match(/^Best regards,$/gmi) || []).length, 1);
 assert.strictEqual((legacy.html.match(/Best regards,/g) || []).length, 1);
 assert.match(legacy.text, /We are Guangdong Huasheng Packaging Co\., Ltd\., a flexible packaging manufacturer in China\./);
 
+const shortBrandSignature = renderMatrixMail({
+  bodyEn: 'Dear COCOME Business Team,\n\nThank you for your time.\n\nBest regards,\nGavin\nHuasheng Packaging'
+});
+assert.strictEqual((shortBrandSignature.text.match(/^Best regards,$/gmi) || []).length, 1);
+assert.strictEqual((shortBrandSignature.text.match(/^Gavin$/gmi) || []).length, 1);
+assert.strictEqual((shortBrandSignature.text.match(/^Huasheng Packaging$/gmi) || []).length, 0);
+
 assert.throws(() => renderMatrixMail({ bodyEn: '' }), /body required/);
 assert.throws(
   () => renderMatrixMail({
