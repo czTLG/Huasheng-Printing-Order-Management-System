@@ -93,12 +93,13 @@ const PROFILES = Object.freeze({
       product: '/products/food-packaging-roll-film',
       courtesy: 'Terima kasih atas masa pihak tuan/puan.',
       supportedClaims: Object.freeze([
+        'Sachet and roll-film supply for COCOME’s instant beverage range',
         'Huasheng Packaging is an ISO 22000-certified flexible packaging manufacturer in China.',
         '华胜包装是中国一家通过 ISO 22000 认证的软包装制造商。',
         'For instant beverage powders, we focus on moisture and aroma protection, sealing stability when fine powder reaches the seal area, accurate roll width, repeat length, eye marks and unwind direction, as well as artwork and barcode control across multiple SKUs.',
         '针对速溶饮品粉剂，我们重点控制防潮与香气保护、细粉进入封口区域时的封合稳定性、卷膜宽度、版长、光标及放卷方向的准确性，以及多个 SKU 之间的设计稿和条码版本管理。',
         'We can confirm manufacturability and quote the corresponding sachet, roll film or pouch format.',
-        '我们可以确认其可制造性，并对相应的小袋、卷膜或自立袋进行报价。'
+        '我们可以确认其可制造性，并对相应的小袋、卷膜或袋装形式进行报价。'
       ])
     })
   }),
