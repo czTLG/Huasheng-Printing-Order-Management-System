@@ -82,6 +82,40 @@ Best regards,
 Gavin
 Huasheng Packaging
 
+## mit-mongkol-20260729-v26
+
+- Approval date: 2026-07-29
+- Approval: approved
+- Recipient: pksourcing@mitmongkol.com
+- Recipient source: https://www.mitmongkol.com/about-us/contact-us.html
+- Sender: Huasheng Packaging Editorial Team <sales@gdhspack.com>
+- Reply-To: sales@gdhspack.com
+- Attachments: one CID-inline brand logo; no ordinary attachments
+- Canonical customer ID: 5881
+- Canonical version ID: 26
+- Content hash: 62b95988b3651b76312fee9e744508b63950a4977ff32f232a38c5489f16037e
+
+### Exact outbound content
+
+Subject: Shampoo and body-wash pouch review for Mit Mongkol Industry Co., Ltd.
+
+Dear Mit Mongkol Packaging Sourcing Team,
+
+I reviewed Mit Mongkol Industry Co., Ltd.'s public OEM/ODM portfolio across hair care, body care, baby care and home care, together with your stated annual capacity of more than 100 million pieces. Managing many formulas, pack formats and artworks at that scale makes packaging qualification and repeat-order consistency especially important.
+
+Huasheng Packaging is based in China. Our relevant formats include custom printed refill pouches, spouted pouches, sachets and roll film. For shampoo and body-wash packaging, we review formula compatibility, filling conditions, fitment sealing, artwork control and repeat-print consistency before confirming the final structure.
+
+Could you send us one current pouch specification? We can check its manufacturability and the corresponding packaging format.
+
+Thai liquid-care packaging guide:
+https://gdhspack.com/th/applications/daily-chemical-packaging
+
+ขอบคุณที่สละเวลาอ่านอีเมลฉบับนี้ เราหวังว่าจะได้พูดคุยกับทีมจัดซื้อบรรจุภัณฑ์ของคุณ
+
+Best regards,
+Gavin
+Huasheng Packaging
+
 ## caroma-20260729-v24
 
 - Approval date: 2026-07-29
