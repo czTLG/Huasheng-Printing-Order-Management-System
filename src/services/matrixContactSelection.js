@@ -102,7 +102,7 @@ function validateContactSelection(input, {
   const unique = new Set(all.map(route => `${route.channel}:${route.address}`));
   if (unique.size !== all.length) throw new Error('contact alternatives contain duplicates');
   const best = Math.max(...all.map(route => route.score));
-  if (selected.score < best) throw new Error('a higher-priority public contact route is available');
+  if (selected.score < best) throw new Error('selected contact is not the best verified route');
   if (selected.channel !== 'email' || selected.address !== String(recipientEmail || '').trim().toLowerCase()) {
     throw new Error('selected contact does not match the email recipient');
   }

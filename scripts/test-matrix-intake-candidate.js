@@ -315,7 +315,7 @@ try {
         verified_at: '2026-07-27T08:00:00.000Z'
       }])
     }), NOW),
-    /higher-priority public contact/
+    /not the best verified route/
   );
   assert.throws(
     () => parseReviewedCandidate(fixture({
