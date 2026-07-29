@@ -81,6 +81,27 @@ const PROFILES = Object.freeze({
       ])
     })
   }),
+  malaysia_instant_beverage: Object.freeze({
+    MY: Object.freeze({
+      kind: 'malaysia_instant_beverage',
+      language: 'en',
+      expectedLanguage: 'en',
+      home: '/',
+      about: '/about',
+      market: '/markets/malaysia-food-packaging',
+      application: '/applications/instant-beverage-powder-packaging',
+      product: '/products/food-packaging-roll-film',
+      courtesy: 'Terima kasih atas masa pihak tuan/puan.',
+      supportedClaims: Object.freeze([
+        'Huasheng Packaging is an ISO 22000-certified flexible packaging manufacturer in China.',
+        '华胜包装是中国一家通过 ISO 22000 认证的软包装制造商。',
+        'For instant beverage powders, we focus on moisture and aroma protection, sealing stability when fine powder reaches the seal area, accurate roll width, repeat length, eye marks and unwind direction, as well as artwork and barcode control across multiple SKUs.',
+        '针对速溶饮品粉剂，我们重点控制防潮与香气保护、细粉进入封口区域时的封合稳定性、卷膜宽度、版长、光标及放卷方向的准确性，以及多个 SKU 之间的设计稿和条码版本管理。',
+        'We can confirm manufacturability and quote the corresponding sachet, roll film or pouch format.',
+        '我们可以确认其可制造性，并对相应的小袋、卷膜或自立袋进行报价。'
+      ])
+    })
+  }),
   food_snack_ar: Object.freeze({
     AE: Object.freeze({
       kind: 'food_snack_ar',
@@ -110,10 +131,14 @@ const LIQUID_CATEGORY = /(?:liquid detergent|hand soap|body soap|shampoo|body wa
 const FOOD_SAUCE_CATEGORY = /(?:sauces?|chili sauce|seasonings?|spices?|soup base)/i;
 const FOOD_SNACK_AR_CATEGORY = /(?:nuts?|dried fruits?|snacks?|spices?|beans?|lentils?|herbs?)/i;
 const THAILAND_FOOD_CATEGORY = /(?:spices?|seasonings?|snacks?|nuts?|dried fruits?|fried vegetables?|dry foods?)/i;
+const INSTANT_BEVERAGE_CATEGORY = /(?:instant beverages?|powdered drinks?|coffee|tea|chocolate beverages?|milk tea|chocolate malt)/i;
 
 function profileFor({ countryCode, categories } = {}) {
   const country = String(countryCode || '').trim().toUpperCase();
   const values = Array.isArray(categories) ? categories.map(value => String(value || '').trim()).filter(Boolean) : [];
+  if (country === 'MY' && values.some(value => INSTANT_BEVERAGE_CATEGORY.test(value))) {
+    return PROFILES.malaysia_instant_beverage.MY;
+  }
   if (country === 'MY' && values.some(value => FOOD_SAUCE_CATEGORY.test(value))) {
     return PROFILES.malaysia_seasoning.MY;
   }

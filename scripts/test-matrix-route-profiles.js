@@ -71,6 +71,16 @@ const {
   assert.strictEqual(malaysiaSeasoning.application, '/applications/food-snack-packaging');
   assert.strictEqual(malaysiaSeasoning.product, '/products/food-packaging-roll-film');
   assert.match(malaysiaSeasoning.courtesy, /Terima kasih/);
+  const malaysiaInstantBeverage = profileFor({
+    countryCode: 'MY',
+    categories: ['coffee', 'tea', 'chocolate beverages', 'instant beverages']
+  });
+  assert.strictEqual(malaysiaInstantBeverage.kind, 'malaysia_instant_beverage');
+  assert.strictEqual(malaysiaInstantBeverage.language, 'en');
+  assert.strictEqual(malaysiaInstantBeverage.market, '/markets/malaysia-food-packaging');
+  assert.strictEqual(malaysiaInstantBeverage.application, '/applications/instant-beverage-powder-packaging');
+  assert.strictEqual(malaysiaInstantBeverage.product, '/products/food-packaging-roll-film');
+  assert.match(malaysiaInstantBeverage.courtesy, /Terima kasih/);
 
   assert.strictEqual(profileFor({ countryCode: 'VN', categories: ['steel'] }), null);
 
