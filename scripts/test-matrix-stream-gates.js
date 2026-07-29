@@ -37,6 +37,10 @@ assert.strictEqual(
   isNonAssertionRequest('If COCOME is evaluating an additional packaging supplier, please send us one current pack specification.'),
   true
 );
+assert.strictEqual(
+  isNonAssertionRequest('如果 COCOME 正在评估新的包装供应商，请向我们提供一款现有包装的规格。'),
+  true
+);
 assert.strictEqual(good.score, 100);
 assert.strictEqual(good.passed, true);
 assert.deepStrictEqual(Object.fromEntries(Object.entries(good.components).map(([key, value]) => [key, value.maximum])), {
