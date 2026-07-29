@@ -1006,7 +1006,10 @@ function createMatrixRouter({
       });
       res.status(result.resolution === 'replayed' ? 200 : 201).json(result);
     } catch (error) {
-      res.status(errorStatus(error)).json({ error: error.message });
+      res.status(errorStatus(error)).json({
+        error: error.message,
+        ...(error?.quality ? { quality: error.quality } : {})
+      });
     }
   });
 

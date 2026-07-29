@@ -140,7 +140,11 @@ function createMatrixIntakeBridge({
       });
       let quality;
       try { quality = JSON.parse(version.quality_json); } catch (_) { quality = null; }
-      if (!quality?.passed) throw new Error('initial draft quality gate blocked');
+      if (!quality?.passed) {
+        const error = new Error('initial draft quality gate blocked');
+        error.quality = quality;
+        throw error;
+      }
       const current = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(workItem.id);
       const response = {
         customer_id: customerId,
