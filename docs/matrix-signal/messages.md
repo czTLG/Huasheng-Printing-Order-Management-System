@@ -81,3 +81,37 @@ Terima kasih atas masa pihak tuan/puan.
 Best regards,
 Gavin
 Huasheng Packaging
+
+## caroma-20260729-v24
+
+- Approval date: 2026-07-29
+- Approval: approved
+- Recipient: sales@caroma.com.my
+- Recipient source: https://www.caroma.com.my/contact-us
+- Sender: Huasheng Packaging Editorial Team <sales@gdhspack.com>
+- Reply-To: sales@gdhspack.com
+- Attachments: none
+- Canonical customer ID: 5891
+- Canonical version ID: 24
+- Content hash: f536daf7661a0e7967ede1d155e70a05d024f2c6de5bd637cca69806cfe4f43c
+
+### Exact outbound content
+
+Subject: Coffee powder-packaging options for Caroma Cafe's beverage brands
+
+Dear Caroma Cafe Business Team,
+
+I reviewed Caroma Cafe Food's public coffee, tea and chocolate beverage range, including the Caroma Coffee, Bicaco White Coffee, Mixco Chocolate and Restea brands, together with the many powder flavours, product variants and 1 kg powder packs shown on your website.
+
+Huasheng Packaging is an ISO 22000-certified flexible packaging manufacturer in China. For powdered beverage packs, we focus on moisture and aroma protection, sealing stability when fine powder reaches the seal area, accurate roll width, repeat length, eye marks and unwind direction, as well as artwork and barcode control across multiple brands and variants.
+
+If Caroma Cafe is evaluating an additional packaging supplier, please send us one current pack specification or filling-machine roll drawing. We can confirm manufacturability and quote the corresponding sachet, roll film or pouch format.
+
+Instant beverage packaging:
+https://gdhspack.com/applications/instant-beverage-powder-packaging
+
+Terima kasih atas masa pihak tuan/puan.
+
+Best regards,
+Gavin
+Huasheng Packaging
