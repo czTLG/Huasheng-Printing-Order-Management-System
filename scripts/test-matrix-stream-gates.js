@@ -6,8 +6,8 @@ const { scoreDraft, extractBilingualFacts } = require('../src/services/matrixStr
 
 const base = {
   subject: '250g and 500g coffee pouch options for Alpha Coffee',
-  bodyEn: 'Dear Alpha Coffee team,\nWe reviewed your 250g and 500g roasted coffee range. We would like to discuss high-barrier valve pouches with stable repeat printing. Could you share your current structure and annual volume?\nBest regards',
-  bodyCn: '您好，我们查看了贵司250g和500g烘焙咖啡产品，希望沟通高阻隔带阀袋及稳定套色。请问当前材料结构和年用量？',
+  bodyEn: 'Dear Alpha Coffee team,\nWe reviewed your 250g and 500g roasted coffee range. We would like to discuss high-barrier valve pouches with stable repeat printing. Would it be useful if we reviewed one current coffee pack photo and highlighted the first valve-pouch points worth checking?\nBest regards',
+  bodyCn: '您好，我们查看了贵司250g和500g烘焙咖啡产品，希望沟通高阻隔带阀袋及稳定套色。如果我们先查看一个现有咖啡包装图片，并指出最值得优先核对的带阀袋要点，这对贵司是否有帮助？',
   recipient: {
     email: 'sales@alpha.test',
     sourceUrl: 'https://alpha.test/contact',
@@ -199,14 +199,16 @@ const dhFoodsDraft = scoreDraft({
   bodyEn: [
     'Dear Dh Foods Purchasing Team,',
     'We reviewed your official factory and supplier-evaluation process, as well as your sauce, soup-base, and seasoning portfolio.',
-    'Is your team currently evaluating printed sachets, pouches, or roll film for any sauce or seasoning line? If yes, could you share one current pack photo, size, fill weight, estimated quantity, and packing-machine type?',
+    'For one representative sauce or seasoning product, we can assess printed sachets, pouches, or roll film.',
+    'Would it be useful if we reviewed one current pack photo and highlighted the first packaging points worth checking?',
     'Best regards,',
     'Gavin'
   ].join('\n\n'),
   bodyCn: [
     'Dh Foods采购团队，您好：',
     '我们查看了贵司官网公开的工厂及供应商评价流程，以及酱料、汤底和调味品产品系列。',
-    '贵司目前是否正在评估用于酱料或调味品产品线的印刷小袋、包装袋或卷膜？如果是，能否提供一个现有包装的照片、尺寸、灌装重量、预计数量和包装机类型？',
+    '针对一个代表性的酱料或调味品产品，我们可以评估印刷小袋、包装袋或卷膜。',
+    '如果我们先查看一个现有包装照片，并指出最值得优先核对的包装要点，这对贵司是否有帮助？',
     '此致',
     'Gavin'
   ].join('\n\n'),
@@ -229,6 +231,18 @@ const dhFoodsDraft = scoreDraft({
 assert.strictEqual(dhFoodsDraft.score, 100);
 assert.strictEqual(dhFoodsDraft.passed, true, JSON.stringify(dhFoodsDraft));
 assert.ok(!dhFoodsDraft.hardFailures.includes('unsupported_supplier'));
+const linkHeavy = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nhttps://gdhspack.com/about\nhttps://gdhspack.com/products`,
+  bodyCn: `${base.bodyCn}\nhttps://gdhspack.com/about\nhttps://gdhspack.com/products`
+});
+assert.ok(linkHeavy.hardFailures.includes('too_many_first_contact_links'));
+const highFriction = scoreDraft({
+  ...base,
+  bodyEn: `${base.bodyEn}\nCould you share your current material structure and expected annual volume?`,
+  bodyCn: `${base.bodyCn}\n能否提供当前材料结构和预计年用量？`
+});
+assert.ok(highFriction.hardFailures.includes('high_friction_first_contact'));
 const namedSupplierStillBlocked = scoreDraft({
   ...base,
   bodyEn: `${base.bodyEn}\nTheir current supplier is Brand A.`,

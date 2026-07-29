@@ -66,7 +66,7 @@ function seedApprovedFixture(index = 1, { lowQuality = false, organizationKey = 
   `).run(workItemId, organizationDomain, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
     JSON.stringify(sourceSnapshot), actorUserId, NOW);
 
-  const approvedBody = lowQuality ? 'Hello' : `Dear ${company} team,\nWe reviewed your 250g and 500g roasted coffee range. We would like to discuss high-barrier valve pouches with stable repeat printing. Could you share your current structure and annual volume?\nBest regards`;
+  const approvedBody = lowQuality ? 'Hello' : `Dear ${company} team,\nWe reviewed your 250g and 500g roasted coffee range. We would like to discuss high-barrier valve pouches with stable repeat printing. Would it be useful if we reviewed one current pack photo and highlighted the first valve-pouch points worth checking?\nBest regards`;
   const created = review.createInitialVersion(db, {
     actorUserId,
     workItemId,
@@ -74,7 +74,7 @@ function seedApprovedFixture(index = 1, { lowQuality = false, organizationKey = 
     recipient,
     subject: lowQuality ? 'Hello' : `250g and 500g coffee pouch options for ${company}`,
     bodyEn: approvedBody,
-    bodyCn: lowQuality ? '你好' : '您好，我们查看了贵司250g和500g烘焙咖啡产品，希望沟通高阻隔带阀袋及稳定套色。请问当前材料结构和年用量？',
+    bodyCn: lowQuality ? '你好' : '您好，我们查看了贵司250g和500g烘焙咖啡产品，希望沟通高阻隔带阀袋及稳定套色。如果我们先查看一个现有包装图片，并指出最值得优先核对的带阀袋要点，这对贵司是否有帮助？',
     strategySummary: 'official evidence reviewed',
     sourceSnapshot,
     idempotencyKey: `delivery-version-create-${index}`
@@ -125,6 +125,7 @@ function confirmationInput(fixture, key) {
     const service = createMatrixStreamDelivery({
       db,
       fromAddress: 'sales@sender.test',
+      fromHeader: 'Gavin | Huasheng Packaging <sales@sender.test>',
       messageIdDomain: 'sender.test',
       dkimSelector: 'selector',
       clock: () => new Date(NOW),
@@ -140,7 +141,7 @@ function confirmationInput(fixture, key) {
     assert.strictEqual(result.state, 'accepted');
     assert.strictEqual(accepted.length, 1);
     assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['from', 'headers', 'html', 'messageId', 'replyTo', 'subject', 'text', 'to'].sort());
-    assert.strictEqual(accepted[0].from, 'sales@sender.test');
+    assert.strictEqual(accepted[0].from, 'Gavin | Huasheng Packaging <sales@sender.test>');
     assert.strictEqual(accepted[0].replyTo, 'sales@sender.test');
     assert.strictEqual(accepted[0].to, 'sales@alpha.test');
     assert.strictEqual(accepted[0].subject, fixture.version.subject);

@@ -68,11 +68,21 @@ function domainIdentity(value) {
 }
 
 function plainAddress(value, label) {
-  const address = normalizedEmail(value);
-  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address) || /[\r\n]/.test(String(value || ''))) {
+  const raw = String(value || '').trim();
+  const address = normalizedEmail(raw);
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address) || /[\r\n]/.test(raw)) {
     throw new Error(`valid ${label} required`);
   }
   return address;
+}
+
+function senderHeader(value, address) {
+  const raw = String(value || address).trim();
+  const bracketed = raw.match(/<([^<>]+)>\s*$/);
+  if (/[\r\n\0]/.test(raw) || (bracketed ? normalizedEmail(bracketed[1]) : normalizedEmail(raw)) !== address) {
+    throw new Error('valid sender header required');
+  }
+  return raw;
 }
 
 function validHostname(value, label) {
@@ -297,7 +307,7 @@ function freshDeliveryGate(db, input, context) {
 }
 
 function createMatrixStreamDelivery({
-  db, transport, clock = () => new Date(), fromAddress, replyToAddress = fromAddress, messageIdDomain, dkimSelector,
+  db, transport, clock = () => new Date(), fromAddress, fromHeader, replyToAddress = fromAddress, messageIdDomain, dkimSelector,
   leaseMs = 30000, waitMs = 20000, pollMs = 25,
   requireCanonicalCutover = process.env.NODE_ENV === 'production'
 } = {}) {
@@ -305,6 +315,7 @@ function createMatrixStreamDelivery({
     throw new Error('delivery dependencies required');
   }
   const from = plainAddress(fromAddress, 'from address');
+  const fromMailHeader = senderHeader(fromHeader, from);
   const replyTo = plainAddress(replyToAddress, 'reply-to address');
   if (replyTo !== from) throw new Error('sender and reply-to mismatch');
   const domain = validHostname(messageIdDomain, 'message id domain');
@@ -505,7 +516,7 @@ function createMatrixStreamDelivery({
     let response;
     try {
       response = await transport.sendMail({
-        from,
+        from: fromMailHeader,
         replyTo,
         to: version.recipient_email,
         subject: version.subject,

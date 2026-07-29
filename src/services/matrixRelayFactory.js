@@ -1,6 +1,7 @@
 'use strict';
 
 const APPROVED_ADDRESS = 'sales@gdhspack.com';
+const COMMERCIAL_SENDER_HEADER = `Gavin | Huasheng Packaging <${APPROVED_ADDRESS}>`;
 
 function required(env, name) {
   const value = String(env?.[name] || '').trim();
@@ -42,6 +43,7 @@ function createMatrixRelayFactory({ env = process.env, nodemailerImpl = require(
 
   return {
     senderAddress: approved,
+    senderHeader: COMMERCIAL_SENDER_HEADER,
     replyToAddress: approved,
     transport,
     async readiness() {
@@ -56,4 +58,4 @@ function createMatrixRelayFactory({ env = process.env, nodemailerImpl = require(
   };
 }
 
-module.exports = { createMatrixRelayFactory, APPROVED_ADDRESS };
+module.exports = { createMatrixRelayFactory, APPROVED_ADDRESS, COMMERCIAL_SENDER_HEADER };

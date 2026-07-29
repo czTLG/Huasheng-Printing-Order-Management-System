@@ -20,6 +20,18 @@ function normalized(value) {
   return String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+function firstContactContentFailures(bodyEn, bodyCn) {
+  const failures = [];
+  const urlsEn = String(bodyEn || '').match(/https?:\/\/[^\s<>'"）)]+/gi) || [];
+  const urlsCn = String(bodyCn || '').match(/https?:\/\/[^\s<>'"）)]+/gi) || [];
+  if (urlsEn.length > 1 || urlsCn.length > 1) failures.push('too_many_first_contact_links');
+  const highFriction = /current material structure|expected annual volume|annual consumption|package size.{0,80}estimated quantity|pack photo.{0,120}(?:size|dimensions).{0,120}(?:quantity|volume)|当前材料结构|预计年用量|包装(?:图片|照片).{0,80}(?:尺寸).{0,120}(?:数量|年用量)/iu;
+  if (highFriction.test(String(bodyEn || '')) || highFriction.test(String(bodyCn || ''))) {
+    failures.push('high_friction_first_contact');
+  }
+  return failures;
+}
+
 function compact(value) {
   return normalized(value).replace(/[^\p{L}\p{N}]+/gu, '');
 }
@@ -378,7 +390,9 @@ function scoreDraft(input = {}) {
   if (unsupportedProductFacts(input.bodyEn, input.bodyCn, evidence)) hardFailures.push('unsupported_product_fact');
   if (hasUnknownProductFact(input.bodyEn, input.bodyCn)) hardFailures.push('unknown_product_fact');
   if (!provenanceOk) hardFailures.push('invalid_recipient_provenance');
-  return { score, passed: score >= 80 && hardFailures.length === 0, components, hardFailures };
+  hardFailures.push(...firstContactContentFailures(input.bodyEn, input.bodyCn));
+  const uniqueHardFailures = [...new Set(hardFailures)];
+  return { score, passed: score >= 80 && uniqueHardFailures.length === 0, components, hardFailures: uniqueHardFailures };
 }
 
 function normalizedEmail(value) {

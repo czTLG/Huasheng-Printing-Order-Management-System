@@ -89,12 +89,13 @@ if (process.env.MATRIX_RELAY_ENABLED === '1') {
     db,
     transport: matrixRelayFactory.transport,
     fromAddress: matrixRelayFactory.senderAddress,
+    fromHeader: matrixRelayFactory.senderHeader,
     replyToAddress: matrixRelayFactory.replyToAddress,
     messageIdDomain: process.env.MATRIX_MESSAGE_ID_DOMAIN || 'gdhspack.com',
     dkimSelector: process.env.MATRIX_DKIM_SELECTOR
   });
   matrixThreadPreviewService = createMatrixThreadPreview({db,readinessService:matrixReadinessService,senderDomain:process.env.MATRIX_MESSAGE_ID_DOMAIN||'gdhspack.com',dkimSelector:process.env.MATRIX_DKIM_SELECTOR});
-  matrixThreadDeliveryService = createMatrixThreadDelivery({db,transport:matrixRelayFactory.transport,previewService:matrixThreadPreviewService,fromAddress:matrixRelayFactory.senderAddress,replyToAddress:matrixRelayFactory.replyToAddress,messageIdDomain:process.env.MATRIX_MESSAGE_ID_DOMAIN||'gdhspack.com'});
+  matrixThreadDeliveryService = createMatrixThreadDelivery({db,transport:matrixRelayFactory.transport,previewService:matrixThreadPreviewService,fromAddress:matrixRelayFactory.senderAddress,fromHeader:matrixRelayFactory.senderHeader,replyToAddress:matrixRelayFactory.replyToAddress,messageIdDomain:process.env.MATRIX_MESSAGE_ID_DOMAIN||'gdhspack.com'});
 }
 let matrixRouter = null;
 function dispatchMatrix(req, res, next) {

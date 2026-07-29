@@ -15,6 +15,7 @@ assert.ok(source.includes('deliveryService: matrixDeliveryService'));
 assert.ok(source.includes('previewService: matrixPreviewService'));
 assert.ok(source.includes('resolveTxt: dns.resolveTxt'));
 assert.ok(source.includes("fromAddress: matrixRelayFactory.senderAddress"));
+assert.ok(source.includes("fromHeader: matrixRelayFactory.senderHeader"));
 assert.ok(source.includes("replyToAddress: matrixRelayFactory.replyToAddress"));
 assert.ok(!source.includes('/etc/packaging-system/smtp.env'), 'server code must not open protected config directly');
 assert.ok(!source.includes('SMTP_PASS='), 'server source must not embed a credential');

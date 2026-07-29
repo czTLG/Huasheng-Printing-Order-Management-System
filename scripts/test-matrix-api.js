@@ -571,11 +571,12 @@ function reviewState(workItemId) {
     assert.ok(/liquid detergent/i.test(personalCareVersion.body.subject));
     assert.ok(!/\b\d+\s*(?:kg|g)\b/i.test(personalCareVersion.body.subject));
     assert.ok(/public liquid detergent, hand soap, body soap, and shampoo capabilities/i.test(personalCareVersion.body.body_en));
-    assert.ok(/packaging sourcing or procurement/i.test(personalCareVersion.body.body_en));
+    assert.ok(/packaging sourcing and compatibility-testing process/i.test(personalCareVersion.body.body_en));
     assert.ok(/leak resistance/i.test(personalCareVersion.body.body_en));
     assert.ok(/https:\/\/gdhspack\.com\/id\/applications\/daily-chemical-packaging/.test(personalCareVersion.body.body_en));
-    assert.ok(/https:\/\/gdhspack\.com\/id\/products\/spout-pouches/.test(personalCareVersion.body.body_en));
-    assert.ok(/https:\/\/gdhspack\.com\/id\/about/.test(personalCareVersion.body.body_en));
+    assert.ok(!/https:\/\/gdhspack\.com\/id\/products\/spout-pouches/.test(personalCareVersion.body.body_en));
+    assert.ok(!/https:\/\/gdhspack\.com\/id\/about/.test(personalCareVersion.body.body_en));
+    assert.strictEqual((personalCareVersion.body.body_en.match(/https?:\/\//g) || []).length, 1);
     assert.ok(/Terima kasih atas waktu Anda/.test(personalCareVersion.body.body_en));
     assert.ok(/tim pengadaan kemasan perusahaan Anda/.test(personalCareVersion.body.body_en));
     assert.ok(!/\bCSE\b/.test(personalCareVersion.body.body_en));
@@ -639,8 +640,9 @@ function reviewState(workItemId) {
     assert.match(foodVersion.body.subject, /sauce|seasoning/i);
     assert.match(foodVersion.body.body_en, /packaging and label inspection/i);
     assert.match(foodVersion.body.body_en, /supplier-evaluation process/i);
-    assert.match(foodVersion.body.body_en, /one current product pack photo/i);
+    assert.match(foodVersion.body.body_en, /one current pack photo/i);
     assert.match(foodVersion.body.body_en, /https:\/\/gdhspack\.com\/vi\/applications\/sauce-packaging/);
+    assert.strictEqual((foodVersion.body.body_en.match(/https?:\/\//g) || []).length, 1);
     assert.match(foodVersion.body.body_en, /Cảm ơn Quý công ty/);
     assert.doesNotMatch(foodVersion.body.body_en, /current pouch supplier|guarantee|final structure/i);
     assert.strictEqual(JSON.parse(foodVersion.body.quality_json).passed, true);

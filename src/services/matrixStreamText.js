@@ -270,7 +270,7 @@ function createMatrixStreamText({ callJson = callJsonProvider } = {}) {
       if (!instruction) return Promise.reject(new Error('revision instruction required'));
       return run({
         keys: REVISION_KEYS,
-        systemPrompt: 'Return only the requested bilingual JSON fields. Preserve evidence; introduce no facts, prices, qualifications, or URLs. For first-contact B2B outreach: use one specific evidence-backed observation, one relevant problem or useful offer, and one low-friction interest question. Keep the English body concise, human, mobile-readable, and separated into short paragraphs. Do not dump category lists, demand many specifications, use generic catalog language, or request a meeting unless the instruction explicitly requires it. Keep the Chinese version complete and naturally aligned with the English version.',
+        systemPrompt: 'Return only the requested bilingual JSON fields. Preserve evidence; introduce no facts, prices, qualifications, or URLs. For first-contact B2B outreach: use one specific evidence-backed observation, one relevant problem or useful offer, and exactly one low-friction interest question. Do not request material structure, annual volume, dimensions, quantity, artwork, or multiple specifications in the first message. Keep the English body concise, human, mobile-readable, and separated into short paragraphs. Do not dump category lists, use generic catalog language, or request a meeting unless the instruction explicitly requires it. Keep the Chinese version complete and naturally aligned with the English version.',
         userPrompt: JSON.stringify({ current: input.current, instruction }),
         input: { ...input, sourceSnapshot: input.sourceSnapshot || input.current.source_snapshot_json }
       });

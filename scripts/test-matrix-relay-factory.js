@@ -26,6 +26,7 @@ const { createMatrixRelayFactory } = require('../src/services/matrixRelayFactory
   };
   const relay = createMatrixRelayFactory({ env, nodemailerImpl, clock: () => new Date('2026-07-19T01:00:00Z') });
   assert.strictEqual(relay.senderAddress, 'sales@gdhspack.com');
+  assert.strictEqual(relay.senderHeader, 'Gavin | Huasheng Packaging <sales@gdhspack.com>');
   assert.strictEqual(relay.replyToAddress, 'sales@gdhspack.com');
   assert.deepStrictEqual(await relay.readiness(), { ready: true, checkedAt: '2026-07-19T01:00:00.000Z', errorClass: '' });
   assert.deepStrictEqual(calls, { create: 1, verify: 1, send: 0 });
