@@ -81,6 +81,22 @@ const {
   assert.strictEqual(malaysiaInstantBeverage.application, '/applications/instant-beverage-powder-packaging');
   assert.strictEqual(malaysiaInstantBeverage.product, '/products/food-packaging-roll-film');
   assert.match(malaysiaInstantBeverage.courtesy, /Terima kasih/);
+  const malaysiaSnack = profileFor({ countryCode: 'MY', categories: ['chocolate', 'snack crackers'] });
+  assert.strictEqual(malaysiaSnack.kind, 'malaysia_seasoning');
+  assert.strictEqual(malaysiaSnack.application, '/applications/food-snack-packaging');
+  const malaysiaLiquid = profileFor({ countryCode: 'MY', categories: ['shampoo', 'body wash'] });
+  assert.strictEqual(malaysiaLiquid.kind, 'liquid_care');
+  assert.strictEqual(malaysiaLiquid.application, '/applications/daily-chemical-packaging');
+  assert.strictEqual(malaysiaLiquid.product, '/products/spout-pouches');
+  assert.ok(malaysiaLiquid.supportedClaims.length >= 4);
+  const indonesiaFood = profileFor({ countryCode: 'ID', categories: ['seasonings', 'powder drinks'] });
+  assert.strictEqual(indonesiaFood.kind, 'matrix_food_id');
+  assert.strictEqual(indonesiaFood.application, '/id/applications/sauce-packaging');
+  assert.strictEqual(indonesiaFood.product, '/id/products/food-packaging-roll-film');
+  const uaeLiquid = profileFor({ countryCode: 'AE', categories: ['liquid detergent', 'personal care'] });
+  assert.strictEqual(uaeLiquid.kind, 'liquid_care');
+  assert.strictEqual(uaeLiquid.application, '/ar/applications/daily-chemical-packaging');
+  assert.strictEqual(uaeLiquid.expectedLanguage, 'ar');
 
   assert.strictEqual(profileFor({ countryCode: 'VN', categories: ['steel'] }), null);
 

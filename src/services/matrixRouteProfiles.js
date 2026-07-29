@@ -21,6 +21,40 @@ const PROFILES = Object.freeze({
       application: '/id/applications/daily-chemical-packaging',
       product: '/id/products/spout-pouches',
       courtesy: 'Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim pengadaan kemasan perusahaan Anda.'
+    }),
+    MY: Object.freeze({
+      kind: 'liquid_care',
+      language: 'en',
+      expectedLanguage: 'en',
+      home: '/',
+      about: '/about',
+      market: '/markets/malaysia-food-packaging',
+      application: '/applications/daily-chemical-packaging',
+      product: '/products/spout-pouches',
+      courtesy: 'Terima kasih atas masa pihak tuan/puan. Kami berharap dapat berbincang dengan pasukan anda.',
+      supportedClaims: Object.freeze([
+        'We are Guangdong Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是广东华胜包装有限公司，一家位于中国的软包装制造商。',
+        'For liquid refill packaging, we review formula compatibility, filling conditions, fitment, sealing and representative leakage testing before confirming the final structure.',
+        '针对液体补充装，我们会在确认最终结构前核对配方兼容性、灌装条件、吸嘴、封口及代表性防漏测试。'
+      ])
+    }),
+    AE: Object.freeze({
+      kind: 'liquid_care',
+      language: 'ar',
+      expectedLanguage: 'ar',
+      home: '/ar',
+      about: '/ar/about',
+      market: '/ar/markets/middle-east-food-packaging',
+      application: '/ar/applications/daily-chemical-packaging',
+      product: '/ar/products/spout-pouches',
+      courtesy: 'شكرًا لوقتكم، ونتطلع إلى فرصة للتواصل مع فريق مشتريات التغليف لديكم.',
+      supportedClaims: Object.freeze([
+        'We are Guangdong Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是广东华胜包装有限公司，一家位于中国的软包装制造商。',
+        'For liquid refill packaging, we review formula compatibility, filling conditions, fitment, sealing and representative leakage testing before confirming the final structure.',
+        '针对液体补充装，我们会在确认最终结构前核对配方兼容性、灌装条件、吸嘴、封口及代表性防漏测试。'
+      ])
     })
   }),
   thailand_food: Object.freeze({
@@ -103,6 +137,25 @@ const PROFILES = Object.freeze({
       ])
     })
   }),
+  matrix_food_id: Object.freeze({
+    ID: Object.freeze({
+      kind: 'matrix_food_id',
+      language: 'id',
+      expectedLanguage: 'id',
+      home: '/id',
+      about: '/id/about',
+      market: '/id/markets/indonesia',
+      application: '/id/applications/sauce-packaging',
+      product: '/id/products/food-packaging-roll-film',
+      courtesy: 'Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim pengadaan kemasan perusahaan Anda.',
+      supportedClaims: Object.freeze([
+        'We are Guangdong Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是广东华胜包装有限公司，一家位于中国的软包装制造商。',
+        'Powder products and liquid sauces require separate review of barrier, sealing, filling equipment and representative testing.',
+        '粉剂产品和液体酱料需要分别核对阻隔、封口、灌装设备和代表性测试。'
+      ])
+    })
+  }),
   food_snack_ar: Object.freeze({
     AE: Object.freeze({
       kind: 'food_snack_ar',
@@ -133,6 +186,8 @@ const FOOD_SAUCE_CATEGORY = /(?:sauces?|chili sauce|seasonings?|spices?|soup bas
 const FOOD_SNACK_AR_CATEGORY = /(?:nuts?|dried fruits?|snacks?|spices?|beans?|lentils?|herbs?)/i;
 const THAILAND_FOOD_CATEGORY = /(?:spices?|seasonings?|snacks?|nuts?|dried fruits?|fried vegetables?|dry foods?)/i;
 const INSTANT_BEVERAGE_CATEGORY = /(?:instant beverages?|powdered drinks?|coffee|tea|chocolate beverages?|milk tea|chocolate malt)/i;
+const MALAYSIA_SNACK_CATEGORY = /(?:snacks?|confectionery|chocolate|crackers?|cand(?:y|ies)|pralines?)/i;
+const INDONESIA_FOOD_CATEGORY = /(?:sauces?|condiments?|seasonings?|powder drinks?|food ingredients?|extracts?|spices?)/i;
 
 function profileFor({ countryCode, categories } = {}) {
   const country = String(countryCode || '').trim().toUpperCase();
@@ -142,6 +197,12 @@ function profileFor({ countryCode, categories } = {}) {
   }
   if (country === 'MY' && values.some(value => FOOD_SAUCE_CATEGORY.test(value))) {
     return PROFILES.malaysia_seasoning.MY;
+  }
+  if (country === 'MY' && values.some(value => MALAYSIA_SNACK_CATEGORY.test(value))) {
+    return PROFILES.malaysia_seasoning.MY;
+  }
+  if (country === 'ID' && values.some(value => INDONESIA_FOOD_CATEGORY.test(value))) {
+    return PROFILES.matrix_food_id.ID;
   }
   if (values.some(value => LIQUID_CATEGORY.test(value)) && PROFILES.liquid_care[country]) {
     return PROFILES.liquid_care[country];
