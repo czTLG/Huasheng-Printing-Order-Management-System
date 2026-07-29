@@ -47,3 +47,37 @@ Gavin
 Guangdong Huasheng Packaging Co., Ltd.
 https://gdhspack.com
 sales@gdhspack.com
+
+## cocome-20260729-v23
+
+- Approval date: 2026-07-29
+- Approval: approved
+- Recipient: hello@cocome.com.my
+- Recipient source: https://www.cocome.com.my/contact/
+- Sender: Huasheng Packaging Editorial Team <sales@gdhspack.com>
+- Reply-To: sales@gdhspack.com
+- Attachments: none
+- Canonical customer ID: 5890
+- Canonical version ID: 23
+- Content hash: 8c7f6b31503763b77088ebea4b5939560715865c13cdde4109387455d3f82005
+
+### Exact outbound content
+
+Subject: Sachet and roll-film supply for COCOME’s instant beverage range
+
+Dear COCOME Business Team,
+
+COCOME’s range of more than 50 coffee, tea, chocolate and other powdered drink flavours—together with your OEM and private-label services—means packaging consistency across multiple flavours and artworks is especially important.
+
+Huasheng Packaging is an ISO 22000-certified flexible packaging manufacturer in China. For instant beverage powders, we focus on moisture and aroma protection, sealing stability when fine powder reaches the seal area, accurate roll width, repeat length, eye marks and unwind direction, as well as artwork and barcode control across multiple SKUs.
+
+If COCOME is evaluating an additional packaging supplier, please send us one current pack specification or filling-machine roll drawing. We can confirm manufacturability and quote the corresponding sachet, roll film or pouch format.
+
+Instant beverage packaging:
+https://gdhspack.com/applications/instant-beverage-powder-packaging
+
+Terima kasih atas masa pihak tuan/puan.
+
+Best regards,
+Gavin
+Huasheng Packaging
