@@ -161,6 +161,75 @@ try {
   assert.strictEqual(admitReviewedCandidate(db, fixture(), { clock: () => NOW }).resolution, 'replayed');
   assert.throws(() => admitReviewedCandidate(db, fixture({ company_name: 'Conflicting Name' }), { clock: () => NOW }), /identity conflict/);
 
+  const legacyFixture = fixture({
+    candidate_key: 'my-cocome-20260728',
+    company_name: 'COCOME (M) Sdn Bhd',
+    country_code: 'MY',
+    normalized_domain: 'cocome.com.my',
+    official_url: 'https://www.cocome.com.my/',
+    recipient: {
+      email: 'hello@cocome.com.my',
+      source_url: 'https://www.cocome.com.my/contact/',
+      verified_at: '2026-07-28T07:00:00.000Z',
+      role: 'public business'
+    },
+    sources: [
+      ['home', '/', 'Official home'],
+      ['profile', '/about/', 'Company profile'],
+      ['products', '/products/', 'Instant beverage products'],
+      ['process', '/services/', 'OEM and private-label services'],
+      ['contact', '/contact/', 'Public business contact']
+    ].map(([role, suffix, excerpt]) => ({
+      role,
+      source_url: `https://www.cocome.com.my${suffix}`,
+      page_title: role,
+      observed_at: '2026-07-28T07:00:00.000Z',
+      excerpt
+    })),
+    discovery: {
+      source_adapter: 'matrix_atlas',
+      source_url: 'https://www.cocome.com.my/',
+      source_query: 'Malaysia instant beverage OEM manufacturer',
+      collected_at: '2026-07-28T07:00:00.000Z'
+    }
+  });
+  const legacyId = Number(db.prepare(`
+    INSERT INTO cache_records (
+      company_name,country_code,city,normalized_domain,official_url,product_categories_json,
+      format_signals_json,size_signals_json,scale_tier,public_email,public_phone,public_whatsapp,
+      contact_url,priority,fit_score,confidence,status,assessment_cn,next_action_cn,stage_code,
+      first_seen_at,updated_at,demand_fit_score,access_score,contact_role,audit_state,audit_note,audited_at
+    ) VALUES (?,?,?,?,?,'[]','[]','[]','medium',?,'','','','P0',90,0.9,'valid','','','observed',?,?,90,100,'public business','audited','legacy',?)
+  `).run(
+    legacyFixture.company_name,
+    legacyFixture.country_code,
+    '',
+    legacyFixture.normalized_domain,
+    legacyFixture.official_url,
+    legacyFixture.recipient.email,
+    NOW,
+    NOW,
+    NOW
+  ).lastInsertRowid);
+  const adopted = admitReviewedCandidate(db, legacyFixture, { clock: () => NOW });
+  assert.strictEqual(adopted.resolution, 'adopted');
+  assert.strictEqual(adopted.candidate_id, legacyId);
+  assert.strictEqual(admitReviewedCandidate(db, legacyFixture, { clock: () => NOW }).resolution, 'replayed');
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM cache_records WHERE normalized_domain=?').get(legacyFixture.normalized_domain).n, 1);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM cache_evidence WHERE record_id=?').get(legacyId).n, 5);
+  assert.throws(
+    () => admitReviewedCandidate(db, { ...legacyFixture, candidate_key: 'my-cocome-name-conflict', company_name: 'Different Company' }, { clock: () => NOW }),
+    /identity conflict/
+  );
+  assert.throws(
+    () => admitReviewedCandidate(db, {
+      ...legacyFixture,
+      candidate_key: 'my-cocome-email-conflict',
+      recipient: { ...legacyFixture.recipient, email: 'other@cocome.com.my' }
+    }, { clock: () => NOW }),
+    /identity conflict/
+  );
+
   const stale = fixture({ candidate_key: 'stale', sources: fixture().sources.map(row => ({ ...row, observed_at: '2025-01-01T00:00:00.000Z' })) });
   assert.throws(() => admitReviewedCandidate(db, stale, { clock: () => NOW }), /evidence is stale/);
   const missingProcess = fixture({ candidate_key: 'missing', sources: fixture().sources.filter(row => row.role !== 'process') });
@@ -224,9 +293,9 @@ try {
     /at least two corroborated identity fields/
   );
 
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_records').get().count, 2);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 10);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_discovery').get().count, 2);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_records').get().count, 3);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 15);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_discovery').get().count, 3);
   assert.strictEqual(db.prepare("SELECT audit_state FROM cache_records").get().audit_state, 'audited');
 } finally {
   db.close();

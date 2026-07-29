@@ -68,6 +68,10 @@ function digest(value) {
   return crypto.createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
 }
 
+function normalizedIdentityText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 function parseInput(input, now) {
   exactKeys(input, TOP_KEYS, 'candidate');
   const domain = cleanDomain(input.normalized_domain);
@@ -167,21 +171,7 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
       if (prior.request_fingerprint !== fingerprint) throw new Error('candidate identity conflict');
       return { candidate_id: prior.record_id, resolution: 'replayed', fingerprint };
     }
-    if (db.prepare('SELECT id FROM cache_records WHERE lower(normalized_domain) = lower(?)').get(candidate.normalized_domain)) {
-      throw new Error('candidate identity conflict');
-    }
-    const result = db.prepare(`
-      INSERT INTO cache_records (
-        company_name,country_code,city,normalized_domain,official_url,product_categories_json,
-        format_signals_json,size_signals_json,scale_tier,public_email,public_phone,public_whatsapp,
-        contact_url,priority,fit_score,confidence,status,assessment_cn,next_action_cn,stage_code,
-        first_seen_at,updated_at,demand_fit_score,access_score,contact_role,audit_state,audit_note,audited_at
-      ) VALUES (
-        @company_name,@country_code,'',@normalized_domain,@official_url,@categories,@formats,@sizes,
-        @scale_tier,@email,'','',@contact_url,@priority,@fit_score,@confidence,'valid','','','observed',
-        @now,@now,@fit_score,100,@contact_role,'audited',@audit_note,@now
-      )
-    `).run({
+    const values = {
       company_name: candidate.company_name,
       country_code: candidate.country_code,
       normalized_domain: candidate.normalized_domain,
@@ -198,15 +188,60 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
       now,
       contact_role: candidate.recipient.role,
       audit_note: `Reviewed public-source intake ${candidate.candidate_key}`
-    });
-    const recordId = Number(result.lastInsertRowid);
+    };
+    const existing = db.prepare(`
+      SELECT id,company_name,country_code,normalized_domain,official_url,public_email,status,audit_state
+      FROM cache_records WHERE lower(normalized_domain) = lower(?)
+    `).get(candidate.normalized_domain);
+    let recordId;
+    let resolution;
+    if (existing) {
+      const reviewedRecord = db.prepare('SELECT request_fingerprint FROM cache_reviewed_intakes WHERE record_id = ?').get(existing.id);
+      if (reviewedRecord) {
+        if (reviewedRecord.request_fingerprint !== fingerprint) throw new Error('candidate identity conflict');
+        return { candidate_id: Number(existing.id), resolution: 'replayed', fingerprint };
+      }
+      const identityMatches = normalizedIdentityText(existing.company_name) === normalizedIdentityText(candidate.company_name)
+        && String(existing.country_code || '').trim().toUpperCase() === candidate.country_code
+        && String(existing.normalized_domain || '').trim().toLowerCase() === candidate.normalized_domain
+        && onDomain(existing.official_url, candidate.normalized_domain)
+        && String(existing.public_email || '').trim().toLowerCase() === candidate.recipient.email.toLowerCase()
+        && existing.status === 'valid'
+        && existing.audit_state === 'audited';
+      if (!identityMatches) throw new Error('candidate identity conflict');
+      db.prepare(`
+        UPDATE cache_records SET
+          official_url=@official_url,product_categories_json=@categories,format_signals_json=@formats,
+          size_signals_json=@sizes,scale_tier=@scale_tier,contact_url=@contact_url,priority=@priority,
+          fit_score=@fit_score,confidence=@confidence,updated_at=@now,demand_fit_score=@fit_score,
+          access_score=100,contact_role=@contact_role,audit_note=@audit_note,audited_at=@now
+        WHERE id=@id
+      `).run({ ...values, id: existing.id });
+      recordId = Number(existing.id);
+      resolution = 'adopted';
+    } else {
+      const result = db.prepare(`
+        INSERT INTO cache_records (
+          company_name,country_code,city,normalized_domain,official_url,product_categories_json,
+          format_signals_json,size_signals_json,scale_tier,public_email,public_phone,public_whatsapp,
+          contact_url,priority,fit_score,confidence,status,assessment_cn,next_action_cn,stage_code,
+          first_seen_at,updated_at,demand_fit_score,access_score,contact_role,audit_state,audit_note,audited_at
+        ) VALUES (
+          @company_name,@country_code,'',@normalized_domain,@official_url,@categories,@formats,@sizes,
+          @scale_tier,@email,'','',@contact_url,@priority,@fit_score,@confidence,'valid','','','observed',
+          @now,@now,@fit_score,100,@contact_role,'audited',@audit_note,@now
+        )
+      `).run(values);
+      recordId = Number(result.lastInsertRowid);
+      resolution = 'inserted';
+    }
     const evidence = db.prepare(`
-      INSERT INTO cache_evidence (record_id,source_url,source_type,page_title,observed_at,excerpt,fingerprint,created_at)
+      INSERT OR IGNORE INTO cache_evidence (record_id,source_url,source_type,page_title,observed_at,excerpt,fingerprint,created_at)
       VALUES (?,?,?,?,?,?,?,?)
     `);
     for (const row of candidate.sources) evidence.run(recordId, row.source_url, `official_${row.role}`, row.page_title, row.observed_at, row.excerpt, digest(row), now);
     db.prepare(`
-      INSERT INTO cache_discovery (record_id,normalized_domain,discovered_via,discovery_url,official_url,source_type,verified_at,fingerprint,created_at)
+      INSERT OR IGNORE INTO cache_discovery (record_id,normalized_domain,discovered_via,discovery_url,official_url,source_type,verified_at,fingerprint,created_at)
       VALUES (?,?,?,?,?,?,?,?,?)
     `).run(recordId, candidate.normalized_domain, candidate.discovery.source_adapter, candidate.discovery.source_url,
       candidate.official_url, 'reviewed_public_source', candidate.discovery.collected_at, digest(candidate.discovery), now);
@@ -225,7 +260,7 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
       }),
       now
     );
-    return { candidate_id: recordId, resolution: 'inserted', fingerprint };
+    return { candidate_id: recordId, resolution, fingerprint };
   });
   return execute.immediate();
 }
