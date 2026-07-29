@@ -37,7 +37,7 @@ const ONTOLOGY = Object.freeze({
   ],
   package_format: [
     ['sachet', /\bsachets?\b/i, /小袋/u],
-    ['roll_film', /\b(?:(?:printed|packaging)[ -]+)?roll[ -]+(?:film|stock)\b/i, /(?:印刷卷膜|包装卷膜|卷膜)/u]
+    ['roll_film', /\b(?:(?:(?:printed|packaging)[ -]+)?roll[ -]+(?:film|stock)|filling[ -]+machine\s+roll\s+drawing)\b/i, /(?:印刷卷膜|包装卷膜|卷膜)/u]
   ],
   transparency: [['transparent', /\btransparent\b/i, /透明/u], ['opaque', /\bopaque\b/i, /不透明/u]],
   closure: [['velcro', /\bvelcro\b/i, /魔术贴/u], ['wire_tie', /\bwire[ -]?tie\b/i, /扎丝/u], ['none', /\bno\s+closure\b/i, /无封口/u]]

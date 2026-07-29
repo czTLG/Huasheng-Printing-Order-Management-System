@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const Database = require('better-sqlite3');
 const { scoreDraft, extractBilingualFacts } = require('../src/services/matrixStreamGate');
 const { isNonAssertionRequest } = require('../src/services/matrixStreamText');
+const { extractOntologyFacts } = require('../src/services/matrixStreamOntology');
 
 const base = {
   subject: '250g and 500g coffee pouch options for Alpha Coffee',
@@ -40,6 +41,10 @@ assert.strictEqual(
 assert.strictEqual(
   isNonAssertionRequest('如果 COCOME 正在评估新的包装供应商，请向我们提供一款现有包装的规格。'),
   true
+);
+assert.deepStrictEqual(
+  extractOntologyFacts('Please send one current pack specification or filling-machine roll drawing.', 'en').package_format,
+  ['roll_film']
 );
 assert.strictEqual(good.score, 100);
 assert.strictEqual(good.passed, true);
