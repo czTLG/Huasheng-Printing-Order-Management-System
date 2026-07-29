@@ -217,6 +217,31 @@ try {
   assert.strictEqual(admitReviewedCandidate(db, legacyFixture, { clock: () => NOW }).resolution, 'replayed');
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM cache_records WHERE normalized_domain=?').get(legacyFixture.normalized_domain).n, 1);
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM cache_evidence WHERE record_id=?').get(legacyId).n, 5);
+  const refreshedFixture = {
+    ...legacyFixture,
+    sources: [
+      ...legacyFixture.sources,
+      {
+        role: 'contact',
+        source_url: 'https://www.cocome.com.my/business/',
+        page_title: 'Business contact',
+        observed_at: '2026-07-28T07:00:00.000Z',
+        excerpt: 'Official organizational contact'
+      }
+    ]
+  };
+  assert.throws(
+    () => admitReviewedCandidate(db, refreshedFixture, { clock: () => NOW }),
+    /identity conflict/
+  );
+  const refreshed = admitReviewedCandidate(db, refreshedFixture, {
+    clock: () => NOW,
+    allowEvidenceRefresh: true
+  });
+  assert.strictEqual(refreshed.resolution, 'refreshed');
+  assert.strictEqual(refreshed.candidate_id, legacyId);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM cache_evidence WHERE record_id=?').get(legacyId).n, 6);
+  assert.strictEqual(admitReviewedCandidate(db, refreshedFixture, { clock: () => NOW }).resolution, 'replayed');
   assert.throws(
     () => admitReviewedCandidate(db, { ...legacyFixture, candidate_key: 'my-cocome-name-conflict', company_name: 'Different Company' }, { clock: () => NOW }),
     /identity conflict/
@@ -294,7 +319,7 @@ try {
   );
 
   assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_records').get().count, 3);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 15);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 16);
   assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_discovery').get().count, 3);
   assert.strictEqual(db.prepare("SELECT audit_state FROM cache_records").get().audit_state, 'audited');
 } finally {

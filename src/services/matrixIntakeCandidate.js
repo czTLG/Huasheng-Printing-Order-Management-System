@@ -146,7 +146,10 @@ function parseInput(input, now) {
   };
 }
 
-function admitReviewedCandidate(db, input, { clock = () => new Date().toISOString() } = {}) {
+function admitReviewedCandidate(db, input, {
+  clock = () => new Date().toISOString(),
+  allowEvidenceRefresh = false
+} = {}) {
   const now = iso(clock(), 'clock');
   const candidate = parseInput(input, now);
   const fingerprint = digest(candidate);
@@ -168,8 +171,10 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
   const execute = db.transaction(() => {
     const prior = db.prepare('SELECT record_id, request_fingerprint FROM cache_reviewed_intakes WHERE candidate_key = ?').get(candidate.candidate_key);
     if (prior) {
-      if (prior.request_fingerprint !== fingerprint) throw new Error('candidate identity conflict');
-      return { candidate_id: prior.record_id, resolution: 'replayed', fingerprint };
+      if (prior.request_fingerprint === fingerprint) {
+        return { candidate_id: prior.record_id, resolution: 'replayed', fingerprint };
+      }
+      if (!allowEvidenceRefresh) throw new Error('candidate identity conflict');
     }
     const values = {
       company_name: candidate.company_name,
@@ -196,10 +201,14 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
     let recordId;
     let resolution;
     if (existing) {
-      const reviewedRecord = db.prepare('SELECT request_fingerprint FROM cache_reviewed_intakes WHERE record_id = ?').get(existing.id);
+      const reviewedRecord = db.prepare('SELECT candidate_key,request_fingerprint FROM cache_reviewed_intakes WHERE record_id = ?').get(existing.id);
       if (reviewedRecord) {
-        if (reviewedRecord.request_fingerprint !== fingerprint) throw new Error('candidate identity conflict');
-        return { candidate_id: Number(existing.id), resolution: 'replayed', fingerprint };
+        if (reviewedRecord.request_fingerprint === fingerprint) {
+          return { candidate_id: Number(existing.id), resolution: 'replayed', fingerprint };
+        }
+        if (!allowEvidenceRefresh || reviewedRecord.candidate_key !== candidate.candidate_key) {
+          throw new Error('candidate identity conflict');
+        }
       }
       const identityMatches = normalizedIdentityText(existing.company_name) === normalizedIdentityText(candidate.company_name)
         && String(existing.country_code || '').trim().toUpperCase() === candidate.country_code
@@ -218,7 +227,7 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
         WHERE id=@id
       `).run({ ...values, id: existing.id });
       recordId = Number(existing.id);
-      resolution = 'adopted';
+      resolution = reviewedRecord ? 'refreshed' : 'adopted';
     } else {
       const result = db.prepare(`
         INSERT INTO cache_records (
@@ -245,13 +254,7 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
       VALUES (?,?,?,?,?,?,?,?,?)
     `).run(recordId, candidate.normalized_domain, candidate.discovery.source_adapter, candidate.discovery.source_url,
       candidate.official_url, 'reviewed_public_source', candidate.discovery.collected_at, digest(candidate.discovery), now);
-    db.prepare(`
-      INSERT INTO cache_reviewed_intakes (
-        candidate_key,record_id,request_fingerprint,route_readiness_json,recipient_provenance_json,created_at
-      ) VALUES (?,?,?,?,?,?)
-    `).run(
-      candidate.candidate_key,
-      recordId,
+    const reviewedValues = [
       fingerprint,
       JSON.stringify(candidate.route_readiness),
       JSON.stringify({
@@ -259,7 +262,20 @@ function admitReviewedCandidate(db, input, { clock = () => new Date().toISOStrin
         ...(candidate.recipient.corroboration ? { corroboration: candidate.recipient.corroboration } : {})
       }),
       now
-    );
+    ];
+    if (resolution === 'refreshed') {
+      db.prepare(`
+        UPDATE cache_reviewed_intakes SET
+          request_fingerprint=?,route_readiness_json=?,recipient_provenance_json=?,created_at=?
+        WHERE candidate_key=? AND record_id=?
+      `).run(...reviewedValues, candidate.candidate_key, recordId);
+    } else {
+      db.prepare(`
+        INSERT INTO cache_reviewed_intakes (
+          candidate_key,record_id,request_fingerprint,route_readiness_json,recipient_provenance_json,created_at
+        ) VALUES (?,?,?,?,?,?)
+      `).run(candidate.candidate_key, recordId, ...reviewedValues);
+    }
     return { candidate_id: recordId, resolution, fingerprint };
   });
   return execute.immediate();
