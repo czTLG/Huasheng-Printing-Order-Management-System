@@ -26,6 +26,10 @@ const {
   assert.strictEqual(thaiSauce.application, '/th/applications/sauce-packaging');
   assert.strictEqual(thaiSauce.product, '/th/products/spout-pouches');
   assert.strictEqual(thaiSauce.expectedLanguage, 'th');
+  assert.strictEqual(
+    profileFor({ countryCode: 'TH', categories: ['sauces', 'seasonings'] }).kind,
+    'food_sauce'
+  );
   assert.strictEqual(thaiSeasoning.language, 'th');
   assert.strictEqual(thaiSeasoning.expectedLanguage, 'th');
   assert.strictEqual(thaiSeasoning.home, '/th');

@@ -224,6 +224,9 @@ function profileFor({ countryCode, categories } = {}) {
   if (values.some(value => LIQUID_CATEGORY.test(value)) && PROFILES.liquid_care[country]) {
     return PROFILES.liquid_care[country];
   }
+  if (values.some(value => /(?:sauces?|chili sauce)/i.test(value)) && PROFILES.food_sauce[country]) {
+    return PROFILES.food_sauce[country];
+  }
   if (country === 'TH' && values.some(value => THAILAND_FOOD_CATEGORY.test(value))) {
     return PROFILES.thailand_food.TH;
   }
