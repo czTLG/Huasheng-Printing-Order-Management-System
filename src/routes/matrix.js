@@ -14,6 +14,7 @@ const { scoreSignalMatch } = require('../services/matrixSignalMatch');
 const { createMatrixLedgerCommand } = require('../services/matrixLedgerCommand');
 const { createMatrixLedgerStore } = require('../services/matrixLedgerStore');
 const { createMatrixIntakeBridge } = require('../services/matrixIntakeBridge');
+const { createMatrixManualOutbound } = require('../services/matrixManualOutbound');
 const {
   profileFor,
   scopeProfileProducts,
@@ -34,6 +35,9 @@ const INTAKE_FIELDS = new Set([
   'candidate_id', 'expected_candidate_fingerprint', 'subject', 'body_en', 'body_cn',
   'strategy_summary', 'attachment_manifest', 'route_readiness_id',
   'approval_reference', 'idempotency_key'
+]);
+const MANUAL_OUTBOUND_FIELDS = new Set([
+  'channel', 'recipient', 'source_url', 'sent_at', 'message_text', 'idempotency_key'
 ]);
 
 function plainObject(value, label) {
@@ -400,6 +404,7 @@ function createMatrixRouter({
       db, reviewService, previewService, deliveryService, clock,
       currentEvidence: async ({ workItem, version }) => assertVersionStrategyCurrent(workItem, version)
     }) : null);
+  const manualOutbound = createMatrixManualOutbound({ db, clock });
 
   router.use(requireMatrixRole);
 
@@ -1538,6 +1543,26 @@ function createMatrixRouter({
       const identity = reviewIdentity(req);
       const customerId = positiveInteger(req.params.customerId, 'customer id');
       res.json(command.customerSnapshot({ actorUserId: identity.actorUserId, customerId }));
+    } catch (error) { sendReviewError(res, error); }
+  });
+
+  router.post('/customers/:customerId/manual-outbound', (req, res) => {
+    try {
+      requireReviewAccess(req);
+      const body = rejectUnknown(req.body || {}, MANUAL_OUTBOUND_FIELDS, 'manual outbound');
+      const identity = reviewIdentity(req);
+      const customerId = positiveInteger(req.params.customerId, 'customer id');
+      const result = manualOutbound.record({
+        actorUserId: identity.actorUserId,
+        customerId,
+        channel: body.channel,
+        recipient: body.recipient,
+        sourceUrl: body.source_url,
+        sentAt: body.sent_at,
+        messageText: body.message_text,
+        idempotencyKey: body.idempotency_key
+      });
+      res.status(result.recorded ? 201 : 200).json(result);
     } catch (error) { sendReviewError(res, error); }
   });
 
