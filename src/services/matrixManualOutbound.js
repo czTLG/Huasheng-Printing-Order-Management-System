@@ -123,6 +123,22 @@ function createMatrixManualOutbound({ db, clock = () => new Date() } = {}) {
       actorUserId
     });
 
+    const obsoleteContactTasks = db.prepare(`
+      SELECT source_kind, source_id
+      FROM matrix_tasks
+      WHERE canonical_customer_id = ? AND task_type = 'replace_contact' AND state = 'pending'
+    `).all(customerId);
+    for (const obsolete of obsoleteContactTasks) {
+      ledger.cancelTasks({
+        customerId,
+        sourceKind: obsolete.source_kind,
+        sourceId: obsolete.source_id,
+        taskType: 'replace_contact',
+        reason: 'official_whatsapp_contact_recorded',
+        actorUserId
+      });
+    }
+
     const dueAt = new Date(Date.parse(sentAt) + (3 * 24 * 60 * 60 * 1000)).toISOString();
     const task = ledger.createTask({
       customerId,

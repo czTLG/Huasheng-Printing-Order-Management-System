@@ -24,6 +24,15 @@ try {
     db,
     clock: () => new Date('2026-07-30T07:00:00.000Z')
   });
+  db.prepare(`
+    INSERT INTO matrix_tasks (
+      canonical_customer_id, source_kind, source_id, task_type, due_at, state,
+      priority, next_action, cancellation_reason, created_at, updated_at
+    ) VALUES (
+      10, 'matrix_stream_job', '99', 'replace_contact', '2026-07-29T00:00:00.000Z',
+      'pending', 'high', '更换有效联系人', '', '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z'
+    )
+  `).run();
   const input = {
     actorUserId,
     customerId: 10,
@@ -43,7 +52,15 @@ try {
   assert.strictEqual(second.recorded, false);
   assert.strictEqual(db.prepare('SELECT COUNT(*) total FROM crm_messages').get().total, 1);
   assert.strictEqual(db.prepare('SELECT COUNT(*) total FROM matrix_thread_messages').get().total, 1);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) total FROM matrix_tasks').get().total, 1);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) total FROM matrix_tasks').get().total, 2);
+  assert.strictEqual(
+    db.prepare("SELECT state FROM matrix_tasks WHERE task_type = 'replace_contact'").get().state,
+    'cancelled'
+  );
+  assert.strictEqual(
+    db.prepare("SELECT COUNT(*) total FROM matrix_tasks WHERE task_type = 'check_reply'").get().total,
+    1
+  );
   const customer = db.prepare(`
     SELECT whatsapp, stage, is_waiting_reply, next_followup_channel, next_followup_at
     FROM customers WHERE id = 10
