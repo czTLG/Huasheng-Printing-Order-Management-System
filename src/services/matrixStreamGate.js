@@ -57,7 +57,7 @@ function component(points, maximum, reasons, evidenceIds) {
 
 const CLAIM_SEMANTICS = Object.freeze({
   unsupported_price: /(?:[$€£¥]|\b(?:usd|eur|rmb|cny|gbp)\b|美元|元|price|cost|quote|amount|价格|报价|单价|售价|费用|金额|成本)/iu,
-  unsupported_certification: /(?:\b(?:fda|iso|brcgs?|haccp|gmp|ce|rohs|reach|sedex)\b|certif|compliant|认证|资质|合规|许可证|审核)/iu,
+  unsupported_certification: /(?:\b(?:fda|iso|brcgs?|haccp|gmp|ce|rohs|sedex)\b|certif|compliant|认证|资质|合规|许可证|审核)/iu,
   unsupported_supplier: /(?:supplier|vendor|manufacturer|\bsuppl(?:y|ies|ied)\b|供应商|制造商|供应)/iu,
   unsupported_performance: /(?:performance|barrier|shelf\s*life|quality|性能|阻隔|保质期|质量)/iu,
   unsupported_delivery: /(?:delivery|arrival|shipping|交付|到货|发货)/iu,

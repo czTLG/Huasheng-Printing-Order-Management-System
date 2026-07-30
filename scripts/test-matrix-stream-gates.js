@@ -122,6 +122,16 @@ assert.strictEqual(confectioneryAligned.components.product_match.points, 20);
 assert.strictEqual(confectioneryAligned.components.entry_value.points, 15);
 assert.strictEqual(confectioneryAligned.components.bilingual_consistency.points, 10);
 
+const ordinaryReach = scoreDraft({
+  ...base,
+  bodyEn: base.bodyEn.replace('stable repeat printing', 'reliable sealing where fine powder may reach the seal area'),
+  evidence: {
+    ...base.evidence,
+    supportedClaims: ['reliable sealing where fine powder may reach the seal area']
+  }
+});
+assert.ok(!ordinaryReach.hardFailures.includes('unsupported_certification'));
+
 const staleProvenance = scoreDraft({
   ...base,
   recipient: { ...base.recipient, verifiedAt: '2025-01-01T00:00:00Z' }
