@@ -195,6 +195,25 @@ const PROFILES = Object.freeze({
         '确保多个私牌 SKU 的印刷和稿件一致性。'
       ])
     })
+  }),
+  central_asia_snack: Object.freeze({
+    KZ: Object.freeze({
+      kind: 'central_asia_snack',
+      language: 'ru',
+      expectedLanguage: 'ru',
+      home: '/ru',
+      about: '/ru/about',
+      market: '/ru/markets/central-asia-food-packaging',
+      application: '/ru/applications/snack-packaging',
+      product: '/ru/products/food-packaging-roll-film',
+      courtesy: 'Благодарим за уделённое время. Будем рады обсудить задачу с вашей командой по закупкам упаковки.',
+      supportedClaims: Object.freeze([
+        'We are Guangdong Huasheng Packaging Co., Ltd., an ISO 22000-certified flexible packaging manufacturer in China.',
+        '我们是广东华胜包装有限公司，一家通过 ISO 22000 认证的中国软包装制造商。',
+        'For confectionery, biscuit and wafer packaging, we focus on moisture and aroma protection, machine-compatible roll specifications, reliable sealing and artwork consistency across multiple SKUs.',
+        '针对糖果、饼干和威化包装，我们重点关注防潮保香、卷膜与包装机的适配、封口可靠性，以及多个 SKU 的设计稿一致性。'
+      ])
+    })
   })
 });
 
@@ -205,6 +224,7 @@ const THAILAND_FOOD_CATEGORY = /(?:spices?|seasonings?|snacks?|nuts?|dried fruit
 const INSTANT_BEVERAGE_CATEGORY = /(?:instant beverages?|powdered drinks?|coffee|tea|chocolate beverages?|milk tea|chocolate malt)/i;
 const MALAYSIA_SNACK_CATEGORY = /(?:snacks?|confectionery|chocolate|crackers?|cand(?:y|ies)|pralines?)/i;
 const INDONESIA_FOOD_CATEGORY = /(?:sauces?|condiments?|seasonings?|powder drinks?|food ingredients?|extracts?|spices?)/i;
+const CENTRAL_ASIA_SNACK_CATEGORY = /(?:confectionery|chocolate|biscuits?|wafers?|cand(?:y|ies)|snacks?)/i;
 
 function profileFor({ countryCode, categories } = {}) {
   const country = String(countryCode || '').trim().toUpperCase();
@@ -220,6 +240,9 @@ function profileFor({ countryCode, categories } = {}) {
   }
   if (country === 'ID' && values.some(value => INDONESIA_FOOD_CATEGORY.test(value))) {
     return PROFILES.matrix_food_id.ID;
+  }
+  if (country === 'KZ' && values.some(value => CENTRAL_ASIA_SNACK_CATEGORY.test(value))) {
+    return PROFILES.central_asia_snack.KZ;
   }
   if (values.some(value => LIQUID_CATEGORY.test(value)) && PROFILES.liquid_care[country]) {
     return PROFILES.liquid_care[country];

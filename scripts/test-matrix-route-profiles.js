@@ -107,6 +107,17 @@ const {
   assert.strictEqual(uaeLiquid.application, '/ar/applications/daily-chemical-packaging');
   assert.strictEqual(uaeLiquid.expectedLanguage, 'ar');
 
+  const kazakhstanConfectionery = profileFor({
+    countryCode: 'KZ',
+    categories: ['confectionery', 'biscuits', 'wafers']
+  });
+  assert.strictEqual(kazakhstanConfectionery.kind, 'central_asia_snack');
+  assert.strictEqual(kazakhstanConfectionery.language, 'ru');
+  assert.strictEqual(kazakhstanConfectionery.market, '/ru/markets/central-asia-food-packaging');
+  assert.strictEqual(kazakhstanConfectionery.application, '/ru/applications/snack-packaging');
+  assert.strictEqual(kazakhstanConfectionery.product, '/ru/products/food-packaging-roll-film');
+  assert.match(kazakhstanConfectionery.courtesy, /Благодарим/u);
+
   assert.strictEqual(profileFor({ countryCode: 'VN', categories: ['steel'] }), null);
 
   const requested = [];
