@@ -17,8 +17,8 @@ const { createMatrixStreamDelivery } = require('../src/services/matrixStreamDeli
 const { MATRIX_MAIL_SIGNATURE, renderMatrixMail } = require('../src/services/matrixMailRender');
 
 const NOW = '2026-07-18T01:00:00.000Z';
-const exactBody = 'Dear UNITEA Kazakhstan procurement team,\nWe reviewed your public tea range and would like to discuss one tea pouch with a zipper and roll-film SKU. Could you share the current material structure and annual volume?\nBest regards';
-const exactChinese = '您好，\n我们查看了贵司公开的茶产品系列，希望沟通一个带有拉链的茶袋和卷膜SKU。请问能否提供当前材料结构和年用量？\n此致敬礼';
+const exactBody = 'Dear UNITEA Kazakhstan procurement team,\nWe reviewed your public tea range and would like to discuss one tea pouch with a zipper and roll-film SKU. Could you share one current pack photo? Existing technical data sheets or packaging drawings can be checked as provided. We will ask only for missing details.\nBest regards';
+const exactChinese = '您好，\n我们查看了贵司公开的茶产品系列，希望沟通一个带有拉链的茶袋和卷膜SKU。能否发送一张现用包装照片？现有技术资料或包装图纸可按原样用于评估。我们只确认缺失的信息。\n此致敬礼';
 
 initDb();
 
