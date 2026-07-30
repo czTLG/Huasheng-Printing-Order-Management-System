@@ -104,6 +104,24 @@ assert.strictEqual(inconsistent.components.entry_value.points, 0);
 assert.strictEqual(inconsistent.components.questions.points, 0);
 assert.strictEqual(inconsistent.components.bilingual_consistency.points, 0);
 
+const confectioneryAligned = scoreDraft({
+  ...base,
+  subject: 'Confectionery packaging options for Acme Foods',
+  bodyEn: 'Dear Acme Foods team,\n\nWe reviewed your confectionery, chocolate, biscuit and wafer range. We would like to discuss confectionery pouch options.\n\nCould you send one current pack photo?\n\nBest regards',
+  bodyCn: '尊敬的贵司团队：\n\n我们查看了贵司的糖果食品、巧克力、饼干和威化系列，希望沟通糖果食品袋方案。\n\n能否发送一张现有包装照片？\n\n此致敬礼',
+  evidence: {
+    ...base.evidence,
+    company: 'Acme Foods',
+    categories: ['confectionery', 'chocolate', 'biscuits', 'wafers'],
+    products: ['confectionery chocolate biscuits wafers'],
+    entryProduct: 'confectionery pouch',
+    supportedClaims: []
+  }
+});
+assert.strictEqual(confectioneryAligned.components.product_match.points, 20);
+assert.strictEqual(confectioneryAligned.components.entry_value.points, 15);
+assert.strictEqual(confectioneryAligned.components.bilingual_consistency.points, 10);
+
 const staleProvenance = scoreDraft({
   ...base,
   recipient: { ...base.recipient, verifiedAt: '2025-01-01T00:00:00Z' }

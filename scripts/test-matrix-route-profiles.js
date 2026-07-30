@@ -60,6 +60,10 @@ const {
     'thailand_food'
   );
   assert.strictEqual(
+    profileFor({ countryCode: 'TH', categories: ['confectionery', 'biscuits', 'wafers'] }).kind,
+    'thailand_food'
+  );
+  assert.strictEqual(
     profileFor({ countryCode: 'TH', categories: ['shampoo', 'seasonings'] }).kind,
     'liquid_care'
   );

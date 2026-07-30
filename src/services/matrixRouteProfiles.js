@@ -101,12 +101,19 @@ const PROFILES = Object.freeze({
     VN: Object.freeze({
       kind: 'food_sauce',
       language: 'vi',
+      expectedLanguage: 'vi',
       home: '/vi',
       about: '/vi/about',
       market: '/vi/markets/vietnam',
       application: '/vi/applications/sauce-packaging',
       product: '/vi/products/spout-pouches',
-      courtesy: 'Cảm ơn Quý công ty đã dành thời gian xem thư. Chúng tôi mong có cơ hội trao đổi cùng đội ngũ thu mua bao bì của Quý công ty.'
+      courtesy: 'Cảm ơn Quý công ty đã dành thời gian xem thư. Chúng tôi mong có cơ hội trao đổi cùng đội ngũ thu mua bao bì của Quý công ty.',
+      supportedClaims: Object.freeze([
+        'We are Huasheng Printing Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是中国的华胜印刷有限公司，专业生产软包装。',
+        'For sauce and seasoning packaging, we focus on product compatibility, sealing stability, machine fit and repeat-print consistency.',
+        '针对酱料和调味料包装，我们重点关注内容物兼容性、封口稳定性、包装机适配和重复订单的印刷一致性。'
+      ])
     })
   }),
   malaysia_seasoning: Object.freeze({
@@ -220,7 +227,7 @@ const PROFILES = Object.freeze({
 const LIQUID_CATEGORY = /(?:liquid detergent|hand soap|body soap|shampoo|body wash|hand wash|personal care|home care|baby care|oral care)/i;
 const FOOD_SAUCE_CATEGORY = /(?:sauces?|chili sauce|seasonings?|spices?|soup base)/i;
 const FOOD_SNACK_AR_CATEGORY = /(?:nuts?|dried fruits?|snacks?|spices?|beans?|lentils?|herbs?)/i;
-const THAILAND_FOOD_CATEGORY = /(?:spices?|seasonings?|snacks?|nuts?|dried fruits?|fried vegetables?|dry foods?)/i;
+const THAILAND_FOOD_CATEGORY = /(?:spices?|seasonings?|snacks?|nuts?|dried fruits?|fried vegetables?|dry foods?|confectionery|chocolate|biscuits?|wafers?|cand(?:y|ies)|gumm(?:y|ies))/i;
 const INSTANT_BEVERAGE_CATEGORY = /(?:instant beverages?|powdered drinks?|coffee|tea|chocolate beverages?|milk tea|chocolate malt)/i;
 const MALAYSIA_SNACK_CATEGORY = /(?:snacks?|confectionery|chocolate|crackers?|cand(?:y|ies)|pralines?)/i;
 const INDONESIA_FOOD_CATEGORY = /(?:sauces?|condiments?|seasonings?|powder drinks?|food ingredients?|extracts?|spices?)/i;

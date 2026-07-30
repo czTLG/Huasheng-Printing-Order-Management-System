@@ -771,6 +771,8 @@ function createMatrixRouter({
     const categoryCnMap = {
       coffee: '咖啡', tea: '茶', nuts: '坚果', 'dried fruit': '干果', snacks: '零食',
       spices: '香辛料', seasonings: '调味品', sauces: '酱料', 'soup bases': '汤底',
+      confectionery: '糖果食品', chocolate: '巧克力', biscuits: '饼干', wafers: '威化',
+      candies: '糖果', candy: '糖果', curry: '咖喱', 'curry paste': '咖喱酱',
       'liquid detergent': '洗衣液', 'powder detergent': '洗衣粉',
       'hand soap': '洗手液', 'body soap': '沐浴皂', 'hand wash': '洗手液',
       shampoo: '洗发产品', 'body wash': '沐浴产品', 'personal care': '个护产品',
