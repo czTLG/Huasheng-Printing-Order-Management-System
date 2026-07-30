@@ -13,7 +13,7 @@ function list(value) {
 const ROLE_PATTERNS = Object.freeze({
   profile: /(?:about|profile|company|history|capacity|factory|export|เกี่ยวกับ|บริษัท|กำลังการผลิต)/iu,
   products: /(?:product|portfolio|category|shampoo|body wash|home care|coffee|tea|snack|ผลิตภัณฑ์|สินค้า)/iu,
-  process: /(?:service|oem|odm|private label|development|research|innovation|packaging service|manufactur|บริการ|วิจัย|พัฒนา)/iu,
+  process: /(?:process|workflow|service|oem|odm|private label|development|research|innovation|packaging service|manufactur|บริการ|วิจัย|พัฒนา)/iu,
   quality: /(?:quality|testing|laboratory|regulatory|certif|iso|gmp|traceability|ทดสอบ|คุณภาพ|มาตรฐาน)/iu,
   sustainability: /(?:sustainab|recycl|mono material|pcr|obp|material efficiency|product waste|สิ่งแวดล้อม|รีไซเคิล)/iu,
   contact: /(?:contact|supplier|sourcing|procurement|purchas|ติดต่อ|จัดซื้อ|ซัพพลายเออร์)/iu
@@ -24,7 +24,7 @@ function evidenceRows(detail) {
     .filter(row => /^https:\/\//i.test(String(row?.source_url || '')))
     .map(row => ({
       source_url: String(row.source_url),
-      locator: text([row.source_url, row.page_title].join(' ')),
+      locator: text([row.source_type, row.source_url, row.page_title].join(' ')),
       value: text([row.source_url, row.page_title, row.excerpt].join(' '))
     }));
 }

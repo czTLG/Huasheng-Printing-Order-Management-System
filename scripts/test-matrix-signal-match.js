@@ -50,4 +50,22 @@ const inaccessible = scoreSignalMatch(noContact, { localizedRouteStatus: 'ready'
 assert.strictEqual(inaccessible.passed, false);
 assert.ok(inaccessible.blockers.includes('organizational_access_missing'));
 
+const typedEvidence = completeDetail();
+typedEvidence.official_evidence = typedEvidence.official_evidence.map((row, index) => ({
+  ...row,
+  source_type: [
+    'official_profile',
+    'official_products',
+    'official_process',
+    'official_quality',
+    'official_sustainability',
+    'official_contact'
+  ][index],
+  source_url: `https://example.test/evidence-${index + 1}`,
+  page_title: `Evidence ${index + 1}`
+}));
+const typedReady = scoreSignalMatch(typedEvidence, { localizedRouteStatus: 'ready' });
+assert.strictEqual(typedReady.passed, true);
+assert.deepStrictEqual(typedReady.blockers, []);
+
 console.log('matrix signal match gate tests passed');
