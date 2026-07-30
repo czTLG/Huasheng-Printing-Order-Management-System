@@ -21,6 +21,11 @@ const {
 
   const thaiSeasoning = profileFor({ countryCode: 'TH', categories: ['spices', 'seasonings'] });
   assert.strictEqual(thaiSeasoning.kind, 'thailand_food');
+  const thaiSauce = profileFor({ countryCode: 'TH', categories: ['sauces'] });
+  assert.strictEqual(thaiSauce.kind, 'food_sauce');
+  assert.strictEqual(thaiSauce.application, '/th/applications/sauce-packaging');
+  assert.strictEqual(thaiSauce.product, '/th/products/spout-pouches');
+  assert.strictEqual(thaiSauce.expectedLanguage, 'th');
   assert.strictEqual(thaiSeasoning.language, 'th');
   assert.strictEqual(thaiSeasoning.expectedLanguage, 'th');
   assert.strictEqual(thaiSeasoning.home, '/th');

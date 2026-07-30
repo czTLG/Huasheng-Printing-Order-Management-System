@@ -81,6 +81,23 @@ const PROFILES = Object.freeze({
     })
   }),
   food_sauce: Object.freeze({
+    TH: Object.freeze({
+      kind: 'food_sauce',
+      language: 'th',
+      expectedLanguage: 'th',
+      home: '/th',
+      about: '/th/about',
+      market: '/th/markets/thailand',
+      application: '/th/applications/sauce-packaging',
+      product: '/th/products/spout-pouches',
+      courtesy: 'ขอบคุณที่สละเวลาอ่านอีเมลฉบับนี้ เราหวังว่าจะได้มีโอกาสพูดคุยกับทีมของคุณ',
+      supportedClaims: Object.freeze([
+        'We are Guangdong Huasheng Packaging Co., Ltd., a flexible packaging manufacturer in China.',
+        '我们是广东华胜包装有限公司，一家位于中国的软包装制造商。',
+        'For sauce packaging, we review product compatibility, filling conditions, fitment, sealing and representative leakage testing before confirming the final structure.',
+        '针对酱料包装，我们会在确认最终结构前核对内容物兼容性、灌装条件、吸嘴、封口及代表性防漏测试。'
+      ])
+    }),
     VN: Object.freeze({
       kind: 'food_sauce',
       language: 'vi',

@@ -157,6 +157,58 @@ function publicMailboxFixture(overrides = {}) {
   return { ...value, ...overrides };
 }
 
+function relatedCorporateDomainFixture(overrides = {}) {
+  const recipient = {
+    email: 'info@meikafood.com',
+    source_url: 'https://www.meikafoods.com/contact-us/',
+    verified_at: '2026-07-28T07:00:00.000Z',
+    role: 'general organizational inbox',
+    evidence_mode: 'official_related_domain',
+    corroboration: {
+      source_url: 'https://www.matrade.gov.my/example/meika',
+      source_class: 'government',
+      observed_at: '2026-07-28T07:10:00.000Z',
+      email: 'meikafood@hotmail.com',
+      organization_name: 'Meika Food Industries Sdn. Bhd.',
+      official_domain: 'meikafoods.com',
+      identity_matches: {
+        address: true,
+        phone: true,
+        registration_number: true
+      }
+    }
+  };
+  const value = fixture({
+    candidate_key: 'my-meika-food-20260728',
+    company_name: 'Meika Food Industries Sdn. Bhd.',
+    country_code: 'MY',
+    normalized_domain: 'meikafoods.com',
+    official_url: 'https://www.meikafoods.com/',
+    recipient,
+    contact_selection: contactSelection(recipient),
+    sources: [
+      ['home', '/', 'Official home'],
+      ['profile', '/about-us/', 'Company profile'],
+      ['products', '/', 'Chocolate and snack products'],
+      ['process', '/about-us/', 'Product development and packaging'],
+      ['contact', '/contact-us/', 'Official related-domain inbox']
+    ].map(([role, suffix, excerpt]) => ({
+      role,
+      source_url: `https://www.meikafoods.com${suffix}`,
+      page_title: role,
+      observed_at: '2026-07-28T07:00:00.000Z',
+      excerpt
+    })),
+    discovery: {
+      source_adapter: 'matrix_atlas',
+      source_url: 'https://www.meikafoods.com/',
+      source_query: 'Malaysia chocolate snack manufacturer',
+      collected_at: '2026-07-28T07:00:00.000Z'
+    }
+  });
+  return { ...value, ...overrides };
+}
+
 try {
   db.pragma('foreign_keys = ON');
   db.exec(`
@@ -335,6 +387,19 @@ try {
   ).get(publicMailbox.candidate_id).recipient_provenance_json);
   assert.strictEqual(storedPublicProvenance.evidence_mode, 'official_public_mailbox');
   assert.strictEqual(storedPublicProvenance.corroboration.email, 'hockxeng@gmail.com');
+  const relatedCorporateDomain = admitReviewedCandidate(db, relatedCorporateDomainFixture(), { clock: () => NOW });
+  const relatedParsed = parseReviewedCandidate(relatedCorporateDomainFixture(), NOW);
+  assert.strictEqual(relatedParsed.recipient.evidence_mode, 'official_related_domain');
+  assert.strictEqual(relatedCorporateDomain.resolution, 'inserted');
+  assert.throws(
+    () => parseReviewedCandidate(relatedCorporateDomainFixture({
+      recipient: {
+        ...relatedCorporateDomainFixture().recipient,
+        email: 'meikafood@gmail.com'
+      }
+    }), NOW),
+    /cannot be a public mailbox provider/
+  );
   assert.throws(
     () => parseReviewedCandidate(publicMailboxFixture({
       recipient: { ...publicMailboxFixture().recipient, corroboration: undefined }
@@ -381,9 +446,9 @@ try {
     /at least two corroborated identity fields/
   );
 
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_records').get().count, 3);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 16);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_discovery').get().count, 3);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_records').get().count, 4);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_evidence').get().count, 21);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) count FROM cache_discovery').get().count, 4);
   assert.strictEqual(db.prepare("SELECT audit_state FROM cache_records").get().audit_state, 'audited');
 } finally {
   db.close();

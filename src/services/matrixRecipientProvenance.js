@@ -102,8 +102,11 @@ function validateRecipientProvenance(input, {
     };
   }
 
-  if (requestedMode !== 'official_public_mailbox') throw new Error('recipient domain mismatch');
-  if (!PUBLIC_MAILBOX_PROVIDERS.has(emailDomain)) throw new Error('public mailbox provider is not allowed');
+  const publicMailbox = requestedMode === 'official_public_mailbox';
+  const relatedCorporateDomain = requestedMode === 'official_related_domain';
+  if (!publicMailbox && !relatedCorporateDomain) throw new Error('recipient domain mismatch');
+  if (publicMailbox && !PUBLIC_MAILBOX_PROVIDERS.has(emailDomain)) throw new Error('public mailbox provider is not allowed');
+  if (relatedCorporateDomain && PUBLIC_MAILBOX_PROVIDERS.has(emailDomain)) throw new Error('related corporate domain cannot be a public mailbox provider');
   const corroboration = exactKeys(
     recipient.corroboration,
     ['email', 'identity_matches', 'observed_at', 'official_domain', 'organization_name', 'source_class', 'source_url'],
@@ -115,7 +118,7 @@ function validateRecipientProvenance(input, {
   const corroborationUrl = httpsUrl(corroboration.source_url, 'corroboration.source_url');
   if (onDomain(corroborationUrl, companyDomain)) throw new Error('corroboration source must be independent');
   const corroborationEmail = text(corroboration.email, 'corroboration.email', 254).toLowerCase();
-  if (corroborationEmail !== email) throw new Error('corroboration email mismatch');
+  if (publicMailbox && corroborationEmail !== email) throw new Error('corroboration email mismatch');
   if (domain(corroboration.official_domain, 'corroboration official domain') !== companyDomain) {
     throw new Error('corroboration official domain mismatch');
   }
@@ -140,12 +143,12 @@ function validateRecipientProvenance(input, {
     role: text(recipient.role, 'recipient.role', 120),
     source_url: source.toString(),
     verified_at: verifiedAt,
-    evidence_mode: 'official_public_mailbox',
+    evidence_mode: requestedMode,
     corroboration: {
       source_url: corroborationUrl.toString(),
       source_class: sourceClass,
       observed_at: recent(corroboration.observed_at, now, 'corroboration', maxAgeDays),
-      email,
+      email: publicMailbox ? email : corroborationEmail,
       organization_name: text(corroboration.organization_name, 'corroboration.organization_name', 160),
       official_domain: companyDomain,
       identity_matches: Object.fromEntries(
