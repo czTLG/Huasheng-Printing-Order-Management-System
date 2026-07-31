@@ -26,6 +26,10 @@ function resolveChatId({ bridgeRoot = DEFAULT_BRIDGE_ROOT, appId, target }) {
     const legacy = payload.projects.filter(item => String(item?.name || '').trim().toLowerCase() === 'build' && String(item?.chatId || '').trim());
     if (legacy.length === 1) return String(legacy[0].chatId);
   }
+  if (channel === 'vmci' && exact.length === 0) {
+    const legacy = payload.projects.filter(item => String(item?.name || '').trim().toLowerCase() === 'vm_debug_ci' && String(item?.chatId || '').trim());
+    if (legacy.length === 1) return String(legacy[0].chatId);
+  }
   throw new Error(`${channel} project binding must be unique`);
 }
 

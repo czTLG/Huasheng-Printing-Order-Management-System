@@ -14,7 +14,7 @@ async function main() {
     fs.mkdirSync(projectRoot, { recursive: true });
     fs.writeFileSync(path.join(projectRoot, 'projects.json'), JSON.stringify({
       version: 1,
-      projects: [{ name: 'build', chatId: 'bill-chat' }, { name: 'vmci', chatId: 'vmci-chat' }]
+      projects: [{ name: 'build', chatId: 'bill-chat' }, { name: 'vm_debug_ci', chatId: 'vmci-chat' }]
     }), { mode: 0o600 });
     const digest = {
       ok: true, date: '2026-07-31', generated_at: '2026-07-31T02:00:00.000Z', digest_id: 'a'.repeat(32),
@@ -42,6 +42,7 @@ async function main() {
     assert.deepStrictEqual(await watcher.deliverDailyDigest({ ...input, enabled: false }), { status: 'disabled' });
     assert.deepStrictEqual(await watcher.deliverDailyDigest({ ...input, clock: () => new Date('2026-07-30T23:00:00.000Z') }), { status: 'early', date: '2026-07-31' });
     assert.strictEqual(watcher.resolveChatId({ bridgeRoot, appId: 'app-test', target: 'bill' }), 'bill-chat');
+    assert.strictEqual(watcher.resolveChatId({ bridgeRoot, appId: 'app-test', target: 'vmci' }), 'vmci-chat');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
