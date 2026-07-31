@@ -9,6 +9,14 @@ const DEFAULT_SPOOL_ROOT = '/workspace/store/matrix-diagnostics';
 const DEFAULT_BRIDGE_ROOT = '/home/node/.feishu-codex-bridge';
 const KINDS = new Set(['disk_warning', 'disk_recovery', 'restart_warning', 'restart_recovery', 'service_warning', 'service_recovery']);
 
+function uuidFromSeed(value) {
+  const hex = crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 32).split('');
+  hex[12] = '5';
+  hex[16] = '8';
+  const normalized = hex.join('');
+  return `${normalized.slice(0, 8)}-${normalized.slice(8, 12)}-${normalized.slice(12, 16)}-${normalized.slice(16, 20)}-${normalized.slice(20)}`;
+}
+
 function exactKeys(value, expected, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} required`);
   const actual = Object.keys(value).sort();
@@ -128,7 +136,7 @@ async function deliverNextAlert({
   const inflight = path.join(inflightDir, pendingNames[0]);
   fs.renameSync(pending, inflight);
   const buildChatId = resolveBuildChatId({ bridgeRoot, appId });
-  await sendManagedCard(channel, buildChatId, alertCard(value), '', false, 'chat_id', value.id);
+  await sendManagedCard(channel, buildChatId, alertCard(value), '', false, 'chat_id', uuidFromSeed(`matrix-diagnostics:${value.id}`));
   const at = clock();
   if (!(at instanceof Date) || !Number.isFinite(at.getTime())) throw new Error('delivery clock invalid');
   atomicJson(receipt, { version: 1, id: value.id, delivered_at: at.toISOString() });
@@ -136,4 +144,4 @@ async function deliverNextAlert({
   return { status: 'delivered', id: value.id };
 }
 
-module.exports = { deliverNextAlert, validateEvent, resolveBuildChatId, alertCard };
+module.exports = { deliverNextAlert, validateEvent, resolveBuildChatId, alertCard, uuidFromSeed };

@@ -45,7 +45,8 @@ async function main() {
     assert.deepStrictEqual(delivered, { status: 'delivered', id: event.id });
     assert.strictEqual(sends.length, 1);
     assert.strictEqual(sends[0][1], 'build-chat');
-    assert.strictEqual(sends[0][6], event.id);
+    assert.match(sends[0][6], /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.strictEqual(sends[0][6], watcher.uuidFromSeed(`matrix-diagnostics:${event.id}`));
     assert.ok(JSON.stringify(sends[0][2]).includes('磁盘'));
     assert.ok(!JSON.stringify(sends[0][2]).includes('vm-chat'));
     const receipt = path.join(spoolRoot, 'receipts', `${event.id}.json`);

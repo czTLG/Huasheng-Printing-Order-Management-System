@@ -34,6 +34,7 @@ async function main() {
     assert.strictEqual(first.status, 'complete');
     assert.strictEqual(sends.length, 1);
     assert.strictEqual(sends[0][1], 'bill-chat');
+    assert.match(sends[0][6], /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
     assert.ok(JSON.stringify(sends[0][2]).includes('示例客户'));
     const receipt = path.join(root, 'state', '2026-07-31', 'bill.json');
     assert.strictEqual(fs.statSync(receipt).mode & 0o777, 0o600);
@@ -43,6 +44,7 @@ async function main() {
     assert.deepStrictEqual(await watcher.deliverDailyDigest({ ...input, clock: () => new Date('2026-07-30T23:00:00.000Z') }), { status: 'early', date: '2026-07-31' });
     assert.strictEqual(watcher.resolveChatId({ bridgeRoot, appId: 'app-test', target: 'bill' }), 'bill-chat');
     assert.strictEqual(watcher.resolveChatId({ bridgeRoot, appId: 'app-test', target: 'vmci' }), 'vmci-chat');
+    assert.strictEqual(watcher.uuidFromSeed('stable'), watcher.uuidFromSeed('stable'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

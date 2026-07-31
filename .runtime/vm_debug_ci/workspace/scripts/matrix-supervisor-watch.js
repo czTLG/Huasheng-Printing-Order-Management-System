@@ -8,6 +8,14 @@ const path = require('node:path');
 const DEFAULT_STATE_ROOT = '/workspace/store/matrix-supervisor';
 const DEFAULT_BRIDGE_ROOT = '/home/node/.feishu-codex-bridge';
 
+function uuidFromSeed(value) {
+  const hex = crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 32).split('');
+  hex[12] = '5';
+  hex[16] = '8';
+  const normalized = hex.join('');
+  return `${normalized.slice(0, 8)}-${normalized.slice(8, 12)}-${normalized.slice(12, 16)}-${normalized.slice(16, 20)}-${normalized.slice(20)}`;
+}
+
 function safeName(value) {
   const text = String(value || '').trim().toLowerCase();
   if (!/^[a-z0-9_-]{2,32}$/.test(text)) throw new Error('supervisor channel invalid');
@@ -106,7 +114,7 @@ async function deliverDailyDigest({
       continue;
     }
     const chatId = resolveChatId({ bridgeRoot, appId, target });
-    const idempotencyKey = crypto.createHash('sha256').update(`${digest.digest_id}:${target}`).digest('hex').slice(0, 32);
+    const idempotencyKey = uuidFromSeed(`matrix-supervisor:${digest.digest_id}:${target}`);
     const sent = await sendManagedCard(channel, chatId, supervisorCard(item), '', false, 'chat_id', idempotencyKey);
     atomicReceipt(receiptPath, {
       version: 1, date: local.date, channel: target, digest_id: digest.digest_id,
@@ -120,4 +128,4 @@ async function deliverDailyDigest({
   return { status: 'complete', date: local.date, results };
 }
 
-module.exports = { deliverDailyDigest, resolveChatId, localParts, supervisorCard };
+module.exports = { deliverDailyDigest, resolveChatId, localParts, supervisorCard, uuidFromSeed };
