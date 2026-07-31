@@ -1,0 +1,1371 @@
+# Review package: b007718..36250d3
+
+## Commits
+36250d3 feat: add matrix stream safety gates
+
+## Files changed
+ .superpowers/sdd/task-2a-report.md    |  65 +++++++++
+ scripts/matrix-policy.js              | 126 +++++++++++++++++
+ scripts/test-matrix-policy.js         |  54 +++++++
+ scripts/test-matrix-stream-gates.js   | 245 ++++++++++++++++++++++++++++++++
+ scripts/test-matrix-stream-review.js  |  12 +-
+ src/db.js                             |  17 +++
+ src/services/matrixStreamFollowup.js  |  94 +++++++++++++
+ src/services/matrixStreamGate.js      | 258 ++++++++++++++++++++++++++++++++++
+ src/services/matrixStreamReadiness.js | 114 +++++++++++++++
+ src/services/matrixStreamReview.js    |  80 ++++++++++-
+ 10 files changed, 1058 insertions(+), 7 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/task-2a-report.md b/.superpowers/sdd/task-2a-report.md
+new file mode 100644
+index 0000000..52b2c5d
+--- /dev/null
++++ b/.superpowers/sdd/task-2a-report.md
+@@ -0,0 +1,65 @@
++# Task 2A Report — Explainable Gates and Reply Checks
++
++## Status
++
++DONE_WITH_CONCERNS
++
++## Scope
++
++- Added deterministic 100-point draft quality scoring with per-component reasons, evidence ids, and hard failures for unsupported price, certification, supplier, performance, delivery, and lead-time claims.
++- Added fail-closed initial-contact evaluation across existing CRM identities, inquiries, orders, CRM messages, suppression events, accepted jobs, and caller-supplied candidate aliases. Exact identities route as existing relationships; similar cross-domain names are review-only and are never merged.
++- Added dependency-injected sender readiness for SPF, DKIM, DMARC, TLS, and verification status, with selector-aware 24-hour persistence and an explicit, unexpired country/channel policy requirement.
++- Added a `list`/`set` country-policy operator tool. `set` requires an active `super_admin`, one exact ISO country, one exact channel, an explicit status, review/expiry timestamps, and at least one HTTPS source URL. Changes write redacted audit summaries.
++- Added third-weekday-at-10:00 Asia/Shanghai reply-check scheduling after accepted jobs, unique originating-job persistence, and terminal closure for reply, bounce, refusal, unsubscribe, or manual stop.
++- Added canonical quality persistence inside create/revise transactions. Low-scoring drafts remain approvable for internal review, while final preview and final confirmation fail closed.
++- Added the minimal `matrix_stream_reply_checks` schema and due-state index.
++- Did not add or invoke delivery, mailer, credential, or external-message functionality. No route or quotation-workflow changes were made.
++
++## RED / GREEN evidence
++
++1. Quality scoring
++   - RED: `node scripts/test-matrix-stream-gates.js` failed with `MODULE_NOT_FOUND` for `matrixStreamGate`.
++   - GREEN: the exact maxima fixture scored 100 and unsupported price/certification/lead-time claims blocked.
++   - RED repair: mismatched `USD 0.50` evidence incorrectly supported `USD 0.05`, and BRC evidence incorrectly supported FDA.
++   - GREEN repair: normalized exact claim fragments no longer collide; all six unsupported categories block independently.
++2. Identity, cooling, and quota
++   - RED: `evaluateInitialContact is not a function`.
++   - GREEN: exact email/domain and order relationships route correctly; the 90-day domain window, Shanghai accepted limit of five, suppression, and possible-duplicate review all pass without row deletion or merging.
++3. Readiness and policy
++   - RED: both readiness and policy tests failed with their expected module-not-found errors.
++   - GREEN: injected checks, selector-aware cache reuse, named hard failures, expired/missing policy behavior, super-admin authorization, exact flags, and redacted audit assertions pass.
++   - RED repair: a directly persisted HTTP source URL or disabled policy requirement bit was incorrectly treated as approved.
++   - GREEN repair: policy consumption revalidates HTTPS sources and both required safeguards on every check.
++4. Follow-up
++   - RED: module-not-found for `matrixStreamFollowup`.
++   - GREEN: Friday and weekend inputs both resolve to Wednesday 10:00 +08:00; accepted jobs create one reply check, duplicate calls do not mutate/reopen it, and terminal events clear active due state.
++5. Version quality persistence
++   - RED: Task 2 regression observed `quality_json === '{}'` after initial version creation.
++   - GREEN: create/revise persist canonical quality results; existing low-score approval succeeds, final preview reports blocked, and final confirmation rejects.
++   - Debug evidence: the first GREEN patch placed revise scoring under approval because of an ambiguous context match; the regression consistently failed at that line. The block was moved to the revise transaction and the full Task 2 test passed.
++
++## Verification
++
++- `node scripts/test-matrix-stream-gates.js` — PASS.
++- `node scripts/test-matrix-policy.js` — PASS.
++- `node scripts/test-matrix-stream-review.js` — PASS.
++- `node scripts/test-packet-gate.js` — PASS.
++- `node scripts/smoke-test.js` — PASS.
++- `node scripts/test-matrix-api.js` — initial sandbox run failed only because binding `0.0.0.0:21002` returned `EPERM`; rerun through the approved localhost test path PASS.
++- `node --check` on all changed/new JavaScript files — PASS.
++- Static scan for mailer/send/delivery primitives and credential environment names in changed services/tool — no matches.
++- `git diff --check` — PASS.
++
++## Concerns
++
++- Similar-name matching is deliberately narrow and deterministic. Names outside the normalized legal-suffix equivalence require an explicit alias from the reviewed candidate context; aliases only produce `possible_duplicate_review`.
++- The 90-day cooldown derives domain history from persisted CRM contact fields. Rows without a parseable contact domain do not create an inferred identity.
++- Weekdays exclude Saturday and Sunday; no public-holiday calendar is inferred.
++- Source URLs are validated as explicit HTTPS URLs without performing network access. Authority remains a reviewed operator judgment captured by the policy record and audit event.
++- Sender readiness invokes only injected verification dependencies and persists their booleans. This task contains no transport construction or delivery operation.
++
++## 蒸馏进度
++
++- 已确认模块：质量评分与硬失败、身份/冷却/日配额、sender readiness、国家渠道策略、第三工作日 reply check、版本质量持久化与最终质量门禁。
++- 未解决模块：不同国家的具体政策内容、法定节假日工作日历、后续真实交付集成；均不属于 Task 2A。
++- 下一优先知识缺口：逐国家/渠道的权威政策来源和复审周期，由 `super_admin` 审阅后逐条录入，禁止默认批准。
+diff --git a/scripts/matrix-policy.js b/scripts/matrix-policy.js
+new file mode 100755
+index 0000000..9a38e90
+--- /dev/null
++++ b/scripts/matrix-policy.js
+@@ -0,0 +1,126 @@
++#!/usr/bin/env node
++'use strict';
++
++const POLICY_STATUSES = new Set(['approved', 'paused', 'blocked']);
++
++function validCountry(value) {
++  const country = String(value || '').trim().toUpperCase();
++  if (!/^[A-Z]{2}$/.test(country)) throw new Error('exact ISO country required');
++  return country;
++}
++
++function validChannel(value) {
++  const channel = String(value || '').trim().toLowerCase();
++  if (!/^[a-z][a-z0-9_-]{1,31}$/.test(channel) || channel === 'all') throw new Error('exact channel required');
++  return channel;
++}
++
++function parseArgs(argv) {
++  const command = String(argv[0] || '').trim();
++  if (!['list', 'set'].includes(command)) throw new Error('command must be list or set');
++  const options = { command };
++  const fields = {
++    '--actor': 'actor', '--country': 'country', '--channel': 'channel', '--status': 'status',
++    '--reviewed-at': 'reviewedAt', '--expires-at': 'expiresAt'
++  };
++  for (let index = 1; index < argv.length; index += 1) {
++    const argument = argv[index];
++    if (argument === '--source-url') {
++      if (index + 1 >= argv.length) throw new Error('source URL value required');
++      options.sourceUrls = [...(options.sourceUrls || []), String(argv[index + 1] || '').trim()];
++      index += 1;
++      continue;
++    }
++    const field = fields[argument];
++    if (!field || index + 1 >= argv.length) throw new Error('named flags only');
++    if (Object.prototype.hasOwnProperty.call(options, field)) throw new Error('duplicate flag');
++    options[field] = String(argv[index + 1] || '').trim();
++    index += 1;
++  }
++  if (options.country !== undefined) options.country = validCountry(options.country);
++  if (options.channel !== undefined) options.channel = validChannel(options.channel);
++  return options;
++}
++
++function validatePolicy(input = {}) {
++  const country = validCountry(input.country);
++  const channel = validChannel(input.channel);
++  const status = String(input.status || '').trim().toLowerCase();
++  if (!POLICY_STATUSES.has(status)) throw new Error('policy status must be approved, paused, or blocked');
++  const reviewedAtMs = Date.parse(String(input.reviewedAt || ''));
++  const expiresAtMs = Date.parse(String(input.expiresAt || ''));
++  if (!Number.isFinite(reviewedAtMs)) throw new Error('valid review time required');
++  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= reviewedAtMs) throw new Error('expiry must be after review time');
++  const sourceUrls = Array.isArray(input.sourceUrls) ? input.sourceUrls : [];
++  if (!sourceUrls.length) throw new Error('at least one authoritative source URL required');
++  const normalizedSources = sourceUrls.map(value => {
++    let url;
++    try { url = new URL(String(value || '')); } catch (_) { throw new Error('valid authoritative source URL required'); }
++    if (url.protocol !== 'https:' || !url.hostname.includes('.')) throw new Error('HTTPS authoritative source URL required');
++    return url.toString();
++  });
++  return {
++    actor: String(input.actor || '').trim(), country, channel, status,
++    reviewedAt: new Date(reviewedAtMs).toISOString(), expiresAt: new Date(expiresAtMs).toISOString(),
++    sourceUrls: [...new Set(normalizedSources)]
++  };
++}
++
++function setPolicy(db, input = {}) {
++  const value = validatePolicy(input);
++  const actor = db.prepare('SELECT id, username, role, status FROM users WHERE username = ?').get(value.actor);
++  if (!actor || actor.status !== 'active' || actor.role !== 'super_admin') throw new Error('active super_admin actor required');
++  const write = db.transaction(() => {
++    db.prepare(`
++      INSERT INTO matrix_stream_country_policies (
++        country_code, channel, status, sender_identity_required, opt_out_required,
++        reviewed_by, reviewed_at, expires_at, source_urls_json
++      ) VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?)
++      ON CONFLICT(country_code, channel) DO UPDATE SET
++        status = excluded.status, sender_identity_required = 1, opt_out_required = 1,
++        reviewed_by = excluded.reviewed_by, reviewed_at = excluded.reviewed_at,
++        expires_at = excluded.expires_at, source_urls_json = excluded.source_urls_json
++    `).run(value.country, value.channel, value.status, actor.id, value.reviewedAt, value.expiresAt,
++      JSON.stringify(value.sourceUrls));
++    const detail = {
++      country_code: value.country, channel: value.channel, status: value.status,
++      reviewed_at: value.reviewedAt, expires_at: value.expiresAt, source_count: value.sourceUrls.length
++    };
++    db.prepare(`
++      INSERT INTO audit_logs (role, user_name, action, resource_type, resource_id, detail, created_at)
++      VALUES (?, ?, 'matrix_policy_set', 'matrix_country_policy', ?, ?, ?)
++    `).run(actor.role, actor.username, `${value.country}:${value.channel}`, JSON.stringify(detail), value.reviewedAt);
++    return db.prepare('SELECT * FROM matrix_stream_country_policies WHERE country_code = ? AND channel = ?')
++      .get(value.country, value.channel);
++  });
++  return write.immediate();
++}
++
++function listPolicies(db, input = {}) {
++  const clauses = [];
++  const values = [];
++  if (input.country) { clauses.push('country_code = ?'); values.push(validCountry(input.country)); }
++  if (input.channel) { clauses.push('channel = ?'); values.push(validChannel(input.channel)); }
++  return db.prepare(`SELECT * FROM matrix_stream_country_policies${clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''} ORDER BY country_code, channel`).all(...values);
++}
++
++function main() {
++  const options = parseArgs(process.argv.slice(2));
++  const { db, initDb } = require('../src/db');
++  try {
++    initDb();
++    const result = options.command === 'set' ? setPolicy(db, options) : listPolicies(db, options);
++    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
++  } finally {
++    db.close();
++  }
++}
++
++if (require.main === module) {
++  try { main(); } catch (error) {
++    process.stderr.write(`Policy operation failed: ${error?.message || 'unknown error'}\n`);
++    process.exitCode = 1;
++  }
++}
++
++module.exports = { parseArgs, setPolicy, listPolicies };
+diff --git a/scripts/test-matrix-policy.js b/scripts/test-matrix-policy.js
+new file mode 100644
+index 0000000..e5df01e
+--- /dev/null
++++ b/scripts/test-matrix-policy.js
+@@ -0,0 +1,54 @@
++'use strict';
++
++const assert = require('node:assert');
++const Database = require('better-sqlite3');
++const { parseArgs, setPolicy, listPolicies } = require('./matrix-policy');
++
++const db = new Database(':memory:');
++db.exec(`
++  CREATE TABLE users (
++    id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password TEXT NOT NULL,
++    role TEXT NOT NULL, status TEXT NOT NULL
++  );
++  CREATE TABLE matrix_stream_country_policies (
++    country_code TEXT NOT NULL, channel TEXT NOT NULL, status TEXT NOT NULL,
++    sender_identity_required INTEGER NOT NULL DEFAULT 1, opt_out_required INTEGER NOT NULL DEFAULT 1,
++    reviewed_by INTEGER NOT NULL, reviewed_at TEXT NOT NULL, expires_at TEXT NOT NULL,
++    source_urls_json TEXT NOT NULL, PRIMARY KEY(country_code, channel)
++  );
++  CREATE TABLE audit_logs (
++    id INTEGER PRIMARY KEY, role TEXT NOT NULL, user_name TEXT NOT NULL, action TEXT NOT NULL,
++    resource_type TEXT NOT NULL, resource_id TEXT, detail TEXT, created_at TEXT NOT NULL
++  );
++`);
++db.prepare('INSERT INTO users VALUES (1, ?, ?, ?, ?)').run('root', 'secret-hash', 'super_admin', 'active');
++db.prepare('INSERT INTO users VALUES (2, ?, ?, ?, ?)').run('worker', 'worker-secret', 'worker', 'active');
++const policy = {
++  actor: 'root', country: 'US', channel: 'email', status: 'approved',
++  reviewedAt: '2026-07-18T00:00:00.000Z', expiresAt: '2026-08-18T00:00:00.000Z',
++  sourceUrls: ['https://authority.example/rules']
++};
++assert.throws(() => setPolicy(db, { ...policy, actor: 'missing' }), /active super_admin/);
++assert.throws(() => setPolicy(db, { ...policy, actor: 'worker' }), /active super_admin/);
++assert.throws(() => setPolicy(db, { ...policy, country: '*' }), /ISO country/);
++assert.throws(() => setPolicy(db, { ...policy, sourceUrls: [] }), /source URL/);
++assert.throws(() => setPolicy(db, { ...policy, expiresAt: policy.reviewedAt }), /expiry/);
++const saved = setPolicy(db, policy);
++assert.strictEqual(saved.country_code, 'US');
++assert.strictEqual(saved.status, 'approved');
++assert.deepStrictEqual(listPolicies(db, { country: 'US', channel: 'email' }).map(row => row.status), ['approved']);
++const audit = db.prepare('SELECT * FROM audit_logs').get();
++assert.strictEqual(audit.action, 'matrix_policy_set');
++assert.ok(!audit.detail.includes('authority.example'));
++assert.ok(!audit.detail.includes('secret'));
++assert.deepStrictEqual(JSON.parse(audit.detail), {
++  country_code: 'US', channel: 'email', status: 'approved',
++  reviewed_at: policy.reviewedAt, expires_at: policy.expiresAt, source_count: 1
++});
++assert.deepStrictEqual(parseArgs(['list', '--country', 'US', '--channel', 'email']), {
++  command: 'list', country: 'US', channel: 'email'
++});
++assert.throws(() => parseArgs(['set', '--actor', 'root', '--country', '*', '--channel', 'email']), /ISO country/);
++assert.throws(() => parseArgs(['remove']), /command/);
++db.close();
++process.stdout.write('matrix policy tests passed\n');
+diff --git a/scripts/test-matrix-stream-gates.js b/scripts/test-matrix-stream-gates.js
+new file mode 100644
+index 0000000..67905c9
+--- /dev/null
++++ b/scripts/test-matrix-stream-gates.js
+@@ -0,0 +1,245 @@
++'use strict';
++
++const assert = require('node:assert');
++const Database = require('better-sqlite3');
++const { scoreDraft } = require('../src/services/matrixStreamGate');
++
++const base = {
++  subject: '250g and 500g coffee pouch options for Alpha Coffee',
++  bodyEn: 'Dear Alpha Coffee team,\nWe reviewed your 250g and 500g roasted coffee range. We would like to discuss high-barrier valve pouches with stable repeat printing. Could you share your current structure and annual volume?\nBest regards',
++  bodyCn: '您好，我们查看了贵司250g和500g烘焙咖啡产品，希望沟通高阻隔带阀袋及稳定套色。请问当前材料结构和年用量？',
++  recipient: {
++    email: 'sales@alpha.test',
++    sourceUrl: 'https://alpha.test/contact',
++    verifiedAt: '2026-07-17T00:00:00Z'
++  },
++  evidence: {
++    company: 'Alpha Coffee',
++    categories: ['coffee'],
++    products: ['250g roasted coffee', '500g roasted coffee'],
++    entryProduct: 'high-barrier valve pouch',
++    supportedClaims: ['stable repeat printing'],
++    evidenceIds: [11, 12]
++  },
++  now: '2026-07-18T00:00:00Z'
++};
++
++const good = scoreDraft(base);
++assert.strictEqual(good.score, 100);
++assert.strictEqual(good.passed, true);
++assert.deepStrictEqual(Object.fromEntries(Object.entries(good.components).map(([key, value]) => [key, value.maximum])), {
++  product_match: 20,
++  company_specific: 15,
++  entry_value: 15,
++  questions: 15,
++  subject: 10,
++  bilingual_consistency: 10,
++  readability: 10,
++  recipient_provenance: 5
++});
++for (const component of Object.values(good.components)) {
++  assert.ok(Array.isArray(component.reasons));
++  assert.deepStrictEqual(component.evidence_ids, [11, 12]);
++}
++
++const unsafe = scoreDraft({
++  ...base,
++  subject: 'Guaranteed lowest price',
++  bodyEn: 'FDA approved. Final price is USD 0.05 with guaranteed lead time.'
++});
++assert.strictEqual(unsafe.passed, false);
++assert.deepStrictEqual(unsafe.hardFailures.sort(), [
++  'unsupported_certification',
++  'unsupported_lead_time',
++  'unsupported_price'
++]);
++const mismatchedEvidence = scoreDraft({
++  ...base,
++  bodyEn: [
++    'FDA approved.',
++    'Final price is USD 0.05 with guaranteed lead time.',
++    'We are an authorized supplier with guaranteed barrier performance and guaranteed delivery.'
++  ].join(' '),
++  evidence: { ...base.evidence, supportedClaims: ['BRC certified', 'Final price is USD 0.50'] }
++});
++assert.deepStrictEqual(mismatchedEvidence.hardFailures.sort(), [
++  'unsupported_certification', 'unsupported_delivery', 'unsupported_lead_time',
++  'unsupported_performance', 'unsupported_price', 'unsupported_supplier'
++]);
++
++const { evaluateInitialContact } = require('../src/services/matrixStreamGate');
++const db = new Database(':memory:');
++db.exec(`
++  CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, contact TEXT, active INTEGER NOT NULL DEFAULT 1);
++  CREATE TABLE inquiries (id INTEGER PRIMARY KEY, customer_id INTEGER, created_at TEXT);
++  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_name TEXT NOT NULL, created_at TEXT);
++  CREATE TABLE crm_messages (
++    id INTEGER PRIMARY KEY, customer_id INTEGER, sender_contact TEXT, receiver_contact TEXT,
++    received_at TEXT NOT NULL, workflow_status TEXT NOT NULL DEFAULT 'pending'
++  );
++  CREATE TABLE matrix_stream_jobs (
++    id INTEGER PRIMARY KEY, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
++  );
++  CREATE TABLE matrix_stream_events (
++    id INTEGER PRIMARY KEY, action TEXT NOT NULL, before_json TEXT NOT NULL DEFAULT '{}',
++    after_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
++  );
++`);
++db.prepare('INSERT INTO customers VALUES (1, ?, ?, 1)').run('Alpha Coffee', 'sales@alpha.test');
++db.prepare('INSERT INTO customers VALUES (2, ?, ?, 1)').run('Acme Foods Limited', 'hello@acme-foods.example');
++db.prepare('INSERT INTO orders VALUES (1, ?, ?)').run('Order Buyer', '2026-01-01T00:00:00Z');
++db.prepare('INSERT INTO crm_messages VALUES (1, NULL, ?, ?, ?, ?)').run(
++  'operator@internal.test', 'new@cooling.test', '2026-06-01T00:00:00Z', 'complete'
++);
++const insertAccepted = db.prepare('INSERT INTO matrix_stream_jobs VALUES (?, ?, ?, ?)');
++for (let id = 1; id <= 5; id += 1) {
++  insertAccepted.run(id, 'accepted', `2026-07-18T0${id}:00:00Z`, `2026-07-18T0${id}:00:00Z`);
++}
++db.prepare('INSERT INTO matrix_stream_events VALUES (1, ?, ?, ?, ?)').run(
++  'suppressed', '{}', JSON.stringify({ email: 'blocked@suppressed.test', domain: 'suppressed.test' }), '2026-07-01T00:00:00Z'
++);
++
++assert.strictEqual(evaluateInitialContact(db, {
++  email: ' SALES@ALPHA.TEST ', domain: 'alpha.test', companyName: 'Alpha Coffee', now: '2026-07-18T00:00:00Z'
++}).route, 'existing_relationship');
++assert.strictEqual(evaluateInitialContact(db, {
++  email: 'buyer@order.test', domain: 'order.test', companyName: 'Order Buyer', now: '2026-07-18T00:00:00Z'
++}).route, 'existing_relationship');
++assert.strictEqual(evaluateInitialContact(db, {
++  email: 'new@cooling.test', domain: 'cooling.test', companyName: 'Cooling Ltd', now: '2026-07-18T00:00:00Z'
++}).reasons[0], 'domain_cooling_90_days');
++assert.strictEqual(evaluateInitialContact(db, {
++  email: 'sixth@fresh.test', domain: 'fresh.test', companyName: 'Fresh Ltd', now: '2026-07-18T14:00:00+08:00'
++}).reasons[0], 'daily_accepted_limit_5');
++const possibleDuplicate = evaluateInitialContact(db, {
++  email: 'new@other.example', domain: 'other.example', companyName: 'Acme Foods Ltd', now: '2026-07-19T14:00:00+08:00'
++});
++assert.strictEqual(possibleDuplicate.route, 'possible_duplicate_review');
++assert.deepStrictEqual(possibleDuplicate.matchedCustomerIds, [2]);
++assert.strictEqual(db.prepare('SELECT count(*) AS count FROM customers').get().count, 2);
++assert.strictEqual(evaluateInitialContact(db, {
++  email: 'blocked@suppressed.test', domain: 'suppressed.test', companyName: 'Suppressed Ltd', now: '2026-07-19T14:00:00+08:00'
++}).route, 'blocked');
++db.close();
++
++const { createMatrixStreamReadiness } = require('../src/services/matrixStreamReadiness');
++const { thirdWeekdayAtTen, scheduleReplyCheck, closeReplyCheck } = require('../src/services/matrixStreamFollowup');
++
++assert.strictEqual(thirdWeekdayAtTen('2026-07-17T14:00:00+08:00'), '2026-07-22T10:00:00+08:00');
++assert.strictEqual(thirdWeekdayAtTen('2026-07-18T14:00:00+08:00'), '2026-07-22T10:00:00+08:00');
++
++const followupDb = new Database(':memory:');
++followupDb.exec(`
++  CREATE TABLE matrix_work_items (
++    id INTEGER PRIMARY KEY, next_action TEXT NOT NULL DEFAULT '', next_followup_at TEXT,
++    updated_at TEXT NOT NULL
++  );
++  CREATE TABLE matrix_stream_jobs (
++    id INTEGER PRIMARY KEY, work_item_id INTEGER NOT NULL, state TEXT NOT NULL,
++    updated_at TEXT NOT NULL
++  );
++  CREATE TABLE matrix_stream_reply_checks (
++    id INTEGER PRIMARY KEY, work_item_id INTEGER NOT NULL, originating_job_id INTEGER NOT NULL UNIQUE,
++    purpose TEXT NOT NULL, channel TEXT NOT NULL, priority TEXT NOT NULL,
++    due_at TEXT, state TEXT NOT NULL, terminal_reason TEXT NOT NULL DEFAULT '',
++    created_at TEXT NOT NULL, closed_at TEXT
++  );
++`);
++followupDb.prepare('INSERT INTO matrix_work_items VALUES (1, ?, NULL, ?)').run('', '2026-07-17T06:00:00.000Z');
++followupDb.prepare('INSERT INTO matrix_stream_jobs VALUES (11, 1, ?, ?)').run('accepted', '2026-07-17T06:00:00.000Z');
++followupDb.prepare('INSERT INTO matrix_stream_jobs VALUES (12, 1, ?, ?)').run('pending', '2026-07-17T06:00:00.000Z');
++const scheduled = scheduleReplyCheck(followupDb, { jobId: 11, channel: 'email', priority: 'normal' });
++assert.deepStrictEqual({
++  work_item_id: scheduled.work_item_id,
++  originating_job_id: scheduled.originating_job_id,
++  purpose: scheduled.purpose,
++  channel: scheduled.channel,
++  priority: scheduled.priority,
++  due_at: scheduled.due_at
++}, {
++  work_item_id: 1, originating_job_id: 11, purpose: 'reply_check', channel: 'email', priority: 'normal',
++  due_at: '2026-07-22T10:00:00+08:00'
++});
++assert.strictEqual(scheduleReplyCheck(followupDb, { jobId: 11, channel: 'email', priority: 'urgent' }).id, scheduled.id);
++assert.strictEqual(followupDb.prepare('SELECT count(*) AS count FROM matrix_stream_reply_checks').get().count, 1);
++assert.strictEqual(followupDb.prepare('SELECT next_followup_at FROM matrix_work_items WHERE id = 1').get().next_followup_at, scheduled.due_at);
++assert.throws(() => scheduleReplyCheck(followupDb, { jobId: 12, channel: 'email' }), /accepted/);
++const closed = closeReplyCheck(followupDb, { jobId: 11, reason: 'reply', closedAt: '2026-07-19T00:00:00.000Z' });
++assert.strictEqual(closed.state, 'closed');
++assert.strictEqual(closed.terminal_reason, 'reply');
++assert.strictEqual(closed.due_at, null);
++assert.strictEqual(followupDb.prepare('SELECT next_followup_at FROM matrix_work_items WHERE id = 1').get().next_followup_at, null);
++assert.throws(() => closeReplyCheck(followupDb, { jobId: 11, reason: 'sent_again' }), /terminal reason/);
++assert.strictEqual(scheduleReplyCheck(followupDb, { jobId: 11, channel: 'email' }).state, 'closed');
++followupDb.close();
++
++(async () => {
++  const readinessDb = new Database(':memory:');
++  readinessDb.exec(`
++    CREATE TABLE matrix_stream_sender_checks (
++      id INTEGER PRIMARY KEY, sender_domain TEXT NOT NULL, checked_at TEXT NOT NULL, expires_at TEXT NOT NULL,
++      spf_ok INTEGER NOT NULL, dkim_ok INTEGER NOT NULL, dmarc_ok INTEGER NOT NULL,
++      tls_ok INTEGER NOT NULL, smtp_ok INTEGER NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}',
++      UNIQUE(sender_domain, checked_at)
++    );
++    CREATE TABLE matrix_stream_country_policies (
++      country_code TEXT NOT NULL, channel TEXT NOT NULL, status TEXT NOT NULL,
++      sender_identity_required INTEGER NOT NULL, opt_out_required INTEGER NOT NULL,
++      reviewed_by INTEGER NOT NULL, reviewed_at TEXT NOT NULL, expires_at TEXT NOT NULL,
++      source_urls_json TEXT NOT NULL, PRIMARY KEY(country_code, channel)
++    );
++  `);
++  readinessDb.prepare(`
++    INSERT INTO matrix_stream_country_policies VALUES ('US', 'email', 'approved', 1, 1, 1, ?, ?, ?)
++  `).run('2026-07-17T00:00:00.000Z', '2026-08-17T00:00:00.000Z', '["https://authority.example/policy"]');
++  let txtCalls = 0;
++  let transportCalls = 0;
++  const readiness = createMatrixStreamReadiness({
++    clock: () => new Date('2026-07-18T00:00:00Z'),
++    resolveTxt: async name => {
++      txtCalls += 1;
++      return ({
++        'sender.test': ['v=spf1 include:mail.test -all'],
++        'selector._domainkey.sender.test': ['v=DKIM1; p=abc'],
++        '_dmarc.sender.test': ['v=DMARC1; p=none']
++      })[name] || [];
++    },
++    verifyTransport: async () => {
++      transportCalls += 1;
++      return { tls: true, smtp: true };
++    }
++  });
++  const readyInput = { db: readinessDb, domain: 'sender.test', selector: 'selector', countryCode: 'US', channel: 'email' };
++  assert.deepStrictEqual((await readiness.check(readyInput)).hardFailures, []);
++  assert.strictEqual((await readiness.check(readyInput)).ok, true);
++  assert.strictEqual(txtCalls, 3);
++  assert.strictEqual(transportCalls, 1);
++  assert.strictEqual(readinessDb.prepare('SELECT count(*) AS count FROM matrix_stream_sender_checks').get().count, 1);
++  readinessDb.prepare("UPDATE matrix_stream_country_policies SET source_urls_json = '[\"http://invalid.example/policy\"]'").run();
++  assert.deepStrictEqual((await readiness.check(readyInput)).hardFailures, ['country_channel_policy_not_approved']);
++  readinessDb.prepare(`
++    UPDATE matrix_stream_country_policies
++    SET source_urls_json = '["https://authority.example/policy"]', sender_identity_required = 0
++  `).run();
++  assert.deepStrictEqual((await readiness.check(readyInput)).hardFailures, ['country_channel_policy_not_approved']);
++  readinessDb.prepare('UPDATE matrix_stream_country_policies SET sender_identity_required = 1').run();
++
++  const notReady = createMatrixStreamReadiness({
++    clock: () => new Date('2026-07-18T00:00:00Z'),
++    resolveTxt: async () => [],
++    verifyTransport: async () => ({ tls: false, smtp: false })
++  });
++  const missing = await notReady.check({ db: readinessDb, domain: 'other.test', selector: '', countryCode: 'CA', channel: 'email' });
++  assert.strictEqual(missing.ok, false);
++  assert.deepStrictEqual(missing.hardFailures.sort(), [
++    'country_channel_policy_not_approved', 'missing_dkim', 'missing_dmarc', 'missing_selector',
++    'missing_smtp_verification', 'missing_spf', 'missing_tls'
++  ]);
++  readinessDb.prepare("UPDATE matrix_stream_country_policies SET expires_at = '2026-07-17T00:00:00.000Z'").run();
++  assert.deepStrictEqual((await readiness.check(readyInput)).hardFailures, ['country_channel_policy_not_approved']);
++  readinessDb.close();
++  process.stdout.write('matrix stream gate tests passed\n');
++})().catch(error => {
++  process.stderr.write(`${error.stack || error.message}\n`);
++  process.exitCode = 1;
++});
+diff --git a/scripts/test-matrix-stream-review.js b/scripts/test-matrix-stream-review.js
+index 785685a..d029d57 100644
+--- a/scripts/test-matrix-stream-review.js
++++ b/scripts/test-matrix-stream-review.js
+@@ -49,37 +49,38 @@ try {
+   const database = require('../src/db');
+   db = database.db;
+   const originalConsoleLog = console.log;
+   console.log = () => {};
+   try {
+     database.initDb();
+   } finally {
+     console.log = originalConsoleLog;
+   }
+ 
+-  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events', 'matrix_stream_recipient_evidence']) {
++  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events', 'matrix_stream_recipient_evidence', 'matrix_stream_reply_checks']) {
+     assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
+   }
+ 
+   const workColumns = db.prepare('PRAGMA table_info(matrix_work_items)').all().map(row => row.name);
+   assert(workColumns.includes('stream_state'));
+   assert(workColumns.includes('current_stream_version_id'));
+ 
+   const draftColumns = db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(row => row.name);
+   assert(draftColumns.includes('matrix_work_item_id'));
+   const versionColumns = db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(row => row.name);
+   assert(versionColumns.includes('recipient_evidence_id'));
+ 
+   const indexColumns = indexName => db.prepare(`PRAGMA index_info(${indexName})`).all().map(row => row.name);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_versions_work_revision'), ['work_item_id', 'revision']);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_state_updated'), ['state', 'updated_at']);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_message_id'), ['message_id']);
++  assert.deepStrictEqual(indexColumns('idx_matrix_stream_reply_checks_due'), ['state', 'due_at']);
+ 
+   const now = '2026-07-18T00:00:00.000Z';
+   const userId = Number(db.prepare(`
+     INSERT INTO users (username, password, role, status, created_at)
+     VALUES ('matrix_stream_review_guard', 'unused', 'super_admin', 'active', ?)
+   `).run(now).lastInsertRowid);
+   const review = require('../src/services/matrixStreamReview');
+   const insertRecipientEvidence = ({ workItemId, domain, email, sourceUrl, verifiedAt, snapshot = {} }) => Number(db.prepare(`
+     INSERT INTO matrix_stream_recipient_evidence (
+       work_item_id, organization_domain, recipient_email, source_url,
+@@ -243,20 +244,23 @@ try {
+       kind: 'public_company'
+     },
+     subject: 'A focused proposal for Alpha',
+     bodyEn: 'Dear Alpha team,\nPlease confirm your current requirements.\nBest regards',
+     bodyCn: '您好，请确认当前需求。',
+     strategySummary: '公开产品页显示匹配品类',
+     sourceSnapshot: { url: 'https://alpha.test/products' },
+     idempotencyKey: 'version-create-1'
+   });
+   assert.strictEqual(v1.revision, 1);
++  assert.notStrictEqual(v1.quality_json, '{}');
++  assert.strictEqual(v1.quality_score, JSON.parse(v1.quality_json).score);
++  assert.ok(v1.quality_score < 80);
+   const { createMatrixStreamText } = require('../src/services/matrixStreamText');
+   const textService = createMatrixStreamText({
+     callJson: async () => ({
+       subject: 'Short proposal for Alpha',
+       body_en: 'Dear Alpha team,\nCould you share annual volume?\nBest regards',
+       body_cn: '您好，请问能否提供年用量？'
+     })
+   });
+   const revisedText = await textService.revise({ current: v1, instruction: '语气更简洁，询问年用量' });
+   assert.strictEqual(revisedText.subject, 'Short proposal for Alpha');
+@@ -558,31 +562,37 @@ try {
+   }
+   const approved = review.approveVersion(db, {
+     actorUserId: userId,
+     workItemId: reviewWorkItemId,
+     versionId: v1.id,
+     expectedWorkVersion: 2,
+     expectedContentHash: v1.content_hash,
+     idempotencyKey: 'approve-1'
+   });
+   assert.strictEqual(approved.status, 'approved');
++  const blockedPreview = review.finalPreview(db, { actorUserId: userId, versionId: v1.id });
++  assert.strictEqual(blockedPreview.allowed, false);
++  assert.ok(blockedPreview.reasons.includes('quality_score_below_80'));
++  assert.throws(() => review.confirmFinalGate(db, { actorUserId: userId, versionId: v1.id }), /quality/i);
+   const v2 = review.reviseVersion(db, {
+     actorUserId: userId,
+     workItemId: reviewWorkItemId,
+     baseVersionId: v1.id,
+     expectedWorkVersion: 3,
+     subject: v1.subject,
+     bodyEn: `${v1.body_en}\nPlease share annual volume.`,
+     bodyCn: `${v1.body_cn}\n请提供年用量。`,
+     idempotencyKey: 'revise-1'
+   });
+   assert.strictEqual(v2.revision, 2);
++  assert.notStrictEqual(v2.quality_json, '{}');
++  assert.strictEqual(v2.quality_score, JSON.parse(v2.quality_json).score);
+   assert.strictEqual(review.getVersion(db, { actorUserId: userId, versionId: v1.id }).status, 'superseded');
+   const approveReplayInput = {
+     actorUserId: userId,
+     workItemId: reviewWorkItemId,
+     versionId: v1.id,
+     expectedWorkVersion: 2,
+     expectedContentHash: v1.content_hash,
+     idempotencyKey: 'approve-1'
+   };
+   const approvedReplay = review.approveVersion(db, approveReplayInput);
+diff --git a/src/db.js b/src/db.js
+index 473ac10..9fef2f1 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -959,27 +959,44 @@ function initDb() {
+       status TEXT NOT NULL CHECK(status IN ('approved','paused','blocked')),
+       sender_identity_required INTEGER NOT NULL DEFAULT 1,
+       opt_out_required INTEGER NOT NULL DEFAULT 1,
+       reviewed_by INTEGER NOT NULL,
+       reviewed_at TEXT NOT NULL,
+       expires_at TEXT NOT NULL,
+       source_urls_json TEXT NOT NULL,
+       PRIMARY KEY(country_code, channel)
+     );
+ 
++    CREATE TABLE IF NOT EXISTS matrix_stream_reply_checks (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      work_item_id INTEGER NOT NULL,
++      originating_job_id INTEGER NOT NULL UNIQUE,
++      purpose TEXT NOT NULL,
++      channel TEXT NOT NULL,
++      priority TEXT NOT NULL,
++      due_at TEXT,
++      state TEXT NOT NULL CHECK(state IN ('active','closed')),
++      terminal_reason TEXT NOT NULL DEFAULT '',
++      created_at TEXT NOT NULL,
++      closed_at TEXT,
++      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
++      FOREIGN KEY(originating_job_id) REFERENCES matrix_stream_jobs(id)
++    );
++
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
+     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_reply_checks_due ON matrix_stream_reply_checks(state, due_at);
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
+     BEFORE UPDATE ON matrix_selection_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_delete
+     BEFORE DELETE ON matrix_selection_events
+     BEGIN
+diff --git a/src/services/matrixStreamFollowup.js b/src/services/matrixStreamFollowup.js
+new file mode 100644
+index 0000000..99cdb87
+--- /dev/null
++++ b/src/services/matrixStreamFollowup.js
+@@ -0,0 +1,94 @@
++'use strict';
++
++const TERMINAL_REASONS = new Set(['reply', 'bounce', 'refusal', 'unsubscribe', 'manual_stop']);
++
++function positiveInteger(value, label) {
++  const number = Number(value);
++  if (!Number.isInteger(number) || number <= 0) throw new Error(`${label} required`);
++  return number;
++}
++
++function boundedToken(value, label, fallback) {
++  const token = String(value || fallback || '').trim().toLowerCase();
++  if (!/^[a-z][a-z0-9_-]{1,31}$/.test(token)) throw new Error(`valid ${label} required`);
++  return token;
++}
++
++function thirdWeekdayAtTen(sentAt) {
++  const timestamp = Date.parse(String(sentAt || ''));
++  if (!Number.isFinite(timestamp)) throw new Error('valid accepted timestamp required');
++  const shanghai = new Date(timestamp + 8 * 3600000);
++  let year = shanghai.getUTCFullYear();
++  let month = shanghai.getUTCMonth();
++  let day = shanghai.getUTCDate();
++  let weekdays = 0;
++  while (weekdays < 3) {
++    const next = new Date(Date.UTC(year, month, day + 1));
++    year = next.getUTCFullYear();
++    month = next.getUTCMonth();
++    day = next.getUTCDate();
++    const weekday = next.getUTCDay();
++    if (weekday !== 0 && weekday !== 6) weekdays += 1;
++  }
++  const yyyy = String(year).padStart(4, '0');
++  const mm = String(month + 1).padStart(2, '0');
++  const dd = String(day).padStart(2, '0');
++  return `${yyyy}-${mm}-${dd}T10:00:00+08:00`;
++}
++
++function scheduleReplyCheck(db, input = {}) {
++  const jobId = positiveInteger(input.jobId, 'job id');
++  const channel = boundedToken(input.channel, 'channel', 'email');
++  const priority = boundedToken(input.priority, 'priority', 'normal');
++  const schedule = db.transaction(() => {
++    const existing = db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(jobId);
++    if (existing) return existing;
++    const job = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(jobId);
++    if (!job || job.state !== 'accepted') throw new Error('accepted delivery job required');
++    const workItem = db.prepare('SELECT id FROM matrix_work_items WHERE id = ?').get(job.work_item_id);
++    if (!workItem) throw new Error('work item required');
++    const dueAt = thirdWeekdayAtTen(job.updated_at || job.created_at);
++    const createdAt = new Date(Date.parse(job.updated_at || job.created_at)).toISOString();
++    const result = db.prepare(`
++      INSERT INTO matrix_stream_reply_checks (
++        work_item_id, originating_job_id, purpose, channel, priority, due_at,
++        state, terminal_reason, created_at, closed_at
++      ) VALUES (?, ?, 'reply_check', ?, ?, ?, 'active', '', ?, NULL)
++    `).run(job.work_item_id, jobId, channel, priority, dueAt, createdAt);
++    db.prepare(`
++      UPDATE matrix_work_items SET next_action = 'reply_check', next_followup_at = ?, updated_at = ? WHERE id = ?
++    `).run(dueAt, createdAt, job.work_item_id);
++    return db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE id = ?').get(Number(result.lastInsertRowid));
++  });
++  return schedule.immediate();
++}
++
++function closeReplyCheck(db, input = {}) {
++  const jobId = positiveInteger(input.jobId, 'job id');
++  const reason = String(input.reason || '').trim().toLowerCase();
++  if (!TERMINAL_REASONS.has(reason)) throw new Error('valid terminal reason required');
++  const closedAtMs = Date.parse(String(input.closedAt || new Date().toISOString()));
++  if (!Number.isFinite(closedAtMs)) throw new Error('valid close timestamp required');
++  const closedAt = new Date(closedAtMs).toISOString();
++  const close = db.transaction(() => {
++    const row = db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(jobId);
++    if (!row) throw new Error('reply check not found');
++    if (row.state === 'active') {
++      db.prepare(`
++        UPDATE matrix_stream_reply_checks
++        SET due_at = NULL, state = 'closed', terminal_reason = ?, closed_at = ?
++        WHERE id = ? AND state = 'active'
++      `).run(reason, closedAt, row.id);
++      db.prepare(`
++        UPDATE matrix_work_items SET next_action = '', next_followup_at = NULL, updated_at = ?
++        WHERE id = ? AND next_action = 'reply_check'
++      `).run(closedAt, row.work_item_id);
++    } else if (row.terminal_reason !== reason) {
++      throw new Error('reply check already closed with another terminal reason');
++    }
++    return db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE id = ?').get(row.id);
++  });
++  return close.immediate();
++}
++
++module.exports = { thirdWeekdayAtTen, scheduleReplyCheck, closeReplyCheck };
+diff --git a/src/services/matrixStreamGate.js b/src/services/matrixStreamGate.js
+new file mode 100644
+index 0000000..067be67
+--- /dev/null
++++ b/src/services/matrixStreamGate.js
+@@ -0,0 +1,258 @@
++'use strict';
++
++const MAXIMUMS = Object.freeze({
++  product_match: 20,
++  company_specific: 15,
++  entry_value: 15,
++  questions: 15,
++  subject: 10,
++  bilingual_consistency: 10,
++  readability: 10,
++  recipient_provenance: 5
++});
++
++function normalized(value) {
++  return String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
++}
++
++function compact(value) {
++  return normalized(value).replace(/[^\p{L}\p{N}]+/gu, '');
++}
++
++function includesPhrase(text, phrase) {
++  const haystack = compact(text);
++  const needle = compact(phrase);
++  return Boolean(needle && haystack.includes(needle));
++}
++
++function component(points, maximum, reasons, evidenceIds) {
++  return { points, maximum, reasons, evidence_ids: evidenceIds };
++}
++
++const HARD_FAILURE_PATTERNS = Object.freeze({
++  unsupported_price: [
++    /\b(?:usd|eur|rmb|cny|gbp)\s*\d+(?:[.,]\d+)?/i,
++    /\b(?:price|cost|quote|amount)\s+(?:is|of|at)\b/i,
++    /(?:价格|报价|单价|售价|费用|金额|成本).{0,12}\d/u
++  ],
++  unsupported_certification: [
++    /\b(?:fda|iso|brcgs?|haccp|gmp|ce|rohs|reach|sedex)\b.{0,24}\b(?:approved|certified|compliant|qualification)/i,
++    /\b(?:approved|certified|compliant)\b/i,
++    /(?:认证|资质|合规|许可证|审核通过)/u
++  ],
++  unsupported_supplier: [
++    /\b(?:approved|authorized|exclusive|official)\s+(?:supplier|vendor|manufacturer)\b/i,
++    /(?:指定|授权|独家|官方)(?:供应商|制造商)/u
++  ],
++  unsupported_performance: [
++    /\b(?:guaranteed|proven)\s+(?:performance|barrier|shelf\s*life|quality)/i,
++    /(?:保证|确保|已验证).{0,16}(?:性能|阻隔|保质期|质量)/u
++  ],
++  unsupported_delivery: [
++    /\b(?:guaranteed|fixed)\s+(?:delivery|arrival|shipping)\b/i,
++    /(?:保证|固定).{0,12}(?:交付|到货|发货)/u
++  ],
++  unsupported_lead_time: [
++    /\b(?:guaranteed|fixed)\s+lead[ -]?time\b/i,
++    /\blead[ -]?time\s+(?:is|of)\s+\d/i,
++    /(?:保证|固定).{0,12}(?:交期|生产周期)/u
++  ]
++});
++
++function unsupportedClaims(input) {
++  const text = [input.subject, input.bodyEn, input.bodyCn].map(normalized).join('\n');
++  const supported = Array.isArray(input.evidence?.supportedClaims)
++    ? input.evidence.supportedClaims.map(normalized).filter(Boolean)
++    : [];
++  return Object.entries(HARD_FAILURE_PATTERNS).filter(([, patterns]) => {
++    const keys = claimKeys(text, patterns);
++    if (!keys.size) return false;
++    const supportedKeys = claimKeys(supported.join('\n'), patterns);
++    return [...keys].some(key => !supportedKeys.has(key));
++  }).map(([failure]) => failure);
++}
++
++function claimKeys(text, patterns) {
++  const keys = new Set();
++  for (const pattern of patterns) {
++    const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
++    for (const match of String(text || '').matchAll(new RegExp(pattern.source, flags))) {
++      const key = compact(match[0]);
++      if (key) keys.add(key);
++    }
++  }
++  return keys;
++}
++
++function scoreDraft(input = {}) {
++  const evidence = input.evidence && typeof input.evidence === 'object' ? input.evidence : {};
++  const evidenceIds = Array.isArray(evidence.evidenceIds) ? [...evidence.evidenceIds] : [];
++  const subject = normalized(input.subject);
++  const bodyEn = normalized(input.bodyEn);
++  const bodyCn = normalized(input.bodyCn);
++  const allText = `${subject}\n${bodyEn}\n${bodyCn}`;
++  const products = Array.isArray(evidence.products) ? evidence.products.filter(Boolean) : [];
++  const categories = Array.isArray(evidence.categories) ? evidence.categories.filter(Boolean) : [];
++
++  const productSignals = [...products, ...categories].filter(value => includesPhrase(allText, value));
++  const productPoints = productSignals.length ? MAXIMUMS.product_match : 0;
++  const companyPoints = includesPhrase(allText, evidence.company) ? MAXIMUMS.company_specific : 0;
++  const entryPoints = includesPhrase(allText, evidence.entryProduct)
++    || (normalized(evidence.entryProduct).includes('pouch') && /\bpouches?\b/i.test(allText))
++    ? MAXIMUMS.entry_value : 0;
++  const questionPoints = /[?？]/u.test(bodyEn) && /[?？]/u.test(bodyCn) ? MAXIMUMS.questions : 0;
++  const subjectPoints = subject.length >= 12 && subject.length <= 120
++    && (includesPhrase(subject, evidence.company) || productSignals.some(value => includesPhrase(subject, value)))
++    ? MAXIMUMS.subject : 0;
++  const bilingualPoints = bodyEn.length >= 40 && bodyCn.length >= 20 ? MAXIMUMS.bilingual_consistency : 0;
++  const readabilityPoints = bodyEn.length <= 1200 && bodyCn.length <= 800
++    && /\b(?:dear|hello|hi)\b/i.test(bodyEn) && /(?:您好|你好)/u.test(bodyCn)
++    ? MAXIMUMS.readability : 0;
++
++  const recipient = input.recipient && typeof input.recipient === 'object' ? input.recipient : {};
++  let provenancePoints = 0;
++  try {
++    const source = new URL(String(recipient.sourceUrl || ''));
++    const verifiedAt = Date.parse(String(recipient.verifiedAt || ''));
++    const now = Date.parse(String(input.now || ''));
++    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized(recipient.email))
++        && source.protocol === 'https:' && Number.isFinite(verifiedAt) && Number.isFinite(now)
++        && verifiedAt <= now) provenancePoints = MAXIMUMS.recipient_provenance;
++  } catch (_) {}
++
++  const components = {
++    product_match: component(productPoints, MAXIMUMS.product_match, productPoints ? ['evidence_product_match'] : ['no_evidence_product_match'], evidenceIds),
++    company_specific: component(companyPoints, MAXIMUMS.company_specific, companyPoints ? ['company_named'] : ['company_not_named'], evidenceIds),
++    entry_value: component(entryPoints, MAXIMUMS.entry_value, entryPoints ? ['entry_product_named'] : ['entry_product_missing'], evidenceIds),
++    questions: component(questionPoints, MAXIMUMS.questions, questionPoints ? ['bilingual_question_present'] : ['bilingual_question_missing'], evidenceIds),
++    subject: component(subjectPoints, MAXIMUMS.subject, subjectPoints ? ['specific_subject'] : ['subject_not_specific'], evidenceIds),
++    bilingual_consistency: component(bilingualPoints, MAXIMUMS.bilingual_consistency, bilingualPoints ? ['both_languages_substantive'] : ['bilingual_content_incomplete'], evidenceIds),
++    readability: component(readabilityPoints, MAXIMUMS.readability, readabilityPoints ? ['bounded_readable_copy'] : ['readability_boundary_failed'], evidenceIds),
++    recipient_provenance: component(provenancePoints, MAXIMUMS.recipient_provenance, provenancePoints ? ['current_https_public_source'] : ['recipient_provenance_invalid'], evidenceIds)
++  };
++  const score = Object.values(components).reduce((sum, value) => sum + value.points, 0);
++  const hardFailures = unsupportedClaims(input);
++  return { score, passed: score >= 80 && hardFailures.length === 0, components, hardFailures };
++}
++
++function normalizedEmail(value) {
++  return normalized(value);
++}
++
++function normalizedDomain(value) {
++  return normalized(value).replace(/^@/, '').replace(/^www\./, '').replace(/\.$/, '');
++}
++
++function contactDomain(value) {
++  const match = normalizedEmail(value).match(/@([^\s,;>]+)/);
++  return match ? normalizedDomain(match[1]) : '';
++}
++
++function companyKey(value) {
++  return normalized(value)
++    .replace(/\b(?:limited|ltd|incorporated|inc|corporation|corp|company|co)\b\.?/g, '')
++    .replace(/(?:有限公司|股份公司|股份有限公司)$/u, '')
++    .replace(/[^\p{L}\p{N}]+/gu, '');
++}
++
++function tableExists(db, name) {
++  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
++}
++
++function rowsIfPresent(db, name) {
++  return tableExists(db, name) ? db.prepare(`SELECT * FROM ${name}`).all() : [];
++}
++
++function jsonObject(value) {
++  try {
++    const parsed = JSON.parse(String(value || '{}'));
++    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
++  } catch (_) {
++    return {};
++  }
++}
++
++function evaluateInitialContact(db, input = {}) {
++  const email = normalizedEmail(input.email);
++  const emailDomain = contactDomain(email);
++  const domain = normalizedDomain(input.domain || emailDomain);
++  const companyName = normalized(input.companyName);
++  const nowMs = Date.parse(String(input.now || ''));
++  if (!db || typeof db.prepare !== 'function' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
++      || !domain || domain !== emailDomain || !companyName || !Number.isFinite(nowMs)) {
++    return { allowed: false, route: 'blocked', reasons: ['invalid_identity_input'], matchedCustomerIds: [] };
++  }
++
++  try {
++    const read = db.transaction(() => {
++      const customers = rowsIfPresent(db, 'customers');
++      const inquiries = rowsIfPresent(db, 'inquiries');
++      const orders = rowsIfPresent(db, 'orders');
++      const messages = rowsIfPresent(db, 'crm_messages');
++      const events = rowsIfPresent(db, 'matrix_stream_events');
++      const jobs = rowsIfPresent(db, 'matrix_stream_jobs');
++      const aliases = Array.isArray(input.aliases) ? input.aliases.map(normalized).filter(Boolean) : [];
++
++      const suppressed = events.some(event => {
++        if (!/suppress|unsubscribe|refusal|blocked/i.test(String(event.action || ''))) return false;
++        const payloads = [jsonObject(event.before_json), jsonObject(event.after_json)];
++        return payloads.some(payload => normalizedEmail(payload.email) === email
++          || normalizedDomain(payload.domain) === domain
++          || contactDomain(payload.recipient_email) === domain);
++      });
++      if (suppressed) return { allowed: false, route: 'blocked', reasons: ['suppression_event'], matchedCustomerIds: [] };
++
++      const messageCustomerIds = new Set(messages.filter(message => {
++        const contacts = [message.sender_contact, message.receiver_contact];
++        return contacts.some(contact => normalizedEmail(contact) === email || contactDomain(contact) === domain);
++      }).map(message => Number(message.customer_id)).filter(Number.isInteger));
++      const exactCustomers = customers.filter(customer => {
++        const contact = normalizedEmail(customer.contact);
++        return customer.active !== 0 && (contact === email || contactDomain(contact) === domain || messageCustomerIds.has(Number(customer.id)));
++      });
++      const inquiryCustomerIds = new Set(inquiries.map(inquiry => Number(inquiry.customer_id)).filter(Number.isInteger));
++      const exactCompanyCustomers = customers.filter(customer => inquiryCustomerIds.has(Number(customer.id))
++        && normalized(customer.name) === companyName);
++      const exactOrder = orders.some(order => normalized(order.customer_name) === companyName);
++      const exactMatches = [...new Set([...exactCustomers, ...exactCompanyCustomers].map(customer => Number(customer.id)))].sort((a, b) => a - b);
++      if (exactMatches.length || exactOrder) {
++        return { allowed: true, route: 'existing_relationship', reasons: ['exact_identity_match'], matchedCustomerIds: exactMatches };
++      }
++
++      const coolingStart = nowMs - 90 * 86400000;
++      const recentDomainContact = messages.some(message => {
++        const at = Date.parse(String(message.received_at || message.created_at || ''));
++        return Number.isFinite(at) && at >= coolingStart && at <= nowMs
++          && [message.sender_contact, message.receiver_contact].some(contact => contactDomain(contact) === domain);
++      });
++      if (recentDomainContact) {
++        return { allowed: false, route: 'blocked', reasons: ['domain_cooling_90_days'], matchedCustomerIds: [] };
++      }
++
++      const shanghaiDay = new Date(nowMs + 8 * 3600000).toISOString().slice(0, 10);
++      const acceptedToday = jobs.filter(job => {
++        if (job.state !== 'accepted') return false;
++        const at = Date.parse(String(job.updated_at || job.created_at || ''));
++        return Number.isFinite(at) && new Date(at + 8 * 3600000).toISOString().slice(0, 10) === shanghaiDay;
++      }).length;
++      if (acceptedToday >= 5) {
++        return { allowed: false, route: 'blocked', reasons: ['daily_accepted_limit_5'], matchedCustomerIds: [] };
++      }
++
++      const candidateKeys = new Set([companyKey(companyName), ...aliases.map(companyKey)].filter(Boolean));
++      const possible = customers.filter(customer => {
++        const customerDomain = contactDomain(customer.contact);
++        return candidateKeys.has(companyKey(customer.name)) && customerDomain !== domain;
++      }).map(customer => Number(customer.id)).filter(Number.isInteger).sort((a, b) => a - b);
++      if (possible.length) {
++        return { allowed: false, route: 'possible_duplicate_review', reasons: ['similar_name_different_domain'], matchedCustomerIds: possible };
++      }
++      return { allowed: true, route: 'initial_contact', reasons: [], matchedCustomerIds: [] };
++    });
++    return read();
++  } catch (_) {
++    return { allowed: false, route: 'blocked', reasons: ['identity_check_failed'], matchedCustomerIds: [] };
++  }
++}
++
++module.exports = { MAXIMUMS, scoreDraft, evaluateInitialContact };
+diff --git a/src/services/matrixStreamReadiness.js b/src/services/matrixStreamReadiness.js
+new file mode 100644
+index 0000000..e7a84dc
+--- /dev/null
++++ b/src/services/matrixStreamReadiness.js
+@@ -0,0 +1,114 @@
++'use strict';
++
++function normalizeTxt(records) {
++  return (Array.isArray(records) ? records : []).flat(Infinity).map(value => String(value || '').trim()).filter(Boolean);
++}
++
++function currentPolicy(db, countryCode, channel, nowMs) {
++  if (!db || typeof db.prepare !== 'function' || !/^[A-Z]{2}$/.test(countryCode) || !channel) return false;
++  const row = db.prepare(`
++    SELECT * FROM matrix_stream_country_policies WHERE country_code = ? AND channel = ?
++  `).get(countryCode, channel);
++  if (!row || row.status !== 'approved') return false;
++  const reviewedAt = Date.parse(String(row.reviewed_at || ''));
++  const expiresAt = Date.parse(String(row.expires_at || ''));
++  let sources;
++  try { sources = JSON.parse(row.source_urls_json); } catch (_) { return false; }
++  const validSources = Array.isArray(sources) && sources.length > 0 && sources.every(value => {
++    try {
++      const url = new URL(String(value || ''));
++      return url.protocol === 'https:' && url.hostname.includes('.');
++    } catch (_) {
++      return false;
++    }
++  });
++  return Number.isFinite(reviewedAt) && reviewedAt <= nowMs
++    && Number.isFinite(expiresAt) && expiresAt > nowMs
++    && row.sender_identity_required === 1 && row.opt_out_required === 1
++    && validSources;
++}
++
++function cachedCheck(db, domain, selector, nowMs) {
++  if (!db || typeof db.prepare !== 'function') return null;
++  const rows = db.prepare(`
++    SELECT * FROM matrix_stream_sender_checks WHERE sender_domain = ? ORDER BY checked_at DESC
++  `).all(domain);
++  return rows.find(row => {
++    const expiresAt = Date.parse(String(row.expires_at || ''));
++    if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) return false;
++    try { return JSON.parse(row.detail_json || '{}').selector === selector; } catch (_) { return false; }
++  }) || null;
++}
++
++function createMatrixStreamReadiness({ resolveTxt, verifyTransport, clock = () => new Date() } = {}) {
++  if (typeof resolveTxt !== 'function' || typeof verifyTransport !== 'function' || typeof clock !== 'function') {
++    throw new Error('readiness dependencies required');
++  }
++  return {
++    async check(input = {}) {
++      const domain = String(input.domain || '').trim().toLowerCase().replace(/\.$/, '');
++      const selector = String(input.selector || '').trim().toLowerCase();
++      const countryCode = String(input.countryCode || '').trim().toUpperCase();
++      const channel = String(input.channel || '').trim().toLowerCase();
++      const nowDate = clock();
++      const nowMs = nowDate instanceof Date ? nowDate.getTime() : Date.parse(String(nowDate));
++      const hardFailures = [];
++      if (!domain || !domain.includes('.') || !Number.isFinite(nowMs)) hardFailures.push('missing_sender_domain');
++      if (!selector) hardFailures.push('missing_selector');
++
++      let row = null;
++      try { row = domain && Number.isFinite(nowMs) ? cachedCheck(input.db, domain, selector, nowMs) : null; } catch (_) {}
++      if (!row && domain && Number.isFinite(nowMs)) {
++        let spf = [];
++        let dkim = [];
++        let dmarc = [];
++        let transport = { tls: false, smtp: false };
++        try {
++          [spf, dkim, dmarc] = await Promise.all([
++            resolveTxt(domain),
++            selector ? resolveTxt(`${selector}._domainkey.${domain}`) : Promise.resolve([]),
++            resolveTxt(`_dmarc.${domain}`)
++          ]);
++        } catch (_) {}
++        try {
++          const verified = await verifyTransport({ domain });
++          transport = verified === true ? { tls: true, smtp: true } : (verified || transport);
++        } catch (_) {}
++        row = {
++          sender_domain: domain,
++          checked_at: new Date(nowMs).toISOString(),
++          expires_at: new Date(nowMs + 24 * 3600000).toISOString(),
++          spf_ok: Number(normalizeTxt(spf).some(value => /^v=spf1\b/i.test(value))),
++          dkim_ok: Number(normalizeTxt(dkim).some(value => /^v=dkim1\b/i.test(value))),
++          dmarc_ok: Number(normalizeTxt(dmarc).some(value => /^v=dmarc1\b/i.test(value))),
++          tls_ok: Number(transport.tls === true),
++          smtp_ok: Number(transport.smtp === true),
++          detail_json: JSON.stringify({ selector })
++        };
++        try {
++          input.db.prepare(`
++            INSERT INTO matrix_stream_sender_checks (
++              sender_domain, checked_at, expires_at, spf_ok, dkim_ok, dmarc_ok,
++              tls_ok, smtp_ok, detail_json
++            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
++          `).run(row.sender_domain, row.checked_at, row.expires_at, row.spf_ok, row.dkim_ok,
++            row.dmarc_ok, row.tls_ok, row.smtp_ok, row.detail_json);
++        } catch (_) {}
++      }
++
++      if (!row?.spf_ok) hardFailures.push('missing_spf');
++      if (!row?.dkim_ok) hardFailures.push('missing_dkim');
++      if (!row?.dmarc_ok) hardFailures.push('missing_dmarc');
++      if (!row?.tls_ok) hardFailures.push('missing_tls');
++      if (!row?.smtp_ok) hardFailures.push('missing_smtp_verification');
++      try {
++        if (!currentPolicy(input.db, countryCode, channel, nowMs)) hardFailures.push('country_channel_policy_not_approved');
++      } catch (_) {
++        hardFailures.push('country_channel_policy_not_approved');
++      }
++      return { ok: hardFailures.length === 0, hardFailures: [...new Set(hardFailures)], checkedAt: row?.checked_at || null };
++    }
++  };
++}
++
++module.exports = { createMatrixStreamReadiness };
+diff --git a/src/services/matrixStreamReview.js b/src/services/matrixStreamReview.js
+index e79e7c0..16efdfb 100644
+--- a/src/services/matrixStreamReview.js
++++ b/src/services/matrixStreamReview.js
+@@ -1,12 +1,13 @@
+ const crypto = require('node:crypto');
+ const { parse: parseDomain } = require('tldts');
++const { scoreDraft } = require('./matrixStreamGate');
+ 
+ function positiveInteger(value, name) {
+   const number = Number(value);
+   if (!Number.isInteger(number) || number <= 0) throw new Error(`${name} must be a positive integer`);
+   return number;
+ }
+ 
+ function normalizeEmail(value) {
+   return String(value || '').trim().toLowerCase();
+ }
+@@ -22,20 +23,41 @@ function contentHash(value) {
+     subject: String(value.subject).trim(),
+     body_en: normalizeBody(value.bodyEn),
+     body_cn: normalizeBody(value.bodyCn)
+   })).digest('hex');
+ }
+ 
+ function requestFingerprint(value) {
+   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+ }
+ 
++function canonicalJson(value) {
++  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
++  if (value && typeof value === 'object') {
++    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
++  }
++  return JSON.stringify(value);
++}
++
++function versionQuality({ subject, bodyEn, bodyCn, recipient, sourceSnapshot, now }) {
++  const nestedEvidence = sourceSnapshot?.evidence && typeof sourceSnapshot.evidence === 'object'
++    && !Array.isArray(sourceSnapshot.evidence) ? sourceSnapshot.evidence : {};
++  return scoreDraft({
++    subject,
++    bodyEn,
++    bodyCn,
++    recipient,
++    evidence: { ...(sourceSnapshot || {}), ...nestedEvidence },
++    now
++  });
++}
++
+ function validateRecipient(input, nowValue = new Date()) {
+   const recipient = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+   const email = normalizeEmail(recipient.email);
+   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('valid recipient email required');
+   let sourceUrl;
+   try {
+     sourceUrl = new URL(String(recipient.sourceUrl || ''));
+   } catch (_) {
+     throw new Error('recipient source must be a valid HTTPS URL');
+   }
+@@ -216,30 +238,32 @@ function createInitialVersion(db, input = {}) {
+     const recipient = evidenceBinding.recipient;
+     const sourceSnapshot = evidenceBinding.snapshot;
+     const hash = contentHash({
+       recipientEmail: recipient.email,
+       recipientSourceUrl: recipient.sourceUrl,
+       subject,
+       bodyEn,
+       bodyCn
+     });
+     const at = timestamp();
++    const quality = versionQuality({ subject, bodyEn, bodyCn, recipient, sourceSnapshot, now: at });
++    const qualityJson = canonicalJson(quality);
+     const inserted = db.prepare(`
+       INSERT INTO matrix_stream_versions (
+         work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
+         subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
+-        status, created_by, created_at, updated_at
+-      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
++        quality_score, quality_json, status, created_by, created_at, updated_at
++      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+     `).run(
+       workItemId, evidenceBinding.evidence.id, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
+       subject, bodyEn, bodyCn, strategySummary, JSON.stringify(sourceSnapshot),
+-      hash, actorUserId, at, at
++      hash, quality.score, qualityJson, actorUserId, at, at
+     );
+     const versionId = Number(inserted.lastInsertRowid);
+     const updated = db.prepare(`
+       UPDATE matrix_work_items
+       SET stage = 'draft_pending', stream_state = 'draft_pending', current_stream_version_id = ?,
+           version = version + 1, updated_at = ?
+       WHERE id = ? AND owner_user_id = ? AND version = ?
+     `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
+     if (updated.changes !== 1) throw new Error('stale work version');
+     const result = versionById(db, versionId);
+@@ -325,36 +349,52 @@ function reviseVersion(db, input = {}) {
+     if (!['draft', 'approved'].includes(base.status)) throw new Error('base version cannot be revised');
+     validateStoredRecipient(db, base);
+     const hash = contentHash({
+       recipientEmail: base.recipient_email,
+       recipientSourceUrl: base.recipient_source_url,
+       subject,
+       bodyEn,
+       bodyCn
+     });
+     const at = timestamp();
++    let sourceSnapshot;
++    try { sourceSnapshot = JSON.parse(base.source_snapshot_json); } catch (_) { throw new Error('stored source snapshot invalid'); }
++    const quality = versionQuality({
++      subject,
++      bodyEn,
++      bodyCn,
++      recipient: {
++        email: base.recipient_email,
++        sourceUrl: base.recipient_source_url,
++        verifiedAt: base.recipient_verified_at
++      },
++      sourceSnapshot,
++      now: at
++    });
++    const qualityJson = canonicalJson(quality);
+     const nextRevision = Number(db.prepare(
+       'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM matrix_stream_versions WHERE work_item_id = ?'
+     ).get(workItemId).revision);
+     db.prepare(`
+       UPDATE matrix_stream_versions SET status = 'superseded', updated_at = ?
+       WHERE id = ? AND status IN ('draft', 'approved')
+     `).run(at, baseVersionId);
+     const inserted = db.prepare(`
+       INSERT INTO matrix_stream_versions (
+         work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
+         subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
+-        status, created_by, created_at, updated_at
+-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
++        quality_score, quality_json, status, created_by, created_at, updated_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+     `).run(
+       workItemId, base.recipient_evidence_id, nextRevision, base.recipient_email, base.recipient_source_url, base.recipient_verified_at,
+-      subject, bodyEn, bodyCn, base.strategy_summary, base.source_snapshot_json, hash, actorUserId, at, at
++      subject, bodyEn, bodyCn, base.strategy_summary, base.source_snapshot_json, hash,
++      quality.score, qualityJson, actorUserId, at, at
+     );
+     const versionId = Number(inserted.lastInsertRowid);
+     const updated = db.prepare(`
+       UPDATE matrix_work_items
+       SET stage = 'draft_pending', stream_state = 'draft_pending', current_stream_version_id = ?,
+           version = version + 1, updated_at = ?
+       WHERE id = ? AND owner_user_id = ? AND version = ?
+     `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
+     if (updated.changes !== 1) throw new Error('stale work version');
+     const result = versionById(db, versionId);
+@@ -373,18 +413,46 @@ function getVersion(db, input = {}) {
+   const versionId = positiveInteger(input.versionId, 'version id');
+   const version = versionById(db, versionId);
+   if (!version) return null;
+   const item = db.prepare('SELECT owner_user_id FROM matrix_work_items WHERE id = ?').get(version.work_item_id);
+   if (!item || item.owner_user_id !== actorUserId) throw new Error('not authorized');
+   const actor = db.prepare('SELECT status FROM users WHERE id = ?').get(actorUserId);
+   if (!actor || actor.status !== 'active') throw new Error('actor is not active');
+   return version;
+ }
+ 
++function finalPreview(db, input = {}) {
++  const version = getVersion(db, input);
++  if (!version) return null;
++  let quality;
++  try { quality = JSON.parse(version.quality_json); } catch (_) { quality = null; }
++  const reasons = [];
++  if (version.status !== 'approved') reasons.push('version_not_approved');
++  if (!quality || version.quality_score !== quality.score) reasons.push('quality_record_invalid');
++  if (version.quality_score < 80) reasons.push('quality_score_below_80');
++  if (Array.isArray(quality?.hardFailures)) reasons.push(...quality.hardFailures);
++  return {
++    version,
++    quality,
++    allowed: reasons.length === 0,
++    reasons: [...new Set(reasons)]
++  };
++}
++
++function confirmFinalGate(db, input = {}) {
++  const preview = finalPreview(db, input);
++  if (!preview) throw new Error('version not found');
++  if (!preview.allowed) throw new Error(`quality final gate blocked: ${preview.reasons.join(',')}`);
++  return preview;
++}
++
+ module.exports = {
+   contentHash,
+   createInitialVersion,
+   reviseVersion,
+   approveVersion,
+   getVersion,
++  finalPreview,
++  confirmFinalGate,
++  canonicalJson,
+   validateRecipient
+ };

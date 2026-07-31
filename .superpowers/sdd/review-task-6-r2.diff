@@ -1,0 +1,1016 @@
+# Review package: 6efea7f..14dfc6b
+
+## Commits
+14dfc6b fix: fail closed on unknown matrix gates
+8f682e6 feat: add matrix stream two-step cards
+
+## Files changed
+ .../workspace/extensions/stream-card.cjs           | 276 +++++++++++++++++----
+ .../vm_debug_ci/workspace/scripts/matrix-client.js |  32 ++-
+ .../workspace/tests/test-stream-card-extension.js  | 267 +++++++++++++++++++-
+ .superpowers/sdd/task-6-report.md                  |  61 +++++
+ 4 files changed, 579 insertions(+), 57 deletions(-)
+
+## Diff
+diff --git a/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs b/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs
+index 3122b53..05edfed 100644
+--- a/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs
++++ b/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs
+@@ -1,18 +1,19 @@
+ 'use strict';
+ 
+ const crypto = require('crypto');
+ const fs = require('fs');
+ 
+-const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.reply_draft', 'mx.retry_translation'];
++const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.reply_draft', 'mx.retry_translation'];
+ const LETTERS = ['A', 'B', 'C', 'D', 'E'];
+ const SESSION_TTL_MS = 30 * 60 * 1000;
++const REVISION_TTL_MS = 10 * 60 * 1000;
+ const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+ const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
+ const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
+ const REPLY_SPOOL_PATH = '/workspace/store/matrix-reply-pending.json';
+ const REPLY_INFLIGHT_PATH = '/workspace/store/matrix-reply-inflight.json';
+ const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
+ 
+ function readOptionalJson(file) {
+   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+   catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+@@ -256,69 +257,142 @@ function renderDetail(detail, state, cardHelpers, chatId) {
+ }
+ 
+ function restartCard(cardHelpers) {
+   return cardHelpers.card([cardHelpers.note('当前没有活动列表，请发送“开发客户”重新开始。')], { summary: '请重新开始' });
+ }
+ 
+ function infoCard(cardHelpers, message) {
+   return cardHelpers.card([cardHelpers.note(clip(message, 180))], { summary: '操作提示' });
+ }
+ 
+-function renderSelectedDraft(detail, result, state, cardHelpers) {
++function actionKey(kind, ...values) {
++  return crypto.createHash('sha256').update([kind, ...values].map(value => String(value ?? '')).join('\u0000')).digest('hex');
++}
++
++function versionAction(version, action, extra = {}) {
++  return {
++    a: action,
++    w: Number(version.work_item_id),
++    x: Number(version.id),
++    v: Number(version.work_item_version),
++    h: String(version.content_hash || ''),
++    ...extra
++  };
++}
++
++function renderVersionReview(version, cardHelpers) {
++  const { card, md, note, actions, button } = cardHelpers;
++  const quality = (() => { try { return JSON.parse(version.quality_json); } catch (_) { return null; } })();
++  const score = Number.isFinite(Number(version.quality_score)) ? Number(version.quality_score) : Number(quality?.score || 0);
++  return card([
++    md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${score}/100`),
++    md(`**英文草稿**\n${clip(version.body_en, 360)}`),
++    md(`**中文翻译**\n${clip(version.body_cn, 280)}`),
++    actions([
++      button('确认采用', versionAction(version, 'mx.approve'), 'primary'),
++      button('修改草稿', versionAction(version, 'mx.revise'), 'default'),
++      button('暂不处理', versionAction(version, 'mx.review'), 'default')
++    ]),
++    note('尚未发送。确认采用仅记录审批，仍需打开最终预览并再次确认。')
++  ], { header: { title: `草稿 v${Number(version.revision || 1)} 待审阅`, template: 'blue' }, summary: '草稿待审阅' });
++}
++
++function renderApproved(version, cardHelpers) {
+   const { card, md, note, actions, button } = cardHelpers;
+-  const strategy = detail.strategy_signal || {};
+-  const categories = Array.isArray(detail.categories) && detail.categories.length
+-    ? detail.categories.join(', ')
+-    : 'your current product range';
+-  const entryProduct = String(strategy.entry_product || (detail.format_signals || []).join(', ') || categories).trim();
+-  const goal = String(strategy.first_contact_goal || result.next_action || detail.next_action_cn || 'confirm the current requirements and purchasing plan').trim();
+-  const questions = Array.isArray(strategy.questions) && strategy.questions.length
+-    ? strategy.questions.slice(0, 3).map(value => clip(value, 65))
+-    : ['What product structure and size are you currently using?', 'What is the expected order volume or annual demand?'];
+-  const supplier = detail.supplier_signal;
+-  const supplierLine = supplier && ['confirmed', 'public_lead'].includes(supplier.confidence)
+-    ? `${supplier.confidence === 'confirmed' ? '已确认' : '公开线索'}｜${clip(supplier.supplier_name, 45)}｜${clip(supplier.supplied_category, 55)}`
+-    : '未知｜暂无可靠公开关系证据';
+-  const englishQuestions = questions.map(value => `- ${value}`).join('\n');
+-  const chineseQuestions = questions.map(value => `- ${value}`).join('\n');
+-  const english = [
+-    `Subject: ${clip(entryProduct, 65)} for ${clip(detail.company_name, 45)}`,
+-    `Dear ${clip(detail.company_name, 45)} team,`,
+-    `We reviewed your publicly available product range, including ${clip(categories, 85)}. Based on this information, we would like to discuss ${clip(entryProduct, 85)} and explore whether a stable, repeatable solution could fit your current plan.`,
+-    `To prepare a relevant proposal, could you please help confirm:`,
+-    englishQuestions,
+-    `Our first objective is to ${clip(goal, 90)}. If appropriate, we can then prepare a focused recommendation for your review.`,
+-    'Best regards'
+-  ].join('\n');
+-  const chinese = [
+-    `主题：与${clip(detail.company_name, 35)}沟通${clip(entryProduct, 55)}`,
+-    `您好，${clip(detail.company_name, 35)}团队：`,
+-    `我们查看了贵司公开展示的产品，包括${clip(categories, 70)}。基于这些信息，希望沟通${clip(entryProduct, 70)}，了解稳定、可重复的方案是否匹配贵司当前计划。`,
+-    '为了准备更有针对性的建议，想请您确认：',
+-    chineseQuestions,
+-    `首轮沟通目标：${clip(goal, 80)}。如果合适，我们再整理一份聚焦的建议供您审阅。`,
+-    '此致'
+-  ].join('\n');
+-  const strategyLine = strategy.differentiation_angle
+-    ? clip(withoutQualification(strategy.differentiation_angle), 95)
+-    : '先核实实际需求，再给出针对性方案';
+   return card([
+-    md(`**已完成：已加入进行中｜候选 #${result.candidate_id}**\n**尚未发送：** 邮件、WhatsApp 和网站联系均未执行。`),
+-    md(`**英文草稿**\n${english}`),
+-    md(`**中文翻译**\n${chinese}`),
+-    md(`**策略依据**\n差异点：${strategyLine}\n供应链线索：${supplierLine}`),
++    md(`**首次确认已记录**\n收件人：${clip(version.recipient_email, 100)}\n主题：${clip(version.subject, 100)}\n状态：尚未发送`),
+     actions([
+-      button('返回列表', { a: 'mx.back', s: state.session.id, v: state.session.version }, 'default'),
+-      button('查看进行中', { a: 'mx.work', s: state.session.id, v: state.session.version }, 'default')
++      button('查看最终预览', versionAction(version, 'mx.preview', { r: 0 }), 'primary'),
++      button('修改草稿', versionAction(version, 'mx.revise'), 'default')
+     ]),
+-    note('请确认草稿是否采用，或直接说明需要修改的内容。本步只生成审阅稿，不会自动外发。')
+-  ], { header: { title: '已生成待审阅草稿', template: 'blue' }, summary: '已生成待审阅草稿' });
++    note('最终预览会重新展示质量与发送门禁；只有第二次确认才可能提交。')
++  ], { header: { title: '已审批，等待最终确认', template: 'blue' }, summary: '等待最终确认' });
++}
++
++function reasonList(value) {
++  const values = [
++    ...(Array.isArray(value?.reasons) ? value.reasons : []),
++    ...(Array.isArray(value?.hardFailures) ? value.hardFailures : []),
++    ...(Array.isArray(value?.hard_failures) ? value.hard_failures : [])
++  ].map(item => String(item || '').trim()).filter(Boolean);
++  return [...new Set(values)];
++}
++
++function gateProjection(value) {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) return { state: 'unknown', reasons: [] };
++  if (value.ok === false) return { state: 'blocked', reasons: reasonList(value) };
++  for (const key of ['reasons', 'hardFailures', 'hard_failures']) {
++    if (Object.prototype.hasOwnProperty.call(value, key) && !Array.isArray(value[key])) {
++      return { state: 'unknown', reasons: [] };
++    }
++  }
++  const reasons = reasonList(value);
++  if (reasons.length) return { state: 'blocked', reasons };
++  if (value.ok === true) return { state: 'passed', reasons: [] };
++  return { state: 'unknown', reasons: [] };
++}
++
++function renderFinalPreview(preview, cardHelpers, retry = 0) {
++  const { card, md, note, actions, button } = cardHelpers;
++  const version = preview?.version || {};
++  const quality = preview?.quality || {};
++  const components = Object.entries(quality.components || {}).slice(0, 8).map(([name, item]) => {
++    const reasons = reasonList(item);
++    return `${clip(name, 28)} ${Number(item?.points || 0)}/${Number(item?.maximum || 0)}${reasons.length ? `：${clip(reasons.join(','), 90)}` : ''}`;
++  });
++  const gateLine = (label, value) => {
++    const projection = gateProjection(value);
++    if (projection.state === 'unknown') return `${label}：提交时复核`;
++    if (projection.state === 'blocked') return `${label}：阻断 ${clip(projection.reasons.join(',') || '未提供明确原因', 130)}`;
++    return `${label}：通过`;
++  };
++  const requiredGates = [preview?.duplicate, preview?.cooling, preview?.quota, preview?.readiness, preview?.policy];
++  const gatesPassed = requiredGates.every(value => gateProjection(value).state === 'passed');
++  const confirmAllowed = preview?.allowed === true && gatesPassed && reasonList(preview).length === 0;
++  const elements = [
++    md(`**收件人**：${clip(version.recipient_email, 100)}\n**主题**：${clip(version.subject, 100)}\n**质量评分**：${Number(quality.score ?? version.quality_score ?? 0)}/100`),
++    md(`**质量组成**\n${components.length ? components.join('\n') : '暂无组成明细'}\n${reasonList(quality).length ? `硬性原因：${clip(reasonList(quality).join(','), 130)}` : ''}`),
++    md([
++      gateLine('重复检查', preview.duplicate),
++      gateLine('冷却期', preview.cooling),
++      gateLine('当日配额', preview.quota),
++      gateLine('发送方就绪', preview.readiness),
++      gateLine('国家/渠道政策', preview.policy),
++      ...(reasonList(preview).length ? [`最终原因：${clip(reasonList(preview).join(','), 150)}`] : [])
++    ].join('\n'))
++  ];
++  if (confirmAllowed) {
++    const cardEventId = `mx-card-${actionKey('confirm-card', version.work_item_id, version.id, version.content_hash, retry).slice(0, 24)}`;
++    elements.push(actions([button('确认发送', versionAction({ ...version, work_item_version: preview.work_item_version }, 'mx.confirm', { d: cardEventId, r: Number(retry || 0) }), 'primary')]));
++    elements.push(note('第二次确认将提交当前不可变版本；重复点击使用同一幂等键。'));
++  } else {
++    elements.push(note('当前门禁未全部明确通过，未提供确认发送操作，也不会提交发送。'));
++  }
++  return card(elements, { header: { title: confirmAllowed ? '最终预览' : '最终预览已阻断', template: confirmAllowed ? 'blue' : 'red' }, summary: '最终预览' });
++}
++
++function renderDeliveryResult(result, versionValue, cardHelpers) {
++  const { card, md, note, actions, button } = cardHelpers;
++  if (result?.state === 'accepted') return card([
++    md('**邮件服务器已接受**\n已记录一次受控提交结果。'),
++    note('此状态表示服务器已接受，不展示服务器原始响应或消息标识。')
++  ], { header: { title: '提交已接受', template: 'green' }, summary: '提交已接受' });
++  if (result?.state === 'failed') return card([
++    md('**明确失败**\n本次未被邮件服务器接受。'),
++    actions([button('重新预览', { ...versionValue, a: 'mx.preview', r: Number(versionValue.r || 0) + 1 }, 'default')]),
++    note('再次尝试前会重新打开最终预览，并使用新的人工确认幂等键。')
++  ], { header: { title: '提交失败', template: 'red' }, summary: '提交失败' });
++  if (result?.state === 'ambiguous') return card([
++    md('**提交结果不明确**\n可能已被服务器接收，禁止自动或按钮重试。'),
++    note('请人工核对后再处理；不展示原始服务器诊断。')
++  ], { header: { title: '需要人工核对', template: 'orange' }, summary: '提交结果不明确' });
++  throw new Error('invalid delivery result');
+ }
+ 
+ function renderFilters(facets, state, cardHelpers) {
+   const { card, md, note, hr, actions, button } = cardHelpers;
+   const regions = (facets.regions || []).filter(item => ['africa', 'americas', 'asia', 'europe', 'oceania'].includes(item.value));
+   const countries = (facets.countries || []).filter(item => /^[A-Z]{2}$/.test(item.value) && !['CN', 'IN'].includes(item.value));
+   const categories = (facets.categories || []).filter(item => item.value && !/广州|中国|China/i.test(String(item.value)));
+   const regionButtons = regions.slice(0, 5).map(item => button(item.value, { a: 'mx.region', s: state.session.id, v: state.session.version, r: item.value }, 'default'));
+   const countryButtons = countries.slice(0, 8).map(item => button(item.value, { a: 'mx.region', s: state.session.id, v: state.session.version, r: `country:${item.value}` }, 'default'));
+   const categoryButtons = categories.slice(0, 8).map(item => button(clip(item.value, 24), { a: 'mx.category', s: state.session.id, v: state.session.version, k: item.value }, 'default'));
+@@ -336,20 +410,21 @@ function renderWorkItems(rows, cardHelpers) {
+   return card([md(lines.length ? lines.join('\n') : '暂无进行中项目'), note('这里只展示当前操作者负责的工作项。')], { summary: '进行中' });
+ }
+ 
+ function register(context) {
+   if (process.env.MATRIX_DELIVERY_ENABLED !== '0') throw new Error('MATRIX_DELIVERY_ENABLED must be exactly 0');
+   const { channel, dispatcher, sendManagedCard, card: cardHelpers } = context;
+   const client = context.client || require('../scripts/matrix-client.js');
+   const now = typeof context.now === 'function' ? context.now : () => Date.now();
+   const sessions = new Map();
+   const selectionEvents = new Map();
++  const revisionContexts = new Map();
+   const scheduleReminderPoll = context.scheduleReminderPoll || ((callback, delay) => setInterval(callback, delay));
+   const clearReminderPoll = context.clearReminderPoll || (timer => clearInterval(timer));
+   const logReminder = context.logReminder || (message => process.stderr.write(`${message}\n`));
+   let reminderPollActive = false;
+   const pollReminder = async () => {
+     if (reminderPollActive) return;
+     reminderPollActive = true;
+     try {
+       const result = await deliverQueuedReminder({
+         channel, sendManagedCard,
+@@ -590,24 +665,93 @@ function register(context) {
+         candidate_id: candidate.id,
+         session_id: state.session.id,
+         expected_version: Number(value.v),
+         idempotency_key: key,
+         next_action: candidate.next_action_cn || '核实公开信息'
+       };
+       selectionEvents.set(key, input);
+     }
+     const result = await client.selectCandidate(openId, input);
+     if (Number(result.session_version) > Number(state.session.version)) state.session.version = result.session_version;
+-    const detail = await sessionBound(() => client.candidateDetail(openId, result.candidate_id, {
+-      session_id: state.session.id, chat_id: evt.chatId, thread_id: evt.threadId || ''
+-    }));
+-    await sendForEvent(evt, renderSelectedDraft(detail, result, state, cardHelpers));
++    if (typeof client.createVersion !== 'function') throw new Error('version review service unavailable');
++    const version = await client.createVersion(openId, result.work_item_id, {
++      expected_work_version: 1,
++      idempotency_key: `${key}:version`
++    });
++    await sendForEvent(evt, renderVersionReview(version, cardHelpers));
++  }
++
++  function reviewActionValue(evt, value) {
++    const openId = String(evt?.operator?.openId || '').trim();
++    const workItemId = Number(value?.w);
++    const versionId = Number(value?.x);
++    const expectedWorkVersion = Number(value?.v);
++    const contentHash = String(value?.h || '').trim();
++    if (!openId || !Number.isInteger(workItemId) || workItemId < 1
++        || !Number.isInteger(versionId) || versionId < 1
++        || !Number.isInteger(expectedWorkVersion) || expectedWorkVersion < 1
++        || !/^[a-f0-9]{64}$/i.test(contentHash)) throw new Error('invalid review action');
++    return { openId, workItemId, versionId, expectedWorkVersion, contentHash };
++  }
++
++  async function deferReviewAction({ evt, value }) {
++    reviewActionValue(evt, value);
++    revisionContexts.delete(sessionKey(evt.chatId, evt.operator.openId, evt.threadId));
++    await sendForEvent(evt, infoCard(cardHelpers, '已暂不处理；尚未发送。需要时可从进行中项目重新打开。'));
++  }
++
++  async function reviseAction({ evt, value }) {
++    const binding = reviewActionValue(evt, value);
++    revisionContexts.set(sessionKey(evt.chatId, binding.openId, evt.threadId), {
++      ...binding,
++      expiresAt: clockMillis() + REVISION_TTL_MS
++    });
++    await sendForEvent(evt, cardHelpers.card([
++      cardHelpers.md('请回复“修改：……”说明需要调整的内容。'),
++      cardHelpers.note('编辑上下文仅绑定当前会话、操作者和话题，10 分钟后自动失效；回复“取消”可立即清理。')
++    ], { header: { title: '等待修改说明', template: 'blue' }, summary: '等待修改说明' }));
++  }
++
++  async function approveAction({ evt, value }) {
++    const binding = reviewActionValue(evt, value);
++    revisionContexts.delete(sessionKey(evt.chatId, binding.openId, evt.threadId));
++    if (typeof client.approveVersion !== 'function') throw new Error('approval service unavailable');
++    const version = await client.approveVersion(binding.openId, binding.workItemId, binding.versionId, {
++      expected_work_version: binding.expectedWorkVersion,
++      expected_content_hash: binding.contentHash,
++      idempotency_key: actionKey('approve', binding.openId, binding.workItemId, binding.versionId, binding.expectedWorkVersion, binding.contentHash)
++    });
++    await sendForEvent(evt, renderApproved(version, cardHelpers));
++  }
++
++  async function previewAction({ evt, value }) {
++    const binding = reviewActionValue(evt, value);
++    if (typeof client.versionPreview !== 'function') throw new Error('preview service unavailable');
++    const preview = await client.versionPreview(binding.openId, binding.workItemId, binding.versionId);
++    await sendForEvent(evt, renderFinalPreview(preview, cardHelpers, Number(value?.r || 0)));
++  }
++
++  async function confirmAction({ evt, value }) {
++    const binding = reviewActionValue(evt, value);
++    const cardEventId = String(value?.d || '').trim();
++    const retry = Number(value?.r || 0);
++    if (!cardEventId || cardEventId.length > 256 || /[\r\n\0]/.test(cardEventId)
++        || !Number.isInteger(retry) || retry < 0) throw new Error('invalid final confirmation');
++    if (typeof client.confirmSend !== 'function') throw new Error('confirmation service unavailable');
++    const result = await client.confirmSend(binding.openId, binding.workItemId, binding.versionId, {
++      expected_work_version: binding.expectedWorkVersion,
++      expected_content_hash: binding.contentHash,
++      chat_id: String(evt.chatId || ''),
++      card_event_id: cardEventId,
++      idempotency_key: actionKey('confirm', binding.openId, binding.workItemId, binding.versionId, binding.expectedWorkVersion, binding.contentHash, retry)
++    });
++    await sendForEvent(evt, renderDeliveryResult(result, value, cardHelpers));
+   }
+ 
+   async function workAction({ evt, value }) {
+     const { openId, state } = await callbackState(evt, value);
+     const result = await client.workItems(openId, {});
+     await sendForEvent(evt, renderWorkItems(result.rows, cardHelpers));
+   }
+ 
+   async function todayAction({ evt }) {
+     const openId = String(evt?.operator?.openId || '').trim();
+@@ -656,20 +800,25 @@ function register(context) {
+     'mx.pick': detailAction,
+     'mx.quick': quickAction,
+     'mx.page': pageAction,
+     'mx.detail': detailAction,
+     'mx.back': backAction,
+     'mx.select': selectAction,
+     'mx.work': workAction,
+     'mx.filters': filterAction,
+     'mx.region': payload => applyFilters(payload, 'region'),
+     'mx.category': payload => applyFilters(payload, 'category'),
++    'mx.review': deferReviewAction,
++    'mx.revise': reviseAction,
++    'mx.approve': approveAction,
++    'mx.preview': previewAction,
++    'mx.confirm': confirmAction,
+     'mx.reply_draft': replyDraftAction,
+     'mx.retry_translation': retryTranslationAction
+   };
+   for (const action of ACTIONS) {
+     dispatcher.on(action, async payload => {
+       try {
+         await actionHandlers[action](payload);
+       } catch (error) {
+         if (invalidSessionError(error)) {
+           sessions.delete(sessionKey(payload.evt?.chatId, payload.evt?.operator?.openId, payload.evt?.threadId));
+@@ -682,20 +831,47 @@ function register(context) {
+   }
+ 
+   return {
+     dispose() {
+       if (disposed) return;
+       disposed = true;
+       clearReminderPoll(reminderTimer);
+     },
+     async onMessage({ msg }) {
+       const text = String(msg?.content || '').trim();
++      const revisionKey = sessionKey(msg?.chatId, msg?.senderId, msg?.threadId);
++      const revision = revisionContexts.get(revisionKey);
++      if (revision) {
++        if (revision.expiresAt <= clockMillis()) {
++          revisionContexts.delete(revisionKey);
++        } else if (text === '取消') {
++          revisionContexts.delete(revisionKey);
++          await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '已取消修改并清理编辑上下文；尚未发送。'), msg.messageId, Boolean(msg.threadId));
++          return true;
++        } else if (text.startsWith('修改：')) {
++          const instruction = text.slice('修改：'.length).trim();
++          if (!instruction) {
++            await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '修改说明不能为空，请回复“修改：……”或“取消”。'), msg.messageId, Boolean(msg.threadId));
++            return true;
++          }
++          if (typeof client.reviseVersion !== 'function') throw new Error('revision service unavailable');
++          const version = await client.reviseVersion(revision.openId, revision.workItemId, {
++            expected_work_version: revision.expectedWorkVersion,
++            base_version_id: revision.versionId,
++            revision_instruction: instruction,
++            idempotency_key: actionKey('revise', revision.openId, revision.workItemId, revision.versionId, revision.expectedWorkVersion, instruction)
++          });
++          revisionContexts.delete(revisionKey);
++          await sendManagedCard(channel, msg.chatId, renderVersionReview(version, cardHelpers), msg.messageId, Boolean(msg.threadId));
++          return true;
++        }
++      }
+       if (text === '开发客户') {
+         await start(msg);
+         return true;
+       }
+       const quickIndex = parseQuickChoice(text);
+       if (quickIndex !== null) {
+         try {
+           await openQuick(msg, quickIndex);
+         } catch (error) {
+           if (!invalidSessionError(error)) throw error;
+diff --git a/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js b/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js
+index 1a93873..4913d83 100644
+--- a/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js
++++ b/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js
+@@ -108,20 +108,49 @@ function today(openId, filters = {}) {
+ function selectCandidate(openId, input) {
+   const body = exactObject(input, new Set(['candidate_id', 'session_id', 'expected_version', 'idempotency_key', 'next_action']), 'selection');
+   return call(openId, '/selections', { method: 'POST', body });
+ }
+ 
+ function workItems(openId, filters = {}) {
+   const query = exactObject(filters, new Set(['stage', 'limit']), 'work filters');
+   return call(openId, '/work-items', { query });
+ }
+ 
++function createVersion(openId, workItemId, input) {
++  const body = { ...exactObject(input, new Set(['expected_work_version', 'idempotency_key']), 'version') };
++  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
++  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions`, { method: 'POST', body });
++}
++
++function reviseVersion(openId, workItemId, input) {
++  const body = { ...exactObject(input, new Set(['expected_work_version', 'base_version_id', 'revision_instruction', 'idempotency_key']), 'revision') };
++  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
++  body.base_version_id = positiveId(body.base_version_id, 'base version id');
++  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions`, { method: 'POST', body });
++}
++
++function approveVersion(openId, workItemId, versionId, input) {
++  const body = { ...exactObject(input, new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']), 'approval') };
++  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
++  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}/approve`, { method: 'POST', body });
++}
++
++function versionPreview(openId, workItemId, versionId) {
++  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}/preview`);
++}
++
++function confirmSend(openId, workItemId, versionId, input) {
++  const body = { ...exactObject(input, new Set(['expected_work_version', 'expected_content_hash', 'chat_id', 'card_event_id', 'idempotency_key']), 'send confirmation') };
++  body.expected_work_version = positiveId(body.expected_work_version, 'expected work version');
++  return call(openId, `/work-items/${positiveId(workItemId, 'work item id')}/versions/${positiveId(versionId, 'version id')}/send`, { method: 'POST', body });
++}
++
+ function startReplyDraft(openId, notificationId) {
+   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/reply-draft`, { method: 'POST', body: {} });
+ }
+ 
+ function retryTranslation(openId, notificationId) {
+   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/retry-translation`, { method: 'POST', body: {} });
+ }
+ 
+ function claimNotification(openId) {
+   return call(openId, '/notifications/claim', { method: 'POST', body: {} });
+@@ -137,13 +166,14 @@ function nackNotification(openId, notificationId, input) {
+   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/nack`, { method: 'POST', body });
+ }
+ 
+ function notificationStatus(openId, notificationId, input) {
+   const body = exactObject(input, new Set(['claim_token']), 'notification status');
+   return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/status`, { method: 'POST', body });
+ }
+ 
+ module.exports = {
+   facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
+-  selectCandidate, workItems, startReplyDraft, retryTranslation,
++  selectCandidate, workItems, createVersion, reviseVersion, approveVersion, versionPreview, confirmSend,
++  startReplyDraft, retryTranslation,
+   claimNotification, ackNotification, nackNotification, notificationStatus
+ };
+diff --git a/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js b/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js
+index 05b4874..0ae38fd 100644
+--- a/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js
++++ b/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js
+@@ -7,37 +7,42 @@ const path = require('node:path');
+ 
+ process.env.MATRIX_DELIVERY_ENABLED = '0';
+ const extension = require('../extensions/stream-card.cjs');
+ 
+ async function testNarrowClient() {
+   process.env.MATRIX_API_BASE_URL = 'https://matrix.test/api/matrix';
+   process.env.MATRIX_BRIDGE_TOKEN = 'test-bridge-token';
+   const clientPath = require.resolve('../scripts/matrix-client.js');
+   delete require.cache[clientPath];
+   const client = require(clientPath);
+-  assert.deepStrictEqual(Object.keys(client).sort(), ['ackNotification', 'candidateDetail', 'claimNotification', 'createSession', 'facets', 'listCandidates', 'nackNotification', 'notificationStatus', 'rehydrateSession', 'retryTranslation', 'selectCandidate', 'startReplyDraft', 'today', 'workItems']);
++  assert.deepStrictEqual(Object.keys(client).sort(), ['ackNotification', 'approveVersion', 'candidateDetail', 'claimNotification', 'confirmSend', 'createSession', 'createVersion', 'facets', 'listCandidates', 'nackNotification', 'notificationStatus', 'rehydrateSession', 'retryTranslation', 'reviseVersion', 'selectCandidate', 'startReplyDraft', 'today', 'versionPreview', 'workItems']);
+   const originalFetch = global.fetch;
+   const requests = [];
+   global.fetch = async (url, options) => {
+     requests.push({ url: String(url), options });
+     return { ok: true, status: 200, headers: { get: name => name === 'content-type' ? 'application/json; charset=utf-8' : null }, json: async () => ({ ok: true }) };
+   };
+   try {
+     await client.facets('ou-client');
+     await client.createSession('ou-client', { chat_id: 'chat', filters: {}, expires_at: '2099-01-01T00:00:00Z' });
+     await client.createSession('ou-client', { session_id: 7, expected_version: 2, page: 3, filters: { region: 'europe' } });
+     await client.rehydrateSession('ou-client', { session_id: 7, chat_id: 'chat', thread_id: 'thread' });
+     await client.listCandidates('ou-client', { region: 'europe', page: 1, page_size: 5 });
+     await client.candidateDetail('ou-client', 4);
+     await client.today('ou-client', { page_size: 5 });
+     await client.selectCandidate('ou-client', { candidate_id: 4, session_id: 7, expected_version: 2, idempotency_key: 'evt', next_action: 'verify' });
+     await client.workItems('ou-client', { stage: 'selected' });
++    await client.createVersion('ou-client', 91, { expected_work_version: 1, idempotency_key: 'create-91' });
++    await client.reviseVersion('ou-client', 91, { expected_work_version: 2, base_version_id: 301, revision_instruction: '更简洁', idempotency_key: 'revise-91' });
++    await client.approveVersion('ou-client', 91, 302, { expected_work_version: 3, expected_content_hash: 'a'.repeat(64), idempotency_key: 'approve-91' });
++    await client.versionPreview('ou-client', 91, 302);
++    await client.confirmSend('ou-client', 91, 302, { expected_work_version: 4, expected_content_hash: 'a'.repeat(64), chat_id: 'chat', card_event_id: 'card-91', idempotency_key: 'send-91' });
+     await client.startReplyDraft('ou-client', 41);
+     await client.retryTranslation('ou-client', 42);
+     await client.claimNotification('ou-client');
+     await client.ackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', receipt_id: 'message-51' });
+     await client.nackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', outcome: 'ambiguous' });
+     await client.notificationStatus('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052' });
+     assert.ok(requests.every(item => new URL(item.url).origin === 'https://matrix.test'));
+     assert.ok(requests.every(item => new URL(item.url).pathname.startsWith('/api/matrix/')));
+     assert.ok(requests.every(item => item.options.redirect === 'manual'));
+     assert.ok(requests.every(item => item.options.signal));
+@@ -45,32 +50,265 @@ async function testNarrowClient() {
+     assert.ok(requests.every(item => item.options.headers['x-feishu-open-id'] === 'ou-client'));
+     assert.strictEqual(requests[1].options.method, 'POST');
+     assert.strictEqual(requests[2].options.method, 'PATCH');
+     assert.ok(requests[2].url.endsWith('/sessions/7'));
+     assert.ok(requests.some(item => item.url.endsWith('/notifications/41/reply-draft')));
+     assert.ok(requests.some(item => item.url.endsWith('/notifications/42/retry-translation')));
+     assert.ok(requests.some(item => item.url.endsWith('/notifications/claim')));
+     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/ack')));
+     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/nack')));
+     assert.ok(requests.some(item => item.url.endsWith('/notifications/51/status')));
++    assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions')));
++    assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/approve')));
++    assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/preview')));
++    assert.ok(requests.some(item => item.url.endsWith('/work-items/91/versions/302/send')));
+     assert.strictEqual(requests.at(-1).options.method, 'POST');
+     assert.throws(() => client.candidateDetail('ou-client', '../outside'), /candidate id/);
++    assert.throws(() => client.createVersion('ou-client', 0, { expected_work_version: 1, idempotency_key: 'x' }), /work item id/);
++    assert.throws(() => client.createVersion('ou-client', 91, { expected_work_version: 0, idempotency_key: 'x' }), /expected work version/);
++    assert.throws(() => client.reviseVersion('ou-client', 91, { expected_work_version: 2, base_version_id: 0, revision_instruction: 'x', idempotency_key: 'x' }), /base version id/);
++    assert.throws(() => client.reviseVersion('ou-client', 91, { expected_work_version: 2, base_version_id: 301, revision_instruction: 'x', idempotency_key: 'x', subject: 'forbidden' }), /unknown revision field/);
++    assert.throws(() => client.confirmSend('ou-client', 91, 302, { expected_work_version: 4, expected_content_hash: 'a'.repeat(64), chat_id: 'chat', card_event_id: 'card', idempotency_key: 'send', body: 'forbidden' }), /unknown send confirmation field/);
+ 
+     global.fetch = async () => ({ ok: false, status: 302, headers: { get: () => 'application/json' }, json: async () => ({}) });
+     await assert.rejects(() => client.facets('ou-client'), /redirect|HTTP 302/);
+     global.fetch = async () => ({ ok: true, status: 200, headers: { get: () => 'text/html' }, json: async () => ({}) });
+     await assert.rejects(() => client.facets('ou-client'), /JSON/);
+   } finally {
+     global.fetch = originalFetch;
+   }
+ }
+ 
++async function testTwoConfirmationReviewFlow() {
++  let now = Date.parse('2026-07-17T00:00:00.000Z');
++  const handlers = new Map();
++  const sent = [];
++  const clientCalls = [];
++  const row = {
++    id: 901, company_name: 'Alpha', country_code: 'US', region: 'americas',
++    official_domain: 'alpha.test', official_url: 'https://alpha.test/', categories: ['coffee'],
++    format_signals: ['pouch'], size_signals: [], scale_tier: 'medium', priority: 'P1',
++    fit_score: 90, demand_fit_score: 90, access_score: 90, confidence: 0.9, status: 'valid',
++    stage_code: 'observed', audit_state: 'audited', assessment_cn: '公开产品证据',
++    next_action_cn: '确认当前需求', updated_at: '2026-07-17T00:00:00.000Z'
++  };
++  let currentVersion = {
++    id: 301, work_item_id: 91, revision: 1, recipient_email: 'sales@alpha.test',
++    recipient_source_url: 'https://alpha.test/contact', subject: 'Proposal for Alpha',
++    body_en: 'Dear Alpha team,\nCould you share your current requirements?\nBest regards',
++    body_cn: '您好，请问能否提供当前需求？', content_hash: 'a'.repeat(64), status: 'draft',
++    quality_score: 91, quality_json: JSON.stringify({
++      score: 91, passed: true, hardFailures: [],
++      components: { questions: { points: 15, maximum: 15, reasons: ['clear_question'], evidence_ids: [] } }
++    }), work_item_version: 2
++  };
++  let blockedPreview = false;
++  let minimalPreview = false;
++  let previewOverride = null;
++  let deliveryState = 'accepted';
++  const client = {
++    today: async () => ({ rows: [row], snapshot_key: '9'.repeat(64) }),
++    createSession: async (_openId, input) => ({
++      id: 91, chat_id: input.chat_id, thread_id: input.thread_id || '', filters: input.filters,
++      snapshot_key: input.snapshot_key, candidate_ids: input.candidate_ids, page: 1, version: 1,
++      expires_at: input.expires_at
++    }),
++    candidateDetail: async () => ({ ...row, discovery: {}, official_evidence: [], contacts: { email: 'sales@alpha.test' } }),
++    selectCandidate: async (openId, input) => {
++      clientCalls.push(['selectCandidate', openId, input]);
++      return { work_item_id: 91, candidate_id: 901, session_id: 91, session_version: 2, next_action: input.next_action };
++    },
++    createVersion: async (openId, workItemId, input) => {
++      clientCalls.push(['createVersion', openId, workItemId, input]);
++      return currentVersion;
++    },
++    reviseVersion: async (openId, workItemId, input) => {
++      clientCalls.push(['reviseVersion', openId, workItemId, input]);
++      currentVersion = {
++        ...currentVersion, id: 302, revision: 2, subject: 'Short proposal for Alpha',
++        body_en: 'Dear Alpha team,\nCould you share annual volume?\nBest regards',
++        body_cn: '您好，请问能否提供年用量？', content_hash: 'b'.repeat(64), work_item_version: 3
++      };
++      return currentVersion;
++    },
++    approveVersion: async (openId, workItemId, versionId, input) => {
++      clientCalls.push(['approveVersion', openId, workItemId, versionId, input]);
++      currentVersion = { ...currentVersion, status: 'approved', work_item_version: 4 };
++      return currentVersion;
++    },
++    versionPreview: async (openId, workItemId, versionId) => {
++      clientCalls.push(['versionPreview', openId, workItemId, versionId]);
++      if (previewOverride) return previewOverride;
++      if (minimalPreview) return {
++        allowed: true, work_item_version: 4, version: currentVersion,
++        quality: JSON.parse(currentVersion.quality_json), reasons: []
++      };
++      if (blockedPreview) return {
++        allowed: false, work_item_version: 4, version: currentVersion,
++        quality: {
++          score: 72,
++          components: Object.fromEntries(Array.from({ length: 12 }, (_, index) => [
++            index === 0 ? 'questions' : `long_component_${index}`,
++            { points: 4, maximum: 15, reasons: [index === 0 ? 'missing_volume_question' : `long_reason_${index}_${'x'.repeat(160)}`] }
++          ])),
++          hardFailures: ['unsupported_product_fact']
++        },
++        reasons: ['quality_score_below_80'],
++        duplicate: { ok: false, reasons: ['possible_duplicate'] },
++        cooling: { ok: false, reasons: ['domain_cooling_90_days'] },
++        quota: { ok: false, reasons: ['daily_quota_exhausted'] },
++        readiness: { ok: false, hardFailures: ['missing_dkim', 'missing_dmarc'] },
++        policy: { ok: false, hardFailures: ['country_channel_policy_not_approved'] }
++      };
++      return {
++        allowed: true, work_item_version: 4, version: currentVersion,
++        quality: JSON.parse(currentVersion.quality_json), reasons: [],
++        duplicate: { ok: true, reasons: [] }, cooling: { ok: true, reasons: [] },
++        quota: { ok: true, reasons: [] }, readiness: { ok: true, hardFailures: [] },
++        policy: { ok: true, hardFailures: [] }
++      };
++    },
++    confirmSend: async (openId, workItemId, versionId, input) => {
++      clientCalls.push(['confirmSend', openId, workItemId, versionId, input]);
++      return { state: deliveryState, error_class: 'RAW-SERVER-DIAGNOSTIC-MUST-NOT-RENDER', work_item_version: 5 };
++    }
++  };
++  const registered = extension.register({
++    channel: {}, dispatcher: { on: (name, handler) => handlers.set(name, handler) }, card: helpers(), client,
++    now: () => now, scheduleReminderPoll: () => ({ unref() {} }), clearReminderPoll: () => undefined,
++    sendManagedCard: async (_channel, _chatId, card) => sent.push(card)
++  });
++  const msg = { content: '开发客户', chatId: 'chat-review', threadId: 'thread-review', senderId: 'ou-review' };
++  const evt = { operator: { openId: 'ou-review' }, chatId: msg.chatId, threadId: msg.threadId, messageId: 'card-review' };
++  await registered.onMessage({ msg });
++  await handlers.get('mx.detail')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.detail').value });
++  await handlers.get('mx.select')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value });
++  assert.deepStrictEqual(buttons(sent.at(-1)).map(item => item.label), ['确认采用', '修改草稿', '暂不处理']);
++  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 0, 'selection must never send');
++  assert.ok([...visibleText(sent.at(-1))].length <= 1500);
++
++  await handlers.get('mx.revise')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.revise').value });
++  assert.ok(visibleText(sent.at(-1)).includes('请回复“修改：……”'));
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, senderId: 'ou-other', content: '修改：错误操作者' } }), false);
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, threadId: 'thread-other', content: '修改：错误话题' } }), false);
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '修改：语气更简洁，询问年用量' } }), true);
++  assert.strictEqual(clientCalls.at(-1)[0], 'reviseVersion');
++  assert.strictEqual(clientCalls.at(-1)[3].revision_instruction, '语气更简洁，询问年用量');
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '修改：成功后不应继续消费' } }), false);
++
++  await handlers.get('mx.approve')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.approve').value });
++  assert.ok(visibleText(sent.at(-1)).includes('尚未发送'));
++  assert.ok(visibleText(sent.at(-1)).includes('sales@alpha.test'));
++  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 0, 'approval must never send');
++  await handlers.get('mx.preview')({ evt, value: buttons(sent.at(-1)).find(item => item.value?.a === 'mx.preview').value });
++  const finalCard = sent.at(-1);
++  assert.ok(visibleText(finalCard).includes('质量评分'));
++  assert.ok(buttons(finalCard).some(item => item.value?.a === 'mx.confirm'));
++  assert.ok([...visibleText(finalCard)].length <= 1500);
++  const confirmValue = buttons(finalCard).find(item => item.value?.a === 'mx.confirm').value;
++  await handlers.get('mx.confirm')({ evt, value: confirmValue });
++  await handlers.get('mx.confirm')({ evt, value: confirmValue });
++  assert.ok(visibleText(sent.at(-1)).includes('邮件服务器已接受'));
++  const confirmations = clientCalls.filter(item => item[0] === 'confirmSend');
++  assert.strictEqual(confirmations.length, 2);
++  assert.strictEqual(confirmations[0][4].idempotency_key, confirmations[1][4].idempotency_key);
++  assert.ok(!visibleText(sent.at(-1)).includes('Message-ID'));
++
++  deliveryState = 'failed';
++  await handlers.get('mx.confirm')({ evt, value: confirmValue });
++  const failedCard = sent.at(-1);
++  assert.ok(visibleText(failedCard).includes('明确失败'));
++  assert.deepStrictEqual(buttons(failedCard).map(item => item.label), ['重新预览']);
++  assert.ok(!visibleText(failedCard).includes('RAW-SERVER-DIAGNOSTIC'));
++  deliveryState = 'ambiguous';
++  await handlers.get('mx.confirm')({ evt, value: confirmValue });
++  const ambiguousCard = sent.at(-1);
++  assert.ok(visibleText(ambiguousCard).includes('提交结果不明确'));
++  assert.strictEqual(buttons(ambiguousCard).length, 0, 'ambiguous result must expose no retry action');
++  assert.ok(!visibleText(ambiguousCard).includes('RAW-SERVER-DIAGNOSTIC'));
++
++  blockedPreview = true;
++  await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
++  const blocked = sent.at(-1);
++  const blockedText = visibleText(blocked);
++  for (const expected of ['质量评分', 'missing_volume_question', 'unsupported_product_fact', 'possible_duplicate', 'domain_cooling_90_days', 'daily_quota_exhausted', 'missing_dkim', 'country_channel_policy_not_approved']) {
++    assert.ok(blockedText.includes(expected), `blocked preview missing ${expected}`);
++  }
++  assert.ok(!buttons(blocked).some(item => item.value?.a === 'mx.confirm'));
++  assert.strictEqual(clientCalls.filter(item => item[0] === 'confirmSend').length, 4);
++  assert.ok([...blockedText].length <= 1500);
++
++  blockedPreview = false;
++  minimalPreview = true;
++  await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
++  const minimalText = visibleText(sent.at(-1));
++  assert.strictEqual((minimalText.match(/提交时复核/g) || []).length, 5, 'absent gate projections must not be shown as passed');
++  assert.ok(!buttons(sent.at(-1)).some(item => item.value?.a === 'mx.confirm'), 'missing required gates must fail closed');
++
++  minimalPreview = false;
++  const trustedGates = {
++    duplicate: { ok: true, reasons: [] }, cooling: { ok: true, reasons: [] },
++    quota: { ok: true, reasons: [] }, readiness: { ok: true, hardFailures: [] },
++    policy: { ok: true, hardFailures: [] }
++  };
++  for (const [label, key, malformed] of [
++    ['重复检查', 'duplicate', {}],
++    ['冷却期', 'cooling', { ok: null }],
++    ['当日配额', 'quota', { status: 'unknown' }],
++    ['发送方就绪', 'readiness', { ok: 'true', reasons: [] }]
++  ]) {
++    previewOverride = {
++      allowed: true, work_item_version: 4, version: currentVersion,
++      quality: JSON.parse(currentVersion.quality_json), reasons: [],
++      ...trustedGates, [key]: malformed
++    };
++    await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
++    const malformedCard = sent.at(-1);
++    assert.ok(visibleText(malformedCard).includes(`${label}：提交时复核`), `${key} malformed projection must be unknown`);
++    assert.ok(!buttons(malformedCard).some(item => item.value?.a === 'mx.confirm'), `${key} malformed projection must fail closed`);
++  }
++
++  previewOverride = {
++    allowed: true, work_item_version: 4, version: currentVersion,
++    quality: JSON.parse(currentVersion.quality_json), reasons: [],
++    ...trustedGates,
++    readiness: { ok: false, hardFailures: ['missing_dkim'] }
++  };
++  await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
++  const contradictoryCard = sent.at(-1);
++  assert.ok(visibleText(contradictoryCard).includes('发送方就绪：阻断 missing_dkim'));
++  assert.ok(!buttons(contradictoryCard).some(item => item.value?.a === 'mx.confirm'), 'allowed true plus blocked gate must fail closed');
++
++  previewOverride = {
++    allowed: true, work_item_version: 4, version: currentVersion,
++    quality: JSON.parse(currentVersion.quality_json), reasons: [],
++    ...trustedGates,
++    policy: { ok: false, reasons: 'malformed_reason_container' }
++  };
++  await handlers.get('mx.preview')({ evt, value: { ...confirmValue, a: 'mx.preview' } });
++  const explicitFalseCard = sent.at(-1);
++  assert.ok(visibleText(explicitFalseCard).includes('国家/渠道政策：阻断'), 'explicit false must remain blocked even if its reason container is malformed');
++  assert.ok(!buttons(explicitFalseCard).some(item => item.value?.a === 'mx.confirm'));
++  previewOverride = null;
++
++  await handlers.get('mx.revise')({ evt, value: { a: 'mx.revise', w: 91, x: 302, v: 4, h: 'b'.repeat(64) } });
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '取消' } }), true);
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '修改：不应继续' } }), false);
++  await handlers.get('mx.revise')({ evt, value: { a: 'mx.revise', w: 91, x: 302, v: 4, h: 'b'.repeat(64) } });
++  await handlers.get('mx.review')({ evt, value: { a: 'mx.review', w: 91, x: 302, v: 4, h: 'b'.repeat(64) } });
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '修改：暂缓后不应继续' } }), false);
++  await handlers.get('mx.revise')({ evt, value: { a: 'mx.revise', w: 91, x: 302, v: 4, h: 'b'.repeat(64) } });
++  now += 10 * 60 * 1000 + 1;
++  assert.strictEqual(await registered.onMessage({ msg: { ...msg, content: '修改：已过期' } }), false);
++  registered.dispose();
++}
++
+ async function testReadOnlyWatcher() {
+   const watcher = require('../scripts/matrix-watch.js');
+   const calls = [];
+   const deliveries = [];
+   const readOnlyClient = {
+     today: async (openId, filters) => {
+       calls.push({ openId, filters });
+       return { rows: Array.from({ length: 7 }, (_, index) => ({ id: index + 1, company_name: `Watch ${index + 1}`, country_code: 'US', priority: 'P1', stage_code: index === 4 ? 'recommendation_ready' : 'observed', assessment_cn: '公开理由', categories: ['coffee'], size_signals: index === 0 ? ['250g', 'own factory'] : [], next_action_cn: '核实公开信息' })) };
+     }
+   };
+@@ -782,39 +1020,45 @@ async function testSelectionReplayAfterRestart() {
+     today: async () => ({ rows: [row], snapshot_key: '8'.repeat(64) }),
+     createSession: async () => ({ id: 81, chat_id: 'chat-replay', thread_id: '', filters: { page_size: 5 }, snapshot_key: '8'.repeat(64), candidate_ids: [801], page: 1, version, expires_at: '2026-07-17T00:30:00Z' }),
+     rehydrateSession: async () => ({ id: 81, chat_id: 'chat-replay', thread_id: '', filters: { page_size: 5 }, snapshot_key: '8'.repeat(64), candidate_ids: [801], candidates: [row], page: 1, version, expires_at: '2026-07-17T00:30:00Z' }),
+     candidateDetail: async () => ({ ...row, discovery: {}, official_evidence: [], contacts: {} }),
+     selectCandidate: async (_openId, input) => {
+       if (persisted.has(input.idempotency_key)) return persisted.get(input.idempotency_key);
+       if (input.expected_version !== version) { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; }
+       version += 1; workItems += 1;
+       const result = { work_item_id: 1, candidate_id: input.candidate_id, session_id: 81, session_version: version, next_action: input.next_action };
+       persisted.set(input.idempotency_key, result); return result;
+-    }
++    },
++    createVersion: async () => ({
++      id: 1, work_item_id: 1, revision: 1, recipient_email: 'sales@replay.test',
++      subject: 'Proposal for Replay Company', body_en: 'Dear Replay team,\nCould you share requirements?',
++      body_cn: '您好，请提供需求。', content_hash: '8'.repeat(64), status: 'draft',
++      quality_score: 90, quality_json: '{"score":90,"passed":true,"components":{},"hardFailures":[]}', work_item_version: 2
++    })
+   };
+   const firstHandlers = new Map();
+   const first = extension.register({ channel: {}, dispatcher: { on: (n, h) => firstHandlers.set(n, h) }, card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_c, _id, card) => sent.push(card) });
+   await first.onMessage({ msg: { content: '开发客户', chatId: 'chat-replay', threadId: '', senderId: 'ou-replay' } });
+   const detailValue = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.detail').value;
+   const evt = { operator: { openId: 'ou-replay' }, chatId: 'chat-replay', threadId: '', messageId: 'evt-replay' };
+   await firstHandlers.get('mx.detail')({ evt, value: detailValue });
+   const oldSelect = buttons(sent.at(-1)).find(item => item.value?.a === 'mx.select').value;
+   await firstHandlers.get('mx.select')({ evt, value: oldSelect });
+-  for (const expected of ['已加入进行中', '英文草稿', '中文翻译', '尚未发送', '请确认']) {
++  for (const expected of ['sales@replay.test', 'Proposal for Replay Company', '英文草稿', '中文翻译', '尚未发送', '确认采用']) {
+     assert.ok(visibleText(sent.at(-1)).includes(expected), `selection follow-up missing ${expected}`);
+   }
+   first.dispose();
+   const freshHandlers = new Map();
+   const fresh = extension.register({ channel: {}, dispatcher: { on: (n, h) => freshHandlers.set(n, h) }, card: helpers(), client, now: () => Date.parse('2026-07-17T00:00:00Z'), sendManagedCard: async (_c, _id, card) => sent.push(card) });
+   await freshHandlers.get('mx.select')({ evt, value: oldSelect });
+   assert.strictEqual(workItems, 1);
+-  assert.ok(visibleText(sent.at(-1)).includes('已加入进行中'));
++  assert.ok(visibleText(sent.at(-1)).includes('sales@replay.test'));
+   await freshHandlers.get('mx.select')({ evt, value: { ...oldSelect, e: 'unseen-stale-event' } });
+   assert.strictEqual(workItems, 1);
+   assert.ok(visibleText(sent.at(-1)).includes('开发客户'));
+   fresh.dispose();
+ }
+ 
+ async function testInteractiveZeroRecommendations() {
+   const sent = []; let created;
+   const registered = extension.register({
+     channel: {}, dispatcher: { on: () => undefined }, card: helpers(), now: () => Date.parse('2026-07-17T00:00:00Z'),
+@@ -862,20 +1106,21 @@ async function testRecommendationSnapshotTransitions() {
+   const drifted = await scenario({ drift: true });
+   assert.strictEqual(drifted.patches.length, 0);
+   assert.ok(visibleText(drifted.sent.at(-1)).includes('开发客户'));
+   const filtered = await scenario({ filterChange: true });
+   assert.strictEqual(filtered.patches.length, 1);
+   assert.strictEqual(filtered.patches[0].snapshot_key, 'c'.repeat(64));
+ }
+ 
+ (async () => {
+   await testNarrowClient();
++  await testTwoConfirmationReviewFlow();
+   await testReadOnlyWatcher();
+   await testReplyNotificationCardAndDraftAction();
+   testWatcherWholeCardBudget();
+   await testFreshQuickChoiceRecovery();
+   await testReminderPollingAndRetry();
+   await testWholeCardBudget();
+   await testExpiredSessionRecovery();
+   await testConcurrentCallbacksFreezeDisplayedVersion();
+   await testSelectionReplayAfterRestart();
+   await testInteractiveZeroRecommendations();
+@@ -970,20 +1215,30 @@ async function testRecommendationSnapshotTransitions() {
+         categories: [{ value: 'coffee', count: 3 }, { value: 'tea', count: 2 }],
+         cities: [{ value: '广州', count: 99 }]
+       };
+     },
+     listCandidates: async () => { throw new Error('ordinary list must not feed recommendations'); },
+     selectCandidate: async (openId, input) => {
+       calls.push(['selectCandidate', openId, input]);
+       if (input.idempotency_key === 'stale-event') { const error = new Error('matrix API HTTP 409'); error.status = 409; throw error; }
+       return { work_item_id: 91, candidate_id: input.candidate_id, session_id: input.session_id, session_version: input.expected_version + 1, next_action: input.next_action };
+     },
++    createVersion: async (openId, workItemId, input) => {
++      calls.push(['createVersion', openId, workItemId, input]);
++      return {
++        id: 301, work_item_id: workItemId, revision: 1, recipient_email: 'public@company.test',
++        recipient_source_url: 'https://company.test/contact', subject: 'laminated roll film for Company 1',
++        body_en: 'Dear Company 1 team,\nCould you confirm structure and annual volume?\nBest regards',
++        body_cn: '您好，请确认当前结构和年用量。', content_hash: '3'.repeat(64), status: 'draft',
++        quality_score: 92, quality_json: '{"score":92,"passed":true,"components":{},"hardFailures":[]}', work_item_version: 2
++      };
++    },
+     workItems: async openId => { calls.push(['workItems', openId]); return { rows: [{ id: 91, candidate_id: 1, stage: 'selected', next_action: '核实公开联系入口' }] }; }
+   };
+   const registered = extension.register({
+     channel: {},
+     dispatcher: { on: (name, handler) => { handlers.set(name, handler); } },
+     sendManagedCard: async (_channel, chatId, card) => { sent.push({ chatId, card }); return 'message-1'; },
+     updateManagedCard: async () => true,
+     card: helpers(),
+     client,
+     now: () => Date.parse('2026-07-17T00:00:00.000Z')
+@@ -1059,21 +1314,21 @@ async function testRecommendationSnapshotTransitions() {
+ 
+   const selectButton = buttons(sent.slice().reverse().find(item => buttons(item.card).some(button => button.value?.a === 'mx.select'))?.card).find(item => item.value?.a === 'mx.select');
+   assert.ok(selectButton);
+   await handlers.get('mx.select')({ evt: callbackEvent, value: selectButton.value });
+   await handlers.get('mx.select')({ evt: callbackEvent, value: selectButton.value });
+   const selectionCalls = calls.filter(item => item[0] === 'selectCandidate').slice(-2);
+   assert.strictEqual(selectionCalls.length, 2);
+   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectionCalls[1][2].idempotency_key);
+   assert.strictEqual(selectionCalls[0][2].idempotency_key, selectButton.value.e);
+   const selectedText = visibleText(sent.at(-1).card);
+-  for (const expected of ['已加入进行中', '英文草稿', '中文翻译', '尚未发送', 'Verified Supplier', 'stable repeat print control', '请确认']) {
++  for (const expected of ['public@company.test', '英文草稿', '中文翻译', '尚未发送', '质量评分', '确认采用']) {
+     assert.ok(selectedText.includes(expected), `selection follow-up missing ${expected}`);
+   }
+   assert.ok([...selectedText].length <= 1500, `selection draft card uses ${[...selectedText].length} code points`);
+ 
+   const selectBeforeStale = calls.filter(item => item[0] === 'selectCandidate').length;
+   await handlers.get('mx.select')({ evt: callbackEvent, value: { a: 'mx.select', s: 11, v: 999, c: 1, e: 'stale-event' } });
+   assert.strictEqual(calls.filter(item => item[0] === 'selectCandidate').length, selectBeforeStale + 1);
+   assert.ok(visibleText(sent.at(-1).card).includes('开发客户'));
+ 
+   const freshSent = [];
+@@ -1105,17 +1360,17 @@ async function testRecommendationSnapshotTransitions() {
+   const incomplete = extension.register({
+     channel: {}, dispatcher: { on: (name, handler) => incompleteHandlers.set(name, handler) }, card: helpers(), client: incompleteClient,
+     now: () => Date.parse('2026-07-17T00:00:00.000Z'), sendManagedCard: async (_channel, _chat, card) => incompleteSent.push(card)
+   });
+   await incomplete.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' } });
+   assert.ok(visibleText(incompleteSent.at(-1)).includes('Company 1'));
+   await incompleteHandlers.get('mx.detail')({ evt: callbackEvent, value: { a: 'mx.detail', s: 999, v: 1, c: 1 } });
+   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
+   incomplete.dispose();
+   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
+-  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.select', 'mx.today', 'mx.work']);
++  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.approve', 'mx.back', 'mx.category', 'mx.confirm', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.preview', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.review', 'mx.revise', 'mx.select', 'mx.today', 'mx.work']);
+ 
+   console.log('stream card extension tests passed');
+ })().catch(error => {
+   console.error(error);
+   process.exitCode = 1;
+ });
+diff --git a/.superpowers/sdd/task-6-report.md b/.superpowers/sdd/task-6-report.md
+new file mode 100644
+index 0000000..c2c2fb2
+--- /dev/null
++++ b/.superpowers/sdd/task-6-report.md
+@@ -0,0 +1,61 @@
++# Task 6 Report — Two-Confirmation Cards and Revision Context
++
++## Status
++
++DONE
++
++## Scope implemented
++
++- Added fixed-origin client methods `createVersion`, `reviseVersion`, `approveVersion`, `versionPreview`, and `confirmSend` with exact request-body fields and positive identifier validation.
++- Replaced the local selection draft with the persisted immutable version returned by the review API.
++- Added neutral card actions `mx.review`, `mx.revise`, `mx.approve`, `mx.preview`, and `mx.confirm`.
++- Kept selection and first approval strictly no-send. The only extension call to `confirmSend` is inside `mx.confirm` after a separately loaded final preview.
++- Added a ten-minute edit context bound to chat, operator open ID, and thread. Only `修改：...` from that exact context is consumed. Success, expiry, cancel, and defer clear the context.
++- Added final preview rendering for quality score/component reasons, duplicate, cooling, quota, sender readiness, and country/channel policy results. Blocked previews expose no confirmation action.
++- Added distinct accepted, definite-failure, and ambiguous result cards. Definite failure returns to a fresh preview; ambiguous delivery has no retry action.
++- Derived stable approval and confirmation idempotency keys from the reviewed identifiers and content hash. Repeated confirmation of the same final card uses the same idempotency key.
++- Kept review/final cards within 1,500 Unicode code points and excluded raw server diagnostics and Message-ID display.
++- Added no production transport, SMTP configuration, or real delivery wiring. Runtime delivery remains disabled.
++
++## TDD evidence
++
++1. Full card-flow RED: selection still rendered only `返回列表` / `查看进行中`; expected the three review actions.
++2. Client API RED: the five exact methods were absent from the exported client.
++3. Result-card RED: definite failure used the old retry label rather than the explicit `重新预览` action.
++4. Positive-body validation RED: `expected_work_version=0` was not rejected locally.
++5. Each RED was followed by the minimal implementation and a focused GREEN run of `test-stream-card-extension.js`.
++
++## Verification
++
++- `node .runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js` — PASS.
++- `node .runtime/vm_debug_ci/workspace/tests/test-bridge-patch.js` — PASS.
++- `node scripts/test-bridge-artifact-0.6.9.js` — PASS.
++- `node scripts/test-matrix-api.js` — PASS on the approved localhost-capable path; the initial sandboxed run failed only with `listen EPERM 0.0.0.0:21002`.
++- `node scripts/test-matrix-stream-correlation.js` — PASS.
++- `node scripts/test-matrix-stream-review.js` — PASS.
++- `node scripts/test-matrix-stream-delivery.js` — PASS.
++- `node scripts/test-matrix-stream-gates.js` — PASS.
++- `node scripts/test-matrix-policy.js` — PASS.
++- `node scripts/test-packet-gate.js` — PASS.
++- `node scripts/smoke-test.js` — `SMOKE PASS`.
++- `node --check` on the changed client, extension, and card test — PASS.
++- Task 6 static no-transport/no-send boundary checks — PASS.
++- `git diff --check` — PASS.
++
++## Deferred boundary
++
++- Copyable direct-message content, price presentation, FOB presentation, and knowledge archival remain unimplemented pending user design confirmation.
++- Task 7 still owns the complete runtime capability audit and manifest rebuild/re-signing.
++
++## Independent review repair
++
++- I1 repaired with a shared fail-closed gate projection: only strict `ok === true` with no blocking reasons is displayed as passed; any present reason fields must be valid arrays.
++- Missing, non-object, empty, unknown, non-boolean `ok`, or malformed reason projections are displayed as `提交时复核` and suppress final confirmation.
++- Explicit `ok === false` or any blocking reason is displayed as blocked. A contradictory `allowed: true` response with any blocked gate exposes no `mx.confirm` action.
++- RED fixtures cover `{}`, `{ ok: null }`, unknown status, string `ok`, missing gates, and `allowed: true` plus an explicitly blocked readiness gate; the normal five-gate passing path remains covered.
++
++## 蒸馏进度
++
++- 已确认模块：固定源 exact client、不可变版本审阅卡、两次确认、三元组十分钟修改上下文、门禁阻断卡、三类提交结果、稳定幂等键、no-send/no-transport 边界。
++- 未解决模块：可复制私聊、价格、FOB、知识归档设计；Task 7 runtime manifest 总审计与重签。
++- 下一优先知识缺口：Task 7 capability inventory 与 manifest 一致性验证。

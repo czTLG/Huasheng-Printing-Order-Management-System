@@ -1,0 +1,1269 @@
+# Review package: dca6d34..bffcb17
+
+## Commits
+bffcb17 fix: harden matrix review api replay
+fd4f624 feat: expose matrix stream review api
+
+## Files changed
+ .superpowers/sdd/task-3-report.md |  78 +++++++
+ scripts/test-matrix-api.js        | 431 +++++++++++++++++++++++++++++++++++++-
+ src/db.js                         |  28 +++
+ src/routes/matrix.js              | 363 +++++++++++++++++++++++++++++++-
+ src/server.js                     |   4 +-
+ 5 files changed, 895 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/task-3-report.md b/.superpowers/sdd/task-3-report.md
+new file mode 100644
+index 0000000..7d0446b
+--- /dev/null
++++ b/.superpowers/sdd/task-3-report.md
+@@ -0,0 +1,78 @@
++# Task 3 Report — Narrow Matrix Review APIs
++
++## Status
++
++DONE_WITH_CONCERNS
++
++## Scope
++
++- Added the bound-operator Matrix review endpoints for immutable version creation/revision, approval, and persisted final preview.
++- Version and approval inputs accept identifiers, expected version/hash values, revision instruction, and idempotency keys only. Unknown client fields are rejected.
++- Initial recipient, source, evidence snapshot, and deterministic bilingual content are derived only from the server-loaded candidate detail and same-organization official evidence.
++- Recipient evidence insertion and initial version creation share one immediate transaction. Any stale, authorization, evidence, or quality failure rolls back evidence/version/event/work-item changes.
++- Preview reads persisted version/quality state only and creates no job or delivery state.
++- No delivery implementation, mail transport, SMTP handling, credential handling, attachment handling, or external communication was added.
++- No quotation workflow was modified.
++
++## RED / GREEN Evidence
++
++1. Missing routes
++   - RED: the first create probe failed with `404 !== 201` after traversing the existing JWT fallback layer.
++   - GREEN: create/revise/approve/preview routes were added under the existing Matrix router.
++2. Fail-closed API matrix
++   - Tests cover inactive/no binding, worker role, missing explicit `matrixSend`, another owner, unknown fields, unpaired base/instruction, stale work version/hash, missing public email, contact-form-only input, missing official evidence, and foreign-domain official evidence.
++   - Every negative case compares recipient-evidence/version/event/job counts and work-item review state before/after and requires zero change.
++3. Deterministic quality
++   - Initial GREEN attempt was blocked by the existing quality gate at 55 because the Chinese specification conjunction was malformed and an English company token in Chinese text produced an ontology conflict.
++   - The deterministic template was corrected without changing the gate. The persisted draft now scores 100, has no hard failures, and records `passed=true`.
++4. Official evidence domain
++   - RED: an `official_website` row on `outside.test` produced a 201 draft for `alpha.test`.
++   - GREEN: official evidence must now use HTTPS and the candidate organization hostname or a subdomain; the foreign-domain case returns 400 with zero review write.
++5. Idempotent replay
++   - RED: exact create replay was rejected as `409 stale work version` by an API preflight check.
++   - GREEN: create and approval initially delegated replay fingerprint/scope handling to the reviewed Task 2 service. Exact replays returned 200 and created no additional state, while a new stale request still returned 409.
++
++## Independent Review Repair
++
++1. Authoritative API request ledger
++   - RED: after a successful create, removing the candidate email and official evidence made the exact API replay return 400 instead of the recorded result.
++   - GREEN: added immutable `matrix_stream_api_requests` records keyed by a globally unique idempotency key and bound to actor, work item, action, canonical client-request fingerprint, version, and original response snapshot.
++   - The ledger row is inserted in the same outer immediate transaction as the evidence/version/event/work-item transition. Update and delete triggers reject direct mutation.
++   - Exact create/approve/revise replay is resolved before candidate loading, stale preflight, or provider invocation. It returns the original response fields plus explicit `current_status` and `current_work_item_version`. A mismatched expected version, target, hash, base, or instruction returns stable 409 without a write.
++   - Candidate email/evidence/specification drift no longer affects exact replay. A new key evaluates current candidate state and still fails closed.
++2. Successful revision replay
++   - RED: the original route had no injectable successful provider path; the first injected revision test received `503 text_provider_unavailable`.
++   - GREEN: the router accepts a bounded text-service dependency. A successful revision writes one ledger row atomically; exact replay returns the persisted snapshot without another provider call. Changed instruction/base and a new stale key all fail before provider invocation.
++3. Commit-time authorization
++   - A fresh authorization read now runs inside the same immediate transaction as create, revise, and approve writes. It binds the current Feishu open ID and binding ID to the actor, then rechecks actor/binding active state, current role, freshly parsed persisted permissions with explicit `matrixSend`, owner, suppression, and expected work version.
++   - Blocking-provider tests revoke the binding and capability during the wait. Both requests return 403 after provider completion and leave recipient evidence, API requests, versions, events, jobs, and work-item review state unchanged.
++4. Stable public errors
++   - RED: a provider exception containing a token, internal path, SQL, and SQLite diagnostic was returned verbatim as HTTP 400.
++   - GREEN: review endpoints return fixed `{ error: { code, message } }` objects. Provider unavailable/failure use stable 503 codes, unexpected storage/service failures use a generic 500, and known validation/authorization/stale/not-found/idempotency classes have stable 4xx codes.
++   - Server diagnostics log only the redacted error class. API tests prove provider text, credentials, filesystem paths, SQL, and SQLite diagnostics do not enter responses.
++
++## Verification
++
++- `node scripts/test-matrix-api.js` — PASS on the approved localhost-capable path.
++- `node scripts/test-matrix-stream-review.js` — PASS.
++- `node scripts/test-matrix-stream-gates.js` — PASS.
++- `node scripts/test-matrix-policy.js` — PASS.
++- `node scripts/test-packet-gate.js` — PASS.
++- `node scripts/test-admin-access-regression.js` — PASS.
++- `node scripts/smoke-test.js` — PASS on the approved localhost-capable path.
++- `node --check src/db.js src/routes/matrix.js src/server.js scripts/test-matrix-api.js` — PASS.
++- Added-line static scan for mail transport, SMTP, credential, and attachment primitives — no matches.
++- `git diff --check` — PASS.
++
++## Concerns
++
++- The deterministic initial template intentionally supports only a small reviewed category map and requires official weight specifications. Unsupported or evidence-poor candidates fail closed instead of receiving a low-quality draft.
++- Free-form revision is exposed and has a successful injected-provider API acceptance path. Production still returns `503 text_provider_unavailable` with zero writes when the bounded provider is intentionally unavailable; no fallback revision is fabricated.
++- The official contact page is accepted as recipient provenance only when the reviewed recipient service can bind it to the same registrable organization domain; at least one same-organization official evidence row is also required.
++- This task does not add final confirmation or delivery. Approval remains a persisted review transition only.
++
++## 蒸馏进度
++
++- 已确认模块：窄化版本创建/修改/批准/预览 API、服务端 recipient/evidence 推导、不可变 API request ledger、原子 transition/replay、提交事务内 fresh 授权、稳定脱敏错误、stale/hash 与零写回归、确定性质量门禁。
++- 未解决模块：生产 provider 的真实自由修改验收、更多可审计品类/规格模板、最终确认与交付；均不在 Task 3 范围内。
++- 下一优先知识缺口：为更多候选品类建立有官方证据支撑的双语确定性模板与规格映射，未确认前继续 fail closed。
+diff --git a/scripts/test-matrix-api.js b/scripts/test-matrix-api.js
+index 305ab7b..1565132 100644
+--- a/scripts/test-matrix-api.js
++++ b/scripts/test-matrix-api.js
+@@ -1,21 +1,23 @@
+ 'use strict';
+ 
+ const assert = require('assert');
+ const fs = require('fs');
+ const os = require('os');
+ const path = require('path');
+ const { spawn, spawnSync } = require('child_process');
++const express = require('express');
+ const Database = require('better-sqlite3');
+ const jwt = require('jsonwebtoken');
+ const crypto = require('crypto');
+-const { createMatrixBridgeAuth } = require('../src/routes/matrix');
++const { createMatrixBridgeAuth, createMatrixRouter } = require('../src/routes/matrix');
++const matrixReviewService = require('../src/services/matrixStreamReview');
+ 
+ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-api-'));
+ const appDbPath = path.join(root, 'app.db');
+ const candidateDbPath = path.join(root, 'candidate.db');
+ const port = 21000 + (process.pid % 1000);
+ const jwtSecret = 'matrix-api-test-jwt-secret';
+ const bridgeToken = 'matrix-api-test-bridge-token-0123456789abcdef';
+ let child;
+ let serverOutput = '';
+ 
+@@ -81,20 +83,30 @@ function seedApplicationDb() {
+   insertUser.run(102, 'matrix-worker', 'worker', 'active');
+   insertUser.run(103, 'matrix-crm', 'foreign_trade_crm_admin', 'active');
+   insertUser.run(104, 'matrix-crm-two', 'foreign_trade_crm_admin', 'active');
+   insertUser.run(105, 'matrix-disabled', 'foreign_trade_crm_admin', 'disabled');
+   const insertBinding = db.prepare(`
+     INSERT INTO matrix_actor_bindings (feishu_open_id, user_id, status, bound_by, bound_at)
+     VALUES (?, ?, 'active', 101, '2026-07-17 00:00:00')
+   `);
+   insertBinding.run('ou-service', 103);
+   insertBinding.run('ou-disabled', 105);
++  insertBinding.run('ou-worker', 102);
++  insertBinding.run('ou-no-cap', 104);
++  insertBinding.run('ou-inactive', 104);
++  db.prepare("UPDATE matrix_actor_bindings SET status = 'revoked', revoked_at = '2026-07-17 00:00:00' WHERE feishu_open_id = 'ou-inactive'").run();
++  db.prepare(`
++    UPDATE users SET permissions_json = ? WHERE id = 103
++  `).run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: true } }));
++  db.prepare(`
++    UPDATE users SET permissions_json = ? WHERE id = 102
++  `).run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: true } }));
+   db.close();
+ }
+ 
+ function seedCandidateDb() {
+   const db = new Database(candidateDbPath);
+   db.exec(`
+     CREATE TABLE cache_records (
+       id INTEGER PRIMARY KEY, company_name TEXT, country_code TEXT, city TEXT,
+       normalized_domain TEXT UNIQUE, official_url TEXT, product_categories_json TEXT,
+       format_signals_json TEXT, size_signals_json TEXT, scale_tier TEXT,
+@@ -118,21 +130,21 @@ function seedCandidateDb() {
+     INSERT INTO cache_records VALUES (
+       @id,@company,@country,'',@domain,@url,@categories,'["pouches"]','["exports"]','medium',
+       @email,@phone,@whatsapp,@contact,@priority,@score,@score,80,0.9,@status,
+       '公开信息确认','核实公开联系入口','observed','audited',NULL,@updated,@updated,'SECRET-COST-FORMULA'
+     )
+   `);
+   insert.run({ id: 1, company: 'Alpha Coffee', country: 'VN', domain: 'alpha.test', url: 'https://alpha.test/', categories: '["coffee"]', email: 'team@alpha.test', phone: '+1 202 555 0123', whatsapp: '+1 202 555 0456', contact: 'https://alpha.test/contact', priority: 'P0', score: 95, status: 'valid', updated: '2026-07-17T00:00:00Z' });
+   insert.run({ id: 2, company: 'Beta Tea', country: 'GB', domain: 'beta.test', url: 'https://beta.test/', categories: '["tea"]', email: 'sales@beta.test', phone: '', whatsapp: '', contact: 'https://beta.test/contact', priority: 'P1', score: 88, status: 'valid', updated: '2026-07-16T00:00:00Z' });
+   insert.run({ id: 3, company: 'India Blocked', country: 'IN', domain: 'blocked.test', url: 'https://blocked.test/', categories: '["coffee"]', email: '', phone: '', whatsapp: '', contact: '', priority: 'P0', score: 99, status: 'valid', updated: '2026-07-17T00:00:00Z' });
+   insert.run({ id: 4, company: 'Review Snacks', country: 'NZ', domain: 'review.test', url: 'https://review.test/', categories: '["snacks"]', email: '', phone: '', whatsapp: '', contact: 'https://review.test/contact', priority: 'P2', score: 70, status: 'needs_review', updated: '2026-07-15T00:00:00Z' });
+-  db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-17T00:00:00Z', 'Coffee', 'e1');
++  db.prepare('INSERT INTO cache_evidence VALUES (1,1,?,?,?,?,?,?)').run('https://alpha.test/products', 'official_website', 'Products', '2026-07-17T00:00:00Z', '250g and 500g roasted coffee', 'e1');
+   db.prepare('INSERT INTO cache_discovery VALUES (1,1,?,?,?,?,?,?,?)').run('alpha.test', 'official_association_directory', 'https://association.test/members/alpha', 'https://alpha.test/', 'official_association_directory', '2026-07-17T00:00:00Z', 'd1');
+   db.close();
+ }
+ 
+ async function waitForServer() {
+   for (let attempt = 0; attempt < 80; attempt += 1) {
+     try {
+       const response = await fetch(`http://127.0.0.1:${port}/health`);
+       if (response.ok) return;
+     } catch (_) {}
+@@ -140,40 +152,59 @@ async function waitForServer() {
+   }
+   throw new Error(`server did not start: ${serverOutput}`);
+ }
+ 
+ async function request(route, options = {}) {
+   const headers = { ...(options.headers || {}) };
+   if (options.token) headers.authorization = `Bearer ${options.token}`;
+   if (options.serviceToken !== undefined) headers['x-matrix-bridge-token'] = options.serviceToken;
+   if (options.openId !== undefined) headers['x-feishu-open-id'] = options.openId;
+   if (options.body !== undefined) headers['content-type'] = 'application/json';
+-  const response = await fetch(`http://127.0.0.1:${port}${route}`, {
++  const response = await fetch(`http://127.0.0.1:${options.port || port}${route}`, {
+     method: options.method || 'GET',
+     headers,
+     body: options.body === undefined ? undefined : JSON.stringify(options.body)
+   });
+   const text = await response.text();
+   let body = null;
+   try { body = text ? JSON.parse(text) : null; } catch (_) { body = text; }
+   return { status: response.status, body };
+ }
+ 
+ async function stopServer() {
+   if (!child || child.exitCode !== null) return;
+   child.kill('SIGTERM');
+   await new Promise(resolve => {
+     const timer = setTimeout(resolve, 2000);
+     child.once('exit', () => { clearTimeout(timer); resolve(); });
+   });
+ }
+ 
++function reviewState(workItemId) {
++  const stateDb = new Database(appDbPath, { readonly: true });
++  try {
++    return {
++      evidence: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_recipient_evidence').get().count,
++      apiRequests: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_api_requests').get().count,
++      versions: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count,
++      events: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_events').get().count,
++      jobs: stateDb.prepare('SELECT COUNT(*) AS count FROM matrix_stream_jobs').get().count,
++      workItem: stateDb.prepare(`
++        SELECT owner_user_id, stage, stream_state, current_stream_version_id, version
++        FROM matrix_work_items WHERE id = ?
++      `).get(workItemId)
++    };
++  } finally {
++    stateDb.close();
++  }
++}
++
+ (async () => {
+   try {
+     testConstantTimeTokenComparison();
+     seedApplicationDb();
+     seedCandidateDb();
+     child = spawn(process.execPath, ['src/server.js'], {
+       cwd: path.resolve(__dirname, '..'),
+       env: {
+         ...process.env,
+         PORT: String(port),
+@@ -341,21 +372,21 @@ async function stopServer() {
+       ...['bounced', 'opted_out', 'delivered', 'unknown'].map(stage => [`stage-${stage}`, db => db.prepare('UPDATE cache_records SET stage_code = ? WHERE id = 1').run(stage)]),
+       ['stale-audit', db => db.prepare("UPDATE cache_records SET audited_at = '2026-07-16T00:00:00Z', updated_at = '2026-07-17T00:00:00Z' WHERE id = 1").run()],
+       ['missing-evidence', db => db.prepare('DELETE FROM cache_evidence WHERE record_id = 1').run()],
+       ['missing-discovery', db => db.prepare('DELETE FROM cache_discovery WHERE record_id = 1').run()],
+       ['missing-contact', db => db.prepare("UPDATE cache_records SET public_email='', public_phone='', public_whatsapp='', contact_url='' WHERE id = 1").run()]
+     ];
+     for (const [name, mutate] of driftCases) {
+       const mutableCandidateDb = new Database(candidateDbPath);
+       try {
+         mutableCandidateDb.prepare("UPDATE cache_records SET country_code='VN', status='valid', stage_code='observed', audited_at='2026-07-17T00:00:00Z', updated_at='2026-07-17T00:00:00Z', public_email='team@alpha.test', public_phone='+1 202 555 0123', public_whatsapp='+1 202 555 0456', contact_url='https://alpha.test/contact' WHERE id=1").run();
+-        mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','Coffee','e1')").run();
++        mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
+         mutableCandidateDb.prepare("INSERT OR REPLACE INTO cache_discovery VALUES (1,1,'alpha.test','official_association_directory','https://association.test/members/alpha','https://alpha.test/','official_association_directory','2026-07-17T00:00:00Z','d1')").run();
+         mutate(mutableCandidateDb);
+       } finally { mutableCandidateDb.close(); }
+       const replayed = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: selectionBody });
+       assert.strictEqual(replayed.status, 200, `${name} replay must remain authoritative`);
+       assert.strictEqual(replayed.body.event_id, firstSelection.body.event_id);
+       const rejected = await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...selectionBody, idempotency_key: `api-event-new-${name}`, expected_version: firstSelection.body.session_version } });
+       assert.strictEqual(rejected.status, 400, `${name} new selection must fail strict eligibility`);
+       const stateDb = new Database(appDbPath, { readonly: true });
+       try {
+@@ -369,31 +400,423 @@ async function stopServer() {
+     assert.strictEqual(firstSelection.body.work_item_id, secondSelection.body.work_item_id);
+     assert.strictEqual((await request('/api/matrix/selections', { method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { ...selectionBody, extra: true } })).status, 400);
+ 
+     const workItems = await request('/api/matrix/work-items', { serviceToken: bridgeToken, openId: 'ou-service' });
+     assert.strictEqual(workItems.status, 200);
+     assert.deepStrictEqual(workItems.body.rows.map(row => row.candidate_id), [1]);
+     const workItem = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}`, { serviceToken: bridgeToken, openId: 'ou-service' });
+     assert.strictEqual(workItem.status, 200);
+     assert.strictEqual(workItem.body.candidate_id, 1);
+ 
++    const workItemId = firstSelection.body.work_item_id;
++    const mutateApp = callback => {
++      const stateDb = new Database(appDbPath);
++      try { callback(stateDb); } finally { stateDb.close(); }
++    };
++    const mutateCandidate = callback => {
++      const stateDb = new Database(candidateDbPath);
++      try { callback(stateDb); } finally { stateDb.close(); }
++    };
++    const assertFailedWithoutReviewWrite = async (label, expectedStatus, action) => {
++      const before = reviewState(workItemId);
++      const response = await action();
++      assert.strictEqual(response.status, expectedStatus, `${label}: ${JSON.stringify(response.body)}`);
++      assert.deepStrictEqual(reviewState(workItemId), before, `${label} must not write review state`);
++      return response;
++    };
++    const versionRoute = `/api/matrix/work-items/${workItemId}/versions`;
++
++    mutateCandidate(db => {
++      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
++      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
++    });
++
++    await assertFailedWithoutReviewWrite('JWT request without a Matrix binding', 403, () => request(versionRoute, {
++      method: 'POST', token: rootToken, body: { expected_work_version: 1, idempotency_key: 'jwt-no-binding' }
++    }));
++    await assertFailedWithoutReviewWrite('inactive binding', 403, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-inactive',
++      body: { expected_work_version: 1, idempotency_key: 'inactive-binding' }
++    }));
++
++    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 102 WHERE id = ?').run(workItemId));
++    await assertFailedWithoutReviewWrite('worker role with requested capability', 403, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-worker',
++      body: { expected_work_version: 1, idempotency_key: 'worker-role' }
++    }));
++    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 103 WHERE id = ?').run(workItemId));
++
++    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 104 WHERE id = ?').run(workItemId));
++    await assertFailedWithoutReviewWrite('missing explicit matrixSend capability', 403, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-no-cap',
++      body: { expected_work_version: 1, idempotency_key: 'missing-capability' }
++    }));
++    await assertFailedWithoutReviewWrite('another owner', 403, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, idempotency_key: 'another-owner' }
++    }));
++    mutateApp(db => db.prepare('UPDATE matrix_work_items SET owner_user_id = 103 WHERE id = ?').run(workItemId));
++
++    await assertFailedWithoutReviewWrite('unknown create field', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, recipient_email: 'other@outside.test', idempotency_key: 'bad-field' }
++    }));
++    await assertFailedWithoutReviewWrite('base without instruction', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, base_version_id: 1, idempotency_key: 'base-only' }
++    }));
++    await assertFailedWithoutReviewWrite('instruction without base', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, revision_instruction: '更简洁', idempotency_key: 'instruction-only' }
++    }));
++    await assertFailedWithoutReviewWrite('stale create work version', 409, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 99, idempotency_key: 'stale-create' }
++    }));
++
++    mutateCandidate(db => db.prepare("UPDATE cache_records SET public_email='', contact_url='https://alpha.test/contact' WHERE id=1").run());
++    await assertFailedWithoutReviewWrite('contact-form-only candidate', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, idempotency_key: 'contact-form-only' }
++    }));
++    mutateCandidate(db => {
++      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='' WHERE id=1").run();
++      db.prepare('DELETE FROM cache_evidence WHERE record_id=1').run();
++    });
++    await assertFailedWithoutReviewWrite('missing official source evidence', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, idempotency_key: 'missing-source' }
++    }));
++    mutateCandidate(db => {
++      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
++      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://outside.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
++    });
++    await assertFailedWithoutReviewWrite('official evidence on another organization domain', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, idempotency_key: 'foreign-source' }
++    }));
++    mutateCandidate(db => {
++      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
++      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
++    });
++
++    const createdVersion = await request(`/api/matrix/work-items/${firstSelection.body.work_item_id}/versions`, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
++    });
++    assert.strictEqual(createdVersion.status, 201, JSON.stringify(createdVersion.body));
++    assert.strictEqual(createdVersion.body.revision, 1);
++    assert.strictEqual(createdVersion.body.recipient_email, 'team@alpha.test');
++    assert.strictEqual(createdVersion.body.recipient_source_url, 'https://alpha.test/contact');
++    assert.strictEqual(createdVersion.body.work_item_version, 2);
++    assert.ok(createdVersion.body.quality_score >= 80);
++    assert.strictEqual(JSON.parse(createdVersion.body.quality_json).passed, true);
++    mutateCandidate(db => {
++      db.prepare("UPDATE cache_records SET public_email='', contact_url='' WHERE id=1").run();
++      db.prepare('DELETE FROM cache_evidence WHERE record_id=1').run();
++    });
++    const createdReplayState = reviewState(workItemId);
++    const createdReplay = await request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
++    });
++    assert.strictEqual(createdReplay.status, 200, JSON.stringify(createdReplay.body));
++    assert.strictEqual(createdReplay.body.id, createdVersion.body.id);
++    assert.deepStrictEqual(reviewState(workItemId), createdReplayState, 'create replay must not write');
++    await assertFailedWithoutReviewWrite('create replay request mismatch', 409, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, idempotency_key: 'draft-api-1' }
++    }));
++    await assertFailedWithoutReviewWrite('new create key revalidates drifted candidate', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, idempotency_key: 'draft-api-drifted-candidate' }
++    }));
++    mutateCandidate(db => {
++      db.prepare("UPDATE cache_records SET public_email='team@alpha.test', contact_url='https://alpha.test/contact' WHERE id=1").run();
++      db.prepare("INSERT OR REPLACE INTO cache_evidence VALUES (1,1,'https://alpha.test/products','official_website','Products','2026-07-17T00:00:00Z','250g and 500g roasted coffee','e1')").run();
++    });
++
++    await assertFailedWithoutReviewWrite('unknown revision field', 400, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, base_version_id: createdVersion.body.id, revision_instruction: '更简洁', subject: 'client supplied', idempotency_key: 'bad-revision-field' }
++    }));
++    const unavailableRevision = await assertFailedWithoutReviewWrite('bounded text provider unavailable', 503, () => request(versionRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, base_version_id: createdVersion.body.id, revision_instruction: '语气更简洁，询问年用量', idempotency_key: 'revision-provider-unavailable' }
++    }));
++    assert.deepStrictEqual(unavailableRevision.body, {
++      error: { code: 'text_provider_unavailable', message: 'Text revision service is unavailable.' }
++    });
++
++    const approveRoute = `${versionRoute}/${createdVersion.body.id}/approve`;
++    await assertFailedWithoutReviewWrite('stale approval work version', 409, () => request(approveRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 1, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'stale-approve' }
++    }));
++    await assertFailedWithoutReviewWrite('stale approval hash', 400, () => request(approveRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, expected_content_hash: '0'.repeat(64), idempotency_key: 'stale-hash' }
++    }));
++    await assertFailedWithoutReviewWrite('unknown approval field', 400, () => request(approveRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, recipient_email: 'other@outside.test', idempotency_key: 'bad-approve-field' }
++    }));
++
++    const approvedVersion = await request(approveRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'approve-api-1' }
++    });
++    assert.strictEqual(approvedVersion.status, 200, JSON.stringify(approvedVersion.body));
++    assert.strictEqual(approvedVersion.body.status, 'approved');
++    assert.strictEqual(approvedVersion.body.work_item_version, 3);
++    const approvedReplayState = reviewState(workItemId);
++    const approvedReplay = await request(approveRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'approve-api-1' }
++    });
++    assert.strictEqual(approvedReplay.status, 200, JSON.stringify(approvedReplay.body));
++    assert.strictEqual(approvedReplay.body.id, approvedVersion.body.id);
++    assert.deepStrictEqual(reviewState(workItemId), approvedReplayState, 'approval replay must not write');
++    await assertFailedWithoutReviewWrite('approval replay hash mismatch', 409, () => request(approveRoute, {
++      method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++      body: { expected_work_version: 2, expected_content_hash: 'f'.repeat(64), idempotency_key: 'approve-api-1' }
++    }));
++
++    const preview = await request(`${versionRoute}/${createdVersion.body.id}/preview`, {
++      serviceToken: bridgeToken, openId: 'ou-service'
++    });
++    assert.strictEqual(preview.status, 200, JSON.stringify(preview.body));
++    assert.strictEqual(preview.body.allowed, true);
++    assert.strictEqual(preview.body.version.id, createdVersion.body.id);
++    assert.strictEqual(preview.body.version.recipient_email, 'team@alpha.test');
++    assert.strictEqual(preview.body.version.subject, createdVersion.body.subject);
++    assert.strictEqual(preview.body.version.body_en, createdVersion.body.body_en);
++    assert.strictEqual(preview.body.version.body_cn, createdVersion.body.body_cn);
++    assert.strictEqual(preview.body.work_item_version, 3);
++    assert.strictEqual(reviewState(workItemId).jobs, 0, 'preview must never create a delivery job');
++    await assertFailedWithoutReviewWrite('preview path work-item mismatch', 404, () => request(`/api/matrix/work-items/99999/versions/${createdVersion.body.id}/preview`, {
++      serviceToken: bridgeToken, openId: 'ou-service'
++    }));
++
+     await stopServer();
++    const injectedPort = port + 1000;
++    const injectedDb = new Database(appDbPath);
++    const injectedReviewService = { ...matrixReviewService };
++    let providerCalls = 0;
++    let providerImpl = async ({ current }) => ({
++      subject: current.subject,
++      body_en: current.body_en,
++      body_cn: current.body_cn
++    });
++    const injectedTextService = {
++      revise(input) {
++        providerCalls += 1;
++        return providerImpl(input);
++      }
++    };
++    const injectedApp = express();
++    injectedApp.use(express.json());
++    injectedApp.use('/api/matrix', createMatrixBridgeAuth({ db: injectedDb, bridgeToken }));
++    injectedApp.use('/api/matrix', createMatrixRouter({
++      db: injectedDb,
++      audit: () => undefined,
++      candidateDbPath,
++      reviewService: injectedReviewService,
++      textService: injectedTextService
++    }));
++    const injectedServer = await new Promise((resolve, reject) => {
++      const server = injectedApp.listen(injectedPort, '127.0.0.1', () => resolve(server));
++      server.once('error', reject);
++    });
++    try {
++      const reviseBody = {
++        expected_work_version: 3,
++        base_version_id: createdVersion.body.id,
++        revision_instruction: '保持证据边界并缩短措辞',
++        idempotency_key: 'revision-api-success-1'
++      };
++      const revisedVersion = await request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: reviseBody
++      });
++      assert.strictEqual(revisedVersion.status, 201, JSON.stringify(revisedVersion.body));
++      assert.strictEqual(revisedVersion.body.revision, 2);
++      assert.strictEqual(providerCalls, 1);
++      const historicalReplayState = reviewState(workItemId);
++      const historicalCreateReplay = await request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
++      });
++      assert.strictEqual(historicalCreateReplay.status, 200, JSON.stringify(historicalCreateReplay.body));
++      assert.strictEqual(historicalCreateReplay.body.status, 'draft');
++      assert.strictEqual(historicalCreateReplay.body.current_status, 'superseded');
++      assert.strictEqual(historicalCreateReplay.body.work_item_version, 2);
++      assert.strictEqual(historicalCreateReplay.body.current_work_item_version, 4);
++      const historicalApprovalReplay = await request(approveRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { expected_work_version: 2, expected_content_hash: createdVersion.body.content_hash, idempotency_key: 'approve-api-1' }
++      });
++      assert.strictEqual(historicalApprovalReplay.status, 200, JSON.stringify(historicalApprovalReplay.body));
++      assert.strictEqual(historicalApprovalReplay.body.status, 'approved');
++      assert.strictEqual(historicalApprovalReplay.body.current_status, 'superseded');
++      assert.strictEqual(historicalApprovalReplay.body.work_item_version, 3);
++      assert.strictEqual(historicalApprovalReplay.body.current_work_item_version, 4);
++      assert.deepStrictEqual(reviewState(workItemId), historicalReplayState, 'historical replay must return snapshots without writing');
++      const revisedReplayState = reviewState(workItemId);
++      const revisedReplay = await request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: reviseBody
++      });
++      assert.strictEqual(revisedReplay.status, 200, JSON.stringify(revisedReplay.body));
++      assert.strictEqual(revisedReplay.body.id, revisedVersion.body.id);
++      assert.strictEqual(providerCalls, 1, 'exact revision replay must not call provider again');
++      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'revision replay must not write');
++
++      const changedInstruction = await request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { ...reviseBody, revision_instruction: '不同指令' }
++      });
++      assert.strictEqual(changedInstruction.status, 409, JSON.stringify(changedInstruction.body));
++      assert.strictEqual(providerCalls, 1, 'idempotency mismatch must precede provider');
++      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'revision mismatch must not write');
++      const changedScope = await request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { ...reviseBody, base_version_id: revisedVersion.body.id }
++      });
++      assert.strictEqual(changedScope.status, 409, JSON.stringify(changedScope.body));
++      assert.strictEqual(providerCalls, 1, 'idempotency scope mismatch must precede provider');
++      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'revision scope mismatch must not write');
++
++      const staleNewRevision = await request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { ...reviseBody, idempotency_key: 'revision-api-stale-new-key' }
++      });
++      assert.strictEqual(staleNewRevision.status, 409, JSON.stringify(staleNewRevision.body));
++      assert.strictEqual(providerCalls, 1, 'new stale revision must fail before provider');
++      assert.deepStrictEqual(reviewState(workItemId), revisedReplayState, 'new stale revision must not write');
++
++      const bindingEntered = {};
++      bindingEntered.promise = new Promise(resolve => { bindingEntered.resolve = resolve; });
++      const bindingRelease = {};
++      bindingRelease.promise = new Promise(resolve => { bindingRelease.resolve = resolve; });
++      providerImpl = async ({ current }) => {
++        bindingEntered.resolve();
++        await bindingRelease.promise;
++        return { subject: current.subject, body_en: current.body_en, body_cn: current.body_cn };
++      };
++      const bindingRaceState = reviewState(workItemId);
++      const bindingRaceRequest = request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: {
++          expected_work_version: 4,
++          base_version_id: revisedVersion.body.id,
++          revision_instruction: 'binding race',
++          idempotency_key: 'revision-binding-race'
++        }
++      });
++      await bindingEntered.promise;
++      mutateApp(db => db.prepare("UPDATE matrix_actor_bindings SET status='revoked', revoked_at='2026-07-18T00:00:00Z' WHERE feishu_open_id='ou-service'").run());
++      bindingRelease.resolve();
++      const bindingRace = await bindingRaceRequest;
++      assert.strictEqual(bindingRace.status, 403, JSON.stringify(bindingRace.body));
++      assert.deepStrictEqual(reviewState(workItemId), bindingRaceState, 'binding revocation during provider wait must write nothing');
++      mutateApp(db => db.prepare("UPDATE matrix_actor_bindings SET status='active', revoked_at=NULL WHERE feishu_open_id='ou-service'").run());
++
++      const capabilityEntered = {};
++      capabilityEntered.promise = new Promise(resolve => { capabilityEntered.resolve = resolve; });
++      const capabilityRelease = {};
++      capabilityRelease.promise = new Promise(resolve => { capabilityRelease.resolve = resolve; });
++      providerImpl = async ({ current }) => {
++        capabilityEntered.resolve();
++        await capabilityRelease.promise;
++        return { subject: current.subject, body_en: current.body_en, body_cn: current.body_cn };
++      };
++      const capabilityRaceState = reviewState(workItemId);
++      const capabilityRaceRequest = request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: {
++          expected_work_version: 4,
++          base_version_id: revisedVersion.body.id,
++          revision_instruction: 'capability race',
++          idempotency_key: 'revision-capability-race'
++        }
++      });
++      await capabilityEntered.promise;
++      mutateApp(db => db.prepare('UPDATE users SET permissions_json=? WHERE id=103').run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: false } })));
++      capabilityRelease.resolve();
++      const capabilityRace = await capabilityRaceRequest;
++      assert.strictEqual(capabilityRace.status, 403, JSON.stringify(capabilityRace.body));
++      assert.deepStrictEqual(reviewState(workItemId), capabilityRaceState, 'capability revocation during provider wait must write nothing');
++      mutateApp(db => db.prepare('UPDATE users SET permissions_json=? WHERE id=103').run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: true } })));
++
++      const rawDiagnostic = 'upstream SECRET_TOKEN=abc /srv/private/provider.js SELECT * FROM users SQLITE_BUSY';
++      providerImpl = async () => { throw new Error(rawDiagnostic); };
++      const providerFailureState = reviewState(workItemId);
++      const providerFailure = await request(versionRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: {
++          expected_work_version: 4,
++          base_version_id: revisedVersion.body.id,
++          revision_instruction: 'provider failure',
++          idempotency_key: 'revision-provider-raw-failure'
++        }
++      });
++      assert.strictEqual(providerFailure.status, 503, JSON.stringify(providerFailure.body));
++      assert.deepStrictEqual(providerFailure.body, {
++        error: { code: 'text_provider_failure', message: 'Text revision service is temporarily unavailable.' }
++      });
++      assert.ok(!JSON.stringify(providerFailure.body).includes(rawDiagnostic));
++      assert.ok(!/SECRET_TOKEN|\/srv\/private|SELECT \*|SQLITE_BUSY/.test(JSON.stringify(providerFailure.body)));
++      assert.deepStrictEqual(reviewState(workItemId), providerFailureState, 'provider failure must write nothing');
++
++      const originalApproveVersion = injectedReviewService.approveVersion;
++      injectedReviewService.approveVersion = () => { throw new Error('SQLITE_CONSTRAINT at /srv/private/app.db SMTP_PASS=hunter2'); };
++      const internalFailureState = reviewState(workItemId);
++      const internalFailure = await request(`${versionRoute}/${revisedVersion.body.id}/approve`, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: {
++          expected_work_version: 4,
++          expected_content_hash: revisedVersion.body.content_hash,
++          idempotency_key: 'approve-internal-failure'
++        }
++      });
++      assert.strictEqual(internalFailure.status, 500, JSON.stringify(internalFailure.body));
++      assert.deepStrictEqual(internalFailure.body, {
++        error: { code: 'internal_error', message: 'Review request could not be completed.' }
++      });
++      assert.ok(!/SQLITE|\/srv\/private|SMTP_PASS|hunter2/.test(JSON.stringify(internalFailure.body)));
++      assert.deepStrictEqual(reviewState(workItemId), internalFailureState, 'internal failure must write nothing');
++      injectedReviewService.approveVersion = originalApproveVersion;
++    } finally {
++      await new Promise(resolve => injectedServer.close(resolve));
++      injectedDb.close();
++    }
++
+     const inspect = new Database(appDbPath, { readonly: true });
+     try {
+       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM matrix_selection_events WHERE idempotency_key = 'api-event-001'").get().n, 1);
+       assert.strictEqual(inspect.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action = 'matrix_candidate_detail'").get().n, 2);
++      assert.deepStrictEqual(
++        inspect.prepare('SELECT action FROM matrix_stream_api_requests ORDER BY id').all().map(row => row.action),
++        ['create', 'approve', 'revise']
++      );
+       const persistedSession = JSON.stringify(inspect.prepare('SELECT snapshot_key, candidate_ids_json, filters_json FROM matrix_sessions WHERE id = ?').get(createdSession.body.id));
+       assert.ok(!persistedSession.includes('Alpha Foods'));
+       assert.ok(!persistedSession.includes('team@alpha.test'));
+     } finally {
+       inspect.close();
+     }
++    const immutableApiDb = new Database(appDbPath);
++    try {
++      assert.throws(() => immutableApiDb.prepare("UPDATE matrix_stream_api_requests SET action='approve' WHERE action='create'").run(), /immutable/);
++      assert.throws(() => immutableApiDb.prepare('DELETE FROM matrix_stream_api_requests').run(), /immutable/);
++    } finally {
++      immutableApiDb.close();
++    }
+ 
+     const cliEnv = { ...process.env, DB_PATH: appDbPath };
+     const invalidRole = spawnSync(process.execPath, ['scripts/matrix-bind-actor.js', '--open-id', 'ou-cli-worker', '--username', 'matrix-worker', '--bound-by', 'matrix-root'], { cwd: path.resolve(__dirname, '..'), env: cliEnv, encoding: 'utf8' });
+     assert.notStrictEqual(invalidRole.status, 0);
+     const firstBind = spawnSync(process.execPath, ['scripts/matrix-bind-actor.js', '--open-id', 'ou-cli', '--username', 'matrix-crm', '--bound-by', 'matrix-root'], { cwd: path.resolve(__dirname, '..'), env: cliEnv, encoding: 'utf8' });
+     assert.strictEqual(firstBind.status, 0, firstBind.stderr);
+     assert.ok(!`${firstBind.stdout}${firstBind.stderr}`.includes('ou-cli'));
+     const refusedReplace = spawnSync(process.execPath, ['scripts/matrix-bind-actor.js', '--open-id', 'ou-cli', '--username', 'matrix-crm-two', '--bound-by', 'matrix-root'], { cwd: path.resolve(__dirname, '..'), env: cliEnv, encoding: 'utf8' });
+     assert.notStrictEqual(refusedReplace.status, 0);
+     const replaced = spawnSync(process.execPath, ['scripts/matrix-bind-actor.js', '--open-id', 'ou-cli', '--username', 'matrix-crm-two', '--bound-by', 'matrix-root', '--replace'], { cwd: path.resolve(__dirname, '..'), env: cliEnv, encoding: 'utf8' });
+diff --git a/src/db.js b/src/db.js
+index 9fef2f1..4cda33e 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -932,20 +932,35 @@ function initDb() {
+       action TEXT NOT NULL,
+       idempotency_key TEXT NOT NULL UNIQUE,
+       request_fingerprint TEXT NOT NULL DEFAULT '',
+       content_hash TEXT NOT NULL DEFAULT '',
+       before_json TEXT NOT NULL DEFAULT '{}',
+       after_json TEXT NOT NULL DEFAULT '{}',
+       diagnostic TEXT NOT NULL DEFAULT '',
+       created_at TEXT NOT NULL
+     );
+ 
++    CREATE TABLE IF NOT EXISTS matrix_stream_api_requests (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      actor_user_id INTEGER NOT NULL,
++      work_item_id INTEGER NOT NULL,
++      action TEXT NOT NULL CHECK(action IN ('create','revise','approve')),
++      idempotency_key TEXT NOT NULL UNIQUE,
++      request_fingerprint TEXT NOT NULL,
++      version_id INTEGER NOT NULL,
++      response_json TEXT NOT NULL,
++      created_at TEXT NOT NULL,
++      FOREIGN KEY(actor_user_id) REFERENCES users(id),
++      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
++      FOREIGN KEY(version_id) REFERENCES matrix_stream_versions(id)
++    );
++
+     CREATE TABLE IF NOT EXISTS matrix_stream_sender_checks (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       sender_domain TEXT NOT NULL,
+       checked_at TEXT NOT NULL,
+       expires_at TEXT NOT NULL,
+       spf_ok INTEGER NOT NULL,
+       dkim_ok INTEGER NOT NULL,
+       dmarc_ok INTEGER NOT NULL,
+       tls_ok INTEGER NOT NULL,
+       smtp_ok INTEGER NOT NULL,
+@@ -982,20 +997,21 @@ function initDb() {
+       FOREIGN KEY(originating_job_id) REFERENCES matrix_stream_jobs(id)
+     );
+ 
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
+     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_api_requests_scope ON matrix_stream_api_requests(actor_user_id, work_item_id, action);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_reply_checks_due ON matrix_stream_reply_checks(state, due_at);
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
+     BEFORE UPDATE ON matrix_selection_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_delete
+     BEFORE DELETE ON matrix_selection_events
+@@ -1008,20 +1024,32 @@ function initDb() {
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_delete
+     BEFORE DELETE ON matrix_stream_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+     END;
+ 
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_api_requests_no_update
++    BEFORE UPDATE ON matrix_stream_api_requests
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_api_requests is immutable');
++    END;
++
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_api_requests_no_delete
++    BEFORE DELETE ON matrix_stream_api_requests
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_api_requests is immutable');
++    END;
++
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_identity_immutable
+     BEFORE UPDATE ON matrix_stream_recipient_evidence
+     WHEN NEW.work_item_id IS NOT OLD.work_item_id
+       OR NEW.organization_domain IS NOT OLD.organization_domain
+       OR NEW.recipient_email IS NOT OLD.recipient_email
+       OR NEW.source_url IS NOT OLD.source_url
+       OR NEW.verified_at IS NOT OLD.verified_at
+       OR NEW.snapshot_json IS NOT OLD.snapshot_json
+       OR NEW.created_by IS NOT OLD.created_by
+       OR NEW.created_at IS NOT OLD.created_at
+diff --git a/src/routes/matrix.js b/src/routes/matrix.js
+index 3c585f7..fed4dcf 100644
+--- a/src/routes/matrix.js
++++ b/src/routes/matrix.js
+@@ -1,24 +1,27 @@
+ 'use strict';
+ 
+ const crypto = require('crypto');
+ const express = require('express');
+-const { defaultPermissionsByRole } = require('../lib/permissions');
++const { defaultPermissionsByRole, normalizePermissions } = require('../lib/permissions');
+ const { createCacheIndexView } = require('../lib/cacheIndexView');
+ const { createPacketGate } = require('../lib/packetGate');
++const { createMatrixStreamText } = require('../services/matrixStreamText');
+ 
+ const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
+ const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
+ const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
+ const STATUSES = new Set(['valid', 'needs_review']);
+ const STAGES = new Set(['selected', 'draft_pending', 'review_pending', 'suppressed']);
+ const LIST_FIELDS = new Set(['region', 'country', 'category', 'priority', 'status', 'page', 'page_size']);
++const VERSION_FIELDS = new Set(['expected_work_version', 'base_version_id', 'revision_instruction', 'idempotency_key']);
++const APPROVAL_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']);
+ 
+ function plainObject(value, label) {
+   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
+   return value;
+ }
+ 
+ function rejectUnknown(value, allowed, label) {
+   const object = plainObject(value, label);
+   const unknown = Object.keys(object).find(key => !allowed.has(key));
+   if (unknown) throw new Error(`unknown ${label} field: ${unknown}`);
+@@ -102,30 +105,79 @@ function createMatrixBridgeAuth({ db, bridgeToken = process.env.MATRIX_BRIDGE_TO
+   };
+ }
+ 
+ function requireMatrixRole(req, res, next) {
+   if (!req.user || !ALLOWED_ROLES.has(req.user.role)) return res.status(403).json({ error: 'matrix administrator role required' });
+   next();
+ }
+ 
+ function errorStatus(error) {
+   const message = String(error?.message || 'request failed');
+-  if (/stale version|session rehydration incomplete/.test(message)) return 409;
+-  if (/not authorized|actor binding|required binding|service binding|inactive|revoked/.test(message)) return 403;
++  if (/stale (?:work )?version|session rehydration incomplete|idempotency request conflict/.test(message)) return 409;
++  if (/not authorized|actor binding|required binding|service binding|inactive|revoked|matrixSend capability/.test(message)) return 403;
++  if (/text_provider_unavailable/.test(message)) return 503;
+   if (/not found/.test(message)) return 404;
+   return 400;
+ }
+ 
+-function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_STREAM_DB_PATH, clock } = {}) {
++function reviewFailure(code) {
++  const error = new Error(code);
++  error.matrixReviewCode = code;
++  return error;
++}
++
++function reviewErrorDescriptor(error) {
++  const message = String(error?.message || '');
++  const explicit = error?.matrixReviewCode;
++  if (explicit === 'text_provider_unavailable' || /text_provider_unavailable/.test(message)) {
++    return { status: 503, code: 'text_provider_unavailable', message: 'Text revision service is unavailable.' };
++  }
++  if (explicit === 'text_provider_failure') {
++    return { status: 503, code: 'text_provider_failure', message: 'Text revision service is temporarily unavailable.' };
++  }
++  if (/idempotency request conflict/.test(message)) {
++    return { status: 409, code: 'idempotency_conflict', message: 'Idempotency key conflicts with another request.' };
++  }
++  if (/stale (?:work )?version|session rehydration incomplete/.test(message)) {
++    return { status: 409, code: 'stale_review_state', message: 'Review state is stale.' };
++  }
++  if (/not authorized|actor binding|required binding|service binding|inactive|revoked|matrixSend capability|administrator role/.test(message)) {
++    return { status: 403, code: 'review_forbidden', message: 'Review action is not authorized.' };
++  }
++  if (/not found/.test(message)) {
++    return { status: 404, code: 'review_not_found', message: 'Review resource was not found.' };
++  }
++  if (/must|required|invalid|unknown|cannot|suppressed|mismatch|conflict|eligible|unsupported|contact form|quality gate/.test(message)) {
++    return { status: 400, code: 'invalid_review_request', message: 'Invalid review request.' };
++  }
++  return { status: 500, code: 'internal_error', message: 'Review request could not be completed.' };
++}
++
++function sendReviewError(res, error) {
++  const descriptor = reviewErrorDescriptor(error);
++  if (descriptor.status >= 500) console.warn(`[matrix-review] ${descriptor.code}`);
++  return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
++}
++
++function createMatrixRouter({
++  db,
++  audit,
++  candidateDbPath = process.env.MATRIX_STREAM_DB_PATH,
++  clock,
++  reviewService = require('../services/matrixStreamReview'),
++  deliveryService,
++  textService = createMatrixStreamText()
++} = {}) {
+   const router = express.Router();
+   const view = createCacheIndexView({ dbPath: candidateDbPath });
+   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
++  void deliveryService;
+ 
+   router.use(requireMatrixRole);
+ 
+   router.get('/ready', (req, res) => {
+     try {
+       if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+       rejectUnknown(req.query, new Set(), 'query');
+       view.ready();
+       res.json({ ok: true, service: 'matrix' });
+     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+@@ -178,20 +230,177 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
+     const binding = db.prepare(`
+       SELECT b.id, b.feishu_open_id AS feishuOpenId
+       FROM matrix_actor_bindings b JOIN users u ON u.id = b.user_id
+       WHERE b.user_id = ? AND b.status = 'active' AND u.status = 'active'
+       ORDER BY b.id ASC LIMIT 1
+     `).get(req.user.id);
+     if (!binding) throw new Error('active actor binding required');
+     return binding;
+   }
+ 
++  function requireReviewAccess(req) {
++    if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
++    const active = db.prepare(`
++      SELECT b.id FROM matrix_actor_bindings b
++      JOIN users u ON u.id = b.user_id
++      WHERE b.id = ? AND b.user_id = ? AND b.status = 'active' AND u.status = 'active'
++    `).get(req.matrixBinding.id, req.user.id);
++    if (!active) throw new Error('active actor binding required');
++    const permissions = normalizePermissions(req.user.role, req.user.permissions);
++    if (!permissions.capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
++  }
++
++  function reviewIdentity(req) {
++    if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
++    return {
++      actorUserId: positiveInteger(req.user?.id, 'actor user id'),
++      bindingId: positiveInteger(req.matrixBinding.id, 'binding id'),
++      openId: String(req.matrixBinding.feishuOpenId || '').trim()
++    };
++  }
++
++  function freshReviewAuthorization(identity, workItemId, expectedVersion) {
++    const row = db.prepare(`
++      SELECT b.id AS binding_id, b.feishu_open_id, b.status AS binding_status,
++             u.id AS actor_user_id, u.role, u.status AS actor_status, u.permissions_json,
++             w.id AS work_item_id, w.candidate_id, w.owner_user_id, w.stage, w.stream_state, w.version
++      FROM matrix_actor_bindings b
++      JOIN users u ON u.id = b.user_id
++      LEFT JOIN matrix_work_items w ON w.id = ?
++      WHERE b.id = ? AND b.user_id = ? AND b.feishu_open_id = ?
++    `).get(workItemId, identity.bindingId, identity.actorUserId, identity.openId);
++    if (!row || row.binding_status !== 'active' || row.actor_status !== 'active') throw new Error('active actor binding required');
++    if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
++    let storedPermissions;
++    try { storedPermissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { storedPermissions = null; }
++    if (!normalizePermissions(row.role, storedPermissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
++    if (!row.work_item_id) throw new Error('work item not found');
++    if (row.owner_user_id !== identity.actorUserId) throw new Error('not authorized');
++    if (row.stage === 'suppressed' || row.stream_state === 'suppressed') throw new Error('work item is suppressed');
++    if (expectedVersion !== undefined && row.version !== expectedVersion) throw new Error('stale work version');
++    return row;
++  }
++
++  function apiRequestFingerprint(value) {
++    return crypto.createHash('sha256').update(reviewService.canonicalJson(value)).digest('hex');
++  }
++
++  function apiReplay({ identity, workItemId, action, idempotencyKey, fingerprint }) {
++    const lookup = db.transaction(() => {
++      const row = db.prepare('SELECT * FROM matrix_stream_api_requests WHERE idempotency_key = ?').get(idempotencyKey);
++      if (!row) return null;
++      const authorization = freshReviewAuthorization(identity, workItemId);
++      if (row.actor_user_id !== identity.actorUserId || row.work_item_id !== workItemId
++          || row.action !== action || row.request_fingerprint !== fingerprint) {
++        throw new Error('idempotency request conflict');
++      }
++      let response;
++      try { response = JSON.parse(row.response_json); } catch (_) { throw new Error('stored API response invalid'); }
++      const version = db.prepare('SELECT status FROM matrix_stream_versions WHERE id = ? AND work_item_id = ?').get(row.version_id, workItemId);
++      if (!version) throw new Error('recorded version not found');
++      return { ...response, current_status: version.status, current_work_item_version: authorization.version };
++    });
++    return lookup.immediate();
++  }
++
++  function recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId, response }) {
++    db.prepare(`
++      INSERT INTO matrix_stream_api_requests (
++        actor_user_id, work_item_id, action, idempotency_key, request_fingerprint,
++        version_id, response_json, created_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
++    `).run(
++      identity.actorUserId, workItemId, action, idempotencyKey, fingerprint,
++      versionId, JSON.stringify(response), new Date().toISOString()
++    );
++  }
++
++  function ownedReviewItem(workItemId, actorUserId, expectedVersion) {
++    const item = db.prepare('SELECT * FROM matrix_work_items WHERE id = ?').get(workItemId);
++    if (!item) throw new Error('work item not found');
++    if (item.owner_user_id !== actorUserId) throw new Error('not authorized');
++    if (item.stage === 'suppressed' || item.stream_state === 'suppressed') throw new Error('work item is suppressed');
++    if (expectedVersion !== undefined && item.version !== expectedVersion) throw new Error('stale work version');
++    return item;
++  }
++
++  function httpsUrl(value) {
++    try {
++      const url = new URL(String(value || ''));
++      return url.protocol === 'https:' && url.hostname.includes('.') ? url.toString() : '';
++    } catch (_) { return ''; }
++  }
++
++  function candidateDraft(detail) {
++    const evidence = Array.isArray(detail.official_evidence) ? detail.official_evidence : [];
++    const organizationDomain = String(detail.official_domain || '').trim().toLowerCase();
++    if (!organizationDomain) throw new Error('official organization domain required');
++    const official = evidence.find(row => {
++      const source = httpsUrl(row.source_url);
++      if (!source) return false;
++      const hostname = new URL(source).hostname.toLowerCase();
++      return hostname === organizationDomain || hostname.endsWith(`.${organizationDomain}`);
++    });
++    if (!official) throw new Error('official recipient source evidence required');
++    const email = String(detail.contacts?.email || '').trim().toLowerCase();
++    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('public company email required; contact form is not eligible');
++    const sourceUrl = httpsUrl(detail.contacts?.contact_page) || httpsUrl(official.source_url);
++    if (!sourceUrl) throw new Error('official recipient source evidence required');
++    const verifiedValue = detail.updated_at || official.observed_at;
++    const verifiedMs = Date.parse(String(verifiedValue || ''));
++    if (!Number.isFinite(verifiedMs)) throw new Error('recipient evidence verification timestamp required');
++
++    const category = String((detail.categories || [])[0] || '').trim().toLowerCase();
++    const categoryCn = ({ coffee: '咖啡', tea: '茶', snacks: '零食' })[category];
++    if (!category || !categoryCn) throw new Error('deterministic draft category is unsupported');
++    const products = evidence.map(row => String(row.excerpt || row.page_title || '').trim()).filter(Boolean);
++    const specs = [...new Set(products.join(' ').match(/\b\d+(?:\.\d+)?\s*(?:kg|g)\b/gi) || [])];
++    if (!specs.length) throw new Error('official product specifications required for deterministic draft');
++    const specText = specs.join(' and ');
++    const specTextCn = specs.join('和');
++    const company = String(detail.company_name || '').trim();
++    const entryProduct = `${category} pouch`;
++    const subject = `${specText} ${entryProduct} options for ${company}`;
++    const bodyEn = `Dear ${company} team,\nWe reviewed your ${specText} ${category} range. We would like to discuss ${category} pouches. Could you share your current material structure and annual volume?\nBest regards`;
++    const bodyCn = `您好，\n我们查看了贵司${specTextCn}${categoryCn}产品，希望沟通${categoryCn}袋。请问能否提供当前材料结构和年用量？\n此致敬礼`;
++    const snapshot = {
++      organization_domain: organizationDomain,
++      recipient_email: email,
++      source_url: sourceUrl,
++      company,
++      categories: detail.categories || [],
++      products,
++      entryProduct,
++      supportedClaims: [],
++      evidenceIds: evidence.map(row => row.source_url).filter(Boolean),
++      official_evidence: evidence.map(row => ({
++        source_url: row.source_url,
++        observed_at: row.observed_at,
++        excerpt: row.excerpt
++      }))
++    };
++    return {
++      recipient: { email, sourceUrl, verifiedAt: new Date(verifiedMs).toISOString(), kind: 'public_company' },
++      subject,
++      bodyEn,
++      bodyCn,
++      strategySummary: `Official evidence reviewed for ${company}`,
++      sourceSnapshot: snapshot,
++      organizationDomain
++    };
++  }
++
++  function withWorkVersion(version) {
++    const item = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(version.work_item_id);
++    return { ...version, work_item_version: item?.version || null };
++  }
++
+   router.post('/sessions', (req, res) => {
+     try {
+       const body = rejectUnknown(req.body, new Set(['chat_id', 'thread_id', 'filters', 'snapshot_key', 'candidate_ids', 'expires_at']), 'body');
+       const binding = bindingForRequest(req);
+       const session = gate.createSession({
+         actorUserId: req.user.id,
+         feishuOpenId: binding.feishuOpenId,
+         chatId: body.chat_id,
+         threadId: body.thread_id,
+         filters: body.filters,
+@@ -286,14 +495,160 @@ function createMatrixRouter({ db, audit, candidateDbPath = process.env.MATRIX_ST
+ 
+   router.get('/work-items/:id', (req, res) => {
+     try {
+       rejectUnknown(req.query, new Set(), 'query');
+       const item = gate.getWorkItem({ workItemId: positiveInteger(req.params.id, 'work item id'), actorUserId: req.user.id });
+       if (!item) return res.status(404).json({ error: 'work item not found' });
+       res.json(item);
+     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+   });
+ 
++  router.post('/work-items/:id/versions', async (req, res) => {
++    try {
++      const body = rejectUnknown(req.body, VERSION_FIELDS, 'body');
++      const identity = reviewIdentity(req);
++      const workItemId = positiveInteger(req.params.id, 'work item id');
++      const expectedWorkVersion = positiveInteger(body.expected_work_version, 'expected work version');
++      const idempotencyKey = String(body.idempotency_key || '').trim();
++      if (!idempotencyKey) throw new Error('idempotency key required');
++      const hasBase = body.base_version_id !== undefined;
++      const hasInstruction = body.revision_instruction !== undefined;
++      if (hasBase !== hasInstruction) throw new Error('base version and revision instruction must be supplied together');
++      const action = hasBase ? 'revise' : 'create';
++      const baseVersionId = hasBase ? positiveInteger(body.base_version_id, 'base version id') : null;
++      const instruction = hasInstruction ? String(body.revision_instruction || '').trim() : '';
++      if (hasInstruction && !instruction) throw new Error('revision instruction required');
++      const fingerprint = apiRequestFingerprint({
++        action,
++        actorUserId: identity.actorUserId,
++        workItemId,
++        expectedWorkVersion,
++        ...(hasBase ? { baseVersionId, instruction } : {})
++      });
++      const replay = apiReplay({ identity, workItemId, action, idempotencyKey, fingerprint });
++      if (replay) return res.status(200).json(replay);
++
++      if (hasBase) {
++        db.transaction(() => freshReviewAuthorization(identity, workItemId, expectedWorkVersion)).immediate();
++        const current = reviewService.getVersion(db, { actorUserId: identity.actorUserId, versionId: baseVersionId });
++        if (!current || current.work_item_id !== workItemId) throw new Error('base version not found');
++        let sourceSnapshot;
++        try { sourceSnapshot = JSON.parse(current.source_snapshot_json); } catch (_) { throw new Error('stored source snapshot invalid'); }
++        let generated;
++        try {
++          generated = await textService.revise({ current, instruction, sourceSnapshot });
++        } catch (_) {
++          throw reviewFailure('text_provider_failure');
++        }
++        if (generated?.ok === false) {
++          throw reviewFailure(generated.reason === 'text_provider_unavailable' ? 'text_provider_unavailable' : 'text_provider_failure');
++        }
++        const revise = db.transaction(() => {
++          freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
++          const revised = reviewService.reviseVersion(db, {
++            actorUserId: identity.actorUserId,
++            workItemId,
++            baseVersionId,
++            expectedWorkVersion,
++            subject: generated.subject,
++            bodyEn: generated.body_en,
++            bodyCn: generated.body_cn,
++            idempotencyKey
++          });
++          const response = withWorkVersion(revised);
++          recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId: revised.id, response });
++          return response;
++        });
++        return res.status(201).json(revise.immediate());
++      }
++
++      const item = db.transaction(() => freshReviewAuthorization(identity, workItemId, expectedWorkVersion)).immediate();
++      const detail = view.detail(item.candidate_id, { revealContacts: true });
++      if (!detail) throw new Error('candidate not found');
++      const draft = candidateDraft(detail);
++      const create = db.transaction(() => {
++        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
++        db.prepare(`
++          INSERT OR IGNORE INTO matrix_stream_recipient_evidence (
++            work_item_id, organization_domain, recipient_email, source_url, verified_at,
++            snapshot_json, status, created_by, created_at
++          ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
++        `).run(
++          workItemId, draft.organizationDomain, draft.recipient.email, draft.recipient.sourceUrl,
++          draft.recipient.verifiedAt, JSON.stringify(draft.sourceSnapshot), identity.actorUserId,
++          typeof clock === 'function' ? new Date(clock()).toISOString() : new Date().toISOString()
++        );
++        const version = reviewService.createInitialVersion(db, {
++          actorUserId: identity.actorUserId,
++          workItemId,
++          expectedWorkVersion,
++          recipient: draft.recipient,
++          subject: draft.subject,
++          bodyEn: draft.bodyEn,
++          bodyCn: draft.bodyCn,
++          strategySummary: draft.strategySummary,
++          sourceSnapshot: draft.sourceSnapshot,
++          idempotencyKey
++        });
++        let quality;
++        try { quality = JSON.parse(version.quality_json); } catch (_) { quality = null; }
++        if (!quality?.passed) throw new Error('initial draft quality gate blocked');
++        const response = withWorkVersion(version);
++        recordApiRequest({ identity, workItemId, action, idempotencyKey, fingerprint, versionId: version.id, response });
++        return response;
++      });
++      const created = create.immediate();
++      return res.status(201).json(created);
++    } catch (error) { sendReviewError(res, error); }
++  });
++
++  router.post('/work-items/:id/versions/:versionId/approve', (req, res) => {
++    try {
++      const body = rejectUnknown(req.body, APPROVAL_FIELDS, 'body');
++      const identity = reviewIdentity(req);
++      const workItemId = positiveInteger(req.params.id, 'work item id');
++      const versionId = positiveInteger(req.params.versionId, 'version id');
++      const expectedWorkVersion = positiveInteger(body.expected_work_version, 'expected work version');
++      const expectedContentHash = String(body.expected_content_hash || '').trim();
++      const idempotencyKey = String(body.idempotency_key || '').trim();
++      if (!idempotencyKey) throw new Error('idempotency key required');
++      const fingerprint = apiRequestFingerprint({
++        action: 'approve', actorUserId: identity.actorUserId, workItemId, versionId,
++        expectedWorkVersion, expectedContentHash
++      });
++      const replay = apiReplay({ identity, workItemId, action: 'approve', idempotencyKey, fingerprint });
++      if (replay) return res.json(replay);
++      const approve = db.transaction(() => {
++        freshReviewAuthorization(identity, workItemId, expectedWorkVersion);
++        const approved = reviewService.approveVersion(db, {
++          actorUserId: identity.actorUserId,
++          workItemId,
++          versionId,
++          expectedWorkVersion,
++          expectedContentHash,
++          idempotencyKey
++        });
++        const response = withWorkVersion(approved);
++        recordApiRequest({ identity, workItemId, action: 'approve', idempotencyKey, fingerprint, versionId: approved.id, response });
++        return response;
++      });
++      res.json(approve.immediate());
++    } catch (error) { sendReviewError(res, error); }
++  });
++
++  router.get('/work-items/:id/versions/:versionId/preview', (req, res) => {
++    try {
++      requireReviewAccess(req);
++      rejectUnknown(req.query, new Set(), 'query');
++      const workItemId = positiveInteger(req.params.id, 'work item id');
++      const versionId = positiveInteger(req.params.versionId, 'version id');
++      const item = ownedReviewItem(workItemId, req.user.id);
++      const preview = reviewService.finalPreview(db, { actorUserId: req.user.id, versionId });
++      if (!preview || preview.version.work_item_id !== item.id) throw new Error('version not found');
++      res.json({ ...preview, work_item_version: item.version });
++    } catch (error) { sendReviewError(res, error); }
++  });
++
+   return router;
+ }
+ 
+ module.exports = { createMatrixBridgeAuth, createMatrixRouter };
+diff --git a/src/server.js b/src/server.js
+index 8a99280..dbfbbba 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -94,21 +94,23 @@ app.use(express.static(require('path').join(__dirname, '..', 'public'), {
+       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+       return;
+     }
+     res.setHeader('Cache-Control', 'public, max-age=600');
+   }
+ }));
+ app.get(['/crm', '/crm/*'], (req, res) => {
+   res.sendFile(path.join(__dirname, '..', 'public', 'new', 'index.html'));
+ });
+ app.use('/api/matrix', matrixBridgeAuth, (req, res, next) => {
+-  if (req.authMode === 'matrix_bridge') return dispatchMatrix(req, res, next);
++  if (req.authMode === 'matrix_bridge') {
++    return dispatchMatrix(req, res, () => res.status(404).json({ error: 'matrix endpoint not found' }));
++  }
+   next();
+ });
+ app.use(fakeAuth);
+ app.use('/api/auth', authRouter);
+ 
+ app.get('/health', (_, res) => res.json({ ok: true, service: 'packaging-system-demo' }));
+ app.use('/api/orders', ordersRouter);
+ app.use('/api/quotes', quotesRouter);
+ app.use('/api/quote-sheets', quoteSheetsRouter);
+ app.use('/api/cost', costRouter);

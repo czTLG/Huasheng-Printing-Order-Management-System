@@ -1,0 +1,521 @@
+# Review package: b08741d..378be63
+
+## Commits
+378be63 test: gate matrix stream review rollout
+
+## Files changed
+ .env.example                                     | 13 +++++
+ .superpowers/sdd/task-7-report.md                | 46 ++++++++++++++++
+ docs/matrix-stream-catalog-2026-07-16.md         |  6 ++-
+ scripts/test-verify-matrix-readonly-selection.js | 44 +++++++++++++++-
+ scripts/verify-matrix-readonly-selection.js      | 67 ++++++++++++++++++++----
+ src/services/matrixStreamDelivery.js             | 23 +++++---
+ 6 files changed, 178 insertions(+), 21 deletions(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index fc62116..878ae57 100644
+--- a/.env.example
++++ b/.env.example
+@@ -4,16 +4,29 @@ ALIYUN_MAIL_IMAP_SECURE=true
+ ALIYUN_MAIL_USER=
+ ALIYUN_MAIL_PASSWORD=
+ ALIYUN_MAIL_SYNC_DAYS=90
+ ALIYUN_MAIL_SYNC_LIMIT=200
+ PORT=8080
+ FORCE_HTTPS=0
+ DB_PATH=./data/app.db
+ MATRIX_STREAM_DB_PATH=./data/matrix-stream.db
+ MATRIX_BRIDGE_TOKEN=
+ MATRIX_DELIVERY_ENABLED=0
++MATRIX_STREAM_SEND_ENABLED=0
++MATRIX_RECIPIENT_MAX_AGE_DAYS=180
++MATRIX_MESSAGE_ID_DOMAIN=
++MATRIX_TEXT_PROVIDER=mock
++MATRIX_DKIM_SELECTOR=
++MATRIX_DAILY_ACCEPTED_LIMIT=5
++MATRIX_DOMAIN_COOLING_DAYS=90
+ MATRIX_RECOMMEND_HOUR=9
+ MATRIX_RECOMMEND_MINUTE=0
++SMTP_HOST=
++SMTP_PORT=465
++SMTP_SECURE=true
++SMTP_USER=
++SMTP_PASS=
++SMTP_FROM=
+ RUNTIME_BACKUP_DIR=/var/lib/packaging-system-backups
+ RUNTIME_BACKUP_RETENTION_DAYS=30
+ RUNTIME_OFFSITE_SYNC_ENABLED=false
+ GOLDEN_BASELINE_PATH=
+diff --git a/.superpowers/sdd/task-7-report.md b/.superpowers/sdd/task-7-report.md
+new file mode 100644
+index 0000000..e1683c4
+--- /dev/null
++++ b/.superpowers/sdd/task-7-report.md
+@@ -0,0 +1,46 @@
++# Task 7 Report — Production-Surface Gate and Full Regression
++
++## Status
++
++IMPLEMENTED; repository lint/build commands unavailable
++
++## Scope implemented
++
++- Expanded the single reviewed runtime manifest to include the complete review, text, gate, readiness, follow-up, delivery, and correlation service surface.
++- Re-signed the changed runtime inventory together and bound the sole reviewed main-application delivery capability to its exact source digest.
++- Kept the bot client, card extension, and watcher outbound-free. Synthetic transport additions to each surface are rejected by the verifier.
++- Restricted delivery approval to the persisted recipient, subject, body, source URL, exact content hash, explicit `matrixSend` capability, one injected `sendMail` call, and fail-closed ambiguous state. Caller recipient, subject, SMTP host, callback URL, retry, attachments, direct SMTP construction, and other network/process capabilities are rejected.
++- Documented only safe environment names/defaults. `MATRIX_STREAM_SEND_ENABLED=0` remains the default, SMTP values are empty, and production does not construct or inject a delivery service in this gate.
++- Updated the runtime catalog to distinguish the outbound-free bot surface from the digest-bound, dependency-injected management service.
++
++## TDD evidence
++
++1. RED: `node scripts/test-verify-matrix-readonly-selection.js` failed because `approvedCapabilitySource('delivery', source)` returned false.
++2. GREEN: the digest-bound delivery capability branch and unified runtime manifest made the reviewed source pass.
++3. Mutation coverage rejects caller-controlled `input.to`, `input.subject`, `input.smtpHost`, callback URL, automatic retry, and unreviewed `nodemailer` construction.
++4. Bot-surface mutation coverage rejects a `sendMail` addition to the client, extension, or watcher.
++5. Safe environment/catalog assertions failed before the documented defaults were added and pass afterward.
++
++## Final verification
++
++- `node scripts/test-verify-matrix-readonly-selection.js` — PASS.
++- Review, gate, policy, delivery, correlation, admin-access, card-extension, bridge-patch, and bridge-artifact focused suites — PASS.
++- `node scripts/test-matrix-api.js` — PASS on the approved localhost-capable path; the initial sandbox-only run was blocked from binding `0.0.0.0:21002` with `EPERM`.
++- Configured read-only database verifier — PASS with 26 eligible rows, five recommendations, one idempotent selection event, and `delivery_enabled: false`.
++- Runtime verifier focused suites — all PASS, including manifest/capability, API, bridge, card, and supervisor checks.
++- `node --check` for the changed verifier files and `git diff --check` — PASS.
++- `npm run lint` — unavailable: `package.json` defines no `lint` script.
++- `npm run build` — unavailable: `package.json` defines no `build` script.
++
++## Boundaries
++
++- No deployment, restart, external send, real transport construction, or enable-flag change was performed.
++- Tests use injected fakes and do not require or read SMTP credentials.
++- Production remains fail-closed because `src/server.js` does not inject the delivery service while the safe flag is disabled.
++- Task 8 retains responsibility for controlled production wiring, explicit enablement, real acceptance, rollback evidence, and any reply-window observation.
++
++## 蒸馏进度
++
++- 已确认模块：统一 runtime manifest、digest-bound delivery capability、bot outbound-free 审计、五类 caller-controlled mutation 拒绝、safe env catalog、configured read-only acceptance。
++- 未解决模块：仓库缺少 lint/build npm scripts；Task 8 controlled wiring、显式启用、真实单次验收与回滚记录尚未执行。
++- 下一优先知识缺口：Task 8 在不扩大 transport 权限面的前提下，如何完成受控 wiring、单次验收和可核验回滚。
+diff --git a/docs/matrix-stream-catalog-2026-07-16.md b/docs/matrix-stream-catalog-2026-07-16.md
+index bb27f2d..6dae8bb 100644
+--- a/docs/matrix-stream-catalog-2026-07-16.md
++++ b/docs/matrix-stream-catalog-2026-07-16.md
+@@ -12,37 +12,39 @@ This catalog records only the code contract and acceptance gate. It contains no
+ - Database integrity: the application connection enables SQLite foreign-key enforcement. Binding replacement audit details retain old/new user IDs and statuses, while the command-line result does not print those identifiers.
+ - Mobile constraint: the full recommendation card is limited to 1,500 Unicode code points, uses no Markdown table, and retains name, reason, category, data status, supplier state, approach angle, verification gap, and next action. Desktop and mobile use wrapping CardKit button rows rather than horizontal tables.
+ - 来源分离: discovery channel/URL identifies how the company was found; official evidence URLs support product/category claims. Detail views label unconfirmed information as `待核实`.
+ - Nearby recommendation scope: active A–E recommendations are limited to `JP,KR,VN,TH,MY,ID,PH,MN,RU,KZ,UZ,KG,PK,BD,NP,LK`. Broader non-CN/non-IN records remain visible to administrators for history and audit, but do not enter the daily card.
+ - Public relationship signals: named supplier relationships are shown only when stored as `confirmed` or `public_lead` with HTTPS source URL, source type, observation time, and excerpt. Missing evidence renders `未知`; it never creates a guessed supplier. Strategy signals retain entry product, differentiation angle, first-contact goal, questions, risks, source URL, and observation time.
+ - Reviewed intake: `matrix-record-import.js` accepts only approved nearby-country organizations with an official domain, public HTTPS discovery/evidence, and conservative public-source scoring. Every new row is forced to `needs_review` + `unreviewed` with no audit timestamp; input cannot set `valid`, invent personal contacts, or enter A–E before a separate human audit.
+ - Recommendation truth: ordinary candidate lists remain broad, but daily recommendations require `status=valid`, stage `observed` or `recommendation_ready`, an allowed country, `audit_state=audited`, a current review, at least one non-empty official-website evidence URL, one discovery row, and one public organizational contact route. All unknown, pending, terminal, suppressed, bounced, opted-out, delivered, and review-needed states are excluded. “Current” means both `audited_at` and `updated_at` are parseable and `audited_at >= updated_at`; missing timestamps never imply freshness.
+ - Recommendation flow: initial choices, advanced-filter results, and every `换一批` page use the same strict paginated recommendation query. Ordinary `/candidates` rows never feed A–E cards. Zero qualified rows create an empty minimized session and a compact no-result card without substituting weaker records.
+ - Snapshot consistency: every page shares a hash of the complete ordered eligible membership, update versions, and filters. A plain next-page action refuses membership/order/version drift before changing the session version; an intentional filter change starts a new snapshot.
+ - Presentation truth: API summaries and details expose the real `stage_code`, while cards render its Chinese workflow label. Observed signals with explicit units/dimensions are shown as confirmed specifications; other non-empty observed values are shown as confirmed public signals, not mislabeled as specifications. Only an empty specification set is marked for verification.
+-- Delivery boundary: `MATRIX_DELIVERY_ENABLED=0` is mandatory. This slice only selects and records candidates; 不存在外发适配器, and it does not send email, WhatsApp, or website requests.
++- Reviewed review loop: the main-application runtime manifest now includes `matrixStreamReview.js`, `matrixStreamText.js`, `matrixStreamGate.js`, `matrixStreamReadiness.js`, `matrixStreamFollowup.js`, `matrixStreamDelivery.js`, and `matrixStreamCorrelation.js`. Draft versions are immutable, approval does not send, and the card requires 两次确认 with a separately loaded final preview.
++- Delivery boundary: the bot 运行面 (`matrix-client.js`, `stream-card.cjs`, and `matrix-watch.js`) remains outbound-free, requires `MATRIX_DELIVERY_ENABLED=0`, and contains no SMTP configuration or transport construction. 不存在外发适配器 in the bot. The sole reviewed transport capability is the digest-bound, dependency-injected main-application `matrixStreamDelivery.js`; it accepts persisted recipient/subject/body only, rejects caller transport/content fields, and has no production construction in `src/server.js` during this gate.
++- Disabled rollout: `.env.example` fixes the safe default `MATRIX_STREAM_SEND_ENABLED=0`. Until the separately controlled rollout wires an approved transport behind an exact enabled flag, the production router has no delivery service and send confirmation fails closed without creating a job. Tests inject a fake transport and never read SMTP secrets or perform real delivery.
+ - Reminder safety: local delivery prioritizes at-most-once behavior. A pending reminder is claimed as inflight before the single managed-card attempt; an inflight record without a matching receipt is always treated as ambiguous and requires manual reconciliation. It is never retried automatically, even after the platform idempotency window, so a crash can cause a missed reminder rather than a duplicate.
+ - Readiness: the runtime probes authenticated `/api/matrix/ready` with the configured service identity. The endpoint verifies active binding, read-only/query-only candidate access, required schema, and execution of the strict recommendation query without returning candidate content. Generic application health cannot satisfy this gate.
+ - Selection replay: a repeated selection callback reaches persisted server idempotency even after bridge restart; the same event returns its authoritative prior result, while an unseen stale event fails closed.
+ - Selection-time truth: every unseen selection reuses the exact strict recommendation predicate synchronously before any work item, event, or session-version write. A candidate that became review-needed, disallowed-stage, stale-audit, evidence/discovery-less, or unreachable cannot be newly selected; an already persisted event still replays authoritatively.
+ - Stage presentation: `recommendation_ready` is rendered as `推荐就绪` in both interactive and scheduled cards.
+ 
+ ## Automated acceptance
+ 
+ Run `npm run verify:matrix-readonly-selection`. This deployment gate uses `MATRIX_STREAM_DB_PATH` or the safe default `./data/matrix-stream.db` and will **fail closed** when that file is missing, corrupt, incorrectly permissioned, or incomplete.
+ 
+ Disposable fixture verification is separate and explicit: `MATRIX_VERIFY_FIXTURE=1 npm run verify:matrix-readonly-selection`. Fixture mode cannot be combined with `MATRIX_STREAM_DB_PATH` and is never enabled by the package script itself. It checks:
+ 
+ - SQLite integrity and mode `0600`;
+ - no duplicate normalized domains or excluded CN/IN rows; ordinary-pool evidence/discovery gaps are reported as statistics, while recommendation-eligible rows must have current audit, official evidence, discovery, and a public organizational contact route;
+ - the adapter's real oversized `recommend` request still returns no more than five recommendations;
+-- delivery disabled and no outbound adapter capability in the Matrix slice;
++- `delivery_enabled: false`, the reviewed delivery source digest, and no unreviewed outbound adapter capability anywhere in the Matrix runtime surface;
+ - one event after the same idempotent selection is submitted twice; A–E only opens detail, while `确认选择` performs the idempotent write;
+ - recommendation geography contains only the 16 approved nearby country codes, and every named supplier row has complete public provenance;
+ - focused tests for the adapter, packet gate, API, bridge seam, and card extension.
+ 
+ ## Controlled deployment gate
+ 
+ The candidate database must have SQLite integrity `ok`, filesystem mode `0600`, the optional signal tables, zero provenance gaps, and `MATRIX_DELIVERY_ENABLED=0`. Build an immutable release directory and image, preserve hostname `vm-debug-ci`, and keep the stopped prior container as `vm_debug_ci_pre_<commit>` until acceptance completes. A failed health, authenticated readiness, bridge credential, or WebSocket check must restore the preserved container.
+ 
+ Real Feishu acceptance uses the authorized bound account and must cover:
+ 
+diff --git a/scripts/test-verify-matrix-readonly-selection.js b/scripts/test-verify-matrix-readonly-selection.js
+index 107f547..be5c390 100644
+--- a/scripts/test-verify-matrix-readonly-selection.js
++++ b/scripts/test-verify-matrix-readonly-selection.js
+@@ -20,20 +20,32 @@ assert.deepStrictEqual(received, { limit: Number.MAX_SAFE_INTEGER, excludeIds: [
+ assert.strictEqual(rows.length, 5);
+ 
+ assert.strictEqual(typeof verifier.candidateInput, 'function');
+ assert.strictEqual(typeof verifier.inspectCandidates, 'function');
+ assert.strictEqual(typeof verifier.runtimeSurfaceFiles, 'function');
+ assert.strictEqual(typeof verifier.outboundAdapterFiles, 'function');
+ assert.strictEqual(typeof verifier.validateComposeConfig, 'function');
+ assert.strictEqual(typeof verifier.approvedCapabilitySource, 'function');
+ assert.strictEqual(typeof verifier.validateRuntimeManifest, 'function');
+ assert.strictEqual(typeof verifier.runtimeManifest, 'function');
++const envExample = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8').split(/\r?\n/);
++for (const line of [
++  'MATRIX_STREAM_SEND_ENABLED=0', 'MATRIX_RECIPIENT_MAX_AGE_DAYS=180',
++  'MATRIX_MESSAGE_ID_DOMAIN=', 'MATRIX_TEXT_PROVIDER=mock', 'MATRIX_DKIM_SELECTOR=',
++  'MATRIX_DAILY_ACCEPTED_LIMIT=5', 'MATRIX_DOMAIN_COOLING_DAYS=90',
++  'SMTP_HOST=', 'SMTP_PORT=465', 'SMTP_SECURE=true', 'SMTP_USER=', 'SMTP_PASS=', 'SMTP_FROM='
++]) assert.ok(envExample.includes(line), `.env.example missing safe Task 7 name/default: ${line}`);
++const catalog = fs.readFileSync(path.join(__dirname, '..', 'docs/matrix-stream-catalog-2026-07-16.md'), 'utf8');
++for (const marker of [
++  'matrixStreamReview.js', 'matrixStreamDelivery.js', '两次确认',
++  'MATRIX_STREAM_SEND_ENABLED=0', 'bot 运行面', 'delivery_enabled: false'
++]) assert.ok(catalog.includes(marker), `Task 7 catalog missing ${marker}`);
+ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-verifier-input-'));
+ try {
+   const temporary = path.join(root, 'temporary');
+   fs.mkdirSync(temporary);
+   const defaultInput = verifier.candidateInput({ root, temporary, env: {} });
+   assert.deepStrictEqual(defaultInput, {
+     dbPath: path.join(root, 'data', 'matrix-stream.db'),
+     source: 'default-readonly-database'
+   });
+   assert.throws(() => verifier.inspectCandidates(defaultInput.dbPath), /no such|not found|open/i);
+@@ -75,34 +87,62 @@ try {
+     'axios.cjs': "require('axios').get('https://outside.invalid/data');\n",
+     'undici.cjs': "require('undici').request('https://outside.invalid/data');\n",
+     'http-request.cjs': "require('node:http').request('http://outside.invalid/data');\n",
+     'https-get.cjs': "require('node:https').get('https://outside.invalid/data');\n",
+     'net-connect.cjs': "require('node:net').connect(443, 'outside.invalid');\n",
+     'tls-connect.cjs': "require('node:tls').connect(443, 'outside.invalid');\n",
+     'http2-connect.cjs': "require('node:http2').connect('https://outside.invalid');\n",
+     'dgram-send.cjs': "require('node:dgram').createSocket('udp4').send('x', 53, 'outside.invalid');\n",
+     'websocket.js': "new WebSocket('wss://outside.invalid/socket');\n",
+     'event-source.js': "new EventSource('https://outside.invalid/events');\n",
+-    'exec-curl.cjs': "require('node:child_process').exec('curl https://outside.invalid/data');\n"
++    'exec-curl.cjs': "require('node:child_process').exec('curl https://outside.invalid/data');\n",
++    'unreviewed-transport.cjs': "require('nodemailer').createTransport({ host: input.smtpHost }).sendMail({ to: input.to });\n",
++    'bot-client-transport.js': `${fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js'), 'utf8')}\ntransport.sendMail({ to: input.to });\n`,
++    'bot-extension-transport.cjs': `${fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs'), 'utf8')}\ntransport.sendMail({ to: input.to });\n`,
++    'bot-watcher-transport.js': `${fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js'), 'utf8')}\ntransport.sendMail({ to: input.to });\n`
+   };
+   for (const [name, source] of Object.entries(rejectedCapabilities)) {
+     fs.writeFileSync(path.join(runtimeRoot, 'nested', name), source);
+   }
+   const surface = verifier.runtimeSurfaceFiles([runtimeRoot]);
+-  assert.strictEqual(surface.length, 13);
++  assert.strictEqual(surface.length, 1 + Object.keys(rejectedCapabilities).length);
+   assert.deepStrictEqual(
+     verifier.outboundAdapterFiles(surface).map(file => path.basename(file)).sort(),
+     Object.keys(rejectedCapabilities).sort()
+   );
++  const deliverySource = fs.readFileSync(path.join(__dirname, '..', 'src/services/matrixStreamDelivery.js'), 'utf8');
++  for (const guard of [
++    'capabilities.matrixSend',
++    'version.content_hash !== input.expectedContentHash',
++    "state = 'ambiguous'",
++    'recipient_source_url'
++  ]) assert.ok(deliverySource.includes(guard), `reviewed delivery source missing ${guard}`);
++  assert.ok(!deliverySource.includes('attachments:'), 'reviewed delivery source must not add attachments');
++  assert.strictEqual(verifier.approvedCapabilitySource('delivery', deliverySource), true);
++  for (const [label, maliciousSource] of [
++    ['caller recipient', deliverySource.replace('to: version.recipient_email', 'to: input.to')],
++    ['caller subject', deliverySource.replace('subject: version.subject', 'subject: input.subject')],
++    ['caller smtp host', deliverySource.replace('from,\n        to:', 'from,\n        smtpHost: input.smtpHost,\n        to:')],
++    ['caller callback', deliverySource.replace('text: version.body_en', 'text: version.body_en,\n        callbackUrl: input.callbackUrl')],
++    ['automatic retry', deliverySource.replace('const classified = classifyError(error);', 'if (input.retry) return deliver(prepared, input);\n      const classified = classifyError(error);')]
++  ]) {
++    assert.notStrictEqual(maliciousSource, deliverySource, `${label} mutation fixture must alter delivery source`);
++    assert.strictEqual(verifier.approvedCapabilitySource('delivery', maliciousSource), false, `${label} mutation must be rejected`);
++  }
+   assert.deepStrictEqual(verifier.outboundAdapterFiles(verifier.runtimeSurfaceFiles()), [], 'reviewed client/supervisor capabilities must be the only production exceptions');
+   const productionFiles = verifier.runtimeSurfaceFiles();
+   const productionManifest = verifier.runtimeManifest();
++  for (const service of [
++    'matrixStreamReview.js', 'matrixStreamText.js', 'matrixStreamGate.js',
++    'matrixStreamReadiness.js', 'matrixStreamFollowup.js', 'matrixStreamDelivery.js',
++    'matrixStreamCorrelation.js'
++  ]) assert.ok(Object.keys(productionManifest).includes(`src/services/${service}`), `runtime manifest missing ${service}`);
+   assert.strictEqual(verifier.validateRuntimeManifest({ files: productionFiles }), true);
+   assert.ok(Object.keys(productionManifest).every(file => !/(?:^|\/)tests?\//.test(file) && !/(?:^|\/)test-/.test(file)));
+   assert.throws(() => verifier.validateRuntimeManifest({ files: productionFiles.slice(1) }), /runtime manifest.*(?:missing|set)/i);
+   assert.throws(() => verifier.validateRuntimeManifest({ files: [...productionFiles, __filename] }), /runtime manifest.*(?:unexpected|set)/i);
+   const changedManifest = { ...productionManifest, [Object.keys(productionManifest)[0]]: '0'.repeat(64) };
+   assert.throws(() => verifier.validateRuntimeManifest({ files: productionFiles, manifest: changedManifest }), /runtime manifest.*hash/i);
+   const clientSource = fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js'), 'utf8');
+   const supervisorSource = fs.readFileSync(path.join(__dirname, '..', '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js'), 'utf8');
+   assert.strictEqual(verifier.approvedCapabilitySource('client', clientSource), true);
+   assert.strictEqual(verifier.approvedCapabilitySource('supervisor', supervisorSource), true);
+diff --git a/scripts/verify-matrix-readonly-selection.js b/scripts/verify-matrix-readonly-selection.js
+index c9de5d0..55ae4cf 100644
+--- a/scripts/verify-matrix-readonly-selection.js
++++ b/scripts/verify-matrix-readonly-selection.js
+@@ -29,61 +29,93 @@ const RUNTIME_SURFACE_ROOTS = [
+   '.runtime/vm_debug_ci/Dockerfile',
+   '.runtime/vm_debug_ci/compose.yaml',
+   '.runtime/vm_debug_ci/bridge-patch',
+   '.runtime/vm_debug_ci/workspace/extensions',
+   '.runtime/vm_debug_ci/workspace/scripts',
+   'src/db.js',
+   'src/server.js',
+   'src/lib/cacheIndexView.js',
+   'src/lib/packetGate.js',
+   'src/routes/matrix.js',
++  'src/services/matrixStreamReview.js',
++  'src/services/matrixStreamText.js',
++  'src/services/matrixStreamGate.js',
++  'src/services/matrixStreamReadiness.js',
++  'src/services/matrixStreamFollowup.js',
++  'src/services/matrixStreamDelivery.js',
++  'src/services/matrixStreamCorrelation.js',
+   'scripts/matrix-bind-actor.js'
+ ].map(file => path.join(ROOT, file));
+ // Reviewed production-only surface. Tests and verifier sources are deliberately excluded.
+ // Any production edit requires review plus an explicit digest update here.
+ const RUNTIME_MANIFEST = {
+   '.runtime/vm_debug_ci/Dockerfile': '0389bfbc40f8523f598a4becd211d77c7fde646b9a751ed628183e065280d203',
+   '.runtime/vm_debug_ci/compose.yaml': '93aa33c33929298186a33da6c6bc5a8aa4a8278c532fa98d6b04e1d2721e21a8',
+   '.runtime/vm_debug_ci/bridge-patch/patch-stream-card.cjs': '75c68ddae8cc7526de6a2b8832cf12563a63021fbdfdcf7b199af77ac0bc96ee',
+-  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': '7b96a2d0c442c2ea401c267d84781ab6ebcb8cacdb6c4132ece7e69365f79a23',
+-  '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
++  '.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs': 'deb2fbcac9d5472060b8a55fbb3d5c52471a6a0e29f6cb46243c373b5e1a49f2',
++  '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js': '7a710d2a3496438a8abece178d5d1a92f8e10fb36dbff54212032fca5f5b76ba',
+   '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js': '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
+-  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '8d4983a0ecc2a3a08aa395af62c55534226b60102e81f4b87ea15b97a70184f4',
+-  'src/db.js': '72eb94ab54b1d36a95b0fb9076422721b1eb3dbe6f96b37b047c98aa8bf0d81a',
+-  'src/server.js': '4d9cc3ec0cd4bf4d1369316785f7a2c0dc64543f1ed88be5440abd93a2577aa7',
++  '.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js': '92e503d37b1f88c62a667da2c1d8db3e07e205250ade2979455677773ce5a0f9',
++  'src/db.js': '56e60d8384b77ea8538aa745cd62123ffe1f4b7a9211004cb776d21e17faaa9f',
++  'src/server.js': 'e930988256872f2ba9d41eb04ac9f514ae890639cac24a658f989a30f181dc69',
+   'src/lib/cacheIndexView.js': '5c5b80179791338abff72dfebca842175b7ab189999576824a3b74c7a572bb3f',
+   'src/lib/packetGate.js': '2fea59af911c177dc4f35b3b29b5984d07e1181128545ec64063fdf4ffba6d6a',
+-  'src/routes/matrix.js': '60e80e0c8bee787d22ff0ff7ff2fd6429941079171d440c1b0eb3abb4d9f48d2',
++  'src/routes/matrix.js': '871da8f61b4a2cb66dea4ca59fce25e82327892b904bffff4852d289dbc06bca',
++  'src/services/matrixStreamReview.js': 'bf6da9b52f48658aef5f67a49c087950c166d11715474a7782c248c521677c85',
++  'src/services/matrixStreamText.js': '7dfefdbc3ba37888bf0736b36c792ec64afc54651dbaa1efeb1f2e7ca2c68658',
++  'src/services/matrixStreamGate.js': '86f99c2672ae6d58ccb5a35aa5cab7b1b4ffa6b3b7132b091a856469cb678c57',
++  'src/services/matrixStreamReadiness.js': '6440a41bb789263528451153081462d339c602222af74cbb87abce0eb7187b7b',
++  'src/services/matrixStreamFollowup.js': 'bd4e6721b12d7b75323bb0ef23d21c7ea117c7c26b39ba6042a4d237950a5c01',
++  'src/services/matrixStreamDelivery.js': 'dc27f55dcc73093c50d7f6fbf28a5a1b17f20378d9e24065aa706b71d15653ea',
++  'src/services/matrixStreamCorrelation.js': '6e0a3ebf457f05629b8886afa5f98c32c7abe0f07a1bbed6f6ec7c07479b0877',
+   'scripts/matrix-bind-actor.js': '984f43dd17ea5163b434f154751a9b4312b44999b180ff7d59e422190587e28c'
+ };
+ 
+ function repositoryContract() {
+   const env = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
+   for (const line of [
+     'MATRIX_STREAM_DB_PATH=./data/matrix-stream.db',
+     'MATRIX_BRIDGE_TOKEN=',
+     'MATRIX_DELIVERY_ENABLED=0',
++    'MATRIX_STREAM_SEND_ENABLED=0',
++    'MATRIX_RECIPIENT_MAX_AGE_DAYS=180',
++    'MATRIX_MESSAGE_ID_DOMAIN=',
++    'MATRIX_TEXT_PROVIDER=mock',
++    'MATRIX_DKIM_SELECTOR=',
++    'MATRIX_DAILY_ACCEPTED_LIMIT=5',
++    'MATRIX_DOMAIN_COOLING_DAYS=90',
+     'MATRIX_RECOMMEND_HOUR=9',
+-    'MATRIX_RECOMMEND_MINUTE=0'
++    'MATRIX_RECOMMEND_MINUTE=0',
++    'SMTP_HOST=',
++    'SMTP_PORT=465',
++    'SMTP_SECURE=true',
++    'SMTP_USER=',
++    'SMTP_PASS=',
++    'SMTP_FROM='
+   ]) assert.ok(env.split(/\r?\n/).includes(line), `.env.example missing ${line}`);
+ 
+   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+   assert.strictEqual(manifest.scripts?.['verify:matrix-readonly-selection'], 'node scripts/verify-matrix-readonly-selection.js');
+ 
+   const catalogPath = path.join(ROOT, 'docs/matrix-stream-catalog-2026-07-16.md');
+   const catalog = fs.readFileSync(catalogPath, 'utf8');
+   for (const marker of [
+     '/api/matrix', 'matrix-bind-actor.js', '开发客户', '1,500',
+     '来源分离', '不存在外发适配器', 'MATRIX_DELIVERY_ENABLED=0',
+     'MATRIX_VERIFY_FIXTURE=1', 'fail closed',
+-    '桌面端', '移动端', 'mx.quick', 'vm_debug_ci_pre_'
++    '桌面端', '移动端', 'mx.quick', 'vm_debug_ci_pre_',
++    'matrixStreamReview.js', 'matrixStreamDelivery.js', '两次确认',
++    'MATRIX_STREAM_SEND_ENABLED=0', 'bot 运行面', 'delivery_enabled: false'
+   ]) assert.ok(catalog.includes(marker), `catalog missing ${marker}`);
++
++  const server = fs.readFileSync(path.join(ROOT, 'src/server.js'), 'utf8');
++  assert.ok(!server.includes('createMatrixStreamDelivery'), 'production delivery must remain unwired while MATRIX_STREAM_SEND_ENABLED=0');
+ }
+ 
+ function createCandidateFixture(root) {
+   const dbPath = path.join(root, 'matrix-stream-fixture.db');
+   const db = new Database(dbPath);
+   db.exec(`
+     CREATE TABLE cache_records (
+       id INTEGER PRIMARY KEY, company_name TEXT, country_code TEXT, city TEXT,
+       normalized_domain TEXT UNIQUE, official_url TEXT, product_categories_json TEXT,
+       format_signals_json TEXT, size_signals_json TEXT, scale_tier TEXT,
+@@ -282,22 +314,23 @@ const CAPABILITY_PATTERNS = [
+   /\bundici\b/,
+   /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?(?:http|https|http2)['"]/,
+   /(?:from\s+|require\s*\(|import\s*\()\s*['"](?:node:)?(?:net|tls|dgram)['"]/,
+   /\b(?:WebSocket|EventSource)\b/,
+   /(?:node:)?child_process/,
+   /\b(?:curl|wget|ncat|socat)\b/,
+   /\b(?:nodemailer|imapflow|SMTP_[A-Z0-9_]*|IMAP_[A-Z0-9_]*|WHATSAPP[A-Z0-9_]*)\b/,
+   /\bsendMail\s*\(/
+ ];
+ const APPROVED_CAPABILITY_SHA256 = {
+-  client: '9be6c6455e69691b354f24c40c506e7510f86bae6ba3557ce3846c56a644261f',
+-  supervisor: '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5'
++  client: '7a710d2a3496438a8abece178d5d1a92f8e10fb36dbff54212032fca5f5b76ba',
++  supervisor: '5e34d4a08f4234425c58111274f39a90fc9c19a776fb9f7c716ba69e67dc6bf5',
++  delivery: 'dc27f55dcc73093c50d7f6fbf28a5a1b17f20378d9e24065aa706b71d15653ea'
+ };
+ 
+ function approvedCapabilitySource(kind, sourceValue) {
+   const source = String(sourceValue);
+   if (crypto.createHash('sha256').update(source).digest('hex') !== APPROVED_CAPABILITY_SHA256[kind]) return false;
+   const unsafeEvaluation = /\beval\s*\(|\bFunction\s*\(|\bimport\s*\(/.test(source);
+   if (unsafeEvaluation || /https?:\/\//i.test(source)) return false;
+   if (kind === 'client') {
+     const envNames = [...source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)].map(match => match[1]).sort();
+     return JSON.stringify(envNames) === JSON.stringify(['MATRIX_API_BASE_URL', 'MATRIX_BRIDGE_TOKEN']) &&
+@@ -317,31 +350,45 @@ function approvedCapabilitySource(kind, sourceValue) {
+       (source.match(/\bfetchImpl\s*\(url,/g) || []).length === 1 &&
+       source.includes('const url = healthUrl(baseUrl);') &&
+       spawnCalls.length === 2 &&
+       source.includes("spawn(process.execPath, ['/workspace/scripts/matrix-watch.js']") &&
+       source.includes("spawn('feishu-codex-bridge', ['run', '--bot', 'stream-node']") &&
+       source.includes("return new URL('/api/matrix/ready', base.origin).href;") &&
+       !/\b(?:exec|execFile|execSync|execFileSync|fork)\s*\(/.test(source) &&
+       !CAPABILITY_PATTERNS.slice(1, 6).some(pattern => pattern.test(source)) &&
+       !CAPABILITY_PATTERNS.slice(7).some(pattern => pattern.test(source));
+   }
++  if (kind === 'delivery') {
++    return source.includes('capabilities.matrixSend') &&
++      source.includes('version.content_hash !== input.expectedContentHash') &&
++      source.includes("state = 'ambiguous'") &&
++      source.includes('recipient_source_url') &&
++      source.includes('await transport.sendMail({') &&
++      (source.match(/await transport\.sendMail\s*\(/g) || []).length === 1 &&
++      !source.includes('attachments:') &&
++      !/\binput\.(?:to|subject|smtpHost|callbackUrl|retry)\b/.test(source) &&
++      !/\b(?:nodemailer|SMTP_[A-Z0-9_]*)\b/.test(source) &&
++      !CAPABILITY_PATTERNS.slice(0, 8).some(pattern => pattern.test(source));
++  }
+   return false;
+ }
+ 
+ function outboundAdapterFiles(files = runtimeSurfaceFiles()) {
+   const clientPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-client.js');
+   const supervisorPath = path.join(ROOT, '.runtime/vm_debug_ci/workspace/scripts/matrix-runtime.js');
++  const deliveryPath = path.join(ROOT, 'src/services/matrixStreamDelivery.js');
+   return files.filter(file => {
+     const source = fs.readFileSync(file, 'utf8');
+     if (!CAPABILITY_PATTERNS.some(pattern => pattern.test(source))) return false;
+     if (path.resolve(file) === clientPath) return !approvedCapabilitySource('client', source);
+     if (path.resolve(file) === supervisorPath) return !approvedCapabilitySource('supervisor', source);
++    if (path.resolve(file) === deliveryPath) return !approvedCapabilitySource('delivery', source);
+     return true;
+   });
+ }
+ 
+ function validateComposeConfig({ runCompose } = {}) {
+   const composePath = path.join(ROOT, '.runtime/vm_debug_ci/compose.yaml');
+   const execute = runCompose || (() => spawnSync('docker', ['compose', '-f', composePath, 'config'], {
+     cwd: ROOT,
+     env: {
+       ...process.env,
+diff --git a/src/services/matrixStreamDelivery.js b/src/services/matrixStreamDelivery.js
+index 7fed717..336cbd7 100644
+--- a/src/services/matrixStreamDelivery.js
++++ b/src/services/matrixStreamDelivery.js
+@@ -143,47 +143,50 @@ function freshReplayAuthorization(db, input) {
+            w.id AS work_item_id, w.owner_user_id
+     FROM matrix_actor_bindings b
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN matrix_work_items w ON w.id = ?
+     WHERE b.id = ? AND b.user_id = ?
+   `).get(input.workItemId, input.bindingId, input.actorUserId);
+   if (!row || row.binding_status !== 'active' || row.actor_status !== 'active') throw new Error('active actor binding required');
+   if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
+   let permissions;
+   try { permissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { permissions = null; }
+-  if (!normalizePermissions(row.role, permissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
++  const capabilities = normalizePermissions(row.role, permissions).capabilities;
++  if (!capabilities.matrixSend) throw new Error('explicit matrixSend capability required');
+   if (!row.work_item_id || row.owner_user_id !== input.actorUserId) throw new Error('delivery not authorized');
+ }
+ 
+ function freshDeliveryGate(db, input, context) {
+   const row = db.prepare(`
+     SELECT b.id AS binding_id, b.status AS binding_status,
+            u.id AS actor_user_id, u.role, u.status AS actor_status, u.permissions_json,
+            w.id AS work_item_id, w.owner_user_id, w.stage, w.stream_state,
+            w.current_stream_version_id, w.version AS work_item_version
+     FROM matrix_actor_bindings b
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN matrix_work_items w ON w.id = ?
+     WHERE b.id = ? AND b.user_id = ?
+   `).get(input.workItemId, input.bindingId, input.actorUserId);
+   if (!row || row.binding_status !== 'active' || row.actor_status !== 'active') throw new Error('active actor binding required');
+   if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
+   let permissions;
+   try { permissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { permissions = null; }
+-  if (!normalizePermissions(row.role, permissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
++  const capabilities = normalizePermissions(row.role, permissions).capabilities;
++  if (!capabilities.matrixSend) throw new Error('explicit matrixSend capability required');
+   if (!row.work_item_id || row.owner_user_id !== input.actorUserId) throw new Error('delivery not authorized');
+   if (row.stage === 'suppressed' || row.stream_state === 'suppressed') throw new Error('work item is suppressed');
+   if (row.work_item_version !== input.expectedWorkVersion) throw new Error('stale work version');
+   if (row.current_stream_version_id !== input.versionId) throw new Error('approved version is not current');
+ 
+   const version = db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ? AND work_item_id = ?').get(input.versionId, input.workItemId);
+   if (!version || version.status !== 'approved' || !version.approved_by || !version.approved_at) throw new Error('persisted approved version required');
++  if (version.content_hash !== input.expectedContentHash) throw new Error('content hash mismatch');
+   const canonicalHash = review.contentHash({
+     recipientEmail: version.recipient_email,
+     recipientSourceUrl: version.recipient_source_url,
+     subject: version.subject,
+     bodyEn: version.body_en,
+     bodyCn: version.body_cn
+   });
+   if (canonicalHash !== version.content_hash || canonicalHash !== input.expectedContentHash) throw new Error('content hash mismatch');
+   if (!currentApprovalEvent(db, version)) throw new Error('persisted approval evidence required');
+ 
+@@ -397,25 +400,31 @@ function createMatrixStreamDelivery({
+       if (current.state !== 'sending') return resultFor(db, current);
+       const currentLeaseMs = Date.parse(String(current.lease_expires_at || ''));
+       const ownsActiveLease = current.owner_token === job.owner_token
+         && current.lease_expires_at === job.lease_expires_at
+         && Number.isFinite(currentLeaseMs) && currentLeaseMs > context.ms;
+       if (!ownsActiveLease && Number.isFinite(currentLeaseMs) && currentLeaseMs > context.ms) {
+         throw new Error('delivery ownership lost');
+       }
+       const finalState = ownsActiveLease ? state : 'ambiguous';
+       const finalErrorClass = ownsActiveLease ? errorClass : 'expired_send_lease';
+-      const changed = db.prepare(`
+-        UPDATE matrix_stream_jobs
+-        SET state = ?, error_class = ?, redacted_diagnostic = ?, updated_at = ?
+-        WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
+-      `).run(finalState, finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at);
++      const changed = ownsActiveLease
++        ? db.prepare(`
++          UPDATE matrix_stream_jobs
++          SET state = ?, error_class = ?, redacted_diagnostic = ?, updated_at = ?
++          WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
++        `).run(finalState, finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at)
++        : db.prepare(`
++          UPDATE matrix_stream_jobs
++          SET state = 'ambiguous', error_class = ?, redacted_diagnostic = ?, updated_at = ?
++          WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
++        `).run(finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at);
+       if (changed.changes !== 1) {
+         current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
+         if (current && current.state !== 'sending') return resultFor(db, current);
+         throw new Error('delivery result conflict');
+       }
+       if (finalState === 'accepted') {
+         scheduleReplyCheck(db, { jobId: job.id, channel: 'email', priority: 'normal' });
+         db.prepare(`
+           UPDATE matrix_work_items
+           SET stream_state = 'sent', version = version + 1, updated_at = ?

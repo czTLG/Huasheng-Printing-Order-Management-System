@@ -1,0 +1,1910 @@
+# Review package: 2ccd62b..b007718
+
+## Commits
+b007718 fix: restrict sensitive request exemptions
+954bddd fix: enforce sentence-level claim evidence
+106af07 fix: fail closed on semantic claims
+dfe3fe6 fix: enforce PSL and claim boundaries
+8d546b8 fix: close matrix stream evidence gaps
+6bebba0 fix: harden matrix stream review integrity
+13cb17d feat: add matrix stream review versions
+
+## Files changed
+ package-lock.json                    |  21 +-
+ package.json                         |   3 +-
+ scripts/test-matrix-stream-review.js | 679 ++++++++++++++++++++++++++++++++++-
+ src/db.js                            | 132 +++++--
+ src/services/aiProvider.js           |  56 ++-
+ src/services/matrixStreamReview.js   | 390 ++++++++++++++++++++
+ src/services/matrixStreamText.js     | 276 ++++++++++++++
+ 7 files changed, 1518 insertions(+), 39 deletions(-)
+
+## Diff
+diff --git a/package-lock.json b/package-lock.json
+index fb9497c..237823d 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -13,21 +13,22 @@
+         "compression": "^1.8.1",
+         "dotenv": "^17.4.2",
+         "express": "^4.21.2",
+         "imapflow": "^1.4.2",
+         "jimp": "^0.22.12",
+         "jsonwebtoken": "^9.0.3",
+         "mailparser": "^3.9.11",
+         "multer": "^2.1.1",
+         "node-cron": "^3.0.3",
+         "nodemailer": "^6.10.1",
+-        "pdfkit": "^0.17.2"
++        "pdfkit": "^0.17.2",
++        "tldts": "7.4.9"
+       }
+     },
+     "node_modules/@jimp/bmp": {
+       "version": "0.22.12",
+       "resolved": "https://registry.npmjs.org/@jimp/bmp/-/bmp-0.22.12.tgz",
+       "integrity": "sha512-aeI64HD0npropd+AR76MCcvvRaa+Qck6loCOS03CkkxGHN5/r336qTM5HPUdHKMDOGzqknuVPA8+kK1t03z12g==",
+       "license": "MIT",
+       "dependencies": {
+         "@jimp/utils": "^0.22.12",
+         "bmp-js": "^0.1.0"
+@@ -2953,20 +2954,38 @@
+     },
+     "node_modules/tlds": {
+       "version": "1.261.0",
+       "resolved": "https://registry.npmjs.org/tlds/-/tlds-1.261.0.tgz",
+       "integrity": "sha512-QXqwfEl9ddlGBaRFXIvNKK6OhipSiLXuRuLJX5DErz0o0Q0rYxulWLdFryTkV5PkdZct5iMInwYEGe/eR++1AA==",
+       "license": "MIT",
+       "bin": {
+         "tlds": "bin.js"
+       }
+     },
++    "node_modules/tldts": {
++      "version": "7.4.9",
++      "resolved": "https://registry.npmjs.org/tldts/-/tldts-7.4.9.tgz",
++      "integrity": "sha512-3kZ8wQQ/k5DrChD4X4FVvr2D7E5uoRgAqkPyLpSCGUvqOvqu+JEdr3mwMUaVWb+vMHZaKhF5fp2PBigKsui7hA==",
++      "license": "MIT",
++      "dependencies": {
++        "tldts-core": "^7.4.9"
++      },
++      "bin": {
++        "tldts": "bin/cli.js"
++      }
++    },
++    "node_modules/tldts-core": {
++      "version": "7.4.9",
++      "resolved": "https://registry.npmjs.org/tldts-core/-/tldts-core-7.4.9.tgz",
++      "integrity": "sha512-DxKfPBI52p2msTEu7MPhdpdDTBhhVQg1a/8PjQckeyAvO13eMYElX545grIp6nnTGIMZlRvFZPvFhvI/WIz2Vg==",
++      "license": "MIT"
++    },
+     "node_modules/toidentifier": {
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz",
+       "integrity": "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA==",
+       "license": "MIT",
+       "engines": {
+         "node": ">=0.6"
+       }
+     },
+     "node_modules/token-types": {
+diff --git a/package.json b/package.json
+index 7a07516..9eb9025 100644
+--- a/package.json
++++ b/package.json
+@@ -21,13 +21,14 @@
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+     "express": "^4.21.2",
+     "imapflow": "^1.4.2",
+     "jimp": "^0.22.12",
+     "jsonwebtoken": "^9.0.3",
+     "mailparser": "^3.9.11",
+     "multer": "^2.1.1",
+     "node-cron": "^3.0.3",
+     "nodemailer": "^6.10.1",
+-    "pdfkit": "^0.17.2"
++    "pdfkit": "^0.17.2",
++    "tldts": "7.4.9"
+   }
+ }
+diff --git a/scripts/test-matrix-stream-review.js b/scripts/test-matrix-stream-review.js
+index 8178628..785685a 100644
+--- a/scripts/test-matrix-stream-review.js
++++ b/scripts/test-matrix-stream-review.js
+@@ -1,18 +1,19 @@
+ const assert = require('node:assert');
+ const fs = require('node:fs');
+ const os = require('node:os');
+ const path = require('node:path');
+ 
+ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-review-'));
+ process.env.DB_PATH = path.join(root, 'app.db');
+ 
++async function main() {
+ let db;
+ 
+ try {
+   const LegacyDatabase = require('better-sqlite3');
+   const legacyDb = new LegacyDatabase(process.env.DB_PATH);
+   legacyDb.exec(`
+     CREATE TABLE matrix_stream_versions (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       work_item_id INTEGER NOT NULL,
+       crm_draft_id INTEGER,
+@@ -40,43 +41,710 @@ try {
+     BEFORE UPDATE ON matrix_stream_versions
+     WHEN OLD.status = 'approved' AND NEW.subject IS NOT OLD.subject
+     BEGIN
+       SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
+     END;
+   `);
+   legacyDb.close();
+ 
+   const database = require('../src/db');
+   db = database.db;
+-  database.initDb();
++  const originalConsoleLog = console.log;
++  console.log = () => {};
++  try {
++    database.initDb();
++  } finally {
++    console.log = originalConsoleLog;
++  }
+ 
+-  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events']) {
++  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events', 'matrix_stream_recipient_evidence']) {
+     assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
+   }
+ 
+   const workColumns = db.prepare('PRAGMA table_info(matrix_work_items)').all().map(row => row.name);
+   assert(workColumns.includes('stream_state'));
+   assert(workColumns.includes('current_stream_version_id'));
+ 
+   const draftColumns = db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(row => row.name);
+   assert(draftColumns.includes('matrix_work_item_id'));
++  const versionColumns = db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(row => row.name);
++  assert(versionColumns.includes('recipient_evidence_id'));
+ 
+   const indexColumns = indexName => db.prepare(`PRAGMA index_info(${indexName})`).all().map(row => row.name);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_versions_work_revision'), ['work_item_id', 'revision']);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_state_updated'), ['state', 'updated_at']);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_message_id'), ['message_id']);
+ 
+   const now = '2026-07-18T00:00:00.000Z';
+   const userId = Number(db.prepare(`
+     INSERT INTO users (username, password, role, status, created_at)
+     VALUES ('matrix_stream_review_guard', 'unused', 'super_admin', 'active', ?)
+   `).run(now).lastInsertRowid);
++  const review = require('../src/services/matrixStreamReview');
++  const insertRecipientEvidence = ({ workItemId, domain, email, sourceUrl, verifiedAt, snapshot = {} }) => Number(db.prepare(`
++    INSERT INTO matrix_stream_recipient_evidence (
++      work_item_id, organization_domain, recipient_email, source_url,
++      verified_at, snapshot_json, status, created_by, created_at
++    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
++  `).run(workItemId, domain, email, sourceUrl, verifiedAt, JSON.stringify(snapshot), userId, now).lastInsertRowid);
++  assert.throws(
++    () => review.validateRecipient({ email: 'guessed@person.test', sourceUrl: '', verifiedAt: '' }, new Date('2026-07-17T00:00:00Z')),
++    /source/i
++  );
++  const reviewWorkItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++    VALUES (900000, ?, ?, ?)
++  `).run(userId, now, now).lastInsertRowid);
++  insertRecipientEvidence({
++    workItemId: reviewWorkItemId,
++    domain: 'alpha.test',
++    email: 'sales@alpha.test',
++    sourceUrl: 'https://alpha.test/contact',
++    verifiedAt: '2026-07-16T00:00:00.000Z',
++    snapshot: {
++      organization_domain: 'alpha.test',
++      recipient_email: 'sales@alpha.test',
++      source_url: 'https://alpha.test/contact',
++      pages: ['https://alpha.test/contact', 'https://alpha.test/products']
++    }
++  });
++  const unverifiedWorkItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++    VALUES (899998, ?, ?, ?)
++  `).run(userId, now, now).lastInsertRowid);
++  insertRecipientEvidence({
++    workItemId: unverifiedWorkItemId,
++    domain: 'alpha.test',
++    email: 'guessed@person.test',
++    sourceUrl: 'https://unrelated.test/contact',
++    verifiedAt: '2026-07-16T00:00:00.000Z',
++    snapshot: {
++      organization_domain: 'alpha.test',
++      recipient_email: 'guessed@person.test',
++      source_url: 'https://unrelated.test/contact'
++    }
++  });
++  assert.throws(() => review.createInitialVersion(db, {
++    actorUserId: userId,
++    workItemId: unverifiedWorkItemId,
++    expectedWorkVersion: 1,
++    recipient: {
++      email: 'guessed@person.test',
++      sourceUrl: 'https://unrelated.test/contact',
++      verifiedAt: '2026-07-16T00:00:00Z',
++      kind: 'public_company'
++    },
++    subject: 'Unsafe self-attested recipient',
++    bodyEn: 'Hello',
++    bodyCn: '您好',
++    sourceSnapshot: { url: 'https://unrelated.test/contact' },
++    idempotencyKey: 'unverified-create'
++  }), /evidence|binding/i);
++  const createDomainFixture = ({ candidateId, domain, email, sourceUrl, key }) => {
++    const scopedWorkItemId = Number(db.prepare(`
++      INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++      VALUES (?, ?, ?, ?)
++    `).run(candidateId, userId, now, now).lastInsertRowid);
++    insertRecipientEvidence({
++      workItemId: scopedWorkItemId,
++      domain,
++      email,
++      sourceUrl,
++      verifiedAt: '2026-07-16T00:00:00.000Z',
++      snapshot: {
++        organization_domain: domain,
++        recipient_email: email,
++        source_url: sourceUrl
++      }
++    });
++    return {
++      actorUserId: userId,
++      workItemId: scopedWorkItemId,
++      expectedWorkVersion: 1,
++      recipient: { email, sourceUrl, verifiedAt: '2026-07-16T00:00:00Z', kind: 'public_company' },
++      subject: 'Registrable domain check',
++      bodyEn: 'Dear team, please confirm your requirements.',
++      bodyCn: '您好，请确认需求。',
++      idempotencyKey: key
++    };
++  };
++  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899996,
++    domain: 'test',
++    email: 'guessed@person.test',
++    sourceUrl: 'https://unrelated.test/contact',
++    key: 'public-suffix-test-create'
++  })), /registrable|evidence|binding/i);
++  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899995,
++    domain: 'co.uk',
++    email: 'sales@person.co.uk',
++    sourceUrl: 'https://unrelated.co.uk/contact',
++    key: 'public-suffix-couk-create'
++  })), /registrable|evidence|binding/i);
++  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899994,
++    domain: 'com.cn',
++    email: 'sales@person.com.cn',
++    sourceUrl: 'https://unrelated.com.cn/contact',
++    key: 'public-suffix-comcn-create'
++  })), /registrable|evidence|binding/i);
++  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899992,
++    domain: 'alpha.invalidtld',
++    email: 'sales@alpha.invalidtld',
++    sourceUrl: 'https://alpha.invalidtld/contact',
++    key: 'unknown-tld-create'
++  })), /registrable|evidence|binding/i);
++  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899991,
++    domain: 'workers.dev',
++    email: 'sales@tenant-a.workers.dev',
++    sourceUrl: 'https://tenant-b.workers.dev/contact',
++    key: 'private-workers-create'
++  })), /registrable|evidence|binding/i);
++  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899990,
++    domain: 'onrender.com',
++    email: 'sales@tenant-a.onrender.com',
++    sourceUrl: 'https://tenant-b.onrender.com/contact',
++    key: 'private-onrender-create'
++  })), /registrable|evidence|binding/i);
++  assert.throws(() => review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899989,
++    domain: 'foo.ck',
++    email: 'sales@tenant-a.foo.ck',
++    sourceUrl: 'https://tenant-b.foo.ck/contact',
++    key: 'wildcard-ck-create'
++  })), /registrable|evidence|binding/i);
++  const validPslExceptionDomain = review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899988,
++    domain: 'www.ck',
++    email: 'sales@mail.www.ck',
++    sourceUrl: 'https://official.www.ck/contact',
++    key: 'exception-www-ck-create'
++  }));
++  assert.strictEqual(validPslExceptionDomain.recipient_email, 'sales@mail.www.ck');
++  const validMultiLevelDomain = review.createInitialVersion(db, createDomainFixture({
++    candidateId: 899993,
++    domain: 'alpha.co.uk',
++    email: 'sales@mail.alpha.co.uk',
++    sourceUrl: 'https://official.alpha.co.uk/contact',
++    key: 'registrable-couk-create'
++  }));
++  assert.strictEqual(validMultiLevelDomain.recipient_email, 'sales@mail.alpha.co.uk');
++  const v1 = review.createInitialVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    expectedWorkVersion: 1,
++    recipient: {
++      email: 'sales@alpha.test',
++      sourceUrl: 'https://alpha.test/contact',
++      verifiedAt: '2026-07-16T00:00:00Z',
++      kind: 'public_company'
++    },
++    subject: 'A focused proposal for Alpha',
++    bodyEn: 'Dear Alpha team,\nPlease confirm your current requirements.\nBest regards',
++    bodyCn: '您好，请确认当前需求。',
++    strategySummary: '公开产品页显示匹配品类',
++    sourceSnapshot: { url: 'https://alpha.test/products' },
++    idempotencyKey: 'version-create-1'
++  });
++  assert.strictEqual(v1.revision, 1);
++  const { createMatrixStreamText } = require('../src/services/matrixStreamText');
++  const textService = createMatrixStreamText({
++    callJson: async () => ({
++      subject: 'Short proposal for Alpha',
++      body_en: 'Dear Alpha team,\nCould you share annual volume?\nBest regards',
++      body_cn: '您好，请问能否提供年用量？'
++    })
++  });
++  const revisedText = await textService.revise({ current: v1, instruction: '语气更简洁，询问年用量' });
++  assert.strictEqual(revisedText.subject, 'Short proposal for Alpha');
++  assert.match(revisedText.body_en, /annual volume/i);
++  assert.match(revisedText.body_cn, /年用量/);
++  await assert.rejects(
++    () => createMatrixStreamText({ callJson: async () => ({ body_en: 'missing fields' }) })
++      .revise({ current: v1, instruction: '简化' }),
++    /invalid bilingual output/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'Hello', body_cn: '您好', extra: 'not allowed'
++      })
++    }).revise({ current: v1, instruction: '简化' }),
++    /invalid bilingual output/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'See https://unknown.test', body_cn: '请查看链接'
++      })
++    }).revise({ current: v1, instruction: '增加链接' }),
++    /introduced URL/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'The price is USD 99.', body_cn: '价格为99美元。'
++      })
++    }).revise({ current: v1, instruction: '增加价格' }),
++    /unsupported price/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Certified supplier', body_en: 'We are ISO certified.', body_cn: '我们已通过认证。'
++      })
++    }).revise({ current: v1, instruction: '增加资质' }),
++    /unsupported qualification/i
++  );
++  for (const priceClaim of ['99美元', '99元', '美元99']) {
++    await assert.rejects(
++      () => createMatrixStreamText({
++        callJson: async () => ({
++          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: `建议价格为${priceClaim}。`
++        })
++      }).revise({ current: v1, instruction: '增加中文价格' }),
++      /unsupported price/i,
++      `${priceClaim} must require evidence`
++    );
++  }
++  for (const qualificationClaim of ['欧盟认证', 'ISO 22000认证', '食品级资质']) {
++    await assert.rejects(
++      () => createMatrixStreamText({
++        callJson: async () => ({
++          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: `该产品具备${qualificationClaim}。`
++        })
++      }).revise({ current: v1, instruction: '增加中文资质' }),
++      /unsupported qualification/i,
++      `${qualificationClaim} must require evidence`
++    );
++  }
++  for (const unsupportedClaim of [
++    '单价为99。', '单价为九十九元。', '售价为99。', '售价为九十九。', '售价大约为99。',
++    '材料符合食品级要求。', '产品已通过认证。', '产品符合RoHS合规规范。',
++    '产品满足REACH要求。', '产品合规。'
++  ]) {
++    await assert.rejects(
++      () => createMatrixStreamText({
++        callJson: async () => ({
++          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: unsupportedClaim
++        })
++      }).revise({ current: v1, instruction: '增加声明' }),
++      /unsupported (?:price|qualification)/i,
++      `${unsupportedClaim} must require exact evidence`
++    );
++  }
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: '单价为99美元。'
++      })
++    }).revise({ current: v1, instruction: '增加价格', sourceSnapshot: { supportedClaims: ['199美元'] } }),
++    /unsupported price/i,
++    '199美元 must not support 99美元'
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'This product is RoHS compliant.', body_cn: '您好。'
++      })
++    }).revise({ current: v1, instruction: '增加合规声明' }),
++    /unsupported qualification/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'This product is RoHS compliant.', body_cn: '您好。'
++      })
++    }).revise({ current: v1, instruction: '增加合规声明', sourceSnapshot: { supportedClaims: ['RoHSX compliant'] } }),
++    /unsupported qualification/i,
++    'RoHSX must not support RoHS'
++  );
++  const exactPriceEvidence = await createMatrixStreamText({
++    callJson: async () => ({
++      subject: 'Supported price', body_en: 'The supported price is USD 99.', body_cn: '证据价格为99美元。'
++    })
++  }).revise({
++    current: v1,
++    instruction: '使用已有价格',
++    sourceSnapshot: { supportedClaims: ['Supported price', 'The supported price is USD 99.', '证据价格为99美元。'] }
++  });
++  assert.match(exactPriceEvidence.body_en, /99/);
++  for (const unsupportedSemanticClaim of [
++    '价格面议。', '报价待定。', '单价请询价。',
++    '产品已通过Sedex审核。', '产品拥有XYZ许可证。'
++  ]) {
++    await assert.rejects(
++      () => createMatrixStreamText({
++        callJson: async () => ({
++          subject: 'Short proposal', body_en: 'Hello Alpha team.', body_cn: unsupportedSemanticClaim
++        })
++      }).revise({ current: v1, instruction: '增加声明' }),
++      /unsupported (?:price|qualification)/i,
++      `${unsupportedSemanticClaim} must fail closed without evidence`
++    );
++  }
++  for (const supportedSemanticClaim of ['价格面议。', '单价请询价。', '产品已通过Sedex审核。', '产品拥有XYZ许可证。']) {
++    const supportedFallback = await createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Evidence-bound statement', body_en: 'Hello Alpha team.', body_cn: supportedSemanticClaim
++      })
++    }).revise({
++      current: v1,
++      instruction: '使用相同证据声明',
++      sourceSnapshot: { supportedClaims: [supportedSemanticClaim] }
++    });
++    assert.strictEqual(supportedFallback.body_cn, supportedSemanticClaim);
++  }
++  for (const sentenceLevelClaim of [
++    '价格免费。', '本项目无需费用。', '产品已获Sedex认可。',
++    '产品获得Acme批准。', '材料达到Acme规范。', '是否已通过Sedex审核？',
++    '价格是99？', '价格为99美元？', 'The price is USD 99?', '单价请询价？',
++    'Please note our price is USD 99.', 'Please confirm it is USD 99.'
++  ]) {
++    await assert.rejects(
++      () => createMatrixStreamText({
++        callJson: async () => ({
++          subject: 'Sentence guard', body_en: 'Hello Alpha team.', body_cn: sentenceLevelClaim
++        })
++      }).revise({ current: v1, instruction: '增加敏感语义' }),
++      /unsupported (?:price|qualification)/i,
++      `${sentenceLevelClaim} must require sentence evidence`
++    );
++  }
++  for (const sentenceLevelEvidence of ['价格免费。', '本项目无需费用。', '产品已获Sedex认可。']) {
++    const acceptedSentence = await createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Sentence evidence', body_en: 'Hello Alpha team.', body_cn: sentenceLevelEvidence
++      })
++    }).revise({
++      current: v1,
++      instruction: '使用整句证据',
++      sourceSnapshot: { supportedClaims: [sentenceLevelEvidence] }
++    });
++    assert.strictEqual(acceptedSentence.body_cn, sentenceLevelEvidence);
++  }
++  for (const allowedQuestion of [
++    '请提供报价。', '烦请告知报价。', '能否提供报价？', '可否确认费用？',
++    '是否有Sedex认证？', '贵司是否有Sedex认证？', 'Could you quote this item?',
++    'Please provide a quote.', 'What is the price?'
++  ]) {
++    const acceptedQuestion = await createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Question only', body_en: 'Hello Alpha team.', body_cn: allowedQuestion
++      })
++    }).revise({ current: v1, instruction: '提出非断言问题' });
++    assert.strictEqual(acceptedQuestion.body_cn, allowedQuestion);
++  }
++  const reasonableNumbers = await createMatrixStreamText({
++    callJson: async () => ({
++      subject: 'Dimension follow-up',
++      body_en: 'Please confirm the 250 mm width for the 2026-07-18 review.',
++      body_cn: '请确认250mm宽度，参考日期为2026-07-18。'
++    })
++  }).revise({ current: v1, instruction: '补充尺寸和日期' });
++  assert.match(reasonableNumbers.body_cn, /250mm/);
++  const translated = await createMatrixStreamText({
++    callJson: async () => ({
++      translation_cn: '请提供报价。',
++      requirements_cn: '需要报价',
++      suggested_subject: 'Re: Alpha requirements',
++      suggested_body_en: 'Dear Alpha team,\nThank you for your message.',
++      suggested_body_cn: '您好，感谢您的来信。'
++    })
++  }).translateInbound({
++    inboundText: 'Please provide a proposal.',
++    sourceSnapshot: { supportedClaims: ['需要报价'] }
++  });
++  assert.deepStrictEqual(Object.keys(translated).sort(), [
++    'requirements_cn', 'suggested_body_cn', 'suggested_body_en', 'suggested_subject', 'translation_cn'
++  ]);
++  const previousTextProvider = process.env.MATRIX_TEXT_PROVIDER;
++  process.env.MATRIX_TEXT_PROVIDER = 'mock';
++  const versionCountBeforeUnavailable = db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count;
++  const unavailable = await createMatrixStreamText().revise({ current: v1, instruction: '简化' });
++  assert.deepStrictEqual({ ok: unavailable.ok, reason: unavailable.reason }, { ok: false, reason: 'text_provider_unavailable' });
++  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count, versionCountBeforeUnavailable);
++  if (previousTextProvider === undefined) delete process.env.MATRIX_TEXT_PROVIDER;
++  else process.env.MATRIX_TEXT_PROVIDER = previousTextProvider;
++  const staleEvidenceWorkItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++    VALUES (899999, ?, ?, ?)
++  `).run(userId, now, now).lastInsertRowid);
++  const staleEvidenceId = insertRecipientEvidence({
++    workItemId: staleEvidenceWorkItemId,
++    domain: 'stale.test',
++    email: 'public@stale.test',
++    sourceUrl: 'https://stale.test/contact',
++    verifiedAt: '2026-07-16T00:00:00.000Z',
++    snapshot: {
++      organization_domain: 'stale.test',
++      recipient_email: 'public@stale.test',
++      source_url: 'https://stale.test/contact'
++    }
++  });
++  const staleEvidenceDraft = review.createInitialVersion(db, {
++    actorUserId: userId,
++    workItemId: staleEvidenceWorkItemId,
++    expectedWorkVersion: 1,
++    recipient: {
++      email: 'public@stale.test',
++      sourceUrl: 'https://stale.test/contact',
++      verifiedAt: '2026-07-16T00:00:00Z',
++      kind: 'public_company'
++    },
++    subject: 'Evidence freshness check',
++    bodyEn: 'Dear team,\nPlease confirm your requirements.',
++    bodyCn: '您好，请确认需求。',
++    sourceSnapshot: { url: 'https://stale.test/contact' },
++    idempotencyKey: 'stale-evidence-create'
++  });
++  db.prepare("UPDATE matrix_stream_recipient_evidence SET status = 'revoked' WHERE id = ?").run(staleEvidenceId);
++  assert.throws(() => review.approveVersion(db, {
++    actorUserId: userId,
++    workItemId: staleEvidenceWorkItemId,
++    versionId: staleEvidenceDraft.id,
++    expectedWorkVersion: 2,
++    expectedContentHash: staleEvidenceDraft.content_hash,
++    idempotencyKey: 'stale-evidence-approve'
++  }), /evidence|binding/i);
++  const tamperedWorkItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++    VALUES (899997, ?, ?, ?)
++  `).run(userId, now, now).lastInsertRowid);
++  insertRecipientEvidence({
++    workItemId: tamperedWorkItemId,
++    domain: 'tamper.test',
++    email: 'public@tamper.test',
++    sourceUrl: 'https://tamper.test/contact',
++    verifiedAt: '2026-07-16T00:00:00.000Z',
++    snapshot: {
++      organization_domain: 'tamper.test',
++      recipient_email: 'public@tamper.test',
++      source_url: 'https://tamper.test/contact'
++    }
++  });
++  const tamperedDraft = review.createInitialVersion(db, {
++    actorUserId: userId,
++    workItemId: tamperedWorkItemId,
++    expectedWorkVersion: 1,
++    recipient: {
++      email: 'public@tamper.test',
++      sourceUrl: 'https://tamper.test/contact',
++      verifiedAt: '2026-07-16T00:00:00Z',
++      kind: 'public_company'
++    },
++    subject: 'Canonical approval hash',
++    bodyEn: 'Original English body',
++    bodyCn: '原始中文正文',
++    idempotencyKey: 'tampered-create'
++  });
++  db.exec('DROP TRIGGER IF EXISTS trg_matrix_stream_versions_content_immutable');
++  try {
++    db.prepare('UPDATE matrix_stream_versions SET body_en = ? WHERE id = ?')
++      .run('Tampered body without a new hash', tamperedDraft.id);
++    assert.throws(() => review.approveVersion(db, {
++      actorUserId: userId,
++      workItemId: tamperedWorkItemId,
++      versionId: tamperedDraft.id,
++      expectedWorkVersion: 2,
++      expectedContentHash: tamperedDraft.content_hash,
++      idempotencyKey: 'tampered-approve'
++    }), /content hash/i);
++  } finally {
++    database.initDb();
++  }
++  const approved = review.approveVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    versionId: v1.id,
++    expectedWorkVersion: 2,
++    expectedContentHash: v1.content_hash,
++    idempotencyKey: 'approve-1'
++  });
++  assert.strictEqual(approved.status, 'approved');
++  const v2 = review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v1.id,
++    expectedWorkVersion: 3,
++    subject: v1.subject,
++    bodyEn: `${v1.body_en}\nPlease share annual volume.`,
++    bodyCn: `${v1.body_cn}\n请提供年用量。`,
++    idempotencyKey: 'revise-1'
++  });
++  assert.strictEqual(v2.revision, 2);
++  assert.strictEqual(review.getVersion(db, { actorUserId: userId, versionId: v1.id }).status, 'superseded');
++  const approveReplayInput = {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    versionId: v1.id,
++    expectedWorkVersion: 2,
++    expectedContentHash: v1.content_hash,
++    idempotencyKey: 'approve-1'
++  };
++  const approvedReplay = review.approveVersion(db, approveReplayInput);
++  assert.strictEqual(approvedReplay.id, v1.id);
++  assert.strictEqual(approvedReplay.status, 'approved');
++  assert.strictEqual(approvedReplay.current_status, 'superseded');
++  const createReplayInput = {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    expectedWorkVersion: 1,
++    recipient: {
++      email: 'sales@alpha.test',
++      sourceUrl: 'https://alpha.test/contact',
++      verifiedAt: '2026-07-16T00:00:00Z',
++      kind: 'public_company'
++    },
++    subject: 'A focused proposal for Alpha',
++    bodyEn: 'Dear Alpha team,\nPlease confirm your current requirements.\nBest regards',
++    bodyCn: '您好，请确认当前需求。',
++    strategySummary: '公开产品页显示匹配品类',
++    sourceSnapshot: { url: 'https://alpha.test/products' },
++    idempotencyKey: 'version-create-1'
++  };
++  const createReplay = review.createInitialVersion(db, createReplayInput);
++  assert.strictEqual(createReplay.id, v1.id);
++  assert.strictEqual(createReplay.status, 'draft');
++  assert.strictEqual(createReplay.current_status, 'superseded');
++  assert.throws(() => review.approveVersion(db, {
++    ...approveReplayInput,
++    expectedContentHash: 'changed-hash'
++  }), /idempotency|fingerprint|scope/i);
++  assert.throws(() => review.approveVersion(db, {
++    ...approveReplayInput,
++    expectedWorkVersion: 3
++  }), /idempotency|fingerprint|scope/i);
++  assert.throws(() => review.approveVersion(db, {
++    ...approveReplayInput,
++    versionId: v2.id
++  }), /idempotency|fingerprint|scope/i);
++  assert.throws(() => review.createInitialVersion(db, {
++    ...createReplayInput,
++    workItemId: unverifiedWorkItemId
++  }), /idempotency|fingerprint|scope|authorized/i);
++  assert.throws(() => review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v1.id,
++    expectedWorkVersion: 3,
++    subject: v1.subject,
++    bodyEn: v1.body_en,
++    bodyCn: v1.body_cn,
++    idempotencyKey: 'approve-1'
++  }), /idempotency|fingerprint|scope/i);
++  db.prepare("UPDATE matrix_work_items SET stage = 'suppressed', stream_state = 'suppressed' WHERE id = ?").run(reviewWorkItemId);
++  assert.throws(() => review.approveVersion(db, approveReplayInput), /suppressed/i);
++  db.prepare("UPDATE matrix_work_items SET stage = 'draft_pending', stream_state = 'draft_pending' WHERE id = ?").run(reviewWorkItemId);
++  db.prepare("UPDATE users SET status = 'inactive' WHERE id = ?").run(userId);
++  assert.throws(() => review.approveVersion(db, approveReplayInput), /active/i);
++  db.prepare("UPDATE users SET status = 'active' WHERE id = ?").run(userId);
++  const replacementOwnerId = Number(db.prepare(`
++    INSERT INTO users (username, password, role, status, created_at)
++    VALUES ('matrix_stream_replacement_owner', 'unused', 'super_admin', 'active', ?)
++  `).run(now).lastInsertRowid);
++  db.prepare('UPDATE matrix_work_items SET owner_user_id = ? WHERE id = ?').run(replacementOwnerId, reviewWorkItemId);
++  assert.throws(() => review.approveVersion(db, approveReplayInput), /authorized/i);
++  db.prepare('UPDATE matrix_work_items SET owner_user_id = ? WHERE id = ?').run(userId, reviewWorkItemId);
++  const reviseReplayInput = {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v1.id,
++    expectedWorkVersion: 3,
++    subject: v1.subject,
++    bodyEn: `${v1.body_en}\nPlease share annual volume.`,
++    bodyCn: `${v1.body_cn}\n请提供年用量。`,
++    idempotencyKey: 'revise-1'
++  };
++  const reviseReplay = review.reviseVersion(db, reviseReplayInput);
++  assert.strictEqual(reviseReplay.id, v2.id);
++  assert.strictEqual(reviseReplay.status, 'draft');
++  assert.strictEqual(reviseReplay.current_status, 'draft');
++  assert.throws(() => review.reviseVersion(db, {
++    ...reviseReplayInput,
++    bodyEn: `${reviseReplayInput.bodyEn}\nChanged replay content.`
++  }), /idempotency|fingerprint|scope/i);
++  assert.throws(() => review.reviseVersion(db, {
++    ...reviseReplayInput,
++    baseVersionId: v2.id
++  }), /idempotency|fingerprint|scope/i);
++  assert.throws(() => review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v2.id,
++    expectedWorkVersion: 3,
++    subject: v2.subject,
++    bodyEn: v2.body_en,
++    bodyCn: v2.body_cn,
++    idempotencyKey: 'stale-revise'
++  }), /stale/i);
++  const hashInput = {
++    recipientEmail: v2.recipient_email,
++    recipientSourceUrl: v2.recipient_source_url,
++    subject: v2.subject,
++    bodyEn: v2.body_en,
++    bodyCn: v2.body_cn
++  };
++  for (const [key, value] of Object.entries({
++    recipientEmail: 'other@alpha.test',
++    recipientSourceUrl: 'https://alpha.test/other',
++    subject: `${v2.subject}!`,
++    bodyEn: `${v2.body_en}!`,
++    bodyCn: `${v2.body_cn}！`
++  })) {
++    assert.notStrictEqual(review.contentHash({ ...hashInput, [key]: value }), v2.content_hash, `${key} must change hash`);
++  }
++  const v3 = review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v2.id,
++    expectedWorkVersion: 4,
++    subject: v2.subject,
++    bodyEn: `${v2.body_en}\nWhat is your timeline?`,
++    bodyCn: `${v2.body_cn}\n项目时间如何？`,
++    idempotencyKey: 'revise-concurrent-winner'
++  });
++  assert.strictEqual(v3.revision, 3);
++  const revisedAfterSupersessionReplay = review.reviseVersion(db, reviseReplayInput);
++  assert.strictEqual(revisedAfterSupersessionReplay.status, 'draft');
++  assert.strictEqual(revisedAfterSupersessionReplay.current_status, 'superseded');
++  assert.throws(
++    () => db.prepare('UPDATE matrix_stream_versions SET subject = ? WHERE id = ?').run('Forbidden in-place edit', v3.id),
++    /immutable/i
++  );
++  assert.throws(
++    () => db.prepare('DELETE FROM matrix_stream_versions WHERE id = ?').run(v3.id),
++    /immutable/i
++  );
++  assert.throws(
++    () => db.prepare('UPDATE matrix_stream_recipient_evidence SET source_url = ? WHERE work_item_id = ?')
++      .run('https://other.test/contact', reviewWorkItemId),
++    /immutable/i
++  );
++  assert.throws(() => review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v2.id,
++    expectedWorkVersion: 4,
++    subject: v2.subject,
++    bodyEn: `${v2.body_en}\nConcurrent loser`,
++    bodyCn: `${v2.body_cn}\n并发失败`,
++    idempotencyKey: 'revise-concurrent-loser'
++  }), /stale/i);
++  assert.strictEqual(
++    db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE idempotency_key = 'revise-concurrent-loser'").get().count,
++    0
++  );
+   const workItemId = Number(db.prepare(`
+     INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+     VALUES (900001, ?, ?, ?)
+   `).run(userId, now, now).lastInsertRowid);
+ 
+   const insertVersion = db.prepare(`
+     INSERT INTO matrix_stream_versions (
+       work_item_id, revision, recipient_email, recipient_source_url,
+       recipient_verified_at, subject, body_en, body_cn, content_hash,
+       status, created_by, approved_by, approved_at, created_at, updated_at
+@@ -153,14 +821,21 @@ try {
+   `);
+   insertJob.run(workItemId, approvedVersionId, 'job-key-1', 'approved-hash', 'message-1', userId, now, now);
+   assert.throws(
+     () => insertJob.run(workItemId, approvedVersionId, 'job-key-1', 'approved-hash', 'message-2', userId, now, now),
+     /UNIQUE constraint failed: matrix_stream_jobs.idempotency_key/
+   );
+   assert.throws(
+     () => insertJob.run(workItemId, approvedVersionId, 'job-key-2', 'approved-hash', 'message-1', userId, now, now),
+     /UNIQUE constraint failed: matrix_stream_jobs.message_id/
+   );
++  console.log('matrix stream review tests passed');
+ } finally {
+   if (db?.open) db.close();
+   fs.rmSync(root, { recursive: true, force: true });
+ }
++}
++
++main().catch(error => {
++  console.error(error);
++  process.exitCode = 1;
++});
+diff --git a/src/db.js b/src/db.js
+index d753b23..473ac10 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -851,24 +851,41 @@ function initDb() {
+       action TEXT NOT NULL,
+       before_json TEXT NOT NULL,
+       after_json TEXT NOT NULL,
+       reason TEXT NOT NULL DEFAULT '',
+       idempotency_key TEXT NOT NULL UNIQUE,
+       created_at TEXT NOT NULL,
+       FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+       FOREIGN KEY(actor_user_id) REFERENCES users(id)
+     );
+ 
++    CREATE TABLE IF NOT EXISTS matrix_stream_recipient_evidence (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      work_item_id INTEGER NOT NULL,
++      organization_domain TEXT NOT NULL,
++      recipient_email TEXT NOT NULL,
++      source_url TEXT NOT NULL,
++      verified_at TEXT NOT NULL,
++      snapshot_json TEXT NOT NULL,
++      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked')),
++      created_by INTEGER NOT NULL,
++      created_at TEXT NOT NULL,
++      UNIQUE(work_item_id, recipient_email, source_url, verified_at),
++      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
++      FOREIGN KEY(created_by) REFERENCES users(id)
++    );
++
+     CREATE TABLE IF NOT EXISTS matrix_stream_versions (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       work_item_id INTEGER NOT NULL,
+       crm_draft_id INTEGER,
++      recipient_evidence_id INTEGER,
+       revision INTEGER NOT NULL,
+       recipient_email TEXT NOT NULL,
+       recipient_source_url TEXT NOT NULL,
+       recipient_verified_at TEXT NOT NULL,
+       subject TEXT NOT NULL,
+       body_en TEXT NOT NULL,
+       body_cn TEXT NOT NULL,
+       strategy_summary TEXT NOT NULL DEFAULT '',
+       source_snapshot_json TEXT NOT NULL DEFAULT '{}',
+       content_hash TEXT NOT NULL,
+@@ -907,20 +924,21 @@ function initDb() {
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       work_item_id INTEGER NOT NULL,
+       version_id INTEGER,
+       job_id INTEGER,
+       actor_user_id INTEGER,
+       matrix_binding_id INTEGER,
+       chat_id TEXT NOT NULL DEFAULT '',
+       card_event_id TEXT NOT NULL DEFAULT '',
+       action TEXT NOT NULL,
+       idempotency_key TEXT NOT NULL UNIQUE,
++      request_fingerprint TEXT NOT NULL DEFAULT '',
+       content_hash TEXT NOT NULL DEFAULT '',
+       before_json TEXT NOT NULL DEFAULT '{}',
+       after_json TEXT NOT NULL DEFAULT '{}',
+       diagnostic TEXT NOT NULL DEFAULT '',
+       created_at TEXT NOT NULL
+     );
+ 
+     CREATE TABLE IF NOT EXISTS matrix_stream_sender_checks (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       sender_domain TEXT NOT NULL,
+@@ -945,20 +963,21 @@ function initDb() {
+       reviewed_at TEXT NOT NULL,
+       expires_at TEXT NOT NULL,
+       source_urls_json TEXT NOT NULL,
+       PRIMARY KEY(country_code, channel)
+     );
+ 
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
+     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
+     BEFORE UPDATE ON matrix_selection_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_delete
+@@ -972,71 +991,118 @@ function initDb() {
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_delete
+     BEFORE DELETE ON matrix_stream_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+     END;
+ 
+-    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;
+-    CREATE TRIGGER trg_matrix_stream_versions_approved_content_immutable
+-    BEFORE UPDATE ON matrix_stream_versions
+-    WHEN OLD.status IN ('approved', 'superseded') AND (
+-      NEW.work_item_id IS NOT OLD.work_item_id OR
+-      NEW.crm_draft_id IS NOT OLD.crm_draft_id OR
+-      NEW.revision IS NOT OLD.revision OR
+-      NEW.recipient_email IS NOT OLD.recipient_email OR
+-      NEW.recipient_source_url IS NOT OLD.recipient_source_url OR
+-      NEW.recipient_verified_at IS NOT OLD.recipient_verified_at OR
+-      NEW.subject IS NOT OLD.subject OR
+-      NEW.body_en IS NOT OLD.body_en OR
+-      NEW.body_cn IS NOT OLD.body_cn OR
+-      NEW.strategy_summary IS NOT OLD.strategy_summary OR
+-      NEW.source_snapshot_json IS NOT OLD.source_snapshot_json OR
+-      NEW.content_hash IS NOT OLD.content_hash OR
+-      NEW.quality_score IS NOT OLD.quality_score OR
+-      NEW.quality_json IS NOT OLD.quality_json OR
+-      NEW.created_by IS NOT OLD.created_by OR
+-      NEW.approved_by IS NOT OLD.approved_by OR
+-      NEW.approved_at IS NOT OLD.approved_at OR
+-      NEW.created_at IS NOT OLD.created_at
+-    )
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_identity_immutable
++    BEFORE UPDATE ON matrix_stream_recipient_evidence
++    WHEN NEW.work_item_id IS NOT OLD.work_item_id
++      OR NEW.organization_domain IS NOT OLD.organization_domain
++      OR NEW.recipient_email IS NOT OLD.recipient_email
++      OR NEW.source_url IS NOT OLD.source_url
++      OR NEW.verified_at IS NOT OLD.verified_at
++      OR NEW.snapshot_json IS NOT OLD.snapshot_json
++      OR NEW.created_by IS NOT OLD.created_by
++      OR NEW.created_at IS NOT OLD.created_at
+     BEGIN
+-      SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
++      SELECT RAISE(ABORT, 'matrix_stream_recipient_evidence identity is immutable');
+     END;
+ 
+-    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approved_no_delete
+-    BEFORE DELETE ON matrix_stream_versions
+-    WHEN OLD.status IN ('approved', 'superseded')
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_no_delete
++    BEFORE DELETE ON matrix_stream_recipient_evidence
+     BEGIN
+-      SELECT RAISE(ABORT, 'approved matrix_stream_versions evidence is immutable');
++      SELECT RAISE(ABORT, 'matrix_stream_recipient_evidence is immutable');
+     END;
+ 
+-    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approval_lifecycle
+-    BEFORE UPDATE OF status ON matrix_stream_versions
+-    WHEN (OLD.status = 'approved' AND NEW.status NOT IN ('approved', 'superseded'))
+-      OR (OLD.status = 'superseded' AND NEW.status != 'superseded')
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_recipient_evidence_status_lifecycle
++    BEFORE UPDATE OF status ON matrix_stream_recipient_evidence
++    WHEN OLD.status = 'revoked' AND NEW.status != 'revoked'
+     BEGIN
+-      SELECT RAISE(ABORT, 'matrix_stream_versions approval lifecycle is irreversible');
++      SELECT RAISE(ABORT, 'matrix_stream_recipient_evidence lifecycle is irreversible');
+     END;
+   `);
+ 
+   const sessionColumns = new Set(db.prepare('PRAGMA table_info(matrix_sessions)').all().map(column => column.name));
+   if (!sessionColumns.has('snapshot_key')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN snapshot_key TEXT NOT NULL DEFAULT ''");
+   if (!sessionColumns.has('candidate_ids_json')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN candidate_ids_json TEXT NOT NULL DEFAULT '[]'");
+ 
+   const matrixWorkItemColumns = new Set(db.prepare('PRAGMA table_info(matrix_work_items)').all().map(column => column.name));
+   if (!matrixWorkItemColumns.has('stream_state')) db.exec("ALTER TABLE matrix_work_items ADD COLUMN stream_state TEXT NOT NULL DEFAULT 'selected'");
+   if (!matrixWorkItemColumns.has('current_stream_version_id')) db.exec('ALTER TABLE matrix_work_items ADD COLUMN current_stream_version_id INTEGER');
+ 
++  const matrixStreamVersionColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(column => column.name));
++  if (!matrixStreamVersionColumns.has('recipient_evidence_id')) db.exec('ALTER TABLE matrix_stream_versions ADD COLUMN recipient_evidence_id INTEGER');
++
++  db.exec(`
++    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;
++    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_no_delete;
++    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_content_immutable;
++    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_no_delete;
++    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approval_metadata;
++    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approval_lifecycle;
++
++    CREATE TRIGGER trg_matrix_stream_versions_content_immutable
++    BEFORE UPDATE ON matrix_stream_versions
++    WHEN NEW.work_item_id IS NOT OLD.work_item_id
++      OR NEW.crm_draft_id IS NOT OLD.crm_draft_id
++      OR NEW.recipient_evidence_id IS NOT OLD.recipient_evidence_id
++      OR NEW.revision IS NOT OLD.revision
++      OR NEW.recipient_email IS NOT OLD.recipient_email
++      OR NEW.recipient_source_url IS NOT OLD.recipient_source_url
++      OR NEW.recipient_verified_at IS NOT OLD.recipient_verified_at
++      OR NEW.subject IS NOT OLD.subject
++      OR NEW.body_en IS NOT OLD.body_en
++      OR NEW.body_cn IS NOT OLD.body_cn
++      OR NEW.strategy_summary IS NOT OLD.strategy_summary
++      OR NEW.source_snapshot_json IS NOT OLD.source_snapshot_json
++      OR NEW.content_hash IS NOT OLD.content_hash
++      OR NEW.quality_score IS NOT OLD.quality_score
++      OR NEW.quality_json IS NOT OLD.quality_json
++      OR NEW.created_by IS NOT OLD.created_by
++      OR NEW.created_at IS NOT OLD.created_at
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_versions content is immutable');
++    END;
++
++    CREATE TRIGGER trg_matrix_stream_versions_no_delete
++    BEFORE DELETE ON matrix_stream_versions
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_versions is immutable');
++    END;
++
++    CREATE TRIGGER trg_matrix_stream_versions_approval_metadata
++    BEFORE UPDATE OF approved_by, approved_at ON matrix_stream_versions
++    WHEN (NEW.approved_by IS NOT OLD.approved_by OR NEW.approved_at IS NOT OLD.approved_at)
++      AND NOT (OLD.status = 'draft' AND NEW.status = 'approved'
++        AND OLD.approved_by IS NULL AND OLD.approved_at IS NULL
++        AND NEW.approved_by IS NOT NULL AND NEW.approved_at IS NOT NULL)
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_versions approval metadata lifecycle violation');
++    END;
++
++    CREATE TRIGGER trg_matrix_stream_versions_approval_lifecycle
++    BEFORE UPDATE OF status ON matrix_stream_versions
++    WHEN (OLD.status = 'approved' AND NEW.status NOT IN ('approved', 'superseded'))
++      OR (OLD.status = 'superseded' AND NEW.status != 'superseded')
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_versions approval lifecycle is irreversible');
++    END;
++  `);
++
++  const matrixStreamEventColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_events)').all().map(column => column.name));
++  if (!matrixStreamEventColumns.has('request_fingerprint')) db.exec("ALTER TABLE matrix_stream_events ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''");
++
+   const matrixReplyDraftColumns = new Set(db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(column => column.name));
+   if (!matrixReplyDraftColumns.has('matrix_work_item_id')) db.exec('ALTER TABLE crm_reply_drafts ADD COLUMN matrix_work_item_id INTEGER');
+ 
+   db.prepare(`
+     UPDATE matrix_sessions
+     SET filters_json = json_remove(filters_json, '$.page')
+     WHERE json_valid(filters_json) = 1
+       AND json_type(filters_json) = 'object'
+       AND json_type(filters_json, '$.page') IS NOT NULL
+   `).run();
+diff --git a/src/services/aiProvider.js b/src/services/aiProvider.js
+index 45e0fb1..7623a90 100644
+--- a/src/services/aiProvider.js
++++ b/src/services/aiProvider.js
+@@ -72,50 +72,101 @@ function validateStructuredObject(value, schemaName = 'assistant', requiredKeys
+   return { ok: true };
+ }
+ 
+ function buildMessages({ systemPrompt, userPrompt }) {
+   const messages = [];
+   if (systemPrompt) messages.push({ role: 'system', content: String(systemPrompt) });
+   messages.push({ role: 'user', content: String(userPrompt || '') });
+   return messages;
+ }
+ 
+-async function fetchJson(endpoint, payload, apiKey) {
++async function fetchJson(endpoint, payload, apiKey, { signal } = {}) {
+   if (typeof fetch !== 'function') {
+     throw new Error('global fetch is not available in this runtime');
+   }
+ 
+   const res = await fetch(endpoint, {
+     method: 'POST',
+     headers: {
+       'Content-Type': 'application/json',
+       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+     },
+-    body: JSON.stringify(payload)
++    body: JSON.stringify(payload),
++    ...(signal ? { signal } : {})
+   });
+ 
+   const text = await res.text();
+   let json = null;
+   try {
+     json = text ? JSON.parse(text) : null;
+   } catch (err) {
+     json = { raw: text };
+   }
+ 
+   if (!res.ok) {
+     const message = json?.error?.message || json?.message || text || `HTTP ${res.status}`;
+     throw new Error(message);
+   }
+ 
+   return json;
+ }
+ 
++async function callJsonProvider({
++  provider,
++  model,
++  systemPrompt,
++  userPrompt,
++  exactKeys,
++  temperature = 0,
++  maxTokens = 1200,
++  timeoutMs = 15000
++} = {}) {
++  try {
++    const keys = Array.isArray(exactKeys) ? [...exactKeys] : [];
++    if (!keys.length || keys.some(key => typeof key !== 'string' || !key)) {
++      throw new Error('caller-owned exact key set required');
++    }
++    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4000) throw new Error('invalid maximum token count');
++    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw new Error('invalid timeout');
++    const cfg = getProviderConfig(provider || process.env.MATRIX_TEXT_PROVIDER);
++    if (cfg.provider === 'mock' || !cfg.apiKey) {
++      return { ok: false, reason: 'text_provider_unavailable', provider: cfg.provider, model: cfg.model };
++    }
++    const payload = {
++      model: model || cfg.model,
++      temperature,
++      max_tokens: maxTokens,
++      response_format: { type: 'json_object' },
++      messages: buildMessages({ systemPrompt, userPrompt })
++    };
++    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
++      ? AbortSignal.timeout(timeoutMs) : undefined;
++    const raw = await fetchJson(cfg.endpoint || DEFAULT_ENDPOINTS[cfg.provider] || DEFAULT_ENDPOINTS.openai, payload, cfg.apiKey, { signal });
++    const content = raw?.choices?.[0]?.message?.content ?? raw?.choices?.[0]?.text ?? '';
++    const json = safeJsonParse(content);
++    if (!isPlainObject(json)) throw new Error('JSON provider output must be an object');
++    const actualKeys = Object.keys(json).sort();
++    const expectedKeys = [...keys].sort();
++    if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
++      throw new Error(`JSON provider output must contain exactly: ${keys.join(', ')}`);
++    }
++    return { ok: true, provider: cfg.provider, model: payload.model, json };
++  } catch (err) {
++    return {
++      ok: false,
++      reason: err.name === 'TimeoutError' ? 'text_provider_timeout' : err.message,
++      provider: String(provider || process.env.MATRIX_TEXT_PROVIDER || '').trim().toLowerCase(),
++      model: model || null
++    };
++  }
++}
++
+ async function callStructuredProvider({
+   provider,
+   model,
+   systemPrompt,
+   userPrompt,
+   temperature = 0,
+   maxTokens = 2000
+ }) {
+   try {
+     const cfg = getProviderConfig(provider);
+@@ -172,12 +223,13 @@ async function callStructuredProvider({
+   }
+ }
+ 
+ module.exports = {
+   DEFAULT_ENDPOINTS,
+   SUPPORTED_PROVIDERS,
+   getProviderConfig,
+   stripCodeFences,
+   safeJsonParse,
+   validateStructuredObject,
++  callJsonProvider,
+   callStructuredProvider
+ };
+diff --git a/src/services/matrixStreamReview.js b/src/services/matrixStreamReview.js
+new file mode 100644
+index 0000000..e79e7c0
+--- /dev/null
++++ b/src/services/matrixStreamReview.js
+@@ -0,0 +1,390 @@
++const crypto = require('node:crypto');
++const { parse: parseDomain } = require('tldts');
++
++function positiveInteger(value, name) {
++  const number = Number(value);
++  if (!Number.isInteger(number) || number <= 0) throw new Error(`${name} must be a positive integer`);
++  return number;
++}
++
++function normalizeEmail(value) {
++  return String(value || '').trim().toLowerCase();
++}
++
++function normalizeBody(value) {
++  return String(value || '').replace(/\r\n?/g, '\n').trim();
++}
++
++function contentHash(value) {
++  return crypto.createHash('sha256').update(JSON.stringify({
++    recipient: normalizeEmail(value.recipientEmail),
++    source: String(value.recipientSourceUrl),
++    subject: String(value.subject).trim(),
++    body_en: normalizeBody(value.bodyEn),
++    body_cn: normalizeBody(value.bodyCn)
++  })).digest('hex');
++}
++
++function requestFingerprint(value) {
++  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
++}
++
++function validateRecipient(input, nowValue = new Date()) {
++  const recipient = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
++  const email = normalizeEmail(recipient.email);
++  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('valid recipient email required');
++  let sourceUrl;
++  try {
++    sourceUrl = new URL(String(recipient.sourceUrl || ''));
++  } catch (_) {
++    throw new Error('recipient source must be a valid HTTPS URL');
++  }
++  if (sourceUrl.protocol !== 'https:') throw new Error('recipient source must use HTTPS');
++  if (recipient.kind !== 'public_company') throw new Error('recipient must be a public-company address');
++
++  const verifiedAtMs = Date.parse(String(recipient.verifiedAt || ''));
++  const nowMs = nowValue instanceof Date ? nowValue.getTime() : Date.parse(String(nowValue));
++  if (!Number.isFinite(verifiedAtMs) || !Number.isFinite(nowMs)) throw new Error('valid recipient verification timestamp required');
++  if (verifiedAtMs > nowMs) throw new Error('recipient verification timestamp is in the future');
++  const configuredDays = Number(process.env.MATRIX_RECIPIENT_MAX_AGE_DAYS || 180);
++  const maxAgeDays = Number.isFinite(configuredDays) && configuredDays > 0 ? configuredDays : 180;
++  if (nowMs - verifiedAtMs > maxAgeDays * 86400000) throw new Error('recipient verification is stale');
++
++  return {
++    email,
++    sourceUrl: sourceUrl.toString(),
++    verifiedAt: new Date(verifiedAtMs).toISOString(),
++    kind: 'public_company'
++  };
++}
++
++function requiredText(value, name) {
++  const text = normalizeBody(value);
++  if (!text) throw new Error(`${name} required`);
++  return text;
++}
++
++function requiredKey(value) {
++  const key = String(value || '').trim();
++  if (!key) throw new Error('idempotency key required');
++  return key;
++}
++
++function timestamp() {
++  return new Date().toISOString();
++}
++
++function versionById(db, versionId) {
++  return db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ?').get(versionId) || null;
++}
++
++function domainIdentity(value) {
++  const parsed = parseDomain(String(value || '').trim().toLowerCase().replace(/\.$/, ''), {
++    allowPrivateDomains: true,
++    validateHostname: true
++  });
++  const supportedSuffix = parsed.isIcann || parsed.isPrivate || parsed.publicSuffix === 'test';
++  if (!supportedSuffix || parsed.isIp || !parsed.hostname || !parsed.domain) return null;
++  return { hostname: parsed.hostname, registrableDomain: parsed.domain };
++}
++
++function checkedRecipientEvidence(db, { workItemId, recipient, evidenceId } = {}) {
++  const normalized = validateRecipient(recipient);
++  const rows = evidenceId
++    ? [db.prepare('SELECT * FROM matrix_stream_recipient_evidence WHERE id = ?').get(evidenceId)].filter(Boolean)
++    : db.prepare(`
++      SELECT * FROM matrix_stream_recipient_evidence
++      WHERE work_item_id = ? AND lower(recipient_email) = ? AND status = 'active'
++      ORDER BY id DESC
++    `).all(workItemId, normalized.email);
++  const evidence = rows.find(row => {
++    if (row.work_item_id !== workItemId || row.status !== 'active') return false;
++    let evidenceSource;
++    try {
++      evidenceSource = new URL(row.source_url);
++    } catch (_) {
++      return false;
++    }
++    const emailDomain = normalized.email.split('@')[1];
++    const verifiedAt = Date.parse(row.verified_at);
++    const organization = domainIdentity(row.organization_domain);
++    const emailIdentity = domainIdentity(emailDomain);
++    const sourceIdentity = domainIdentity(evidenceSource.hostname);
++    return normalizeEmail(row.recipient_email) === normalized.email
++      && evidenceSource.toString() === normalized.sourceUrl
++      && new Date(verifiedAt).toISOString() === normalized.verifiedAt
++      && organization !== null
++      && organization.hostname === organization.registrableDomain
++      && emailIdentity?.registrableDomain === organization.registrableDomain
++      && sourceIdentity?.registrableDomain === organization.registrableDomain;
++  });
++  if (!evidence) throw new Error('trusted recipient evidence binding required');
++  let snapshot;
++  try {
++    snapshot = JSON.parse(evidence.snapshot_json);
++  } catch (_) {
++    throw new Error('trusted recipient evidence snapshot invalid');
++  }
++  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
++      || String(snapshot.organization_domain || '').toLowerCase() !== String(evidence.organization_domain).toLowerCase()
++      || normalizeEmail(snapshot.recipient_email) !== normalized.email
++      || String(snapshot.source_url || '') !== normalized.sourceUrl) {
++    throw new Error('trusted recipient evidence snapshot binding invalid');
++  }
++  return { recipient: normalized, evidence, snapshot };
++}
++
++function validateStoredRecipient(db, version) {
++  return checkedRecipientEvidence(db, {
++    workItemId: version.work_item_id,
++    evidenceId: version.recipient_evidence_id,
++    recipient: {
++    email: version.recipient_email,
++    sourceUrl: version.recipient_source_url,
++    verifiedAt: version.recipient_verified_at,
++    kind: 'public_company'
++    }
++  });
++}
++
++function activeOwnedWorkItem(db, workItemId, actorUserId) {
++  const actor = db.prepare('SELECT id, status FROM users WHERE id = ?').get(actorUserId);
++  if (!actor || actor.status !== 'active') throw new Error('actor is not active');
++  const item = db.prepare('SELECT * FROM matrix_work_items WHERE id = ?').get(workItemId);
++  if (!item || item.owner_user_id !== actorUserId) throw new Error('not authorized');
++  if (item.stage === 'suppressed' || item.stream_state === 'suppressed') throw new Error('work item is suppressed');
++  return item;
++}
++
++function ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion) {
++  const item = activeOwnedWorkItem(db, workItemId, actorUserId);
++  if (item.version !== expectedWorkVersion) throw new Error('stale work version');
++  return item;
++}
++
++function replay(db, { idempotencyKey, actorUserId, workItemId, action, fingerprint }) {
++  const event = db.prepare('SELECT * FROM matrix_stream_events WHERE idempotency_key = ?').get(idempotencyKey);
++  if (!event) return null;
++  activeOwnedWorkItem(db, workItemId, actorUserId);
++  if (event.actor_user_id !== actorUserId || event.work_item_id !== workItemId
++      || event.action !== action || event.request_fingerprint !== fingerprint) {
++    throw new Error('idempotency request fingerprint or scope mismatch');
++  }
++  const after = JSON.parse(event.after_json || '{}');
++  const version = versionById(db, after.version_id || event.version_id);
++  if (!version || version.work_item_id !== workItemId) throw new Error('recorded version scope mismatch');
++  validateStoredRecipient(db, version);
++  const recorded = after.response && typeof after.response === 'object' && !Array.isArray(after.response)
++    ? after.response
++    : { ...version, ...(after.status ? { status: after.status } : {}) };
++  return { ...recorded, current_status: version.status };
++}
++
++function addEvent(db, { workItemId, versionId, actorUserId, action, idempotencyKey, fingerprint, contentHash: hash, before, after, at }) {
++  db.prepare(`
++    INSERT INTO matrix_stream_events (
++      work_item_id, version_id, actor_user_id, action, idempotency_key,
++      request_fingerprint, content_hash, before_json, after_json, created_at
++    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++  `).run(
++    workItemId, versionId, actorUserId, action, idempotencyKey, fingerprint, hash,
++    JSON.stringify(before || {}), JSON.stringify(after || {}), at
++  );
++}
++
++function createInitialVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const workItemId = positiveInteger(input.workItemId, 'work item id');
++  const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
++  const idempotencyKey = requiredKey(input.idempotencyKey);
++  const normalizedRecipient = validateRecipient(input.recipient);
++  const subject = requiredText(input.subject, 'subject');
++  const bodyEn = requiredText(input.bodyEn, 'English body');
++  const bodyCn = requiredText(input.bodyCn, 'Chinese body');
++  const strategySummary = String(input.strategySummary || '').trim();
++  const sourceSnapshotInput = input.sourceSnapshot && typeof input.sourceSnapshot === 'object' && !Array.isArray(input.sourceSnapshot)
++    ? input.sourceSnapshot : {};
++  const fingerprint = requestFingerprint({
++    action: 'created', actorUserId, workItemId, expectedWorkVersion,
++    recipient: normalizedRecipient, subject, bodyEn, bodyCn, strategySummary, sourceSnapshot: sourceSnapshotInput
++  });
++  const transaction = db.transaction(() => {
++    const previous = replay(db, { idempotencyKey, actorUserId, workItemId, action: 'created', fingerprint });
++    if (previous) return previous;
++    ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
++    const evidenceBinding = checkedRecipientEvidence(db, { workItemId, recipient: normalizedRecipient });
++    const recipient = evidenceBinding.recipient;
++    const sourceSnapshot = evidenceBinding.snapshot;
++    const hash = contentHash({
++      recipientEmail: recipient.email,
++      recipientSourceUrl: recipient.sourceUrl,
++      subject,
++      bodyEn,
++      bodyCn
++    });
++    const at = timestamp();
++    const inserted = db.prepare(`
++      INSERT INTO matrix_stream_versions (
++        work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
++        subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
++        status, created_by, created_at, updated_at
++      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
++    `).run(
++      workItemId, evidenceBinding.evidence.id, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
++      subject, bodyEn, bodyCn, strategySummary, JSON.stringify(sourceSnapshot),
++      hash, actorUserId, at, at
++    );
++    const versionId = Number(inserted.lastInsertRowid);
++    const updated = db.prepare(`
++      UPDATE matrix_work_items
++      SET stage = 'draft_pending', stream_state = 'draft_pending', current_stream_version_id = ?,
++          version = version + 1, updated_at = ?
++      WHERE id = ? AND owner_user_id = ? AND version = ?
++    `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
++    if (updated.changes !== 1) throw new Error('stale work version');
++    const result = versionById(db, versionId);
++    addEvent(db, {
++      workItemId, versionId, actorUserId, action: 'created', idempotencyKey, fingerprint,
++      contentHash: hash, before: {}, after: { version_id: versionId, revision: 1, status: result.status, response: result }, at
++    });
++    return result;
++  });
++  return transaction.immediate();
++}
++
++function approveVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const workItemId = positiveInteger(input.workItemId, 'work item id');
++  const versionId = positiveInteger(input.versionId, 'version id');
++  const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
++  const idempotencyKey = requiredKey(input.idempotencyKey);
++  const expectedContentHash = String(input.expectedContentHash || '').trim();
++  if (!expectedContentHash) throw new Error('expected content hash required');
++  const fingerprint = requestFingerprint({
++    action: 'approved', actorUserId, workItemId, versionId, expectedWorkVersion, expectedContentHash
++  });
++  const transaction = db.transaction(() => {
++    const previous = replay(db, { idempotencyKey, actorUserId, workItemId, action: 'approved', fingerprint });
++    if (previous) return previous;
++    ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
++    const version = versionById(db, versionId);
++    if (!version || version.work_item_id !== workItemId) throw new Error('version not found');
++    if (version.status !== 'draft') throw new Error('version is not a draft');
++    const canonicalHash = contentHash({
++      recipientEmail: version.recipient_email,
++      recipientSourceUrl: version.recipient_source_url,
++      subject: version.subject,
++      bodyEn: version.body_en,
++      bodyCn: version.body_cn
++    });
++    if (version.content_hash !== canonicalHash || expectedContentHash !== canonicalHash) throw new Error('content hash mismatch');
++    validateStoredRecipient(db, version);
++    const at = timestamp();
++    const changed = db.prepare(`
++      UPDATE matrix_stream_versions
++      SET status = 'approved', approved_by = ?, approved_at = ?, updated_at = ?
++      WHERE id = ? AND work_item_id = ? AND status = 'draft' AND content_hash = ?
++    `).run(actorUserId, at, at, versionId, workItemId, expectedContentHash);
++    if (changed.changes !== 1) throw new Error('version approval conflict');
++    const updated = db.prepare(`
++      UPDATE matrix_work_items
++      SET stage = 'review_pending', stream_state = 'approved', current_stream_version_id = ?,
++          version = version + 1, updated_at = ?
++      WHERE id = ? AND owner_user_id = ? AND version = ?
++    `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
++    if (updated.changes !== 1) throw new Error('stale work version');
++    const result = versionById(db, versionId);
++    addEvent(db, {
++      workItemId, versionId, actorUserId, action: 'approved', idempotencyKey, fingerprint,
++      contentHash: result.content_hash, before: { status: version.status },
++      after: { version_id: versionId, revision: result.revision, status: result.status, response: result }, at
++    });
++    return result;
++  });
++  return transaction.immediate();
++}
++
++function reviseVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const workItemId = positiveInteger(input.workItemId, 'work item id');
++  const baseVersionId = positiveInteger(input.baseVersionId, 'base version id');
++  const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
++  const idempotencyKey = requiredKey(input.idempotencyKey);
++  const subject = requiredText(input.subject, 'subject');
++  const bodyEn = requiredText(input.bodyEn, 'English body');
++  const bodyCn = requiredText(input.bodyCn, 'Chinese body');
++  const fingerprint = requestFingerprint({
++    action: 'revised', actorUserId, workItemId, baseVersionId, expectedWorkVersion, subject, bodyEn, bodyCn
++  });
++  const transaction = db.transaction(() => {
++    const previous = replay(db, { idempotencyKey, actorUserId, workItemId, action: 'revised', fingerprint });
++    if (previous) return previous;
++    ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
++    const base = versionById(db, baseVersionId);
++    if (!base || base.work_item_id !== workItemId) throw new Error('base version not found');
++    if (!['draft', 'approved'].includes(base.status)) throw new Error('base version cannot be revised');
++    validateStoredRecipient(db, base);
++    const hash = contentHash({
++      recipientEmail: base.recipient_email,
++      recipientSourceUrl: base.recipient_source_url,
++      subject,
++      bodyEn,
++      bodyCn
++    });
++    const at = timestamp();
++    const nextRevision = Number(db.prepare(
++      'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM matrix_stream_versions WHERE work_item_id = ?'
++    ).get(workItemId).revision);
++    db.prepare(`
++      UPDATE matrix_stream_versions SET status = 'superseded', updated_at = ?
++      WHERE id = ? AND status IN ('draft', 'approved')
++    `).run(at, baseVersionId);
++    const inserted = db.prepare(`
++      INSERT INTO matrix_stream_versions (
++        work_item_id, recipient_evidence_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
++        subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
++        status, created_by, created_at, updated_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
++    `).run(
++      workItemId, base.recipient_evidence_id, nextRevision, base.recipient_email, base.recipient_source_url, base.recipient_verified_at,
++      subject, bodyEn, bodyCn, base.strategy_summary, base.source_snapshot_json, hash, actorUserId, at, at
++    );
++    const versionId = Number(inserted.lastInsertRowid);
++    const updated = db.prepare(`
++      UPDATE matrix_work_items
++      SET stage = 'draft_pending', stream_state = 'draft_pending', current_stream_version_id = ?,
++          version = version + 1, updated_at = ?
++      WHERE id = ? AND owner_user_id = ? AND version = ?
++    `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
++    if (updated.changes !== 1) throw new Error('stale work version');
++    const result = versionById(db, versionId);
++    addEvent(db, {
++      workItemId, versionId, actorUserId, action: 'revised', idempotencyKey, fingerprint,
++      contentHash: hash, before: { version_id: base.id, revision: base.revision, status: base.status },
++      after: { version_id: versionId, revision: result.revision, status: result.status, response: result }, at
++    });
++    return result;
++  });
++  return transaction.immediate();
++}
++
++function getVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const versionId = positiveInteger(input.versionId, 'version id');
++  const version = versionById(db, versionId);
++  if (!version) return null;
++  const item = db.prepare('SELECT owner_user_id FROM matrix_work_items WHERE id = ?').get(version.work_item_id);
++  if (!item || item.owner_user_id !== actorUserId) throw new Error('not authorized');
++  const actor = db.prepare('SELECT status FROM users WHERE id = ?').get(actorUserId);
++  if (!actor || actor.status !== 'active') throw new Error('actor is not active');
++  return version;
++}
++
++module.exports = {
++  contentHash,
++  createInitialVersion,
++  reviseVersion,
++  approveVersion,
++  getVersion,
++  validateRecipient
++};
+diff --git a/src/services/matrixStreamText.js b/src/services/matrixStreamText.js
+new file mode 100644
+index 0000000..21923c4
+--- /dev/null
++++ b/src/services/matrixStreamText.js
+@@ -0,0 +1,276 @@
++const { callJsonProvider } = require('./aiProvider');
++
++const REVISION_KEYS = ['subject', 'body_en', 'body_cn'];
++const INBOUND_KEYS = [
++  'translation_cn',
++  'requirements_cn',
++  'suggested_subject',
++  'suggested_body_en',
++  'suggested_body_cn'
++];
++
++function isPlainObject(value) {
++  return !!value && typeof value === 'object' && !Array.isArray(value);
++}
++
++function exactObject(value, keys) {
++  if (!isPlainObject(value)) return false;
++  const actual = Object.keys(value).sort();
++  const expected = [...keys].sort();
++  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
++}
++
++function extractUrls(value) {
++  return String(value || '').match(/https?:\/\/[^\s<>'"）)]+/gi) || [];
++}
++
++const PRICE_SEMANTIC = /(?:价格|报价|单价|售价|费用|收费|免费|成本|\b(?:price|quote|rate|fee|cost|free)\b)/i;
++const QUALIFICATION_SEMANTIC = /(?:认证|证书|资质|许可证|许可|审核|认可|批准|合规|标准|规范|要求|\b(?:certified|certificate|certification|license[ds]?|permit(?:ted)?|audit(?:ed)?|approved|recognized|compliant|compliance|standard|requirement)\b)/i;
++const CHINESE_REQUEST = /^(?:(?:请|烦请)(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)|(?:能否|可以|可否)(?:请)?(?:您|贵司)?(?:提供|告知|确认|说明|回复|报价)|(?:是否有|您是否有|贵司是否有|贵司是否(?:可以|能够|提供)))(.*)$/i;
++const ENGLISH_REQUEST = /^(?:(?:(?:could|would|can) you)(?: please)? (?:provide|confirm|quote|tell|share|send)|please (?:provide|confirm|quote|tell|share|send)|what (?:is|are))(?:\s+|$)(.*)$/i;
++const CHINESE_ASSERTION = /(?:是|为|已|拥有|通过|获得|获|无需|免收费|免费|符合|满足|达到|具备|持有|取得|认可|批准|备案|单价请询价)/i;
++const ENGLISH_ASSERTION = /\b(?:is|are|our price|we are|we have|have|has|approved|certified|recognized|compliant|free|no[ -]?fee|note)\b|\b(?:price|quote|rate|fee|cost)\s+(?:is|are)\b/i;
++
++function splitSentences(value) {
++  return String(value || '')
++    .replace(/\r/g, '')
++    .split(/(?<=[。！？!?])|(?<=\.)\s+|\n+/u)
++    .map(sentence => sentence.trim())
++    .filter(Boolean);
++}
++
++function normalizedSentence(value) {
++  return String(value || '').normalize('NFKC').trim().replace(/[。.!?！？]+$/u, '').replace(/\s+/g, '').toLowerCase();
++}
++
++function normalizedSyntaxSentence(value) {
++  return String(value || '').normalize('NFKC').trim().replace(/[。.!?！？]+$/u, '').replace(/\s+/g, ' ');
++}
++
++function sensitiveKinds(sentence) {
++  return {
++    price: PRICE_SEMANTIC.test(sentence),
++    qualification: QUALIFICATION_SEMANTIC.test(sentence)
++  };
++}
++
++function isNonAssertionRequest(sentence) {
++  const text = normalizedSyntaxSentence(sentence);
++  const chinese = text.match(CHINESE_REQUEST);
++  if (chinese) return !CHINESE_ASSERTION.test(chinese[1]);
++  const english = text.match(ENGLISH_REQUEST);
++  return Boolean(english && !ENGLISH_ASSERTION.test(english[1]));
++}
++
++function assertionText(value) {
++  return splitSentences(value).filter(sentence => !isNonAssertionRequest(sentence)).join('\n');
++}
++
++const AMOUNT_PATTERN = '(?:\\d[\\d,.]*(?:\\.\\d+)?|[零〇一二两三四五六七八九十百千万点]+)';
++const CURRENCY_PATTERN = '(?:usd|eur|gbp|cny|rmb|[$€£¥]|美元|美金|人民币|欧元|英镑|日元|元)';
++
++function chineseNumber(value) {
++  const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
++  const units = { 十: 10, 百: 100, 千: 1000 };
++  const [integerPart, decimalPart] = String(value).split('点');
++  let total = 0;
++  let section = 0;
++  let number = 0;
++  for (const char of integerPart) {
++    if (Object.prototype.hasOwnProperty.call(digits, char)) {
++      number = digits[char];
++    } else if (units[char]) {
++      section += (number || 1) * units[char];
++      number = 0;
++    } else if (char === '万') {
++      total += (section + number) * 10000;
++      section = 0;
++      number = 0;
++    } else {
++      return null;
++    }
++  }
++  let result = total + section + number;
++  if (decimalPart) {
++    if ([...decimalPart].some(char => !Object.prototype.hasOwnProperty.call(digits, char))) return null;
++    result += Number(`0.${[...decimalPart].map(char => digits[char]).join('')}`);
++  }
++  return Number.isFinite(result) ? result : null;
++}
++
++function normalizedAmount(value) {
++  const raw = String(value || '').trim();
++  const number = /^\d/.test(raw) ? Number(raw.replace(/,/g, '')) : chineseNumber(raw);
++  return Number.isFinite(number) ? String(number) : null;
++}
++
++function normalizedCurrency(value) {
++  const raw = String(value || '').toLowerCase();
++  if (/usd|美元|美金|\$/.test(raw)) return 'USD';
++  if (/eur|欧元|€/.test(raw)) return 'EUR';
++  if (/gbp|英镑|£/.test(raw)) return 'GBP';
++  if (/日元/.test(raw)) return 'JPY';
++  if (/cny|rmb|人民币|元|¥/.test(raw)) return 'CNY';
++  return 'UNSPECIFIED';
++}
++
++function priceClaims(value) {
++  const text = assertionText(value);
++  const claims = new Set();
++  const currencyAdjacent = new RegExp(`(?:${CURRENCY_PATTERN}\\s*${AMOUNT_PATTERN}|${AMOUNT_PATTERN}\\s*${CURRENCY_PATTERN})`, 'gi');
++  for (const match of text.matchAll(currencyAdjacent)) {
++    const amountMatch = match[0].match(new RegExp(AMOUNT_PATTERN, 'i'));
++    const amount = normalizedAmount(amountMatch?.[0]);
++    if (amount !== null) claims.add(`price:${normalizedCurrency(match[0])}:${amount}`);
++  }
++  const priceLanguage = new RegExp(`(?:单价|售价|价格|报价|费用|金额|成本)\\s*(?:为|是|约|：|:)?\\s*(${AMOUNT_PATTERN})(?:\\s*(${CURRENCY_PATTERN}))?`, 'gi');
++  for (const match of text.matchAll(priceLanguage)) {
++    const amount = normalizedAmount(match[1]);
++    if (amount !== null) claims.add(`price:${normalizedCurrency(match[2])}:${amount}`);
++  }
++  for (const segment of text.split(/[。；;，,\n]/)) {
++    if (!/(?:单价|售价|价格|报价|费用|金额|成本)/.test(segment)) continue;
++    const amountMatch = segment.match(new RegExp(AMOUNT_PATTERN, 'i'));
++    const priceState = /(?:面议|待定|另议|请询价|询价|视[^。；，,\n]{0,16}而定|\b(?:negotiable|tbd|to be determined|contact for price)\b)/i;
++    if (!amountMatch && !priceState.test(segment)) continue;
++    const normalizedPriceLanguage = new RegExp(`(?:单价|售价|价格|报价|费用|金额|成本)\\s*(?:为|是|约|：|:)?\\s*${AMOUNT_PATTERN}(?:\\s*${CURRENCY_PATTERN})?`, 'i');
++    if (!amountMatch || !normalizedPriceLanguage.test(segment)) {
++      const fallback = segment.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
++      if (fallback) claims.add(`price:fallback:${fallback}`);
++    }
++  }
++  return [...claims];
++}
++
++function qualificationClaims(value) {
++  const text = assertionText(value);
++  const claims = new Set();
++  for (const match of text.matchAll(/\b(ISO)\s*(\d+(?:[-:]\d+)?)?\b/gi)) claims.add(`qualification:iso:${match[2] || 'unspecified'}`);
++  for (const match of text.matchAll(/\b(BRCGS?|FDA|HACCP|GMP|CE|ROHS|REACH)\b/gi)) claims.add(`qualification:${match[1].toLowerCase()}`);
++  if (/食品级|\bfood[- ]grade\b/i.test(text)) claims.add('qualification:food-grade');
++  if (/(?:欧盟)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:eu');
++  if (/(?:有机)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:organic');
++  if (/(?:清真)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:halal');
++  if (/(?:犹太)(?:认证|资质|标准|要求)/.test(text)) claims.add('qualification:kosher');
++  for (const segment of text.split(/[。；;，,\n]/)) {
++    const qualificationSignal = /(?:审核|认证|证书|许可证|许可|资质|合规|(?:符合|满足|达到)[^。；，,\n]{0,32}(?:标准|规范|要求)|\b(?:audit(?:ed)?|license[ds]?|certificate|certified|certification|compliant|compliance|qualified|qualification)\b)/i;
++    if (!qualificationSignal.test(segment)) continue;
++    if (/\b(?:ISO|BRCGS?|FDA|HACCP|GMP|CE|ROHS|REACH)\b|食品级|\bfood[- ]grade\b|(?:欧盟|有机|清真|犹太)(?:认证|资质|标准|规范|要求)/i.test(segment)) continue;
++    const fallback = segment.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
++    if (fallback) claims.add(`qualification:fallback:${fallback}`);
++  }
++  return [...claims];
++}
++
++function collectEvidenceValues(value, output) {
++  if (typeof value === 'string') {
++    const trimmed = value.trim();
++    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
++      try {
++        collectEvidenceValues(JSON.parse(trimmed), output);
++        return output;
++      } catch (_) {
++        // A non-JSON string remains evidence text.
++      }
++    }
++    if (trimmed) output.push(trimmed);
++  } else if (Array.isArray(value)) {
++    for (const item of value) collectEvidenceValues(item, output);
++  } else if (value && typeof value === 'object') {
++    for (const item of Object.values(value)) collectEvidenceValues(item, output);
++  }
++  return output;
++}
++
++function evidenceValues(input) {
++  const source = input?.sourceSnapshot ?? input?.source_snapshot ?? input?.publicEvidence ?? input?.public_evidence ?? {};
++  return collectEvidenceValues(source, []);
++}
++
++function validateClaims(output, input) {
++  const outputValues = Object.values(output);
++  const outputText = outputValues.join('\n');
++  const sourceValues = evidenceValues(input);
++  const sourceSentences = new Set(sourceValues.flatMap(splitSentences).map(normalizedSentence).filter(Boolean));
++  const sourcePrices = new Set(sourceValues.flatMap(priceClaims));
++  const sourceQualifications = new Set(sourceValues.flatMap(qualificationClaims));
++  const allowedUrlText = [sourceValues.join('\n'), JSON.stringify(input?.current || {}), String(input?.inboundText || input?.message || '')].join('\n');
++  for (const url of extractUrls(outputText)) {
++    if (!allowedUrlText.includes(url)) throw new Error('invalid bilingual output: model introduced URL');
++  }
++  for (const sentence of outputValues.flatMap(splitSentences)) {
++    const kinds = sensitiveKinds(sentence);
++    if ((!kinds.price && !kinds.qualification) || isNonAssertionRequest(sentence)) continue;
++    if (!sourceSentences.has(normalizedSentence(sentence))) {
++      const kind = kinds.price ? 'price' : 'qualification';
++      throw new Error(`invalid bilingual output: unsupported ${kind} claim`);
++    }
++  }
++  for (const price of priceClaims(outputText)) {
++    if (!sourcePrices.has(price)) throw new Error('invalid bilingual output: unsupported price claim');
++  }
++  for (const claim of qualificationClaims(outputText)) {
++    if (!sourceQualifications.has(claim)) throw new Error('invalid bilingual output: unsupported qualification claim');
++  }
++}
++
++function validatedOutput(value, keys, input) {
++  if (!exactObject(value, keys) || keys.some(key => !String(value[key] || '').trim())) {
++    throw new Error('invalid bilingual output: exact non-empty fields required');
++  }
++  const normalized = Object.fromEntries(keys.map(key => [key, String(value[key]).replace(/\r\n?/g, '\n').trim()]));
++  validateClaims(normalized, input);
++  return normalized;
++}
++
++function unwrapProviderResult(value) {
++  if (value && value.ok === false) {
++    if (value.reason === 'text_provider_unavailable') return value;
++    throw new Error(`text provider failed: ${value.reason || 'unknown error'}`);
++  }
++  return value && value.ok === true && isPlainObject(value.json) ? value.json : value;
++}
++
++function createMatrixStreamText({ callJson = callJsonProvider } = {}) {
++  if (typeof callJson !== 'function') throw new Error('callJson function required');
++
++  async function run({ keys, systemPrompt, userPrompt, input }) {
++    const providerValue = await callJson({
++      systemPrompt,
++      userPrompt,
++      exactKeys: keys,
++      timeoutMs: 15000,
++      maxTokens: 1200
++    });
++    const output = unwrapProviderResult(providerValue);
++    if (output && output.ok === false && output.reason === 'text_provider_unavailable') return output;
++    return validatedOutput(output, keys, input);
++  }
++
++  return {
++    revise(input = {}) {
++      if (!isPlainObject(input.current)) return Promise.reject(new Error('current version required'));
++      const instruction = String(input.instruction || '').trim();
++      if (!instruction) return Promise.reject(new Error('revision instruction required'));
++      return run({
++        keys: REVISION_KEYS,
++        systemPrompt: 'Return only the requested bilingual JSON fields. Preserve evidence; introduce no facts, prices, qualifications, or URLs.',
++        userPrompt: JSON.stringify({ current: input.current, instruction }),
++        input: { ...input, sourceSnapshot: input.sourceSnapshot || input.current.source_snapshot_json }
++      });
++    },
++
++    translateInbound(input = {}) {
++      const inboundText = String(input.inboundText || input.message || '').trim();
++      if (!inboundText) return Promise.reject(new Error('inbound text required'));
++      return run({
++        keys: INBOUND_KEYS,
++        systemPrompt: 'Translate and suggest a bilingual response using only supplied public evidence. Return only the requested JSON fields.',
++        userPrompt: JSON.stringify({ inbound_text: inboundText, public_evidence: input.publicEvidence || {} }),
++        input: { ...input, inboundText }
++      });
++    }
++  };
++}
++
++module.exports = { createMatrixStreamText };

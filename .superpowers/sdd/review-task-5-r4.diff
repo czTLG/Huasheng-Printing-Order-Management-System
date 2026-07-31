@@ -1,0 +1,2934 @@
+# Review package: 711fde0..6efea7f
+
+## Commits
+6efea7f fix: preserve matrix notification generations
+b724076 fix: make matrix relay crash safe
+189d195 fix: harden matrix stream reply delivery
+45b80cb feat: correlate matrix stream replies
+
+## Files changed
+ .../workspace/extensions/stream-card.cjs           |  94 ++-
+ .../vm_debug_ci/workspace/scripts/matrix-client.js |  33 +-
+ .../vm_debug_ci/workspace/scripts/matrix-watch.js  | 124 +++-
+ .../workspace/tests/test-stream-card-extension.js  | 257 +++++++-
+ scripts/test-matrix-api.js                         |  77 +++
+ scripts/test-matrix-stream-correlation.js          | 647 +++++++++++++++++++++
+ src/db.js                                          | 141 +++++
+ src/lib/imapSync.js                                |  39 +-
+ src/lib/safeText.js                                |  12 +
+ src/routes/matrix.js                               |  96 +++
+ src/services/matrixStreamCorrelation.js            | 640 ++++++++++++++++++++
+ src/services/matrixStreamDelivery.js               |   6 +-
+ src/services/matrixStreamFollowup.js               |   2 -
+ 13 files changed, 2153 insertions(+), 15 deletions(-)
+
+## Diff
+diff --git a/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs b/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs
+index 542c804..3122b53 100644
+--- a/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs
++++ b/.runtime/vm_debug_ci/workspace/extensions/stream-card.cjs
+@@ -1,21 +1,23 @@
+ 'use strict';
+ 
+ const crypto = require('crypto');
+ const fs = require('fs');
+ 
+-const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category'];
++const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.reply_draft', 'mx.retry_translation'];
+ const LETTERS = ['A', 'B', 'C', 'D', 'E'];
+ const SESSION_TTL_MS = 30 * 60 * 1000;
+ const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+ const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
+ const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
++const REPLY_SPOOL_PATH = '/workspace/store/matrix-reply-pending.json';
++const REPLY_INFLIGHT_PATH = '/workspace/store/matrix-reply-inflight.json';
+ const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
+ 
+ function readOptionalJson(file) {
+   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+   catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+ }
+ 
+ function writeJsonAtomic(targetPath, value) {
+   const temporary = `${targetPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+   try {
+@@ -78,20 +80,70 @@ async function deliverQueuedReminder({
+   writeJsonAtomic(inflightPath, inflight);
+   const sent = await sendManagedCard(channel, inflight.chat_id, inflight.card, '', false, 'chat_id', inflight.id);
+   writeReceipt(receiptPath, {
+     version: 1, date: inflight.date, id: inflight.id, chat_id: inflight.chat_id,
+     message_id: String(sent?.messageId || ''), delivered_at: new Date().toISOString()
+   });
+   removeInflight(inflightPath);
+   return { status: 'delivered', id: inflight.id };
+ }
+ 
++function validateReplyRecord(record, expectedChatId) {
++  const keys = Object.keys(record || {}).sort();
++  const expected = ['card', 'chat_id', 'claim_token', 'id', 'notification_key', 'version'];
++  if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new Error('invalid reply notification record fields');
++  if (record.version !== 1 || !Number.isInteger(record.id) || record.id < 1
++      || !/^[0-9a-f-]{36}$/i.test(record.notification_key)
++      || !/^[0-9a-f-]{36}$/i.test(record.claim_token)
++      || String(record.chat_id) !== String(expectedChatId || '')) throw new Error('invalid reply notification record binding');
++  if (!record.card || typeof record.card !== 'object' || Array.isArray(record.card)) throw new Error('invalid reply notification card');
++  return record;
++}
++
++async function deliverQueuedReply({
++  client, openId = process.env.MATRIX_OWNER_OPEN_ID,
++  spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH,
++  expectedChatId = process.env.STREAM_CHAT_ID, channel, sendManagedCard
++}) {
++  const resolved = (record, result) => {
++    const state = String(result?.delivery_state || '');
++    if (!['pending', 'delivered', 'manual_review'].includes(state)) throw new Error('notification state unresolved');
++    fs.unlinkSync(inflightPath);
++    return { status: state === 'pending' ? 'retry_pending' : state, id: record.id };
++  };
++  const existingInflight = readOptionalJson(inflightPath);
++  if (existingInflight) {
++    const record = validateReplyRecord(existingInflight, expectedChatId);
++    const status = await client.notificationStatus(openId, record.id, { claim_token: record.claim_token });
++    if (status?.delivery_state !== 'inflight' || status?.can_deliver !== true) return resolved(record, status);
++    const result = await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome: 'ambiguous' });
++    return resolved(record, result);
++  }
++  const queued = readOptionalJson(spoolPath);
++  if (!queued) return false;
++  const record = validateReplyRecord(queued, expectedChatId);
++  fs.renameSync(spoolPath, inflightPath);
++  const status = await client.notificationStatus(openId, record.id, { claim_token: record.claim_token });
++  if (status?.delivery_state !== 'inflight' || status?.can_deliver !== true) return resolved(record, status);
++  let sent;
++  try {
++    sent = await sendManagedCard(channel, record.chat_id, record.card, '', false, 'chat_id', record.notification_key);
++  } catch (error) {
++    const outcome = error?.definiteDeliveryFailure === true ? 'failed' : 'ambiguous';
++    const result = await client.nackNotification(openId, record.id, { claim_token: record.claim_token, outcome });
++    return resolved(record, result);
++  }
++  const receiptId = String(sent?.messageId || record.notification_key);
++  const result = await client.ackNotification(openId, record.id, { claim_token: record.claim_token, receipt_id: receiptId });
++  return resolved(record, result);
++}
++
+ function clip(value, maximum = 90) {
+   const text = String(value == null || value === '' ? '待核实' : value).replace(/[\r\n]+/g, ' ').trim();
+   const points = [...text];
+   return points.length > maximum ? `${points.slice(0, maximum - 1).join('')}…` : text;
+ }
+ 
+ function eventId(session, candidate) {
+   return crypto.createHash('sha256').update(`${session.id}:${session.version}:${candidate.id}:select`).digest('hex').slice(0, 24);
+ }
+ 
+@@ -303,20 +355,27 @@ function register(context) {
+         channel, sendManagedCard,
+         spoolPath: context.reminderSpoolPath || REMINDER_SPOOL_PATH,
+         inflightPath: context.reminderInflightPath || REMINDER_INFLIGHT_PATH,
+         receiptPath: context.reminderReceiptPath || REMINDER_RECEIPT_PATH,
+         writeReceipt: context.writeReminderReceipt || writeReceiptAtomic,
+         removeInflight: context.removeReminderInflight || (file => fs.unlinkSync(file))
+       });
+       if (result?.status === 'ambiguous') {
+         logReminder(`[stream-card] reminder delivery ambiguous: ${result.id}; manual reconciliation required`);
+       }
++      await deliverQueuedReply({
++        client, openId: process.env.MATRIX_OWNER_OPEN_ID,
++        channel, sendManagedCard,
++        spoolPath: context.replySpoolPath || REPLY_SPOOL_PATH,
++        inflightPath: context.replyInflightPath || REPLY_INFLIGHT_PATH,
++        expectedChatId: process.env.STREAM_CHAT_ID
++      });
+     } catch (error) {
+       logReminder(`[stream-card] reminder delivery failed: ${error?.message || 'unknown error'}`);
+     } finally {
+       reminderPollActive = false;
+     }
+   };
+   const reminderTimer = scheduleReminderPoll(pollReminder, Math.max(1000, Number(context.reminderPollMs || 5000)));
+   reminderTimer.unref?.();
+   let disposed = false;
+ 
+@@ -558,32 +617,61 @@ function register(context) {
+ 
+   async function quickAction({ evt, value }) {
+     const index = Number(value?.i);
+     if (!Number.isInteger(index) || index < 0 || index >= LETTERS.length) throw new Error('invalid quick choice');
+     await openQuick({
+       senderId: evt?.operator?.openId, chatId: evt?.chatId,
+       threadId: evt?.threadId || '', messageId: evt?.messageId
+     }, index);
+   }
+ 
++  async function replyDraftAction({ evt, value }) {
++    const openId = String(evt?.operator?.openId || '').trim();
++    const notificationId = Number(value?.n);
++    if (!openId || !Number.isInteger(notificationId) || notificationId < 1) throw new Error('valid reply draft action required');
++    if (typeof client.startReplyDraft !== 'function') throw new Error('reply draft service unavailable');
++    const result = await client.startReplyDraft(openId, notificationId);
++    if (!result || result.state !== 'draft_pending' || Number(result.notification_id) !== notificationId) {
++      throw new Error('invalid reply draft result');
++    }
++    await sendForEvent(evt, cardHelpers.card([
++      cardHelpers.md(`工作项 #${Number(result.work_item_id)} 已进入 **draft_pending**。`),
++      cardHelpers.note('尚未发送；请继续人工审阅草稿。')
++    ], { summary: '回复草稿待审阅' }));
++  }
++
++  async function retryTranslationAction({ evt, value }) {
++    const openId = String(evt?.operator?.openId || '').trim();
++    const notificationId = Number(value?.n);
++    if (!openId || !Number.isInteger(notificationId) || notificationId < 1) throw new Error('valid translation retry action required');
++    if (typeof client.retryTranslation !== 'function') throw new Error('translation retry service unavailable');
++    const result = await client.retryTranslation(openId, notificationId);
++    if (!result || Number(result.notification_id) !== notificationId
++        || !['ready', 'pending'].includes(result.translation_status)) throw new Error('invalid translation retry result');
++    await sendForEvent(evt, infoCard(cardHelpers,
++      `translation_status=${result.translation_status}；${result.translation_status === 'ready' ? '请重新查看回复通知。' : '翻译仍待处理，未生成推测内容。'}`));
++  }
++
+   const actionHandlers = {
+     'mx.today': todayAction,
+     'mx.pick': detailAction,
+     'mx.quick': quickAction,
+     'mx.page': pageAction,
+     'mx.detail': detailAction,
+     'mx.back': backAction,
+     'mx.select': selectAction,
+     'mx.work': workAction,
+     'mx.filters': filterAction,
+     'mx.region': payload => applyFilters(payload, 'region'),
+-    'mx.category': payload => applyFilters(payload, 'category')
++    'mx.category': payload => applyFilters(payload, 'category'),
++    'mx.reply_draft': replyDraftAction,
++    'mx.retry_translation': retryTranslationAction
+   };
+   for (const action of ACTIONS) {
+     dispatcher.on(action, async payload => {
+       try {
+         await actionHandlers[action](payload);
+       } catch (error) {
+         if (invalidSessionError(error)) {
+           sessions.delete(sessionKey(payload.evt?.chatId, payload.evt?.operator?.openId, payload.evt?.threadId));
+           await sendForEvent(payload.evt, restartCard(cardHelpers));
+         } else {
+@@ -614,11 +702,11 @@ function register(context) {
+           sessions.delete(sessionKey(msg?.chatId, msg?.senderId, msg?.threadId));
+           await sendManagedCard(channel, msg.chatId, restartCard(cardHelpers), msg.messageId, Boolean(msg.threadId));
+         }
+         return true;
+       }
+       return false;
+     }
+   };
+ }
+ 
+-module.exports = { register, deliverQueuedReminder, parseQuickChoice };
++module.exports = { register, deliverQueuedReminder, deliverQueuedReply, parseQuickChoice };
+diff --git a/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js b/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js
+index 83d02a7..1a93873 100644
+--- a/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js
++++ b/.runtime/vm_debug_ci/workspace/scripts/matrix-client.js
+@@ -108,11 +108,42 @@ function today(openId, filters = {}) {
+ function selectCandidate(openId, input) {
+   const body = exactObject(input, new Set(['candidate_id', 'session_id', 'expected_version', 'idempotency_key', 'next_action']), 'selection');
+   return call(openId, '/selections', { method: 'POST', body });
+ }
+ 
+ function workItems(openId, filters = {}) {
+   const query = exactObject(filters, new Set(['stage', 'limit']), 'work filters');
+   return call(openId, '/work-items', { query });
+ }
+ 
+-module.exports = { facets, createSession, rehydrateSession, listCandidates, candidateDetail, today, selectCandidate, workItems };
++function startReplyDraft(openId, notificationId) {
++  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/reply-draft`, { method: 'POST', body: {} });
++}
++
++function retryTranslation(openId, notificationId) {
++  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/retry-translation`, { method: 'POST', body: {} });
++}
++
++function claimNotification(openId) {
++  return call(openId, '/notifications/claim', { method: 'POST', body: {} });
++}
++
++function ackNotification(openId, notificationId, input) {
++  const body = exactObject(input, new Set(['claim_token', 'receipt_id']), 'notification acknowledgement');
++  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/ack`, { method: 'POST', body });
++}
++
++function nackNotification(openId, notificationId, input) {
++  const body = exactObject(input, new Set(['claim_token', 'outcome']), 'notification rejection');
++  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/nack`, { method: 'POST', body });
++}
++
++function notificationStatus(openId, notificationId, input) {
++  const body = exactObject(input, new Set(['claim_token']), 'notification status');
++  return call(openId, `/notifications/${positiveId(notificationId, 'notification id')}/status`, { method: 'POST', body });
++}
++
++module.exports = {
++  facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
++  selectCandidate, workItems, startReplyDraft, retryTranslation,
++  claimNotification, ackNotification, nackNotification, notificationStatus
++};
+diff --git a/.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js b/.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js
+index 7d6943d..68269b4 100644
+--- a/.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js
++++ b/.runtime/vm_debug_ci/workspace/scripts/matrix-watch.js
+@@ -1,20 +1,22 @@
+ #!/usr/bin/env node
+ 'use strict';
+ 
+ const fs = require('node:fs');
+ const crypto = require('node:crypto');
+ 
+ const STATE_PATH = '/workspace/store/matrix-watch-state.json';
+ const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
+ const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
+ const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
++const REPLY_SPOOL_PATH = '/workspace/store/matrix-reply-pending.json';
++const REPLY_INFLIGHT_PATH = '/workspace/store/matrix-reply-inflight.json';
+ const QUALIFICATION_PATTERN = /(?:\b(?:ISO\s*\d*|GMP|HACCP|BRC|HALAL|SMETA|BSCI|FSSC|FDA|QS)\b|认证|资质|certificat)/i;
+ 
+ function shanghaiParts(now = new Date()) {
+   const parts = new Intl.DateTimeFormat('en-CA', {
+     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+     hour: '2-digit', minute: '2-digit', hour12: false
+   }).formatToParts(now);
+   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+   return { date: `${values.year}-${values.month}-${values.day}`, hour: Number(values.hour), minute: Number(values.minute) };
+ }
+@@ -36,20 +38,32 @@ function saveState(state) {
+   const temporary = `${STATE_PATH}.${process.pid}.tmp`;
+   fs.writeFileSync(temporary, JSON.stringify(clean), { mode: 0o600 });
+   fs.renameSync(temporary, STATE_PATH);
+ }
+ 
+ function readJson(file) {
+   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+   catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+ }
+ 
++function readProcessIdentity(pid = process.pid, readFile = fs.readFileSync) {
++  const processId = Number(pid);
++  if (!Number.isInteger(processId) || processId < 1) throw new Error('valid process id required');
++  const bootId = String(readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
++  const stat = String(readFile(`/proc/${processId}/stat`, 'utf8')).trim();
++  const close = stat.lastIndexOf(')');
++  const fields = close >= 0 ? stat.slice(close + 1).trim().split(/\s+/) : [];
++  const startTime = String(fields[19] || '').trim();
++  if (!/^[0-9a-f-]{8,}$/i.test(bootId) || !/^\d+$/.test(startTime)) throw new Error('process identity unavailable');
++  return { pid: processId, boot_id: bootId, start_time: startTime };
++}
++
+ function deliveryId(date, chatId) {
+   const day = String(date || '');
+   const chat = String(chatId || '').trim();
+   if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !chat) throw new Error('valid reminder date and chat required');
+   const bytes = crypto.createHash('sha256').update(`matrix-reminder\0${day}\0${chat}`).digest().subarray(0, 16);
+   bytes[6] = (bytes[6] & 0x0f) | 0x50;
+   bytes[8] = (bytes[8] & 0x3f) | 0x80;
+   const hex = bytes.toString('hex');
+   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+ }
+@@ -179,20 +193,127 @@ function reminderCard(rows) {
+     config: { update_multi: true },
+     header: { template: selected.length ? 'blue' : 'grey', title: { tag: 'plain_text', content: '今日优先候选' } },
+     body: { elements: [
+       { tag: 'markdown', content },
+       ...quickRows,
+       ...(selected.length ? [{ tag: 'markdown', content: '也可 @智能桓 回复 A-E' }] : [])
+     ] }
+   };
+ }
+ 
++function positiveId(value, label) {
++  const number = Number(value);
++  if (!Number.isInteger(number) || number < 1) throw new Error(`valid ${label} required`);
++  return number;
++}
++
++function replyNotificationCard(notification) {
++  if (!notification || typeof notification !== 'object' || Array.isArray(notification)) throw new Error('valid reply notification required');
++  const notificationId = positiveId(notification.id, 'notification id');
++  const workItemId = positiveId(notification.work_item_id, 'work item id');
++  positiveId(notification.job_id, 'job id');
++  const status = String(notification.translation_status || 'pending');
++  if (!['ready', 'pending'].includes(status)) throw new Error('valid translation status required');
++  const original = clip(notification.original_preview, 320);
++  const translation = status === 'ready' ? clip(notification.translation_cn, 260) : '翻译待处理';
++  const requirements = status === 'ready' ? clip(notification.requirements_cn, 180) : '翻译待处理';
++  const workState = clip(notification.work_item_state, 40);
++  return {
++    schema: '2.0',
++    config: { update_multi: true },
++    header: { template: 'blue', title: { tag: 'plain_text', content: '收到回复' } },
++    body: { elements: [
++      { tag: 'markdown', content: `**原文预览**\n${original}\n\n**中文翻译**\n${translation}\n\n**需求摘要**\n${requirements}\n\n**工作项状态**\n${workState}` },
++      {
++        tag: 'column_set', flex_mode: 'flow', horizontal_spacing: 'small',
++        columns: status === 'ready' ? [{ tag: 'column', width: 'auto', elements: [{
++          tag: 'button', text: { tag: 'plain_text', content: 'View reply draft' }, type: 'default',
++          behaviors: [{ type: 'callback', value: { a: 'mx.reply_draft', n: notificationId, w: workItemId } }]
++        }] }] : [{ tag: 'column', width: 'auto', elements: [{
++          tag: 'button', text: { tag: 'plain_text', content: 'Retry translation' }, type: 'default',
++          behaviors: [{ type: 'callback', value: { a: 'mx.retry_translation', n: notificationId } }]
++        }] }]
++      },
++      { tag: 'markdown', content: status === 'pending' ? '翻译服务暂不可用，可稍后人工重试；未生成推测内容。' : '查看操作只创建待审阅草稿，不会发送。' }
++    ] }
++  };
++}
++
++async function claimAndQueueReply({
++  client, ownerOpenId, chatId,
++  spoolPath = REPLY_SPOOL_PATH, inflightPath = REPLY_INFLIGHT_PATH,
++  lockPath = `${spoolPath}.lock`, lockStaleMs = 300000,
++  identityReader = readProcessIdentity
++}) {
++  if (!client || typeof client.claimNotification !== 'function' || !ownerOpenId || !chatId) throw new Error('reply watcher binding required');
++  let lockFd;
++  try {
++    for (let attempt = 0; attempt < 2; attempt += 1) {
++      try {
++        lockFd = fs.openSync(lockPath, 'wx', 0o600);
++        fs.writeFileSync(lockFd, `${JSON.stringify({ ...identityReader(process.pid), created_at: new Date().toISOString() })}\n`);
++        fs.fsyncSync(lockFd);
++        break;
++      } catch (error) {
++        if (error?.code !== 'EEXIST') throw error;
++        const age = Date.now() - fs.statSync(lockPath).mtimeMs;
++        if (attempt === 0 && age > Math.max(1000, Number(lockStaleMs || 300000))) {
++          let owner = null;
++          try { owner = readJson(lockPath); } catch (_) {}
++          if (Number.isInteger(owner?.pid) && owner.pid > 0 && owner.boot_id && owner.start_time) {
++            let current = null;
++            try { current = identityReader(owner.pid); } catch (_) {}
++            if (current && current.pid === owner.pid
++                && current.boot_id === owner.boot_id && current.start_time === owner.start_time) {
++              return { status: 'busy' };
++            }
++          }
++          try { fs.unlinkSync(lockPath); } catch (unlinkError) { if (unlinkError?.code !== 'ENOENT') throw unlinkError; }
++          continue;
++        }
++        return { status: 'busy' };
++      }
++    }
++    if (readJson(spoolPath) || readJson(inflightPath)) return { status: 'busy' };
++    const response = await client.claimNotification(ownerOpenId);
++    const notification = response?.notification;
++    if (!notification) return { status: 'empty' };
++    const record = {
++      version: 1,
++      id: positiveId(notification.id, 'notification id'),
++      notification_key: String(notification.notification_key || ''),
++      claim_token: String(notification.claim_token || ''),
++      chat_id: String(chatId),
++      card: replyNotificationCard(notification)
++    };
++    if (!/^[0-9a-f-]{36}$/i.test(record.notification_key) || !/^[0-9a-f-]{36}$/i.test(record.claim_token)) throw new Error('valid reply notification claim required');
++    const temporary = `${spoolPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
++    try {
++      fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
++      fs.linkSync(temporary, spoolPath);
++    } catch (error) {
++      try {
++        await client.nackNotification(ownerOpenId, record.id, { claim_token: record.claim_token, outcome: 'failed' });
++      } catch (_) {}
++      throw error;
++    } finally {
++      try { fs.unlinkSync(temporary); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
++    }
++    return { status: 'queued', id: record.id };
++  } finally {
++    if (lockFd !== undefined) {
++      fs.closeSync(lockFd);
++      try { fs.unlinkSync(lockPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
++    }
++  }
++}
++
+ async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatId, send, hour = 9, minute = 0 }) {
+   if (!client || typeof client.today !== 'function') throw new Error('read-only matrix client required');
+   if (!ownerOpenId || !chatId || typeof send !== 'function') throw new Error('watcher binding and sender required');
+   const current = shanghaiParts(now);
+   const clean = normalizedState(state);
+   const passed = current.hour > hour || (current.hour === hour && current.minute >= minute);
+   if (!passed || clean.last_success_date === current.date) return clean;
+   const result = await client.today(ownerOpenId, { page_size: 5 });
+   const messageId = await send(reminderCard((result.rows || []).slice(0, 5)), chatId, current.date);
+   return { last_success_date: current.date, last_message_id: String(messageId || '') };
+@@ -205,20 +326,21 @@ async function main() {
+   }
+   const ownerOpenId = String(process.env.MATRIX_OWNER_OPEN_ID || '').trim();
+   const chatId = String(process.env.STREAM_CHAT_ID || '').trim();
+   if (!ownerOpenId || !chatId) throw new Error('watcher environment incomplete');
+   const client = require('./matrix-client.js');
+   const hour = Number(process.env.MATRIX_RECOMMEND_HOUR || 9);
+   const minute = Number(process.env.MATRIX_RECOMMEND_MINUTE || 0);
+   let state = loadState();
+   while (true) {
+     try {
++      await claimAndQueueReply({ client, ownerOpenId, chatId });
+       const next = await runDue({
+         now: new Date(), state, client, ownerOpenId, chatId, hour, minute,
+         send: (card, _chat, date) => queueReminder(card, chatId, { date })
+       });
+       if (next.last_success_date !== state.last_success_date) {
+         state = next;
+         saveState(state);
+         process.stdout.write(`[matrix-watch] reminder queued for ${state.last_success_date}\n`);
+       }
+     } catch (error) {
+@@ -226,11 +348,11 @@ async function main() {
+     }
+     await new Promise(resolve => setTimeout(resolve, pollMs));
+   }
+ }
+ 
+ if (require.main === module) main().catch(error => {
+   process.stderr.write(`[matrix-watch] fatal: ${error?.message || 'unknown error'}\n`);
+   process.exit(1);
+ });
+ 
+-module.exports = { runDue, reminderCard, shanghaiParts, queueReminder, deliveryId };
++module.exports = { runDue, reminderCard, replyNotificationCard, claimAndQueueReply, readProcessIdentity, shanghaiParts, queueReminder, deliveryId };
+diff --git a/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js b/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js
+index 00fde62..05b4874 100644
+--- a/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js
++++ b/.runtime/vm_debug_ci/workspace/tests/test-stream-card-extension.js
+@@ -7,46 +7,59 @@ const path = require('node:path');
+ 
+ process.env.MATRIX_DELIVERY_ENABLED = '0';
+ const extension = require('../extensions/stream-card.cjs');
+ 
+ async function testNarrowClient() {
+   process.env.MATRIX_API_BASE_URL = 'https://matrix.test/api/matrix';
+   process.env.MATRIX_BRIDGE_TOKEN = 'test-bridge-token';
+   const clientPath = require.resolve('../scripts/matrix-client.js');
+   delete require.cache[clientPath];
+   const client = require(clientPath);
+-  assert.deepStrictEqual(Object.keys(client).sort(), ['candidateDetail', 'createSession', 'facets', 'listCandidates', 'rehydrateSession', 'selectCandidate', 'today', 'workItems']);
++  assert.deepStrictEqual(Object.keys(client).sort(), ['ackNotification', 'candidateDetail', 'claimNotification', 'createSession', 'facets', 'listCandidates', 'nackNotification', 'notificationStatus', 'rehydrateSession', 'retryTranslation', 'selectCandidate', 'startReplyDraft', 'today', 'workItems']);
+   const originalFetch = global.fetch;
+   const requests = [];
+   global.fetch = async (url, options) => {
+     requests.push({ url: String(url), options });
+     return { ok: true, status: 200, headers: { get: name => name === 'content-type' ? 'application/json; charset=utf-8' : null }, json: async () => ({ ok: true }) };
+   };
+   try {
+     await client.facets('ou-client');
+     await client.createSession('ou-client', { chat_id: 'chat', filters: {}, expires_at: '2099-01-01T00:00:00Z' });
+     await client.createSession('ou-client', { session_id: 7, expected_version: 2, page: 3, filters: { region: 'europe' } });
+     await client.rehydrateSession('ou-client', { session_id: 7, chat_id: 'chat', thread_id: 'thread' });
+     await client.listCandidates('ou-client', { region: 'europe', page: 1, page_size: 5 });
+     await client.candidateDetail('ou-client', 4);
+     await client.today('ou-client', { page_size: 5 });
+     await client.selectCandidate('ou-client', { candidate_id: 4, session_id: 7, expected_version: 2, idempotency_key: 'evt', next_action: 'verify' });
+     await client.workItems('ou-client', { stage: 'selected' });
++    await client.startReplyDraft('ou-client', 41);
++    await client.retryTranslation('ou-client', 42);
++    await client.claimNotification('ou-client');
++    await client.ackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', receipt_id: 'message-51' });
++    await client.nackNotification('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052', outcome: 'ambiguous' });
++    await client.notificationStatus('ou-client', 51, { claim_token: '00000000-0000-4000-8000-000000000052' });
+     assert.ok(requests.every(item => new URL(item.url).origin === 'https://matrix.test'));
+     assert.ok(requests.every(item => new URL(item.url).pathname.startsWith('/api/matrix/')));
+     assert.ok(requests.every(item => item.options.redirect === 'manual'));
+     assert.ok(requests.every(item => item.options.signal));
+     assert.ok(requests.every(item => item.options.headers['x-matrix-bridge-token'] === 'test-bridge-token'));
+     assert.ok(requests.every(item => item.options.headers['x-feishu-open-id'] === 'ou-client'));
+     assert.strictEqual(requests[1].options.method, 'POST');
+     assert.strictEqual(requests[2].options.method, 'PATCH');
+     assert.ok(requests[2].url.endsWith('/sessions/7'));
++    assert.ok(requests.some(item => item.url.endsWith('/notifications/41/reply-draft')));
++    assert.ok(requests.some(item => item.url.endsWith('/notifications/42/retry-translation')));
++    assert.ok(requests.some(item => item.url.endsWith('/notifications/claim')));
++    assert.ok(requests.some(item => item.url.endsWith('/notifications/51/ack')));
++    assert.ok(requests.some(item => item.url.endsWith('/notifications/51/nack')));
++    assert.ok(requests.some(item => item.url.endsWith('/notifications/51/status')));
++    assert.strictEqual(requests.at(-1).options.method, 'POST');
+     assert.throws(() => client.candidateDetail('ou-client', '../outside'), /candidate id/);
+ 
+     global.fetch = async () => ({ ok: false, status: 302, headers: { get: () => 'application/json' }, json: async () => ({}) });
+     await assert.rejects(() => client.facets('ou-client'), /redirect|HTTP 302/);
+     global.fetch = async () => ({ ok: true, status: 200, headers: { get: () => 'text/html' }, json: async () => ({}) });
+     await assert.rejects(() => client.facets('ou-client'), /JSON/);
+   } finally {
+     global.fetch = originalFetch;
+   }
+ }
+@@ -119,20 +132,259 @@ async function testReadOnlyWatcher() {
+     }), { status: 'delivered', id: queuedId });
+     assert.deepStrictEqual(sentFromSpool, [{ chatId: 'chat-watch', card: { schema: '2.0', body: { elements: [] } }, uuid: queuedId }]);
+     assert.strictEqual(fs.existsSync(spoolPath), false);
+     assert.strictEqual(JSON.parse(fs.readFileSync(receiptPath, 'utf8')).id, queuedId);
+     assert.strictEqual(await extension.deliverQueuedReminder({ spoolPath, inflightPath, receiptPath, expectedChatId: 'chat-watch', channel: {}, sendManagedCard: async () => {} }), false);
+   } finally {
+     fs.rmSync(spoolRoot, { recursive: true, force: true });
+   }
+ }
+ 
++async function testReplyNotificationCardAndDraftAction() {
++  const watcher = require('../scripts/matrix-watch.js');
++  const ready = watcher.replyNotificationCard({
++    id: 41,
++    work_item_id: 91,
++    job_id: 71,
++    kind: 'reply',
++    original_preview: 'Please send the current specifications.',
++    translation_status: 'ready',
++    translation_cn: '请发送当前规格。',
++    requirements_cn: '需要当前规格',
++    work_item_state: 'replied'
++  });
++  const readyText = visibleText(ready);
++  for (const expected of ['原文预览', 'Please send the current specifications.', '中文翻译', '请发送当前规格。', '需求摘要', '需要当前规格', '工作项状态', 'replied', 'View reply draft']) {
++    assert.ok(readyText.includes(expected), `reply notification missing ${expected}`);
++  }
++  assert.ok(JSON.stringify(ready).includes('"a":"mx.reply_draft"'));
++  assert.ok(JSON.stringify(ready).includes('"n":41'));
++  assert.ok(!JSON.stringify(ready).includes('credential'));
++  assert.ok([...readyText].length <= 900);
++
++  const pending = watcher.replyNotificationCard({
++    id: 42, work_item_id: 92, job_id: 72, kind: 'reply',
++    original_preview: 'Hello', translation_status: 'pending', translation_cn: '',
++    requirements_cn: '', work_item_state: 'replied'
++  });
++  const pendingText = visibleText(pending);
++  assert.ok(pendingText.includes('翻译待处理'));
++  assert.ok(!pendingText.includes('请发送当前规格。'));
++  assert.ok(JSON.stringify(pending).includes('"a":"mx.retry_translation"'));
++  assert.ok(!JSON.stringify(pending).includes('"a":"mx.reply_draft"'));
++
++  const handlers = new Map();
++  const sent = [];
++  const draftCalls = [];
++  const registered = extension.register({
++    channel: {},
++    dispatcher: { on: (name, handler) => handlers.set(name, handler) },
++    card: helpers(),
++    client: {
++      startReplyDraft: async (openId, notificationId) => {
++        draftCalls.push({ openId, notificationId });
++        return { notification_id: notificationId, work_item_id: 91, state: 'draft_pending' };
++      },
++      retryTranslation: async (openId, notificationId) => ({ notification_id: notificationId, translation_status: 'ready', retry_available: false }),
++      confirmSend: async () => { throw new Error('must never send'); }
++    },
++    sendManagedCard: async (_channel, _chatId, card) => sent.push(card),
++    scheduleReminderPoll: () => ({ unref() {} }),
++    clearReminderPoll: () => undefined
++  });
++  assert.strictEqual(typeof handlers.get('mx.reply_draft'), 'function');
++  await handlers.get('mx.reply_draft')({
++    evt: { operator: { openId: 'ou-reply' }, chatId: 'chat-reply', threadId: '', messageId: 'evt-reply' },
++    value: { a: 'mx.reply_draft', n: 41 }
++  });
++  assert.deepStrictEqual(draftCalls, [{ openId: 'ou-reply', notificationId: 41 }]);
++  assert.ok(visibleText(sent.at(-1)).includes('draft_pending'));
++  assert.ok(visibleText(sent.at(-1)).includes('尚未发送'));
++  assert.strictEqual(typeof handlers.get('mx.retry_translation'), 'function');
++  await handlers.get('mx.retry_translation')({
++    evt: { operator: { openId: 'ou-reply' }, chatId: 'chat-reply', threadId: '', messageId: 'evt-retry' },
++    value: { a: 'mx.retry_translation', n: 42 }
++  });
++  assert.ok(visibleText(sent.at(-1)).includes('translation_status=ready'));
++  registered.dispose();
++
++  assert.strictEqual(typeof watcher.claimAndQueueReply, 'function');
++  assert.strictEqual(typeof watcher.readProcessIdentity, 'function');
++  const actualIdentity = watcher.readProcessIdentity();
++  assert.strictEqual(actualIdentity.pid, process.pid);
++  assert.match(actualIdentity.boot_id, /^[0-9a-f-]{8,}$/i);
++  assert.match(actualIdentity.start_time, /^\d+$/);
++  assert.strictEqual(typeof extension.deliverQueuedReply, 'function');
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-reply-spool-'));
++  const spoolPath = path.join(root, 'pending.json');
++  const inflightPath = path.join(root, 'inflight.json');
++  const claimedRow = {
++    id: 51, notification_key: '00000000-0000-4000-8000-000000000051',
++    claim_token: '00000000-0000-4000-8000-000000000052', delivery_state: 'inflight',
++    work_item_id: 91, job_id: 71, kind: 'reply', original_preview: 'Hello',
++    translation_status: 'pending', translation_cn: '', requirements_cn: '',
++    work_item_state: 'replied', attempt_count: 1
++  };
++  try {
++    let releaseFirst;
++    let firstClaimStarted;
++    const started = new Promise(resolve => { firstClaimStarted = resolve; });
++    const held = new Promise(resolve => { releaseFirst = resolve; });
++    let claimCalls = 0;
++    const racingClient = {
++      claimNotification: async () => {
++        claimCalls += 1;
++        if (claimCalls === 1) { firstClaimStarted(); await held; }
++        return { notification: { ...claimedRow, id: 50 + claimCalls, notification_key: `00000000-0000-4000-8000-00000000005${claimCalls}` } };
++      },
++      nackNotification: async () => undefined
++    };
++    const firstQueue = watcher.claimAndQueueReply({
++      client: racingClient, ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
++    });
++    await started;
++    const lockPath = `${spoolPath}.lock`;
++    assert.strictEqual(fs.statSync(lockPath).mode & 0o777, 0o600, 'relay lock must be private');
++    const secondQueue = await watcher.claimAndQueueReply({
++      client: racingClient, ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
++    });
++    releaseFirst();
++    assert.deepStrictEqual(await firstQueue, { status: 'queued', id: 51 });
++    assert.deepStrictEqual(secondQueue, { status: 'busy' });
++    assert.strictEqual(claimCalls, 1, 'watcher without the filesystem lock must not call claim API');
++    assert.strictEqual(fs.existsSync(lockPath), false, 'relay lock must be cleaned');
++    fs.unlinkSync(spoolPath);
++    const liveIdentity = { pid: process.pid, boot_id: 'boot-a', start_time: '100' };
++    fs.writeFileSync(lockPath, `${JSON.stringify({ ...liveIdentity, created_at: '2020-01-01T00:00:00Z' })}\n`, { mode: 0o600, flag: 'wx' });
++    fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
++    assert.deepStrictEqual(await watcher.claimAndQueueReply({
++      client: { claimNotification: async () => { throw new Error('live lock must prevent claim'); } },
++      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000,
++      identityReader: () => liveIdentity
++    }), { status: 'busy' });
++    fs.unlinkSync(lockPath);
++    for (const [recorded, current, label] of [
++      [liveIdentity, { ...liveIdentity, start_time: '101' }, 'reused pid'],
++      [liveIdentity, { ...liveIdentity, boot_id: 'boot-b' }, 'new boot']
++    ]) {
++      fs.writeFileSync(lockPath, `${JSON.stringify({ ...recorded, created_at: '2020-01-01T00:00:00Z' })}\n`, { mode: 0o600, flag: 'wx' });
++      fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
++      assert.deepStrictEqual(await watcher.claimAndQueueReply({
++        client: { claimNotification: async () => ({ notification: null }) },
++        ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000,
++        identityReader: () => current
++      }), { status: 'empty' }, `${label} lock must be recoverable`);
++      assert.strictEqual(fs.existsSync(lockPath), false);
++    }
++    fs.writeFileSync(lockPath, 'stale', { mode: 0o600, flag: 'wx' });
++    fs.utimesSync(lockPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
++    assert.deepStrictEqual(await watcher.claimAndQueueReply({
++      client: { claimNotification: async () => ({ notification: null }) },
++      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath, lockStaleMs: 1000
++    }), { status: 'empty' }, 'stale watcher lock must not wedge the relay');
++    assert.strictEqual(fs.existsSync(lockPath), false);
++
++    assert.deepStrictEqual(await watcher.claimAndQueueReply({
++      client: { claimNotification: async () => ({ notification: claimedRow }), nackNotification: async () => { throw new Error('must not nack'); } },
++      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
++    }), { status: 'queued', id: 51 });
++    const acknowledgements = [];
++    let sends = 0;
++    assert.deepStrictEqual(await extension.deliverQueuedReply({
++      client: {
++        notificationStatus: async () => ({ notification_id: 51, delivery_state: 'inflight', can_deliver: true }),
++        ackNotification: async (...args) => { acknowledgements.push(args); return { notification_id: 51, delivery_state: 'delivered' }; },
++        nackNotification: async () => { throw new Error('must not nack'); }
++      },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async (_channel, _chat, _card, _reply, _thread, _receiveType, uuid) => { sends += 1; return { messageId: `message-${uuid}` }; }
++    }), { status: 'delivered', id: 51 });
++    assert.strictEqual(sends, 1);
++    assert.strictEqual(acknowledgements.length, 1);
++    assert.strictEqual(await extension.deliverQueuedReply({
++      client: {}, openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => { throw new Error('must not resend'); }
++    }), false);
++
++    await watcher.claimAndQueueReply({
++      client: { claimNotification: async () => ({ notification: { ...claimedRow, id: 57, notification_key: '00000000-0000-4000-8000-000000000058' } }) },
++      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
++    });
++    let ackCommitted = false;
++    await assert.rejects(() => extension.deliverQueuedReply({
++      client: {
++        notificationStatus: async () => ({ notification_id: 57, delivery_state: 'inflight', can_deliver: true }),
++        ackNotification: async () => { ackCommitted = true; throw new Error('ack response lost'); }
++      },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => ({ messageId: 'message-57' })
++    }), /ack response lost/);
++    assert.strictEqual(ackCommitted, true);
++    assert.strictEqual(fs.existsSync(inflightPath), true, 'ack uncertainty must retain recovery file');
++    assert.deepStrictEqual(await extension.deliverQueuedReply({
++      client: { notificationStatus: async () => ({ notification_id: 57, delivery_state: 'delivered', can_deliver: false }) },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => { throw new Error('ack recovery must not resend'); }
++    }), { status: 'delivered', id: 57 });
++
++    await watcher.claimAndQueueReply({
++      client: { claimNotification: async () => ({ notification: { ...claimedRow, id: 52, notification_key: '00000000-0000-4000-8000-000000000053' } }) },
++      ownerOpenId: 'ou-reply', chatId: 'chat-reply', spoolPath, inflightPath
++    });
++    fs.renameSync(spoolPath, inflightPath);
++    const crashNacks = [];
++    assert.deepStrictEqual(await extension.deliverQueuedReply({
++      client: {
++        notificationStatus: async () => ({ notification_id: 52, delivery_state: 'inflight', can_deliver: true }),
++        nackNotification: async (...args) => { crashNacks.push(args); return { notification_id: 52, delivery_state: 'manual_review' }; }
++      },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => { throw new Error('crash recovery must not resend'); }
++    }), { status: 'manual_review', id: 52 });
++    assert.strictEqual(crashNacks[0][2].outcome, 'ambiguous');
++
++    const recovered = { ...claimedRow, id: 53, notification_key: '00000000-0000-4000-8000-000000000054' };
++    fs.writeFileSync(inflightPath, `${JSON.stringify({ version: 1, id: recovered.id, notification_key: recovered.notification_key, claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
++    assert.deepStrictEqual(await extension.deliverQueuedReply({
++      client: { notificationStatus: async () => ({ notification_id: 53, delivery_state: 'delivered', can_deliver: false }) },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => { throw new Error('ack recovery must not resend'); }
++    }), { status: 'delivered', id: 53 });
++    assert.strictEqual(fs.existsSync(inflightPath), false);
++
++    fs.writeFileSync(inflightPath, `${JSON.stringify({ version: 1, id: 54, notification_key: '00000000-0000-4000-8000-000000000055', claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
++    assert.deepStrictEqual(await extension.deliverQueuedReply({
++      client: { notificationStatus: async () => ({ notification_id: 54, delivery_state: 'pending', can_deliver: false }) },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => { throw new Error('nack recovery must not resend'); }
++    }), { status: 'retry_pending', id: 54 });
++
++    fs.writeFileSync(spoolPath, `${JSON.stringify({ version: 1, id: 55, notification_key: '00000000-0000-4000-8000-000000000056', claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
++    assert.deepStrictEqual(await extension.deliverQueuedReply({
++      client: { notificationStatus: async () => ({ notification_id: 55, delivery_state: 'manual_review', can_deliver: false }) },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => { throw new Error('cancelled notification must not send'); }
++    }), { status: 'manual_review', id: 55 });
++
++    fs.writeFileSync(inflightPath, `${JSON.stringify({ version: 1, id: 56, notification_key: '00000000-0000-4000-8000-000000000057', claim_token: recovered.claim_token, chat_id: 'chat-reply', card: watcher.replyNotificationCard(recovered) })}\n`, { mode: 0o600, flag: 'wx' });
++    await assert.rejects(() => extension.deliverQueuedReply({
++      client: { notificationStatus: async () => { throw new Error('status unavailable'); } },
++      openId: 'ou-reply', expectedChatId: 'chat-reply', spoolPath, inflightPath,
++      channel: {}, sendManagedCard: async () => { throw new Error('must not send'); }
++    }), /status unavailable/);
++    assert.strictEqual(fs.existsSync(inflightPath), true, 'unknown DB state must retain relay file');
++    fs.unlinkSync(inflightPath);
++  } finally {
++    fs.rmSync(root, { recursive: true, force: true });
++  }
++}
++
+ function testWatcherWholeCardBudget() {
+   const watcher = require('../scripts/matrix-watch.js');
+   const long = '😀极限公开信息'.repeat(90);
+   const rows = Array.from({ length: 5 }, (_, index) => ({
+     id: 700 + index,
+     company_name: `定时公司${index + 1}${long}`,
+     country_code: 'US',
+     priority: 'P0',
+     stage_code: index === 4 ? 'recommendation_ready' : 'observed',
+     assessment_cn: index === 0 ? `ISO22000认证明确，产品匹配${long}` : `理由${index + 1}${long}`,
+@@ -611,20 +863,21 @@ async function testRecommendationSnapshotTransitions() {
+   assert.strictEqual(drifted.patches.length, 0);
+   assert.ok(visibleText(drifted.sent.at(-1)).includes('开发客户'));
+   const filtered = await scenario({ filterChange: true });
+   assert.strictEqual(filtered.patches.length, 1);
+   assert.strictEqual(filtered.patches[0].snapshot_key, 'c'.repeat(64));
+ }
+ 
+ (async () => {
+   await testNarrowClient();
+   await testReadOnlyWatcher();
++  await testReplyNotificationCardAndDraftAction();
+   testWatcherWholeCardBudget();
+   await testFreshQuickChoiceRecovery();
+   await testReminderPollingAndRetry();
+   await testWholeCardBudget();
+   await testExpiredSessionRecovery();
+   await testConcurrentCallbacksFreezeDisplayedVersion();
+   await testSelectionReplayAfterRestart();
+   await testInteractiveZeroRecommendations();
+   await testRecommendationSnapshotTransitions();
+   testSanitizedCompose();
+@@ -852,17 +1105,17 @@ async function testRecommendationSnapshotTransitions() {
+   const incomplete = extension.register({
+     channel: {}, dispatcher: { on: (name, handler) => incompleteHandlers.set(name, handler) }, card: helpers(), client: incompleteClient,
+     now: () => Date.parse('2026-07-17T00:00:00.000Z'), sendManagedCard: async (_channel, _chat, card) => incompleteSent.push(card)
+   });
+   await incomplete.onMessage({ msg: { content: 'A', chatId: 'chat-1', threadId: 'thread-1', senderId: 'ou-1' } });
+   assert.ok(visibleText(incompleteSent.at(-1)).includes('Company 1'));
+   await incompleteHandlers.get('mx.detail')({ evt: callbackEvent, value: { a: 'mx.detail', s: 999, v: 1, c: 1 } });
+   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
+   incomplete.dispose();
+   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
+-  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.quick', 'mx.region', 'mx.select', 'mx.today', 'mx.work']);
++  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.back', 'mx.category', 'mx.detail', 'mx.filters', 'mx.page', 'mx.pick', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.select', 'mx.today', 'mx.work']);
+ 
+   console.log('stream card extension tests passed');
+ })().catch(error => {
+   console.error(error);
+   process.exitCode = 1;
+ });
+diff --git a/scripts/test-matrix-api.js b/scripts/test-matrix-api.js
+index 5b05bf1..0f8f842 100644
+--- a/scripts/test-matrix-api.js
++++ b/scripts/test-matrix-api.js
+@@ -617,29 +617,57 @@ function reviewState(workItemId) {
+     };
+     const claimOptions = { leaseMs: 5000, waitMs: 1000, pollMs: 10 };
+     const deliveryCalls = [];
+     let deliveryImpl = async () => ({ state: 'accepted', error_class: '', work_item_version: 4, message_id: '<must-not-leave-api@sender.test>' });
+     const injectedDeliveryService = {
+       async confirm(input) {
+         deliveryCalls.push(input);
+         return deliveryImpl(input);
+       }
+     };
++    const replyDraftCalls = [];
++    const injectedCorrelationService = {
++      startReplyDraft(_db, input) {
++        replyDraftCalls.push(input);
++        return { notification_id: input.notificationId, work_item_id: workItemId, state: 'draft_pending' };
++      },
++      async retryInboundTranslation(_db, input) {
++        replyDraftCalls.push({ retry: true, ...input });
++        return { notification_id: input.notificationId, translation_status: 'ready', retry_available: false };
++      },
++      claimNotification(_db, input) {
++        replyDraftCalls.push({ claim: true, ...input });
++        return { id: 51, notification_key: '00000000-0000-4000-8000-000000000051', claim_token: '00000000-0000-4000-8000-000000000052', delivery_state: 'inflight', work_item_id: workItemId, job_id: 71, kind: 'reply', original_preview: 'Hello', translation_status: 'pending', translation_cn: '', requirements_cn: '', work_item_state: 'replied', attempt_count: 1 };
++      },
++      ackNotification(_db, input) {
++        replyDraftCalls.push({ ack: true, ...input });
++        return { notification_id: input.notificationId, delivery_state: 'delivered' };
++      },
++      nackNotification(_db, input) {
++        replyDraftCalls.push({ nack: true, ...input });
++        return { notification_id: input.notificationId, delivery_state: input.outcome === 'ambiguous' ? 'manual_review' : 'pending' };
++      },
++      notificationStatus(_db, input) {
++        replyDraftCalls.push({ status: true, ...input });
++        return { notification_id: input.notificationId, delivery_state: 'delivered', can_deliver: false };
++      }
++    };
+     const injectedApp = express();
+     injectedApp.use(express.json());
+     injectedApp.use('/api/matrix', createMatrixBridgeAuth({ db: injectedDb, bridgeToken }));
+     injectedApp.use('/api/matrix', createMatrixRouter({
+       db: injectedDb,
+       audit: () => undefined,
+       candidateDbPath,
+       reviewService: injectedReviewService,
+       deliveryService: injectedDeliveryService,
++      correlationService: injectedCorrelationService,
+       textService: injectedTextService,
+       claimOptions
+     }));
+     const injectedServer = await new Promise((resolve, reject) => {
+       const server = injectedApp.listen(injectedPort, '127.0.0.1', () => resolve(server));
+       server.once('error', reject);
+     });
+     try {
+       const sendRoute = `${versionRoute}/${createdVersion.body.id}/send`;
+       const sendBody = {
+@@ -680,20 +708,69 @@ function reviewState(workItemId) {
+       deliveryImpl = async () => ({ state: 'accepted', error_class: '', work_item_version: 4 });
+       for (const field of ['recipient', 'subject', 'body', 'smtp_host', 'callback_url', 'attachment', 'retry']) {
+         const rejected = await request(sendRoute, {
+           port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+           body: { ...sendBody, idempotency_key: `send-api-reject-${field}`, [field]: true }
+         });
+         assert.strictEqual(rejected.status, 400, `${field}: ${JSON.stringify(rejected.body)}`);
+       }
+       assert.strictEqual(deliveryCalls.length, 2, 'unknown send fields must be rejected before delivery service');
+ 
++      const replyDraft = await request('/api/matrix/notifications/41/reply-draft', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: {}
++      });
++      assert.deepStrictEqual(replyDraft, {
++        status: 200,
++        body: { notification_id: 41, work_item_id: workItemId, state: 'draft_pending' }
++      });
++      assert.strictEqual(replyDraftCalls.length, 1);
++      assert.strictEqual(replyDraftCalls[0].actorUserId, 103);
++      assert.strictEqual(replyDraftCalls[0].notificationId, 41);
++      const rejectedReplyDraft = await request('/api/matrix/notifications/41/reply-draft', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { send: true }
++      });
++      assert.strictEqual(rejectedReplyDraft.status, 400);
++      assert.strictEqual(replyDraftCalls.length, 1, 'reply draft route must reject delivery-like fields');
++      const retriedTranslation = await request('/api/matrix/notifications/42/retry-translation', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: {}
++      });
++      assert.deepStrictEqual(retriedTranslation, {
++        status: 200,
++        body: { notification_id: 42, translation_status: 'ready', retry_available: false }
++      });
++      assert.strictEqual(replyDraftCalls.at(-1).retry, true);
++      const claimedNotification = await request('/api/matrix/notifications/claim', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: {}
++      });
++      assert.strictEqual(claimedNotification.status, 200);
++      assert.strictEqual(claimedNotification.body.notification.id, 51);
++      assert.strictEqual(replyDraftCalls.at(-1).bindingId, 1);
++      const ackedNotification = await request('/api/matrix/notifications/51/ack', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { claim_token: '00000000-0000-4000-8000-000000000052', receipt_id: 'message-51' }
++      });
++      assert.deepStrictEqual(ackedNotification, { status: 200, body: { notification_id: 51, delivery_state: 'delivered' } });
++      const nackedNotification = await request('/api/matrix/notifications/51/nack', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { claim_token: '00000000-0000-4000-8000-000000000052', outcome: 'ambiguous' }
++      });
++      assert.deepStrictEqual(nackedNotification, { status: 200, body: { notification_id: 51, delivery_state: 'manual_review' } });
++      const notificationStatus = await request('/api/matrix/notifications/51/status', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { claim_token: '00000000-0000-4000-8000-000000000052' }
++      });
++      assert.deepStrictEqual(notificationStatus, { status: 200, body: { notification_id: 51, delivery_state: 'delivered', can_deliver: false } });
++      const rejectedClaim = await request('/api/matrix/notifications/claim', {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: { limit: 2 }
++      });
++      assert.strictEqual(rejectedClaim.status, 400);
++
+       const reviseBody = {
+         expected_work_version: 3,
+         base_version_id: createdVersion.body.id,
+         revision_instruction: '保持证据边界并缩短措辞',
+         idempotency_key: 'revision-api-success-1'
+       };
+       const revisedVersion = await request(versionRoute, {
+         port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: reviseBody
+       });
+       assert.strictEqual(revisedVersion.status, 201, JSON.stringify(revisedVersion.body));
+diff --git a/scripts/test-matrix-stream-correlation.js b/scripts/test-matrix-stream-correlation.js
+new file mode 100644
+index 0000000..fe59063
+--- /dev/null
++++ b/scripts/test-matrix-stream-correlation.js
+@@ -0,0 +1,647 @@
++'use strict';
++
++const assert = require('node:assert');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const Database = require('better-sqlite3');
++
++const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-correlation-'));
++process.env.DB_PATH = path.join(root, 'app.db');
++
++const { db, initDb } = require('../src/db');
++const {
++  correlateInbound, startReplyDraft, retryInboundTranslation,
++  claimNotification, ackNotification, nackNotification, notificationStatus,
++  classifyKind, safePreview
++} = require('../src/services/matrixStreamCorrelation');
++const { importAndCorrelateEmailMessage, upsertEmailMessage } = require('../src/lib/imapSync');
++
++initDb();
++
++const NOW = '2026-07-18T02:00:00.000Z';
++const SENT_AT = '2026-07-17T01:00:00.000Z';
++
++function seedAccepted(index, {
++  recipient = 'sales@alpha.test',
++  sender = 'sales@sender.test',
++  subject = 'A focused proposal',
++  sentAt = SENT_AT
++} = {}) {
++  const userId = 8100 + index;
++  db.prepare(`
++    INSERT INTO users (id, username, password, role, status, created_at)
++    VALUES (?, ?, 'test-only', 'foreign_trade_crm_admin', 'active', ?)
++  `).run(userId, `correlation-${index}`, NOW);
++  const workItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (
++      candidate_id, stage, owner_user_id, current_summary, next_action,
++      version, created_at, updated_at, stream_state
++    ) VALUES (?, 'review_pending', ?, '', 'reply_check', 3, ?, ?, 'sent')
++  `).run(8800 + index, userId, sentAt, sentAt).lastInsertRowid);
++  const bindingId = Number(db.prepare(`
++    INSERT INTO matrix_actor_bindings (feishu_open_id, user_id, status, bound_by, bound_at)
++    VALUES (?, ?, 'active', ?, ?)
++  `).run(`ou-correlation-${index}`, userId, userId, sentAt).lastInsertRowid);
++  const versionId = Number(db.prepare(`
++    INSERT INTO matrix_stream_versions (
++      work_item_id, revision, recipient_email, recipient_source_url,
++      recipient_verified_at, subject, body_en, body_cn, strategy_summary,
++      source_snapshot_json, content_hash, quality_score, quality_json, status,
++      created_by, approved_by, approved_at, created_at, updated_at
++    ) VALUES (?, 1, ?, 'https://alpha.test/contact', ?, ?, 'Dear team', '您好', '',
++      '{}', ?, 90, '{}', 'approved', ?, ?, ?, ?, ?)
++  `).run(workItemId, recipient, sentAt, subject, `hash-${index}`, userId, userId,
++    sentAt, sentAt, sentAt).lastInsertRowid);
++  db.prepare('UPDATE matrix_work_items SET current_stream_version_id = ? WHERE id = ?').run(versionId, workItemId);
++  const messageId = `<matrix-stream-${index}@sender.test>`;
++  const jobId = Number(db.prepare(`
++    INSERT INTO matrix_stream_jobs (
++      work_item_id, version_id, idempotency_key, content_hash, message_id,
++      state, attempt_count, created_by, sender_email, created_at, updated_at
++    ) VALUES (?, ?, ?, ?, ?, 'accepted', 1, ?, ?, ?, ?)
++  `).run(workItemId, versionId, `job-${index}`, `hash-${index}`, messageId,
++    userId, sender, sentAt, sentAt).lastInsertRowid);
++  db.prepare(`
++    INSERT INTO matrix_stream_reply_checks (
++      work_item_id, originating_job_id, purpose, channel, priority, due_at,
++      state, terminal_reason, created_at
++    ) VALUES (?, ?, 'reply_check', 'email', 'normal', '2026-07-22T10:00:00+08:00',
++      'active', '', ?)
++  `).run(workItemId, jobId, sentAt);
++  return { userId, bindingId, workItemId, versionId, jobId, messageId, recipient, sender, subject };
++}
++
++async function main() {
++  for (const table of ['matrix_stream_inbound_links', 'matrix_stream_notification_spool']) {
++    assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
++  }
++  const jobColumns = db.prepare('PRAGMA table_info(matrix_stream_jobs)').all().map(row => row.name);
++  assert(jobColumns.includes('sender_email'), 'matrix_stream_jobs.sender_email missing');
++
++  const exactJob = seedAccepted(1);
++  const translated = [];
++  const exact = await correlateInbound(db, {
++    message_id: '<reply-1@test>',
++    in_reply_to: exactJob.messageId,
++    references_header: `<older@test> ${exactJob.messageId}`,
++    from_email: ' SALES@ALPHA.TEST ',
++    to_emails: 'Sales <sales@sender.test>',
++    subject: 'Re: A focused proposal',
++    cleaned_text: 'Please send specifications.'
++  }, {
++    clock: () => new Date(NOW),
++    translateInbound: async input => {
++      translated.push(input);
++      return {
++        translation_cn: '请发送规格。',
++        requirements_cn: '需要规格资料',
++        suggested_subject: 'Re: A focused proposal',
++        suggested_body_en: 'Thank you. Please find the requested information.',
++        suggested_body_cn: '谢谢。请查收所需资料。'
++      };
++    }
++  });
++  assert.deepStrictEqual(exact, { status: 'matched', workItemId: exactJob.workItemId, jobId: exactJob.jobId, kind: 'reply' });
++  assert.strictEqual(translated.length, 1);
++  assert.strictEqual(db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(exactJob.workItemId).stream_state, 'replied');
++  assert.deepStrictEqual(
++    db.prepare('SELECT state, terminal_reason, due_at FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(exactJob.jobId),
++    { state: 'closed', terminal_reason: 'reply', due_at: null }
++  );
++  const spool = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<reply-1@test>');
++  assert.strictEqual(spool.translation_status, 'ready');
++  assert.strictEqual(spool.original_preview, 'Please send specifications.');
++  assert.strictEqual(spool.translation_cn, '请发送规格。');
++  assert.strictEqual(spool.requirements_cn, '需要规格资料');
++  assert.ok(!JSON.stringify(spool).includes('password'));
++  assert.ok(!JSON.stringify(spool).includes('source_snapshot'));
++  for (const secret of ['very secret value', 'bearer-secret', 'basic-secret', 'url-secret', 'query-secret', 'PRIVATE-BODY']) {
++    assert.ok(!safePreview([
++      'password = very secret value',
++      'Authorization: Bearer bearer-secret',
++      'Authorization: Basic basic-secret',
++      'smtp://user:url-secret@host.test/path?api_key=query-secret',
++      '-----BEGIN PRIVATE KEY-----\nPRIVATE-BODY\n-----END PRIVATE KEY-----'
++    ].join('\n')).includes(secret), `safe preview leaked ${secret}`);
++  }
++  for (const sensitive of [
++    'cost+margin', 'resin+conversion', 'very secret', 'topsecret',
++    'internal formula', 'private cost'
++  ]) {
++    assert.ok(!safePreview([
++      'internal formula=cost+margin',
++      'private cost: resin+conversion',
++      'note: password = very secret',
++      'credentials password: topsecret'
++    ].join('\n')).toLowerCase().includes(sensitive), `safe preview leaked ${sensitive}`);
++  }
++
++  const claimed = claimNotification(db, {
++    actorUserId: exactJob.userId, bindingId: exactJob.bindingId,
++    clock: () => new Date(NOW), leaseMs: 1000
++  });
++  assert.strictEqual(claimed.id, spool.id);
++  assert.strictEqual(claimed.delivery_state, 'inflight');
++  assert.match(claimed.notification_key, /^[0-9a-f-]{36}$/);
++  assert.match(claimed.claim_token, /^[0-9a-f-]{36}$/);
++  const db2 = new Database(process.env.DB_PATH);
++  db2.pragma('foreign_keys = ON');
++  assert.strictEqual(claimNotification(db2, {
++    actorUserId: exactJob.userId, bindingId: exactJob.bindingId,
++    clock: () => new Date(NOW), leaseMs: 1000
++  }), null, 'second watcher must not claim an inflight notification');
++  assert.throws(() => ackNotification(db, {
++    actorUserId: exactJob.userId, bindingId: exactJob.bindingId, notificationId: spool.id,
++    claimToken: '00000000-0000-4000-8000-000000000000', receiptId: 'receipt-wrong', clock: () => new Date(NOW)
++  }), /claim/i);
++  assert.deepStrictEqual(ackNotification(db, {
++    actorUserId: exactJob.userId, bindingId: exactJob.bindingId, notificationId: spool.id,
++    claimToken: claimed.claim_token, receiptId: 'receipt-1', clock: () => new Date(NOW)
++  }), { notification_id: spool.id, delivery_state: 'delivered' });
++  assert.deepStrictEqual(ackNotification(db, {
++    actorUserId: exactJob.userId, bindingId: exactJob.bindingId, notificationId: spool.id,
++    claimToken: claimed.claim_token, receiptId: 'receipt-1', clock: () => new Date(NOW)
++  }), { notification_id: spool.id, delivery_state: 'delivered' }, 'ack replay must be stable');
++  assert.deepStrictEqual(notificationStatus(db, {
++    actorUserId: exactJob.userId, bindingId: exactJob.bindingId, notificationId: spool.id,
++    claimToken: claimed.claim_token, clock: () => new Date(NOW)
++  }), { notification_id: spool.id, delivery_state: 'delivered', can_deliver: false });
++  assert.strictEqual(claimNotification(db2, {
++    actorUserId: exactJob.userId, bindingId: exactJob.bindingId,
++    clock: () => new Date('2026-07-18T02:00:02.000Z'), leaseMs: 1000
++  }), null, 'delivered notification must never be reclaimed');
++  db2.close();
++  db.prepare(`
++    INSERT INTO matrix_stream_events (work_item_id, action, idempotency_key, created_at)
++    VALUES (?, 'client_collision_fixture', ?, ?)
++  `).run(exactJob.workItemId, `reply-draft-notification-${spool.id}`, NOW);
++  const jobsBeforeDraft = db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_jobs').get().count;
++  const draft = startReplyDraft(db, { actorUserId: 8101, bindingId: exactJob.bindingId, notificationId: spool.id, clock: () => new Date(NOW) });
++  assert.deepStrictEqual(draft, { notification_id: spool.id, work_item_id: exactJob.workItemId, state: 'draft_pending' });
++  assert.deepStrictEqual(startReplyDraft(db, { actorUserId: 8101, bindingId: exactJob.bindingId, notificationId: spool.id, clock: () => new Date(NOW) }), draft);
++  const storedDraft = db.prepare('SELECT * FROM crm_reply_drafts WHERE id = ?').get(
++    db.prepare('SELECT reply_draft_id FROM matrix_stream_notification_spool WHERE id = ?').get(spool.id).reply_draft_id
++  );
++  assert.strictEqual(storedDraft.status, 'draft_pending');
++  assert.strictEqual(storedDraft.matrix_work_item_id, exactJob.workItemId);
++  assert.strictEqual(storedDraft.draft_text_en, 'Thank you. Please find the requested information.');
++  assert.strictEqual(db.prepare('SELECT stage FROM matrix_work_items WHERE id = ?').get(exactJob.workItemId).stage, 'draft_pending');
++  assert.strictEqual(db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(exactJob.workItemId).stream_state, 'replied');
++  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_jobs').get().count, jobsBeforeDraft, 'draft action must never create a delivery job');
++
++  const beforeReplay = {
++    events: db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_events').get().count,
++    spool: db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool').get().count,
++    links: db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_inbound_links').get().count
++  };
++  assert.deepStrictEqual(await correlateInbound(db, {
++    message_id: '<reply-1@test>', in_reply_to: exactJob.messageId,
++    from_email: exactJob.recipient, to_emails: exactJob.sender,
++    subject: `Re: ${exactJob.subject}`, cleaned_text: 'changed replay body'
++  }, { clock: () => new Date(NOW), translateInbound: async () => { throw new Error('must not run'); } }), exact);
++  assert.deepStrictEqual({
++    events: db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_events').get().count,
++    spool: db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool').get().count,
++    links: db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_inbound_links').get().count
++  }, beforeReplay, 'message-id replay must not mutate');
++
++  const fallbackJob = seedAccepted(2, { recipient: 'hello@beta.test', subject: 'Beta launch plan' });
++  const longInbound = `${'A'.repeat(900)} END-MARKER`;
++  upsertEmailMessage('sales@sender.test', 'INBOX', {
++    message_uid: 'fallback-uid', message_id: '<reply-fallback@test>',
++    from_email: 'hello@beta.test', to_emails: 'sales@sender.test',
++    subject: 'RE: Beta launch plan', text_body: longInbound, cleaned_text: longInbound, received_at: NOW
++  });
++  const fallback = await correlateInbound(db, {
++    message_id: '<reply-fallback@test>', from_email: 'Hello <hello@beta.test>',
++    to_emails: 'sales@sender.test', subject: 'RE:  Beta   launch plan ', cleaned_text: longInbound
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  assert.deepStrictEqual(fallback, { status: 'matched', workItemId: fallbackJob.workItemId, jobId: fallbackJob.jobId, kind: 'reply' });
++  const pending = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<reply-fallback@test>');
++  assert.strictEqual(pending.translation_status, 'pending');
++  assert.strictEqual(pending.translation_cn, '');
++  assert.strictEqual(pending.requirements_cn, '');
++  assert.strictEqual(pending.retry_available, 1);
++  await assert.rejects(() => retryInboundTranslation(db, {
++    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId,
++    notificationId: pending.id, clock: () => new Date(NOW),
++    translateInbound: async () => { throw new Error('unpublished pending card must not invoke provider'); }
++  }), /delivery eligible/i);
++  const pendingClaim = claimNotification(db, {
++    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId, clock: () => new Date(NOW)
++  });
++  ackNotification(db, {
++    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId,
++    notificationId: pending.id, claimToken: pendingClaim.claim_token,
++    receiptId: 'pending-card', clock: () => new Date(NOW)
++  });
++  assert.throws(
++    () => startReplyDraft(db, { actorUserId: 8102, bindingId: fallbackJob.bindingId, notificationId: pending.id, clock: () => new Date(NOW) }),
++    /translation pending/i
++  );
++  db.prepare(`
++    INSERT INTO matrix_stream_events (work_item_id, action, idempotency_key, created_at)
++    VALUES (?, 'client_collision_fixture', ?, ?)
++  `).run(fallbackJob.workItemId, `inbound-translation-ready-${pending.id}`, NOW);
++  const retryResult = await retryInboundTranslation(db, {
++    actorUserId: fallbackJob.userId,
++    bindingId: fallbackJob.bindingId,
++    notificationId: pending.id,
++    clock: () => new Date(NOW),
++    translateInbound: async input => {
++      assert.ok(input.inboundText.includes('END-MARKER'), 'retry must use full durable inbound text');
++      return ({
++      translation_cn: '您好。', requirements_cn: '待确认具体需求',
++      suggested_subject: 'Re: Beta launch plan',
++      suggested_body_en: 'Thank you. Could you share more detail?',
++      suggested_body_cn: '谢谢。请问能否提供更多细节？'
++      });
++    }
++  });
++  assert.deepStrictEqual(retryResult, { notification_id: pending.id, translation_status: 'ready', retry_available: false });
++  assert.deepStrictEqual(db.prepare(`
++    SELECT translation_status, delivery_state, notification_key
++    FROM matrix_stream_notification_spool WHERE id = ?
++  `).get(pending.id), {
++    translation_status: 'pending', delivery_state: 'delivered', notification_key: pending.notification_key
++  }, 'retry must not mutate the delivered notification generation');
++  const readyGeneration = db.prepare(`
++    SELECT * FROM matrix_stream_notification_spool
++    WHERE inbound_message_id = ? AND generation = 2
++  `).get('<reply-fallback@test>');
++  assert.ok(readyGeneration);
++  assert.strictEqual(readyGeneration.supersedes_notification_id, pending.id);
++  assert.notStrictEqual(readyGeneration.notification_key, pending.notification_key);
++  assert.deepStrictEqual({
++    translation_status: readyGeneration.translation_status,
++    translation_cn: readyGeneration.translation_cn,
++    requirements_cn: readyGeneration.requirements_cn,
++    retry_available: readyGeneration.retry_available,
++    delivery_state: readyGeneration.delivery_state
++  }, {
++    translation_status: 'ready', translation_cn: '您好。', requirements_cn: '待确认具体需求', retry_available: 0,
++    delivery_state: 'pending'
++  });
++  const readyClaim = claimNotification(db, {
++    actorUserId: fallbackJob.userId, bindingId: fallbackJob.bindingId, clock: () => new Date(NOW)
++  });
++  assert.strictEqual(readyClaim.id, readyGeneration.id);
++  assert.strictEqual(readyClaim.translation_status, 'ready', 'successful retry must queue one ready card');
++
++  const direct = seedAccepted(10, { recipient: 'direct@header.test', subject: 'Direct parent' });
++  const older = seedAccepted(11, { recipient: 'older@header.test', subject: 'Older parent' });
++  const directResult = await correlateInbound(db, {
++    message_id: '<direct-precedence@test>', in_reply_to: direct.messageId,
++    references_header: `${older.messageId} ${direct.messageId}`,
++    from_email: direct.recipient, to_emails: direct.sender,
++    subject: `Re: ${direct.subject}`, cleaned_text: 'Current reply'
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  assert.strictEqual(directResult.jobId, direct.jobId, 'unique In-Reply-To must ignore other References matches');
++  assert.deepStrictEqual(await correlateInbound(db, {
++    message_id: '<references-ambiguous@test>', references_header: `${older.messageId} ${direct.messageId}`,
++    from_email: direct.recipient, to_emails: direct.sender,
++    subject: `Re: ${direct.subject}`, cleaned_text: 'No direct parent header'
++  }, { clock: () => new Date(NOW) }), { status: 'needs_review' });
++
++  const quoted = [
++    'Yes, please send the details.', '', 'Best regards,', 'Alex', '',
++    '-----Original Message-----', 'From: Sales <sales@sender.test>',
++    'Subject: Earlier note', 'Please unsubscribe if this is not relevant.'
++  ].join('\n');
++  assert.strictEqual(classifyKind({ subject: 'Re: Current', cleaned_text: quoted }), 'reply');
++  assert.strictEqual(classifyKind({ subject: 'Re: Current', cleaned_text: 'Please unsubscribe me.' }), 'unsubscribe');
++
++  const evolving = seedAccepted(12, { recipient: 'state@evolve.test', subject: 'State evolution' });
++  assert.strictEqual((await correlateInbound(db, {
++    message_id: '<state-reply@test>', in_reply_to: evolving.messageId,
++    from_email: evolving.recipient, to_emails: evolving.sender,
++    subject: `Re: ${evolving.subject}`, cleaned_text: 'Yes, please continue.'
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) })).kind, 'reply');
++  assert.strictEqual((await correlateInbound(db, {
++    message_id: '<state-unsubscribe@test>', in_reply_to: evolving.messageId,
++    from_email: evolving.recipient, to_emails: evolving.sender,
++    subject: `Re: ${evolving.subject}`, cleaned_text: 'Please unsubscribe me.'
++  }, { clock: () => new Date('2026-07-18T02:01:00.000Z') })).kind, 'unsubscribe');
++  assert.strictEqual(db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(evolving.workItemId).stream_state, 'suppressed');
++  assert.deepStrictEqual(db.prepare('SELECT delivery_state, last_error_class FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<state-reply@test>'), {
++    delivery_state: 'manual_review', last_error_class: 'terminal_cancelled'
++  }, 'higher-priority terminal event must retire a stale reply card');
++  assert.strictEqual(claimNotification(db, {
++    actorUserId: evolving.userId, bindingId: evolving.bindingId, clock: () => new Date(NOW)
++  }), null);
++  await assert.rejects(() => retryInboundTranslation(db, {
++    actorUserId: evolving.userId, bindingId: evolving.bindingId,
++    notificationId: db.prepare('SELECT id FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<state-reply@test>').id,
++    clock: () => new Date(NOW), translateInbound: async () => { throw new Error('must not translate'); }
++  }), /eligible|state/i);
++  assert.strictEqual(db.prepare('SELECT terminal_reason FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(evolving.jobId).terminal_reason, 'reply', 'reply check closes exactly once');
++  assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE job_id = ? AND action IN ('inbound_reply','inbound_unsubscribe')").get(evolving.jobId).count, 2);
++  await correlateInbound(db, {
++    message_id: '<state-late-reply@test>', in_reply_to: evolving.messageId,
++    from_email: evolving.recipient, to_emails: evolving.sender,
++    subject: `Re: ${evolving.subject}`, cleaned_text: 'Actually, one more note.'
++  }, { clock: () => new Date('2026-07-18T02:02:00.000Z'), translateInbound: async () => ({
++    translation_cn: '补充说明。', requirements_cn: '无', suggested_subject: 'Re: State evolution',
++    suggested_body_en: 'Thank you.', suggested_body_cn: '谢谢。'
++  }) });
++  assert.strictEqual(db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(evolving.workItemId).stream_state, 'suppressed');
++  assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_notification_spool WHERE inbound_message_id = '<state-late-reply@test>'").get().count, 0, 'suppressed work must not reopen reply drafting');
++
++  const retryDelivery = seedAccepted(13, { recipient: 'notify@retry.test', subject: 'Notification retry' });
++  await correlateInbound(db, {
++    message_id: '<notify-retry@test>', in_reply_to: retryDelivery.messageId,
++    from_email: retryDelivery.recipient, to_emails: retryDelivery.sender,
++    subject: `Re: ${retryDelivery.subject}`, cleaned_text: 'Reply for notification retry'
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  const retryClaim1 = claimNotification(db, {
++    actorUserId: retryDelivery.userId, bindingId: retryDelivery.bindingId,
++    clock: () => new Date(NOW), leaseMs: 1000
++  });
++  assert.deepStrictEqual(nackNotification(db, {
++    actorUserId: retryDelivery.userId, bindingId: retryDelivery.bindingId,
++    notificationId: retryClaim1.id, claimToken: retryClaim1.claim_token,
++    outcome: 'failed', clock: () => new Date(NOW)
++  }), { notification_id: retryClaim1.id, delivery_state: 'pending' });
++  const retryClaim2 = claimNotification(db, {
++    actorUserId: retryDelivery.userId, bindingId: retryDelivery.bindingId,
++    clock: () => new Date(NOW), leaseMs: 1000
++  });
++  assert.strictEqual(retryClaim2.attempt_count, 2);
++  assert.deepStrictEqual(nackNotification(db, {
++    actorUserId: retryDelivery.userId, bindingId: retryDelivery.bindingId,
++    notificationId: retryClaim2.id, claimToken: retryClaim2.claim_token,
++    outcome: 'ambiguous', clock: () => new Date(NOW)
++  }), { notification_id: retryClaim2.id, delivery_state: 'manual_review' });
++  assert.strictEqual(claimNotification(db, {
++    actorUserId: retryDelivery.userId, bindingId: retryDelivery.bindingId,
++    clock: () => new Date(NOW), leaseMs: 1000
++  }), null);
++
++  const crashDelivery = seedAccepted(14, { recipient: 'notify@crash.test', subject: 'Notification crash' });
++  await correlateInbound(db, {
++    message_id: '<notify-crash@test>', in_reply_to: crashDelivery.messageId,
++    from_email: crashDelivery.recipient, to_emails: crashDelivery.sender,
++    subject: `Re: ${crashDelivery.subject}`, cleaned_text: 'Reply before watcher crash'
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  const crashClaim = claimNotification(db, {
++    actorUserId: crashDelivery.userId, bindingId: crashDelivery.bindingId,
++    clock: () => new Date(NOW), leaseMs: 1000
++  });
++  assert.ok(crashClaim);
++  assert.deepStrictEqual(ackNotification(db, {
++    actorUserId: crashDelivery.userId, bindingId: crashDelivery.bindingId,
++    notificationId: crashClaim.id, claimToken: crashClaim.claim_token,
++    receiptId: 'too-late', clock: () => new Date('2026-07-18T02:00:02.000Z')
++  }), { notification_id: crashClaim.id, delivery_state: 'manual_review' }, 'expired ack must fail closed');
++  assert.strictEqual(claimNotification(db, {
++    actorUserId: crashDelivery.userId, bindingId: crashDelivery.bindingId,
++    clock: () => new Date('2026-07-18T02:00:02.000Z'), leaseMs: 1000
++  }), null, 'expired inflight delivery must not be automatically resent');
++  assert.strictEqual(db.prepare('SELECT delivery_state FROM matrix_stream_notification_spool WHERE id = ?').get(crashClaim.id).delivery_state, 'manual_review');
++
++  const scavengedDelivery = seedAccepted(16, { recipient: 'notify@scavenge.test', subject: 'Notification scavenger' });
++  await correlateInbound(db, {
++    message_id: '<notify-scavenge@test>', in_reply_to: scavengedDelivery.messageId,
++    from_email: scavengedDelivery.recipient, to_emails: scavengedDelivery.sender,
++    subject: `Re: ${scavengedDelivery.subject}`, cleaned_text: 'Reply before lease scavenging'
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  const scavengedClaim = claimNotification(db, {
++    actorUserId: scavengedDelivery.userId, bindingId: scavengedDelivery.bindingId,
++    clock: () => new Date(NOW), leaseMs: 1000
++  });
++  const db3 = new Database(process.env.DB_PATH);
++  db3.pragma('foreign_keys = ON');
++  assert.strictEqual(claimNotification(db3, {
++    actorUserId: scavengedDelivery.userId, bindingId: scavengedDelivery.bindingId,
++    clock: () => new Date('2026-07-18T02:00:02.000Z'), leaseMs: 1000
++  }), null);
++  assert.deepStrictEqual(nackNotification(db, {
++    actorUserId: scavengedDelivery.userId, bindingId: scavengedDelivery.bindingId,
++    notificationId: scavengedClaim.id, claimToken: scavengedClaim.claim_token,
++    outcome: 'ambiguous', clock: () => new Date('2026-07-18T02:00:02.000Z')
++  }), { notification_id: scavengedClaim.id, delivery_state: 'manual_review' }, 'scavenger-first finalize must replay safely');
++  db3.close();
++
++  const inflightRetry = seedAccepted(18, { recipient: 'notify@inflight-retry.test', subject: 'Inflight translation retry' });
++  const inflightText = 'Visible pending reply before acknowledgement';
++  upsertEmailMessage('sales@sender.test', 'INBOX', {
++    message_uid: 'inflight-retry-uid', message_id: '<inflight-retry@test>', from_email: inflightRetry.recipient,
++    to_emails: inflightRetry.sender, subject: `Re: ${inflightRetry.subject}`, text_body: inflightText,
++    cleaned_text: inflightText, received_at: NOW
++  });
++  await correlateInbound(db, {
++    message_id: '<inflight-retry@test>', in_reply_to: inflightRetry.messageId,
++    from_email: inflightRetry.recipient, to_emails: inflightRetry.sender,
++    subject: `Re: ${inflightRetry.subject}`, cleaned_text: inflightText
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  const inflightOld = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = ? AND generation = 1').get('<inflight-retry@test>');
++  const inflightClaim = claimNotification(db, {
++    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId, clock: () => new Date(NOW)
++  });
++  const readyValue = {
++    translation_cn: '可见回复', requirements_cn: '待处理', suggested_subject: `Re: ${inflightRetry.subject}`,
++    suggested_body_en: 'Thank you.', suggested_body_cn: '谢谢。'
++  };
++  let repeatProviderCalls = 0;
++  await retryInboundTranslation(db, {
++    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId,
++    notificationId: inflightOld.id, clock: () => new Date(NOW),
++    translateInbound: async () => { repeatProviderCalls += 1; return readyValue; }
++  });
++  assert.deepStrictEqual(db.prepare(`
++    SELECT delivery_state, owner_token, notification_key FROM matrix_stream_notification_spool WHERE id = ?
++  `).get(inflightOld.id), {
++    delivery_state: 'inflight', owner_token: inflightClaim.claim_token, notification_key: inflightOld.notification_key
++  }, 'retry-before-ack must preserve the old inflight identity');
++  assert.deepStrictEqual(ackNotification(db, {
++    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId,
++    notificationId: inflightOld.id, claimToken: inflightClaim.claim_token,
++    receiptId: 'inflight-old-receipt', clock: () => new Date(NOW)
++  }), { notification_id: inflightOld.id, delivery_state: 'delivered' });
++  await retryInboundTranslation(db, {
++    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId,
++    notificationId: inflightOld.id, clock: () => new Date(NOW),
++    translateInbound: async () => { repeatProviderCalls += 1; throw new Error('response-loss replay must not call provider'); }
++  });
++  assert.strictEqual(repeatProviderCalls, 1);
++  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<inflight-retry@test>').count, 2, 'retry replay must create one generation');
++  const inflightReadyClaim = claimNotification(db, {
++    actorUserId: inflightRetry.userId, bindingId: inflightRetry.bindingId, clock: () => new Date(NOW)
++  });
++  assert.strictEqual(inflightReadyClaim.translation_status, 'ready');
++  assert.strictEqual(db.prepare('SELECT supersedes_notification_id FROM matrix_stream_notification_spool WHERE id = ?').get(inflightReadyClaim.id).supersedes_notification_id, inflightOld.id);
++
++  const concurrentRetry = seedAccepted(19, { recipient: 'notify@concurrent-retry.test', subject: 'Concurrent translation retry' });
++  const concurrentText = 'Concurrent pending reply';
++  upsertEmailMessage('sales@sender.test', 'INBOX', {
++    message_uid: 'concurrent-retry-uid', message_id: '<concurrent-retry@test>', from_email: concurrentRetry.recipient,
++    to_emails: concurrentRetry.sender, subject: `Re: ${concurrentRetry.subject}`, text_body: concurrentText,
++    cleaned_text: concurrentText, received_at: NOW
++  });
++  await correlateInbound(db, {
++    message_id: '<concurrent-retry@test>', in_reply_to: concurrentRetry.messageId,
++    from_email: concurrentRetry.recipient, to_emails: concurrentRetry.sender,
++    subject: `Re: ${concurrentRetry.subject}`, cleaned_text: concurrentText
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  const concurrentOld = db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<concurrent-retry@test>');
++  const concurrentClaim = claimNotification(db, {
++    actorUserId: concurrentRetry.userId, bindingId: concurrentRetry.bindingId, clock: () => new Date(NOW)
++  });
++  ackNotification(db, {
++    actorUserId: concurrentRetry.userId, bindingId: concurrentRetry.bindingId,
++    notificationId: concurrentOld.id, claimToken: concurrentClaim.claim_token,
++    receiptId: 'concurrent-pending-card', clock: () => new Date(NOW)
++  });
++  const db4 = new Database(process.env.DB_PATH);
++  const db5 = new Database(process.env.DB_PATH);
++  db4.pragma('foreign_keys = ON'); db5.pragma('foreign_keys = ON');
++  let concurrentStarted = 0;
++  let releaseConcurrent;
++  const concurrentGate = new Promise(resolve => { releaseConcurrent = resolve; });
++  const concurrentProvider = async () => {
++    concurrentStarted += 1;
++    if (concurrentStarted === 2) releaseConcurrent();
++    await concurrentGate;
++    return readyValue;
++  };
++  await Promise.all([db4, db5].map(connection => retryInboundTranslation(connection, {
++    actorUserId: concurrentRetry.userId, bindingId: concurrentRetry.bindingId,
++    notificationId: concurrentOld.id, clock: () => new Date(NOW), translateInbound: concurrentProvider
++  })));
++  assert.strictEqual(concurrentStarted, 2);
++  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool WHERE inbound_message_id = ? AND generation = 2').get('<concurrent-retry@test>').count, 1);
++  assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE action = 'inbound_translation_ready' AND work_item_id = ?").get(concurrentRetry.workItemId).count, 1);
++  db4.close(); db5.close();
++
++  const redactedDelivery = seedAccepted(17, { recipient: 'notify@redact.test', subject: 'Notification redaction' });
++  await correlateInbound(db, {
++    message_id: '<notify-redact@test>', in_reply_to: redactedDelivery.messageId,
++    from_email: redactedDelivery.recipient, to_emails: redactedDelivery.sender,
++    subject: `Re: ${redactedDelivery.subject}`,
++    cleaned_text: 'Public reply line\ninternal formula=cost+margin\nnote: password = very secret'
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  const redactedSpool = db.prepare('SELECT original_preview FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<notify-redact@test>');
++  assert.ok(redactedSpool.original_preview.includes('Public reply line'));
++  for (const excluded of ['internal formula', 'cost+margin', 'password', 'very secret']) {
++    assert.ok(!redactedSpool.original_preview.toLowerCase().includes(excluded), `spool leaked ${excluded}`);
++  }
++
++  const authRetry = seedAccepted(15, { recipient: 'retry@auth.test', subject: 'Authorization retry' });
++  const authText = 'Authoritative retry body';
++  upsertEmailMessage('sales@sender.test', 'INBOX', {
++    message_uid: 'auth-retry-uid', message_id: '<auth-retry@test>', from_email: authRetry.recipient,
++    to_emails: authRetry.sender, subject: `Re: ${authRetry.subject}`, text_body: authText,
++    cleaned_text: authText, received_at: NOW
++  });
++  await correlateInbound(db, {
++    message_id: '<auth-retry@test>', in_reply_to: authRetry.messageId,
++    from_email: authRetry.recipient, to_emails: authRetry.sender,
++    subject: `Re: ${authRetry.subject}`, cleaned_text: authText
++  }, { clock: () => new Date(NOW), translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' }) });
++  const authNotification = db.prepare("SELECT * FROM matrix_stream_notification_spool WHERE inbound_message_id = '<auth-retry@test>'").get();
++  const authClaim = claimNotification(db, {
++    actorUserId: authRetry.userId, bindingId: authRetry.bindingId, clock: () => new Date(NOW)
++  });
++  assert.strictEqual(authClaim.id, authNotification.id);
++  await assert.rejects(() => retryInboundTranslation(db, {
++    actorUserId: authRetry.userId, bindingId: authRetry.bindingId,
++    notificationId: authNotification.id, clock: () => new Date(NOW),
++    translateInbound: async () => {
++      db.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(authRetry.userId);
++      return {
++        translation_cn: '正文', requirements_cn: '无', suggested_subject: 'Re: Authorization retry',
++        suggested_body_en: 'Thank you.', suggested_body_cn: '谢谢。'
++      };
++    }
++  }), /authorized/i);
++  assert.strictEqual(db.prepare('SELECT translation_status FROM matrix_stream_notification_spool WHERE id = ?').get(authNotification.id).translation_status, 'pending');
++  db.prepare("UPDATE users SET status = 'active' WHERE id = ?").run(authRetry.userId);
++
++  const ambiguousOne = seedAccepted(3, { recipient: 'team@gamma.test', subject: 'Gamma plan' });
++  const ambiguousTwo = seedAccepted(4, { recipient: 'team@gamma.test', subject: 'Gamma plan', sentAt: '2026-07-16T01:00:00.000Z' });
++  const beforeAmbiguous = [ambiguousOne, ambiguousTwo].map(row => db.prepare('SELECT * FROM matrix_work_items WHERE id = ?').get(row.workItemId));
++  const ambiguous = await correlateInbound(db, {
++    message_id: '<reply-ambiguous@test>', from_email: 'team@gamma.test',
++    to_emails: 'sales@sender.test', subject: 'Re: Gamma plan', cleaned_text: 'Hello'
++  }, { clock: () => new Date(NOW) });
++  assert.deepStrictEqual(ambiguous, { status: 'needs_review' });
++  assert.deepStrictEqual([ambiguousOne, ambiguousTwo].map(row => db.prepare('SELECT * FROM matrix_work_items WHERE id = ?').get(row.workItemId)), beforeAmbiguous);
++  assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE action = 'inbound_needs_review'").get().count, 2);
++  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get('<reply-ambiguous@test>').count, 0);
++
++  const old = seedAccepted(5, { recipient: 'old@delta.test', subject: 'Old plan', sentAt: '2026-01-01T00:00:00.000Z' });
++  assert.deepStrictEqual(await correlateInbound(db, {
++    message_id: '<reply-old@test>', from_email: old.recipient, to_emails: old.sender,
++    subject: `Re: ${old.subject}`, cleaned_text: 'late'
++  }, { clock: () => new Date(NOW) }), { status: 'unmatched' });
++
++  for (const fixture of [
++    { index: 6, event_kind: 'bounce', state: 'bounced', reason: 'bounce', text: 'Delivery Status Notification' },
++    { index: 7, event_kind: 'refusal', state: 'refused', reason: 'refusal', text: 'No thank you.' },
++    { index: 8, event_kind: 'unsubscribe', state: 'suppressed', reason: 'unsubscribe', text: 'Please unsubscribe.' },
++    { index: 9, event_kind: 'manual_stop', state: 'suppressed', reason: 'manual_stop', text: 'operator stop' }
++  ]) {
++    const job = seedAccepted(fixture.index, { recipient: `team${fixture.index}@terminal.test`, subject: `Terminal ${fixture.index}` });
++    const result = await correlateInbound(db, {
++      message_id: `<terminal-${fixture.index}@test>`, in_reply_to: job.messageId,
++      from_email: job.recipient, to_emails: job.sender, subject: `Re: ${job.subject}`,
++      cleaned_text: fixture.text, event_kind: fixture.event_kind
++    }, {
++      clock: () => new Date(NOW),
++      translateInbound: async () => ({ ok: false, reason: 'text_provider_unavailable' })
++    });
++    assert.deepStrictEqual(result, { status: 'matched', workItemId: job.workItemId, jobId: job.jobId, kind: fixture.event_kind });
++    assert.strictEqual(db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(job.workItemId).stream_state, fixture.state);
++    assert.strictEqual(db.prepare('SELECT terminal_reason FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(job.jobId).terminal_reason, fixture.reason);
++    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_notification_spool WHERE inbound_message_id = ?').get(`<terminal-${fixture.index}@test>`).count, 0);
++    if (fixture.event_kind !== 'reply') {
++      assert.throws(() => startReplyDraft(db, {
++        actorUserId: job.userId, bindingId: job.bindingId, notificationId: 999999, clock: () => new Date(NOW)
++      }), /not found/i);
++    }
++  }
++
++  const refusalJob = db.prepare("SELECT * FROM matrix_stream_jobs WHERE idempotency_key = 'job-7'").get();
++  db.prepare(`
++    INSERT INTO matrix_stream_notification_spool (
++      inbound_message_id, work_item_id, job_id, kind, original_preview,
++      translation_status, work_item_state, retry_available, notification_key,
++      delivery_state, created_at
++    ) VALUES ('<terminal-7@test>', ?, ?, 'refusal', 'No thank you.', 'pending',
++      'refused', 1, '00000000-0000-4000-8000-000000000077', 'pending', ?)
++  `).run(refusalJob.work_item_id, refusalJob.id, NOW);
++  const refusalNotification = db.prepare("SELECT id FROM matrix_stream_notification_spool WHERE inbound_message_id = '<terminal-7@test>'").get();
++  assert.throws(() => startReplyDraft(db, {
++    actorUserId: 8107, bindingId: db.prepare("SELECT id FROM matrix_actor_bindings WHERE user_id = 8107").get().id, notificationId: refusalNotification.id, clock: () => new Date(NOW)
++  }), /reply notification/i);
++
++  let observedDurable = false;
++  const imported = await importAndCorrelateEmailMessage('sales@sender.test', 'INBOX', {
++    message_uid: 'imap-1', message_id: '<imap-durable@test>', from_email: 'outside@test',
++    to_emails: 'sales@sender.test', subject: 'A durable inbound', text_body: 'hello',
++    received_at: NOW
++  }, {
++    database: db,
++    correlate: async (_database, message) => {
++      observedDurable = Boolean(db.prepare('SELECT id FROM email_messages WHERE message_id = ?').get(message.message_id));
++      throw new Error('provider password=do-not-leak');
++    }
++  });
++  assert.strictEqual(observedDurable, true, 'correlation must run after durable email commit');
++  assert.strictEqual(imported.imported.inserted, true);
++  assert.strictEqual(imported.correlation_error.code, 'MATRIX_INBOUND_CORRELATION_FAILED');
++  assert.strictEqual(imported.correlation_error.message, 'Inbound correlation failed.');
++  assert(db.prepare('SELECT id FROM email_messages WHERE message_id = ?').get('<imap-durable@test>'), 'correlation failure rolled back email');
++  assert.ok(!JSON.stringify(imported).includes('do-not-leak'));
++
++  console.log('matrix stream correlation tests passed');
++}
++
++main().catch(error => {
++  console.error(error);
++  process.exitCode = 1;
++}).finally(() => {
++  try { db.close(); } catch (_) {}
++  fs.rmSync(root, { recursive: true, force: true });
++});
+diff --git a/src/db.js b/src/db.js
+index f9b98ca..9ee8bb8 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -910,20 +910,21 @@ function initDb() {
+       content_hash TEXT NOT NULL,
+       message_id TEXT NOT NULL UNIQUE,
+       state TEXT NOT NULL CHECK(state IN ('pending','sending','accepted','failed','ambiguous')),
+       attempt_count INTEGER NOT NULL DEFAULT 0,
+       error_class TEXT NOT NULL DEFAULT '',
+       redacted_diagnostic TEXT NOT NULL DEFAULT '',
+       created_by INTEGER NOT NULL,
+       owner_token TEXT NOT NULL DEFAULT '',
+       lease_expires_at TEXT NOT NULL DEFAULT '',
+       recipient_domain TEXT NOT NULL DEFAULT '',
++      sender_email TEXT NOT NULL DEFAULT '',
+       reservation_day TEXT NOT NULL DEFAULT '',
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+       FOREIGN KEY(version_id) REFERENCES matrix_stream_versions(id)
+     );
+ 
+     CREATE TABLE IF NOT EXISTS matrix_stream_events (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       work_item_id INTEGER NOT NULL,
+@@ -946,20 +947,26 @@ function initDb() {
+     CREATE TABLE IF NOT EXISTS matrix_stream_delivery_event_keys (
+       event_key TEXT PRIMARY KEY,
+       job_id INTEGER NOT NULL,
+       event_kind TEXT NOT NULL CHECK(event_kind IN ('start','result')),
+       request_hash TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+       UNIQUE(job_id, event_kind),
+       FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id)
+     );
+ 
++    CREATE TABLE IF NOT EXISTS matrix_stream_internal_event_keys (
++      logical_key TEXT PRIMARY KEY,
++      event_key TEXT NOT NULL UNIQUE,
++      created_at TEXT NOT NULL
++    );
++
+     CREATE TABLE IF NOT EXISTS matrix_stream_api_requests (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       actor_user_id INTEGER NOT NULL,
+       work_item_id INTEGER NOT NULL,
+       action TEXT NOT NULL CHECK(action IN ('create','revise','approve')),
+       idempotency_key TEXT NOT NULL UNIQUE,
+       request_fingerprint TEXT NOT NULL,
+       version_id INTEGER NOT NULL,
+       response_json TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+@@ -1019,30 +1026,80 @@ function initDb() {
+       priority TEXT NOT NULL,
+       due_at TEXT,
+       state TEXT NOT NULL CHECK(state IN ('active','closed')),
+       terminal_reason TEXT NOT NULL DEFAULT '',
+       created_at TEXT NOT NULL,
+       closed_at TEXT,
+       FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+       FOREIGN KEY(originating_job_id) REFERENCES matrix_stream_jobs(id)
+     );
+ 
++    CREATE TABLE IF NOT EXISTS matrix_stream_inbound_links (
++      inbound_message_id TEXT PRIMARY KEY,
++      email_message_row_id INTEGER,
++      status TEXT NOT NULL CHECK(status IN ('matched','needs_review','unmatched')),
++      kind TEXT NOT NULL DEFAULT '',
++      work_item_id INTEGER,
++      job_id INTEGER,
++      created_at TEXT NOT NULL,
++      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
++      FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id)
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_stream_notification_spool (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      inbound_message_id TEXT NOT NULL,
++      work_item_id INTEGER NOT NULL,
++      job_id INTEGER NOT NULL,
++      kind TEXT NOT NULL CHECK(kind IN ('reply','refusal')),
++      original_preview TEXT NOT NULL,
++      translation_status TEXT NOT NULL CHECK(translation_status IN ('ready','pending')),
++      translation_cn TEXT NOT NULL DEFAULT '',
++      requirements_cn TEXT NOT NULL DEFAULT '',
++      suggested_subject TEXT NOT NULL DEFAULT '',
++      suggested_body_en TEXT NOT NULL DEFAULT '',
++      suggested_body_cn TEXT NOT NULL DEFAULT '',
++      work_item_state TEXT NOT NULL,
++      retry_available INTEGER NOT NULL DEFAULT 0 CHECK(retry_available IN (0,1)),
++      reply_draft_id INTEGER,
++      notification_key TEXT NOT NULL UNIQUE,
++      delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','inflight','delivered','manual_review')),
++      owner_token TEXT NOT NULL DEFAULT '',
++      lease_expires_at TEXT NOT NULL DEFAULT '',
++      attempt_count INTEGER NOT NULL DEFAULT 0,
++      receipt_id TEXT NOT NULL DEFAULT '',
++      last_error_class TEXT NOT NULL DEFAULT '',
++      finalized_token TEXT NOT NULL DEFAULT '',
++      finalized_state TEXT NOT NULL DEFAULT '',
++      generation INTEGER NOT NULL DEFAULT 1 CHECK(generation >= 1),
++      supersedes_notification_id INTEGER,
++      created_at TEXT NOT NULL,
++      delivered_at TEXT,
++      UNIQUE(inbound_message_id, generation),
++      FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
++      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
++      FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id),
++      FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id),
++      FOREIGN KEY(supersedes_notification_id) REFERENCES matrix_stream_notification_spool(id)
++    );
++
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
+     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_recipient_evidence_lookup ON matrix_stream_recipient_evidence(work_item_id, recipient_email, status);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_api_requests_scope ON matrix_stream_api_requests(actor_user_id, work_item_id, action);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_api_claims_lease ON matrix_stream_api_claims(lease_expires_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_reply_checks_due ON matrix_stream_reply_checks(state, due_at);
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_notification_spool_state ON matrix_stream_notification_spool(delivery_state, id);
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
+     BEFORE UPDATE ON matrix_selection_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_delete
+     BEFORE DELETE ON matrix_selection_events
+     BEGIN
+@@ -1148,20 +1205,21 @@ function initDb() {
+   if (!matrixWorkItemColumns.has('stream_state')) db.exec("ALTER TABLE matrix_work_items ADD COLUMN stream_state TEXT NOT NULL DEFAULT 'selected'");
+   if (!matrixWorkItemColumns.has('current_stream_version_id')) db.exec('ALTER TABLE matrix_work_items ADD COLUMN current_stream_version_id INTEGER');
+ 
+   const matrixStreamVersionColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(column => column.name));
+   if (!matrixStreamVersionColumns.has('recipient_evidence_id')) db.exec('ALTER TABLE matrix_stream_versions ADD COLUMN recipient_evidence_id INTEGER');
+ 
+   const matrixStreamJobColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_jobs)').all().map(column => column.name));
+   if (!matrixStreamJobColumns.has('owner_token')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''");
+   if (!matrixStreamJobColumns.has('lease_expires_at')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''");
+   if (!matrixStreamJobColumns.has('recipient_domain')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN recipient_domain TEXT NOT NULL DEFAULT ''");
++  if (!matrixStreamJobColumns.has('sender_email')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN sender_email TEXT NOT NULL DEFAULT ''");
+   if (!matrixStreamJobColumns.has('reservation_day')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN reservation_day TEXT NOT NULL DEFAULT ''");
+   db.exec(`
+     CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_stream_jobs_active_domain_reservation
+       ON matrix_stream_jobs(recipient_domain)
+       WHERE recipient_domain <> '' AND state IN ('pending','sending','ambiguous');
+     CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_reservation_day
+       ON matrix_stream_jobs(reservation_day, state);
+   `);
+ 
+   db.exec(`
+@@ -1219,20 +1277,103 @@ function initDb() {
+       SELECT RAISE(ABORT, 'matrix_stream_versions approval lifecycle is irreversible');
+     END;
+   `);
+ 
+   const matrixStreamEventColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_events)').all().map(column => column.name));
+   if (!matrixStreamEventColumns.has('request_fingerprint')) db.exec("ALTER TABLE matrix_stream_events ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''");
+ 
+   const matrixReplyDraftColumns = new Set(db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(column => column.name));
+   if (!matrixReplyDraftColumns.has('matrix_work_item_id')) db.exec('ALTER TABLE crm_reply_drafts ADD COLUMN matrix_work_item_id INTEGER');
+ 
++  const matrixNotificationColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_notification_spool)').all().map(column => column.name));
++  if (!matrixNotificationColumns.has('reply_draft_id')) db.exec('ALTER TABLE matrix_stream_notification_spool ADD COLUMN reply_draft_id INTEGER');
++  if (!matrixNotificationColumns.has('finalized_token')) db.exec("ALTER TABLE matrix_stream_notification_spool ADD COLUMN finalized_token TEXT NOT NULL DEFAULT ''");
++  if (!matrixNotificationColumns.has('finalized_state')) db.exec("ALTER TABLE matrix_stream_notification_spool ADD COLUMN finalized_state TEXT NOT NULL DEFAULT ''");
++
++  const matrixInboundLinkColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_inbound_links)').all().map(column => column.name));
++  if (!matrixInboundLinkColumns.has('email_message_row_id')) db.exec('ALTER TABLE matrix_stream_inbound_links ADD COLUMN email_message_row_id INTEGER');
++
++  const notificationSql = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='matrix_stream_notification_spool'").get()?.sql || '');
++  if (/\bclaimed\b/.test(notificationSql) || !/\bmanual_review\b/.test(notificationSql) || !/\bgeneration\b/.test(notificationSql)) {
++    db.pragma('foreign_keys = OFF');
++    try {
++      db.exec(`
++        ALTER TABLE matrix_stream_notification_spool RENAME TO matrix_stream_notification_spool_legacy;
++        CREATE TABLE matrix_stream_notification_spool (
++          id INTEGER PRIMARY KEY AUTOINCREMENT,
++          inbound_message_id TEXT NOT NULL,
++          work_item_id INTEGER NOT NULL,
++          job_id INTEGER NOT NULL,
++          kind TEXT NOT NULL CHECK(kind IN ('reply','refusal')),
++          original_preview TEXT NOT NULL,
++          translation_status TEXT NOT NULL CHECK(translation_status IN ('ready','pending')),
++          translation_cn TEXT NOT NULL DEFAULT '', requirements_cn TEXT NOT NULL DEFAULT '',
++          suggested_subject TEXT NOT NULL DEFAULT '', suggested_body_en TEXT NOT NULL DEFAULT '', suggested_body_cn TEXT NOT NULL DEFAULT '',
++          work_item_state TEXT NOT NULL, retry_available INTEGER NOT NULL DEFAULT 0 CHECK(retry_available IN (0,1)),
++          reply_draft_id INTEGER, notification_key TEXT NOT NULL UNIQUE,
++          delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','inflight','delivered','manual_review')),
++          owner_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT NOT NULL DEFAULT '', attempt_count INTEGER NOT NULL DEFAULT 0,
++          receipt_id TEXT NOT NULL DEFAULT '', last_error_class TEXT NOT NULL DEFAULT '',
++          finalized_token TEXT NOT NULL DEFAULT '', finalized_state TEXT NOT NULL DEFAULT '',
++          generation INTEGER NOT NULL DEFAULT 1 CHECK(generation >= 1), supersedes_notification_id INTEGER,
++          created_at TEXT NOT NULL, delivered_at TEXT,
++          UNIQUE(inbound_message_id, generation),
++          FOREIGN KEY(inbound_message_id) REFERENCES matrix_stream_inbound_links(inbound_message_id),
++          FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id), FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id),
++          FOREIGN KEY(reply_draft_id) REFERENCES crm_reply_drafts(id),
++          FOREIGN KEY(supersedes_notification_id) REFERENCES matrix_stream_notification_spool(id)
++        );
++      `);
++      const legacyRows = db.prepare('SELECT * FROM matrix_stream_notification_spool_legacy ORDER BY id').all();
++      const insertMigrated = db.prepare(`
++        INSERT INTO matrix_stream_notification_spool (
++          id, inbound_message_id, work_item_id, job_id, kind, original_preview,
++          translation_status, translation_cn, requirements_cn, suggested_subject,
++          suggested_body_en, suggested_body_cn, work_item_state, retry_available,
++          reply_draft_id, notification_key, delivery_state, owner_token, lease_expires_at,
++          attempt_count, receipt_id, last_error_class, finalized_token, finalized_state,
++          generation, supersedes_notification_id, created_at, delivered_at
++        ) VALUES (
++          @id, @inbound_message_id, @work_item_id, @job_id, @kind, @original_preview,
++          @translation_status, @translation_cn, @requirements_cn, @suggested_subject,
++          @suggested_body_en, @suggested_body_cn, @work_item_state, @retry_available,
++          @reply_draft_id, @notification_key, @delivery_state, @owner_token, @lease_expires_at,
++          @attempt_count, @receipt_id, @last_error_class, @finalized_token, @finalized_state,
++          @generation, @supersedes_notification_id, @created_at, @delivered_at
++        )
++      `);
++      for (const row of legacyRows) {
++        const deliveryState = ['pending', 'inflight', 'delivered', 'manual_review'].includes(row.delivery_state)
++          ? row.delivery_state : 'manual_review';
++        insertMigrated.run({
++          id: row.id, inbound_message_id: row.inbound_message_id, work_item_id: row.work_item_id,
++          job_id: row.job_id, kind: row.kind, original_preview: row.original_preview,
++          translation_status: row.translation_status, translation_cn: row.translation_cn || '',
++          requirements_cn: row.requirements_cn || '', suggested_subject: row.suggested_subject || '',
++          suggested_body_en: row.suggested_body_en || '', suggested_body_cn: row.suggested_body_cn || '',
++          work_item_state: row.work_item_state, retry_available: Number(row.retry_available || 0),
++          reply_draft_id: row.reply_draft_id || null, notification_key: row.notification_key || crypto.randomUUID(),
++          delivery_state: deliveryState, owner_token: row.owner_token || '', lease_expires_at: row.lease_expires_at || '',
++          attempt_count: Number(row.attempt_count || 0), receipt_id: row.receipt_id || '',
++          last_error_class: row.last_error_class || '', finalized_token: row.finalized_token || '',
++          finalized_state: row.finalized_state || '', generation: Number(row.generation || 1),
++          supersedes_notification_id: row.supersedes_notification_id || null,
++          created_at: row.created_at, delivered_at: row.delivered_at || null
++        });
++      }
++      db.exec('DROP TABLE matrix_stream_notification_spool_legacy');
++    } finally {
++      db.pragma('foreign_keys = ON');
++    }
++  }
++  db.exec('CREATE INDEX IF NOT EXISTS idx_matrix_stream_notification_spool_state ON matrix_stream_notification_spool(delivery_state, id)');
++
+   db.prepare(`
+     UPDATE matrix_sessions
+     SET filters_json = json_remove(filters_json, '$.page')
+     WHERE json_valid(filters_json) = 1
+       AND json_type(filters_json) = 'object'
+       AND json_type(filters_json, '$.page') IS NOT NULL
+   `).run();
+ 
+   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+   if (!cols.includes('priority')) {
+diff --git a/src/lib/imapSync.js b/src/lib/imapSync.js
+index a7f943c..f297c1c 100644
+--- a/src/lib/imapSync.js
++++ b/src/lib/imapSync.js
+@@ -1,11 +1,12 @@
+ const { db, now } = require('../db');
++const { correlateInbound: defaultCorrelateInbound } = require('../services/matrixStreamCorrelation');
+ 
+ function text(value) {
+   if (value === undefined || value === null) return '';
+   return String(value).trim();
+ }
+ 
+ function parseBool(value, fallback = true) {
+   if (value === undefined || value === null || value === '') return fallback;
+   return String(value).toLowerCase() === 'true';
+ }
+@@ -296,20 +297,43 @@ function upsertEmailMessage(mailbox, folder, rawMessage) {
+     normalized.to_emails, normalized.cc_emails, normalized.bcc_emails, normalized.subject, normalized.text_body,
+     normalized.html_body, normalized.cleaned_text, normalized.attachments_json, normalized.sent_at,
+     normalized.received_at, normalized.direction, normalized.processing_status, normalized.normalized_subject,
+     normalized.conversation_key, normalized.email_domain, normalized.contact_email, normalized.contact_name,
+     normalized.quote_detected, normalized.inquiry_detected, normalized.customer_detected, normalized.parsed_at,
+     normalized.matched_customer_id, normalized.matched_inquiry_id, normalized.raw_headers_json, ts, ts
+   );
+   return { id: result.lastInsertRowid, inserted: true, normalized };
+ }
+ 
++async function importAndCorrelateEmailMessage(mailbox, folder, rawMessage, {
++  database = db,
++  correlate = defaultCorrelateInbound,
++  correlationOptions = {}
++} = {}) {
++  if (database !== db) throw new Error('email import database mismatch');
++  const imported = upsertEmailMessage(mailbox, folder, rawMessage);
++  if (imported.normalized.direction !== 'inbound') return { imported, correlation: null, correlation_error: null };
++  try {
++    const correlation = await correlate(database, { ...imported.normalized, email_row_id: imported.id }, correlationOptions);
++    return { imported, correlation, correlation_error: null };
++  } catch (_) {
++    return {
++      imported,
++      correlation: null,
++      correlation_error: {
++        code: 'MATRIX_INBOUND_CORRELATION_FAILED',
++        message: 'Inbound correlation failed.'
++      }
++    };
++  }
++}
++
+ function resolveFolderName(folder) {
+   const value = text(folder || 'INBOX');
+   const lowered = value.toLowerCase();
+   if (lowered === 'sent' || lowered === 'sent messages' || lowered === 'sent mail' || lowered === '已发送' || lowered === '已发送邮件') {
+     return ['Sent', 'Sent Messages', 'Sent Mail', '已发送', '已发送邮件'];
+   }
+   return [value];
+ }
+ 
+ async function openMailboxWithFallback(client, folder) {
+@@ -323,21 +347,24 @@ async function openMailboxWithFallback(client, folder) {
+       lastError = err;
+     }
+   }
+   if (lastError) {
+     lastError.code = lastError.code || 'IMAP_FOLDER_NOT_FOUND';
+     lastError.message = text(lastError.message || `Mailbox folder not found: ${folder}`);
+   }
+   throw lastError || new Error(`Mailbox folder not found: ${folder}`);
+ }
+ 
+-async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system' } = {}) {
++async function syncMailbox({
++  folder = 'INBOX', days, limit, operator = 'system',
++  correlate = defaultCorrelateInbound, correlationOptions = {}
++} = {}) {
+   const cfgCheck = validateImapConfig();
+   const ts = now();
+   const result = createSyncResult({
+     mailbox: cfgCheck.config.user,
+     folder: text(folder || 'INBOX'),
+     status: 'running'
+   });
+   const run = db.prepare(`
+     INSERT INTO email_sync_runs (mailbox, folder, sync_type, status, started_at, created_by, created_at)
+     VALUES (?, ?, 'manual', 'running', ?, ?, ?)
+@@ -418,21 +445,21 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system'
+     for await (const msg of client.fetch(uids, { uid: true, envelope: true, source: true, bodyStructure: true, internalDate: true, flags: true, headers: true })) {
+       try {
+         const parsed = await simpleParser(msg.source);
+         const attachmentMeta = Array.isArray(parsed.attachments)
+           ? parsed.attachments.map((item) => ({
+               filename: item.filename || '',
+               contentType: item.contentType || '',
+               size: Number(item.size || 0)
+             }))
+           : [];
+-        const imported = upsertEmailMessage(mailbox, folder, {
++        const outcome = await importAndCorrelateEmailMessage(mailbox, folder, {
+           message_uid: String(msg.uid || ''),
+           message_id: parsed.messageId || msg.envelope?.messageId || '',
+           in_reply_to: parsed.inReplyTo || '',
+           references_header: Array.isArray(parsed.references) ? parsed.references.join(' ') : text(parsed.references),
+           from_email: parsed.from?.value?.[0]?.address || msg.envelope?.from?.[0]?.address || '',
+           from_name: parsed.from?.value?.[0]?.name || msg.envelope?.from?.[0]?.name || '',
+           to_emails: (parsed.to?.value || []).map((item) => item.address).filter(Boolean).join(','),
+           cc_emails: (parsed.cc?.value || []).map((item) => item.address).filter(Boolean).join(','),
+           bcc_emails: (parsed.bcc?.value || []).map((item) => item.address).filter(Boolean).join(','),
+           subject: parsed.subject || msg.envelope?.subject || '',
+@@ -441,29 +468,34 @@ async function syncMailbox({ folder = 'INBOX', days, limit, operator = 'system'
+           cleaned_text: cleanMessageText(parsed.text || ''),
+           attachments_json: JSON.stringify(attachmentMeta),
+           sent_at: parsed.date ? parsed.date.toISOString() : '',
+           received_at: msg.internalDate ? msg.internalDate.toISOString() : '',
+           raw_headers_json: JSON.stringify({
+             messageId: parsed.messageId || '',
+             inReplyTo: parsed.inReplyTo || '',
+             references: parsed.references || '',
+           }),
+           parsed_at: now()
+-        });
++        }, { correlate, correlationOptions });
++        const imported = outcome.imported;
+         result.messages.push({ id: imported.id, message_id: imported.normalized.message_id, subject: imported.normalized.subject });
+         if (imported.inserted) {
+           insertedCount += 1;
+           result.inserted.push(imported.id);
+         } else {
+           skippedCount += 1;
+           result.skipped.push(imported.id);
+         }
++        if (outcome.correlation_error) {
++          errorCount += 1;
++          result.errors.push(outcome.correlation_error);
++        }
+       } catch (err) {
+         errorCount += 1;
+         result.errors.push({
+           code: text(err?.code),
+           message: sanitizeErrorMessage(err?.message || err)
+         });
+       }
+     }
+     db.prepare(`
+       UPDATE email_sync_runs
+@@ -508,13 +540,14 @@ module.exports = {
+   getImapConfig,
+   validateImapConfig,
+   maskMailboxUser,
+   classifyImapError,
+   cleanMessageText,
+   computeConversationKey,
+   extractDomain,
+   normalizeSubject,
+   resolveFolderName,
+   upsertEmailMessage,
++  importAndCorrelateEmailMessage,
+   sanitizeErrorMessage,
+   syncMailbox
+ };
+diff --git a/src/lib/safeText.js b/src/lib/safeText.js
+new file mode 100644
+index 0000000..193c84f
+--- /dev/null
++++ b/src/lib/safeText.js
+@@ -0,0 +1,12 @@
++'use strict';
++
++function redactSensitiveText(value) {
++  let text = String(value == null ? '' : value).normalize('NFKC');
++  text = text.replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gi, '[REDACTED]');
++  text = text.replace(/\b((?:https?|smtps?|imaps?):\/\/)[^\s/@:]+(?::[^\s/@]*)?@/gi, '$1[redacted]@');
++  text = text.replace(/([?&](?:access_token|auth_token|token|api_key|apikey|secret|password)=)[^&#\s]*/gi, '$1[redacted]');
++  const sensitiveLine = /(?:\bauthorization\s*:|\b(?:password|passwd|passphrase|secret|credentials?|api[_ -]?key|access[_ -]?token|auth[_ -]?token|smtp[_ -]?(?:pass|password))\b|\b(?:private|internal)\b.*\b(?:cost(?:ing)?|formula|margin)\b|\b(?:cost|margin)[_ -]?formula\b)/i;
++  return text.split(/\r?\n/).map(line => sensitiveLine.test(line) ? '[REDACTED]' : line).join('\n');
++}
++
++module.exports = { redactSensitiveText };
+diff --git a/src/routes/matrix.js b/src/routes/matrix.js
+index 83a2c41..df5102b 100644
+--- a/src/routes/matrix.js
++++ b/src/routes/matrix.js
+@@ -191,20 +191,21 @@ function sendDeliveryError(res, error) {
+   return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
+ }
+ 
+ function createMatrixRouter({
+   db,
+   audit,
+   candidateDbPath = process.env.MATRIX_STREAM_DB_PATH,
+   clock,
+   reviewService = require('../services/matrixStreamReview'),
+   deliveryService,
++  correlationService = require('../services/matrixStreamCorrelation'),
+   textService = createMatrixStreamText(),
+   claimOptions = {}
+ } = {}) {
+   const router = express.Router();
+   const view = createCacheIndexView({ dbPath: candidateDbPath });
+   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
+ 
+   router.use(requireMatrixRole);
+ 
+   router.get('/ready', (req, res) => {
+@@ -622,20 +623,115 @@ function createMatrixRouter({
+ 
+   router.get('/work-items/:id', (req, res) => {
+     try {
+       rejectUnknown(req.query, new Set(), 'query');
+       const item = gate.getWorkItem({ workItemId: positiveInteger(req.params.id, 'work item id'), actorUserId: req.user.id });
+       if (!item) return res.status(404).json({ error: 'work item not found' });
+       res.json(item);
+     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+   });
+ 
++  router.post('/notifications/:id/reply-draft', (req, res) => {
++    try {
++      rejectUnknown(req.body, new Set(), 'body');
++      const identity = reviewIdentity(req);
++      if (!correlationService || typeof correlationService.startReplyDraft !== 'function') {
++        throw new Error('reply draft service unavailable');
++      }
++      const result = correlationService.startReplyDraft(db, {
++        actorUserId: identity.actorUserId,
++        bindingId: identity.bindingId,
++        notificationId: positiveInteger(req.params.id, 'notification id'),
++        clock
++      });
++      if (!result || result.state !== 'draft_pending') throw new Error('invalid reply draft result');
++      res.json({
++        notification_id: positiveInteger(result.notification_id, 'notification id'),
++        work_item_id: positiveInteger(result.work_item_id, 'work item id'),
++        state: 'draft_pending'
++      });
++    } catch (error) { sendReviewError(res, error); }
++  });
++
++  router.post('/notifications/:id/retry-translation', async (req, res) => {
++    try {
++      rejectUnknown(req.body, new Set(), 'body');
++      const identity = reviewIdentity(req);
++      if (!correlationService || typeof correlationService.retryInboundTranslation !== 'function') {
++        throw new Error('translation retry service unavailable');
++      }
++      const result = await correlationService.retryInboundTranslation(db, {
++        actorUserId: identity.actorUserId,
++        bindingId: identity.bindingId,
++        notificationId: positiveInteger(req.params.id, 'notification id'),
++        clock
++      });
++      if (!result || !['ready', 'pending'].includes(result.translation_status)) throw new Error('invalid translation retry result');
++      res.json({
++        notification_id: positiveInteger(result.notification_id, 'notification id'),
++        translation_status: result.translation_status,
++        retry_available: result.translation_status === 'pending'
++      });
++    } catch (error) { sendReviewError(res, error); }
++  });
++
++  router.post('/notifications/claim', (req, res) => {
++    try {
++      rejectUnknown(req.body, new Set(), 'body');
++      const identity = reviewIdentity(req);
++      if (!correlationService || typeof correlationService.claimNotification !== 'function') throw new Error('notification claim service unavailable');
++      const notification = correlationService.claimNotification(db, {
++        actorUserId: identity.actorUserId, bindingId: identity.bindingId, clock
++      });
++      res.json({ notification });
++    } catch (error) { sendReviewError(res, error); }
++  });
++
++  router.post('/notifications/:id/ack', (req, res) => {
++    try {
++      const body = rejectUnknown(req.body, new Set(['claim_token', 'receipt_id']), 'body');
++      const identity = reviewIdentity(req);
++      if (!correlationService || typeof correlationService.ackNotification !== 'function') throw new Error('notification acknowledgement service unavailable');
++      res.json(correlationService.ackNotification(db, {
++        actorUserId: identity.actorUserId, bindingId: identity.bindingId,
++        notificationId: positiveInteger(req.params.id, 'notification id'),
++        claimToken: body.claim_token, receiptId: body.receipt_id, clock
++      }));
++    } catch (error) { sendReviewError(res, error); }
++  });
++
++  router.post('/notifications/:id/nack', (req, res) => {
++    try {
++      const body = rejectUnknown(req.body, new Set(['claim_token', 'outcome']), 'body');
++      const identity = reviewIdentity(req);
++      if (!correlationService || typeof correlationService.nackNotification !== 'function') throw new Error('notification rejection service unavailable');
++      res.json(correlationService.nackNotification(db, {
++        actorUserId: identity.actorUserId, bindingId: identity.bindingId,
++        notificationId: positiveInteger(req.params.id, 'notification id'),
++        claimToken: body.claim_token, outcome: body.outcome, clock
++      }));
++    } catch (error) { sendReviewError(res, error); }
++  });
++
++  router.post('/notifications/:id/status', (req, res) => {
++    try {
++      const body = rejectUnknown(req.body, new Set(['claim_token']), 'body');
++      const identity = reviewIdentity(req);
++      if (!correlationService || typeof correlationService.notificationStatus !== 'function') throw new Error('notification status service unavailable');
++      res.json(correlationService.notificationStatus(db, {
++        actorUserId: identity.actorUserId, bindingId: identity.bindingId,
++        notificationId: positiveInteger(req.params.id, 'notification id'),
++        claimToken: body.claim_token, clock
++      }));
++    } catch (error) { sendReviewError(res, error); }
++  });
++
+   router.post('/work-items/:id/versions', async (req, res) => {
+     let heldClaimToken = null;
+     let heldClaimKey = '';
+     try {
+       const body = rejectUnknown(req.body, VERSION_FIELDS, 'body');
+       const identity = reviewIdentity(req);
+       const workItemId = positiveInteger(req.params.id, 'work item id');
+       const expectedWorkVersion = positiveInteger(body.expected_work_version, 'expected work version');
+       const idempotencyKey = String(body.idempotency_key || '').trim();
+       if (!idempotencyKey) throw new Error('idempotency key required');
+diff --git a/src/services/matrixStreamCorrelation.js b/src/services/matrixStreamCorrelation.js
+new file mode 100644
+index 0000000..7ef9a55
+--- /dev/null
++++ b/src/services/matrixStreamCorrelation.js
+@@ -0,0 +1,640 @@
++'use strict';
++
++const crypto = require('node:crypto');
++const { createMatrixStreamText } = require('./matrixStreamText');
++const { closeReplyCheck } = require('./matrixStreamFollowup');
++const { redactSensitiveText } = require('../lib/safeText');
++
++const TERMINAL_KINDS = new Set(['reply', 'bounce', 'refusal', 'unsubscribe', 'manual_stop']);
++const TRANSLATION_KEYS = [
++  'translation_cn', 'requirements_cn', 'suggested_subject',
++  'suggested_body_en', 'suggested_body_cn'
++];
++const STATE_PRIORITY = new Map([
++  ['selected', 0], ['sent', 0], ['replied', 10], ['refused', 20], ['bounced', 30], ['suppressed', 100]
++]);
++
++function cleanToken(value) {
++  return String(value == null ? '' : value).normalize('NFKC').trim();
++}
++
++function normalizeMessageId(value) {
++  const token = cleanToken(value).toLowerCase();
++  if (!token) return '';
++  const bracketed = token.match(/<[^<>\s]+>/)?.[0];
++  return bracketed || (/^[^\s<>@]+@[^\s<>@]+$/.test(token) ? `<${token}>` : '');
++}
++
++function headerMessageIds(value) {
++  const text = cleanToken(value).toLowerCase();
++  const ids = text.match(/<[^<>\s]+>/g) || [];
++  if (!ids.length) {
++    const single = normalizeMessageId(text);
++    if (single) ids.push(single);
++  }
++  return [...new Set(ids.map(normalizeMessageId).filter(Boolean))];
++}
++
++function emailAddresses(value) {
++  const matches = cleanToken(value).toLowerCase().match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+/g) || [];
++  return [...new Set(matches)];
++}
++
++function normalizedSubject(value) {
++  let result = cleanToken(value).toLowerCase();
++  let prior;
++  do {
++    prior = result;
++    result = result
++      .replace(/^\s*(?:(?:re|fw|fwd)\s*:|(?:回复|答复|转发)\s*[:：])\s*/i, '')
++      .replace(/\s+/g, ' ')
++      .trim();
++  } while (result !== prior);
++  return result;
++}
++
++function clockIso(clock) {
++  const value = typeof clock === 'function' ? clock() : new Date();
++  const date = value instanceof Date ? value : new Date(value);
++  if (!Number.isFinite(date.getTime())) throw new Error('valid correlation clock required');
++  return { ms: date.getTime(), iso: date.toISOString() };
++}
++
++function authoredText(value) {
++  const lines = String(value == null ? '' : value).replace(/\r\n?/g, '\n').split('\n');
++  const kept = [];
++  for (const line of lines) {
++    const trimmed = line.trim();
++    if (/^(?:-{2,}\s*Original Message\s*-{2,}|_{5,}|On .+ wrote:|From:\s|Sent:\s|Subject:\s|发件人[:：]|发送时间[:：]|主题[:：])/i.test(trimmed)) break;
++    if (/^--\s*$/.test(line) && kept.some(item => item.trim())) break;
++    if (kept.some(item => item.trim()) && /^(?:best regards|kind regards|regards|sincerely)[,!]?$/i.test(trimmed)) break;
++    if (kept.some(item => item.trim()) && /^(?:to unsubscribe|unsubscribe here|manage (?:email )?preferences|取消订阅|退订链接)/i.test(trimmed)) break;
++    if (!/^\s*>/.test(line)) kept.push(line);
++  }
++  return kept.join('\n').trim();
++}
++
++function classifyKind(message) {
++  const explicit = cleanToken(message.event_kind || message.kind).toLowerCase();
++  if (explicit) {
++    if (!TERMINAL_KINDS.has(explicit)) throw new Error('valid inbound event kind required');
++    return explicit;
++  }
++  const subject = cleanToken(message.subject);
++  const body = authoredText(message.cleaned_text || message.text_body);
++  const sender = emailAddresses(message.from_email)[0] || '';
++  const source = `${subject}\n${body}`;
++  if (/mailer-daemon|postmaster/i.test(sender)
++      || /(?:delivery status notification|undeliverable|delivery failure|returned mail|mail delivery failed|投递失败|退信)/i.test(subject)) return 'bounce';
++  if (/\b(?:unsubscribe me|please unsubscribe|remove me from (?:your|this) list|stop emailing me)\b|(?:请|烦请)?(?:取消订阅|退订|从名单中移除)/i.test(source)) return 'unsubscribe';
++  if (/\b(?:not interested|no thank you|do not wish to proceed|we will pass)\b|(?:不感兴趣|暂不考虑|无需继续|不再推进)/i.test(source)) return 'refusal';
++  return 'reply';
++}
++
++function safePreview(value, maximum = 800) {
++  const redacted = redactSensitiveText(value)
++    .normalize('NFKC').trim()
++    .replace(/[\r\n\t]+/g, ' ')
++    .replace(/\s+/g, ' ');
++  return [...redacted].slice(0, maximum).join('');
++}
++
++function linkResult(row) {
++  if (!row) return null;
++  if (row.status === 'matched') {
++    return { status: 'matched', workItemId: row.work_item_id, jobId: row.job_id, kind: row.kind };
++  }
++  return { status: row.status };
++}
++
++function candidatesForMessageIds(db, ids) {
++  if (!ids.length) return [];
++  const placeholders = ids.map(() => '?').join(',');
++  return db.prepare(`
++    SELECT j.*, v.recipient_email, v.subject
++    FROM matrix_stream_jobs j
++    JOIN matrix_stream_versions v ON v.id = j.version_id
++    WHERE j.state = 'accepted' AND LOWER(j.message_id) IN (${placeholders})
++    ORDER BY j.id DESC
++  `).all(...ids);
++}
++
++function exactCandidates(db, message) {
++  const direct = candidatesForMessageIds(db, headerMessageIds(message.in_reply_to));
++  if (direct.length) return direct;
++  return candidatesForMessageIds(db, headerMessageIds(message.references_header));
++}
++
++function fallbackCandidates(db, message, context) {
++  const from = emailAddresses(message.from_email);
++  const to = new Set(emailAddresses([message.to_emails, message.cc_emails].filter(Boolean).join(',')));
++  const subject = normalizedSubject(message.subject);
++  if (from.length !== 1 || !to.size || !subject) return [];
++  const earliest = new Date(context.ms - 120 * 86400000).toISOString();
++  return db.prepare(`
++    SELECT j.*, v.recipient_email, v.subject
++    FROM matrix_stream_jobs j
++    JOIN matrix_stream_versions v ON v.id = j.version_id
++    WHERE j.state = 'accepted' AND j.updated_at >= ? AND j.updated_at <= ?
++      AND LOWER(v.recipient_email) = ? AND LOWER(j.sender_email) IN (${[...to].map(() => '?').join(',')})
++    ORDER BY j.updated_at DESC, j.id DESC
++  `).all(earliest, context.iso, from[0], ...to)
++    .filter(row => normalizedSubject(row.subject) === subject);
++}
++
++function internalEventKey(db, logicalKey, createdAt) {
++  const logical = String(logicalKey || '').trim();
++  if (!logical) throw new Error('internal event logical key required');
++  const existing = db.prepare('SELECT event_key FROM matrix_stream_internal_event_keys WHERE logical_key = ?').get(logical);
++  if (existing) return existing.event_key;
++  for (let attempt = 0; attempt < 8; attempt += 1) {
++    const eventKey = `mx-internal-${crypto.randomUUID()}`;
++    if (db.prepare('SELECT 1 FROM matrix_stream_events WHERE idempotency_key = ?').get(eventKey)) continue;
++    try {
++      db.prepare(`
++        INSERT INTO matrix_stream_internal_event_keys (logical_key, event_key, created_at)
++        VALUES (?, ?, ?)
++      `).run(logical, eventKey, createdAt);
++      return eventKey;
++    } catch (error) {
++      if (!/UNIQUE/.test(String(error?.message || ''))) throw error;
++      const raced = db.prepare('SELECT event_key FROM matrix_stream_internal_event_keys WHERE logical_key = ?').get(logical);
++      if (raced) return raced.event_key;
++    }
++  }
++  throw new Error('internal event key reservation failed');
++}
++
++function activeOwnerBinding(db, actorUserId, bindingId, workItemId) {
++  return db.prepare(`
++    SELECT 1
++    FROM matrix_actor_bindings b
++    JOIN users u ON u.id = b.user_id
++    JOIN matrix_work_items w ON w.id = ? AND w.owner_user_id = u.id
++    WHERE b.id = ? AND b.user_id = ? AND b.status = 'active' AND u.status = 'active'
++  `).get(workItemId, bindingId, actorUserId);
++}
++
++function requiredClaimInput(input) {
++  return {
++    actorUserId: positiveInteger(input.actorUserId, 'actor user id'),
++    bindingId: positiveInteger(input.bindingId, 'actor binding id')
++  };
++}
++
++function activeActorBinding(db, actorUserId, bindingId) {
++  return db.prepare(`
++    SELECT 1 FROM matrix_actor_bindings b
++    JOIN users u ON u.id = b.user_id
++    WHERE b.id = ? AND b.user_id = ? AND b.status = 'active' AND u.status = 'active'
++  `).get(bindingId, actorUserId);
++}
++
++function claimProjection(row) {
++  if (!row) return null;
++  return {
++    id: row.id,
++    notification_key: row.notification_key,
++    claim_token: row.owner_token,
++    delivery_state: row.delivery_state,
++    work_item_id: row.work_item_id,
++    job_id: row.job_id,
++    kind: row.kind,
++    original_preview: row.original_preview,
++    translation_status: row.translation_status,
++    translation_cn: row.translation_cn,
++    requirements_cn: row.requirements_cn,
++    work_item_state: row.work_item_state,
++    attempt_count: row.attempt_count
++  };
++}
++
++function claimNotification(db, input = {}) {
++  const identity = requiredClaimInput(input);
++  if (!activeActorBinding(db, identity.actorUserId, identity.bindingId)) throw new Error('notification claim not authorized');
++  const context = clockIso(input.clock);
++  const leaseMs = Math.min(300000, Math.max(1000, Number(input.leaseMs || 30000)));
++  const transaction = db.transaction(() => {
++    const expired = db.prepare(`
++      SELECT n.id FROM matrix_stream_notification_spool n
++      JOIN matrix_work_items w ON w.id = n.work_item_id
++      WHERE n.delivery_state = 'inflight' AND n.lease_expires_at <= ? AND w.owner_user_id = ?
++    `).all(context.iso, identity.actorUserId);
++    for (const row of expired) {
++      db.prepare(`
++        UPDATE matrix_stream_notification_spool
++        SET delivery_state = 'manual_review', finalized_token = owner_token, finalized_state = 'manual_review',
++            owner_token = '', lease_expires_at = '', last_error_class = 'claim_expired'
++        WHERE id = ? AND delivery_state = 'inflight' AND lease_expires_at <= ?
++      `).run(row.id, context.iso);
++    }
++    const row = db.prepare(`
++      SELECT n.* FROM matrix_stream_notification_spool n
++      JOIN matrix_work_items w ON w.id = n.work_item_id
++      JOIN matrix_actor_bindings b ON b.user_id = w.owner_user_id
++      JOIN users u ON u.id = w.owner_user_id
++      WHERE n.delivery_state = 'pending' AND n.kind = 'reply' AND w.stream_state = 'replied'
++        AND w.owner_user_id = ? AND b.id = ? AND b.status = 'active' AND u.status = 'active'
++      ORDER BY n.id LIMIT 1
++    `).get(identity.actorUserId, identity.bindingId);
++    if (!row) return null;
++    const token = crypto.randomUUID();
++    const leaseExpiresAt = new Date(context.ms + leaseMs).toISOString();
++    const changed = db.prepare(`
++      UPDATE matrix_stream_notification_spool
++      SET delivery_state = 'inflight', owner_token = ?, lease_expires_at = ?, attempt_count = attempt_count + 1,
++          finalized_token = '', finalized_state = ''
++      WHERE id = ? AND delivery_state = 'pending'
++    `).run(token, leaseExpiresAt, row.id);
++    if (changed.changes !== 1) return null;
++    return claimProjection(db.prepare('SELECT * FROM matrix_stream_notification_spool WHERE id = ?').get(row.id));
++  });
++  return transaction.immediate();
++}
++
++function authorizedNotification(db, input) {
++  const identity = requiredClaimInput(input);
++  const notificationId = positiveInteger(input.notificationId, 'notification id');
++  const claimToken = String(input.claimToken || '').trim();
++  if (!/^[0-9a-f-]{36}$/i.test(claimToken)) throw new Error('valid notification claim token required');
++  const row = db.prepare(`
++    SELECT n.*, w.stream_state AS current_work_state
++    FROM matrix_stream_notification_spool n
++    JOIN matrix_work_items w ON w.id = n.work_item_id
++    WHERE n.id = ?
++  `).get(notificationId);
++  if (!row || !activeOwnerBinding(db, identity.actorUserId, identity.bindingId, row.work_item_id)) throw new Error('notification claim not authorized');
++  return { identity, row, notificationId, claimToken };
++}
++
++function expireOrCancelClaim(db, claim, context) {
++  const expired = claim.row.delivery_state === 'inflight' && claim.row.lease_expires_at <= context.iso;
++  const cancelled = claim.row.kind !== 'reply' || claim.row.current_work_state !== 'replied';
++  if (claim.row.delivery_state === 'inflight' && claim.row.owner_token === claim.claimToken && (expired || cancelled)) {
++    db.prepare(`
++      UPDATE matrix_stream_notification_spool
++      SET delivery_state = 'manual_review', finalized_token = ?, finalized_state = 'manual_review',
++          owner_token = '', lease_expires_at = '', last_error_class = ?
++      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ?
++    `).run(claim.claimToken, expired ? 'claim_expired' : 'terminal_cancelled', claim.notificationId, claim.claimToken);
++    return 'manual_review';
++  }
++  return null;
++}
++
++function replayedState(claim) {
++  return claim.row.finalized_token === claim.claimToken && claim.row.finalized_state
++    ? claim.row.finalized_state : '';
++}
++
++function notificationStatus(db, input = {}) {
++  const context = clockIso(input.clock);
++  const transaction = db.transaction(() => {
++    const claim = authorizedNotification(db, input);
++    const terminal = expireOrCancelClaim(db, claim, context) || replayedState(claim);
++    if (terminal) return { notification_id: claim.notificationId, delivery_state: terminal, can_deliver: false };
++    if (claim.row.delivery_state !== 'inflight' || claim.row.owner_token !== claim.claimToken) {
++      throw new Error('notification claim mismatch');
++    }
++    return { notification_id: claim.notificationId, delivery_state: 'inflight', can_deliver: true };
++  });
++  return transaction.immediate();
++}
++
++function ackNotification(db, input = {}) {
++  const context = clockIso(input.clock);
++  const receiptId = String(input.receiptId || '').trim();
++  if (!receiptId || receiptId.length > 256 || /[\r\n\0]/.test(receiptId)) throw new Error('valid notification receipt required');
++  const transaction = db.transaction(() => {
++    const claim = authorizedNotification(db, input);
++    const terminal = expireOrCancelClaim(db, claim, context) || replayedState(claim);
++    if (terminal) return { notification_id: claim.notificationId, delivery_state: terminal };
++    if (claim.row.delivery_state !== 'inflight' || claim.row.owner_token !== claim.claimToken) throw new Error('notification claim mismatch');
++    db.prepare(`
++      UPDATE matrix_stream_notification_spool
++      SET delivery_state = 'delivered', receipt_id = ?, delivered_at = ?,
++          finalized_token = ?, finalized_state = 'delivered', owner_token = '', lease_expires_at = '', last_error_class = ''
++      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ? AND lease_expires_at > ?
++    `).run(receiptId, context.iso, claim.claimToken, claim.notificationId, claim.claimToken, context.iso);
++    return { notification_id: claim.notificationId, delivery_state: 'delivered' };
++  });
++  return transaction.immediate();
++}
++
++function nackNotification(db, input = {}) {
++  const outcome = String(input.outcome || '').trim();
++  if (!['failed', 'ambiguous'].includes(outcome)) throw new Error('valid notification outcome required');
++  const context = clockIso(input.clock);
++  const transaction = db.transaction(() => {
++    const claim = authorizedNotification(db, input);
++    const terminal = expireOrCancelClaim(db, claim, context) || replayedState(claim);
++    if (terminal) return { notification_id: claim.notificationId, delivery_state: terminal };
++    if (claim.row.delivery_state !== 'inflight' || claim.row.owner_token !== claim.claimToken) throw new Error('notification claim mismatch');
++    const nextState = outcome === 'failed' && claim.row.attempt_count < 3 ? 'pending' : 'manual_review';
++    db.prepare(`
++      UPDATE matrix_stream_notification_spool
++      SET delivery_state = ?, finalized_token = ?, finalized_state = ?, owner_token = '', lease_expires_at = '', last_error_class = ?
++      WHERE id = ? AND delivery_state = 'inflight' AND owner_token = ? AND lease_expires_at > ?
++    `).run(nextState, claim.claimToken, nextState,
++      outcome === 'failed' ? 'explicit_failure' : 'ambiguous_delivery', claim.notificationId, claim.claimToken, context.iso);
++    return { notification_id: claim.notificationId, delivery_state: nextState };
++  });
++  return transaction.immediate();
++}
++
++async function translationFor(message, options) {
++  const translateInbound = options.translateInbound
++    || createMatrixStreamText(options.textOptions || {}).translateInbound;
++  try {
++    const value = await translateInbound({
++      inboundText: cleanToken(message.cleaned_text || message.text_body),
++      publicEvidence: {}
++    });
++    if (value?.ok === false && value.reason === 'text_provider_unavailable') return { status: 'pending' };
++    const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).sort() : [];
++    if (JSON.stringify(keys) !== JSON.stringify([...TRANSLATION_KEYS].sort())
++        || TRANSLATION_KEYS.some(key => !cleanToken(value[key]))) return { status: 'pending' };
++    return { status: 'ready', value };
++  } catch (_) {
++    return { status: 'pending' };
++  }
++}
++
++function insertReviewEvent(db, messageId, candidates, context) {
++  const first = candidates[0];
++  db.prepare(`
++    INSERT INTO matrix_stream_events (
++      work_item_id, version_id, job_id, action, idempotency_key,
++      before_json, after_json, diagnostic, created_at
++    ) VALUES (?, ?, NULL, 'inbound_needs_review', ?, ?, ?, 'ambiguous_correlation', ?)
++  `).run(first.work_item_id, first.version_id, internalEventKey(db, `inbound-review:${messageId}`, context.iso),
++    '{}', JSON.stringify({ candidate_job_ids: candidates.map(row => row.id) }), context.iso);
++}
++
++function durableEmailRowId(db, message, messageId) {
++  const supplied = Number(message.email_row_id);
++  if (Number.isInteger(supplied) && supplied > 0) {
++    const row = db.prepare('SELECT id, message_id FROM email_messages WHERE id = ?').get(supplied);
++    if (row && normalizeMessageId(row.message_id) === messageId) return row.id;
++  }
++  return db.prepare('SELECT id FROM email_messages WHERE LOWER(message_id) = ? LIMIT 1').get(messageId)?.id || null;
++}
++
++async function correlateInbound(db, emailMessage = {}, options = {}) {
++  if (!db || typeof db.prepare !== 'function') throw new Error('correlation database required');
++  const messageId = normalizeMessageId(emailMessage.message_id);
++  if (!messageId) throw new Error('valid inbound message id required');
++  const prior = db.prepare('SELECT * FROM matrix_stream_inbound_links WHERE inbound_message_id = ?').get(messageId);
++  if (prior) return linkResult(prior);
++
++  const context = clockIso(options.clock);
++  const emailMessageRowId = durableEmailRowId(db, emailMessage, messageId);
++  const exact = exactCandidates(db, emailMessage);
++  const candidates = exact.length ? exact : fallbackCandidates(db, emailMessage, context);
++  if (candidates.length !== 1) {
++    const status = candidates.length > 1 ? 'needs_review' : 'unmatched';
++    const transaction = db.transaction(() => {
++      const replay = db.prepare('SELECT * FROM matrix_stream_inbound_links WHERE inbound_message_id = ?').get(messageId);
++      if (replay) return linkResult(replay);
++      if (status === 'needs_review') insertReviewEvent(db, messageId, candidates, context);
++      db.prepare(`
++        INSERT INTO matrix_stream_inbound_links (inbound_message_id, email_message_row_id, status, kind, work_item_id, job_id, created_at)
++        VALUES (?, ?, ?, '', NULL, NULL, ?)
++      `).run(messageId, emailMessageRowId, status, context.iso);
++      return { status };
++    });
++    return transaction.immediate();
++  }
++
++  const job = candidates[0];
++  const kind = classifyKind(emailMessage);
++  const preTranslationState = db.prepare('SELECT stream_state FROM matrix_work_items WHERE id = ?').get(job.work_item_id)?.stream_state;
++  const translation = kind === 'reply' && (STATE_PRIORITY.get(preTranslationState) || 0) <= (STATE_PRIORITY.get('replied') || 0)
++    ? await translationFor(emailMessage, options)
++    : { status: 'pending' };
++  const state = ({ reply: 'replied', bounce: 'bounced', refusal: 'refused', unsubscribe: 'suppressed', manual_stop: 'suppressed' })[kind];
++  const transaction = db.transaction(() => {
++    const replay = db.prepare('SELECT * FROM matrix_stream_inbound_links WHERE inbound_message_id = ?').get(messageId);
++    if (replay) return linkResult(replay);
++    const before = db.prepare('SELECT stream_state, version FROM matrix_work_items WHERE id = ?').get(job.work_item_id);
++    if (!before) throw new Error('correlated work item missing');
++    closeReplyCheck(db, { jobId: job.id, reason: kind === 'reply' ? 'reply' : kind, closedAt: context.iso });
++    const nextState = (STATE_PRIORITY.get(state) || 0) >= (STATE_PRIORITY.get(before.stream_state) || 0) ? state : before.stream_state;
++    db.prepare(`
++      UPDATE matrix_work_items
++      SET stream_state = ?, stage = CASE WHEN ? = 'suppressed' THEN 'suppressed' ELSE stage END,
++          version = version + 1, updated_at = ? WHERE id = ?
++    `).run(nextState, nextState, context.iso, job.work_item_id);
++    if (nextState !== 'replied') {
++      db.prepare(`
++        UPDATE matrix_stream_notification_spool
++        SET delivery_state = 'manual_review',
++            finalized_token = CASE WHEN delivery_state = 'inflight' THEN owner_token ELSE finalized_token END,
++            finalized_state = CASE WHEN delivery_state = 'inflight' THEN 'manual_review' ELSE finalized_state END,
++            owner_token = '', lease_expires_at = '', last_error_class = 'terminal_cancelled'
++        WHERE work_item_id = ? AND kind = 'reply' AND delivery_state IN ('pending','inflight')
++      `).run(job.work_item_id);
++    }
++    db.prepare(`
++      INSERT INTO matrix_stream_inbound_links (inbound_message_id, email_message_row_id, status, kind, work_item_id, job_id, created_at)
++      VALUES (?, ?, 'matched', ?, ?, ?, ?)
++    `).run(messageId, emailMessageRowId, kind, job.work_item_id, job.id, context.iso);
++    db.prepare(`
++      INSERT INTO matrix_stream_events (
++        work_item_id, version_id, job_id, action, idempotency_key,
++        before_json, after_json, diagnostic, created_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)
++    `).run(job.work_item_id, job.version_id, job.id, `inbound_${kind}`,
++      internalEventKey(db, `inbound-${kind}:${messageId}`, context.iso), JSON.stringify({ stream_state: before.stream_state }),
++      JSON.stringify({ stream_state: nextState, inbound_message_id: messageId, observed_kind: kind }), context.iso);
++
++    if (kind === 'reply' && nextState === 'replied') {
++      const ready = translation.status === 'ready';
++      const value = ready ? translation.value : {};
++      db.prepare(`
++        INSERT INTO matrix_stream_notification_spool (
++          inbound_message_id, work_item_id, job_id, kind, original_preview,
++          translation_status, translation_cn, requirements_cn, suggested_subject,
++          suggested_body_en, suggested_body_cn, work_item_state, retry_available,
++          notification_key, delivery_state, created_at
++        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
++      `).run(messageId, job.work_item_id, job.id, kind,
++        safePreview(emailMessage.cleaned_text || emailMessage.text_body, 800),
++        ready ? 'ready' : 'pending',
++        ready ? safePreview(value.translation_cn, 800) : '',
++        ready ? safePreview(value.requirements_cn, 500) : '',
++        ready ? safePreview(value.suggested_subject, 200) : '',
++        ready ? safePreview(value.suggested_body_en, 1200) : '',
++        ready ? safePreview(value.suggested_body_cn, 1200) : '',
++        nextState, ready ? 0 : 1, crypto.randomUUID(), context.iso);
++    }
++    return { status: 'matched', workItemId: job.work_item_id, jobId: job.id, kind };
++  });
++  return transaction.immediate();
++}
++
++function positiveInteger(value, label) {
++  const number = Number(value);
++  if (!Number.isInteger(number) || number < 1) throw new Error(`${label} required`);
++  return number;
++}
++
++function startReplyDraft(db, input = {}) {
++  if (!db || typeof db.prepare !== 'function') throw new Error('correlation database required');
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const bindingId = positiveInteger(input.bindingId, 'actor binding id');
++  const notificationId = positiveInteger(input.notificationId, 'notification id');
++  const context = clockIso(input.clock);
++  const transaction = db.transaction(() => {
++    const row = db.prepare(`
++      SELECT n.*, w.owner_user_id, w.stage, w.stream_state, j.version_id,
++             v.recipient_email
++      FROM matrix_stream_notification_spool n
++      JOIN matrix_work_items w ON w.id = n.work_item_id
++      JOIN matrix_stream_jobs j ON j.id = n.job_id
++      JOIN matrix_stream_versions v ON v.id = j.version_id
++      WHERE n.id = ?
++    `).get(notificationId);
++    if (!row) throw new Error('reply notification not found');
++    if (!activeOwnerBinding(db, actorUserId, bindingId, row.work_item_id)) throw new Error('reply draft not authorized');
++    if (row.kind !== 'reply' || row.stream_state !== 'replied') throw new Error('reply notification is not draft eligible');
++    if (row.translation_status !== 'ready') throw new Error('reply draft translation pending');
++    const result = { notification_id: notificationId, work_item_id: row.work_item_id, state: 'draft_pending' };
++    if (row.reply_draft_id) {
++      const existing = db.prepare('SELECT id, status FROM crm_reply_drafts WHERE id = ? AND matrix_work_item_id = ?').get(row.reply_draft_id, row.work_item_id);
++      if (!existing || existing.status !== 'draft_pending') throw new Error('reply draft state conflict');
++      return result;
++    }
++    const inserted = db.prepare(`
++      INSERT INTO crm_reply_drafts (
++        source_type, reply_channel, recipient_contact, email_subject,
++        draft_text_en, draft_text_cn, draft_summary_cn, generation_method,
++        status, missing_info_json, matrix_work_item_id, created_by, updated_by,
++        created_at, updated_at
++      ) VALUES ('matrix_stream_inbound', 'email', ?, ?, ?, ?, ?, ?, 'draft_pending', ?, ?, ?, ?, ?, ?)
++    `).run(row.recipient_email, row.suggested_subject, row.suggested_body_en,
++      row.suggested_body_cn, row.requirements_cn,
++      'validated_provider', '[]',
++      row.work_item_id, String(actorUserId), String(actorUserId), context.iso, context.iso);
++    const replyDraftId = Number(inserted.lastInsertRowid);
++    db.prepare('UPDATE matrix_stream_notification_spool SET reply_draft_id = ? WHERE id = ? AND reply_draft_id IS NULL')
++      .run(replyDraftId, notificationId);
++    db.prepare(`
++      UPDATE matrix_work_items
++      SET stage = 'draft_pending', next_action = 'review_reply_draft', version = version + 1, updated_at = ?
++      WHERE id = ?
++    `).run(context.iso, row.work_item_id);
++    db.prepare(`
++      INSERT INTO matrix_stream_events (
++        work_item_id, version_id, job_id, actor_user_id, action, idempotency_key,
++        before_json, after_json, diagnostic, created_at
++      ) VALUES (?, ?, ?, ?, 'reply_draft_started', ?, ?, ?, '', ?)
++    `).run(row.work_item_id, row.version_id, row.job_id, actorUserId,
++      internalEventKey(db, `reply-draft:${notificationId}`, context.iso),
++      JSON.stringify({ stage: row.stage, stream_state: row.stream_state }),
++      JSON.stringify({ stage: 'draft_pending', stream_state: row.stream_state, reply_draft_id: replyDraftId }),
++      context.iso);
++    return result;
++  });
++  return transaction.immediate();
++}
++
++async function retryInboundTranslation(db, input = {}) {
++  if (!db || typeof db.prepare !== 'function') throw new Error('correlation database required');
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const notificationId = positiveInteger(input.notificationId, 'notification id');
++  const context = clockIso(input.clock);
++  const bindingId = positiveInteger(input.bindingId, 'actor binding id');
++  const row = db.prepare(`
++    SELECT n.*, w.owner_user_id, w.stream_state, l.email_message_row_id, e.cleaned_text, e.text_body
++    FROM matrix_stream_notification_spool n
++    JOIN matrix_work_items w ON w.id = n.work_item_id
++    JOIN matrix_stream_inbound_links l ON l.inbound_message_id = n.inbound_message_id
++    LEFT JOIN email_messages e ON e.id = l.email_message_row_id
++    WHERE n.id = ?
++  `).get(notificationId);
++  if (!row) throw new Error('reply notification not found');
++  if (!activeOwnerBinding(db, actorUserId, bindingId, row.work_item_id)) throw new Error('translation retry not authorized');
++  if (row.kind !== 'reply' || row.stream_state !== 'replied') throw new Error('reply notification is not retry eligible');
++  if (!['inflight', 'delivered', 'manual_review'].includes(row.delivery_state)) throw new Error('reply notification is not delivery eligible for retry');
++  const existingReady = db.prepare(`
++    SELECT id FROM matrix_stream_notification_spool
++    WHERE inbound_message_id = ? AND generation > ? AND translation_status = 'ready'
++    ORDER BY generation DESC LIMIT 1
++  `).get(row.inbound_message_id, row.generation);
++  if (existingReady) return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
++  if (row.translation_status === 'ready') {
++    return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
++  }
++  const authoritativeText = String(row.cleaned_text || row.text_body || '').trim();
++  if (!row.email_message_row_id || !authoritativeText) {
++    return { notification_id: notificationId, translation_status: 'pending', retry_available: true };
++  }
++  const translation = await translationFor({ cleaned_text: authoritativeText }, input);
++  if (translation.status !== 'ready') {
++    return { notification_id: notificationId, translation_status: 'pending', retry_available: true };
++  }
++  const transaction = db.transaction(() => {
++    const current = db.prepare(`
++      SELECT n.*, w.owner_user_id, w.stream_state
++      FROM matrix_stream_notification_spool n
++      JOIN matrix_work_items w ON w.id = n.work_item_id
++      WHERE n.id = ?
++    `).get(notificationId);
++    if (!current || !activeOwnerBinding(db, actorUserId, bindingId, current.work_item_id)) throw new Error('translation retry not authorized');
++    if (current.kind !== 'reply' || current.stream_state !== 'replied') throw new Error('reply notification is not retry eligible');
++    if (!['inflight', 'delivered', 'manual_review'].includes(current.delivery_state)) throw new Error('reply notification is not delivery eligible for retry');
++    const readyGeneration = db.prepare(`
++      SELECT id FROM matrix_stream_notification_spool
++      WHERE inbound_message_id = ? AND generation > ? AND translation_status = 'ready'
++      ORDER BY generation DESC LIMIT 1
++    `).get(current.inbound_message_id, current.generation);
++    if (readyGeneration) {
++      return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
++    }
++    if (current.translation_status === 'ready') {
++      return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
++    }
++    const value = translation.value;
++    const generation = Number(db.prepare(`
++      SELECT COALESCE(MAX(generation), 0) + 1 AS generation
++      FROM matrix_stream_notification_spool WHERE inbound_message_id = ?
++    `).get(current.inbound_message_id).generation);
++    db.prepare(`
++      INSERT INTO matrix_stream_notification_spool (
++        inbound_message_id, work_item_id, job_id, kind, original_preview,
++        translation_status, translation_cn, requirements_cn, suggested_subject,
++        suggested_body_en, suggested_body_cn, work_item_state, retry_available,
++        notification_key, delivery_state, generation, supersedes_notification_id, created_at
++      ) VALUES (?, ?, ?, 'reply', ?, 'ready', ?, ?, ?, ?, ?, 'replied', 0, ?, 'pending', ?, ?, ?)
++    `).run(current.inbound_message_id, current.work_item_id, current.job_id, current.original_preview,
++      safePreview(value.translation_cn, 800), safePreview(value.requirements_cn, 500),
++      safePreview(value.suggested_subject, 200), safePreview(value.suggested_body_en, 1200),
++      safePreview(value.suggested_body_cn, 1200), crypto.randomUUID(), generation, current.id, context.iso);
++    db.prepare(`
++      INSERT INTO matrix_stream_events (
++        work_item_id, job_id, actor_user_id, action, idempotency_key,
++        before_json, after_json, diagnostic, created_at
++      ) VALUES (?, ?, ?, 'inbound_translation_ready', ?,
++        '{"translation_status":"pending"}', '{"translation_status":"ready"}', '', ?)
++    `).run(current.work_item_id, current.job_id, actorUserId,
++      internalEventKey(db, `inbound-translation-ready:${current.inbound_message_id}`, context.iso), context.iso);
++    return { notification_id: notificationId, translation_status: 'ready', retry_available: false };
++  });
++  return transaction.immediate();
++}
++
++module.exports = {
++  correlateInbound,
++  startReplyDraft,
++  retryInboundTranslation,
++  claimNotification,
++  ackNotification,
++  nackNotification,
++  notificationStatus,
++  classifyKind,
++  normalizedSubject,
++  normalizeMessageId,
++  emailAddresses,
++  safePreview
++};
+diff --git a/src/services/matrixStreamDelivery.js b/src/services/matrixStreamDelivery.js
+index e810ddf..7fed717 100644
+--- a/src/services/matrixStreamDelivery.js
++++ b/src/services/matrixStreamDelivery.js
+@@ -354,24 +354,24 @@ function createMatrixStreamDelivery({
+       const recipientDomain = domainIdentity(normalizedEmail(gated.version.recipient_email).split('@')[1]);
+       if (!recipientDomain) throw new Error('valid recipient reservation domain required');
+       reserveCapacity(recipientDomain, context);
+       const ownerToken = crypto.randomUUID();
+       const leaseExpiresAt = new Date(context.ms + timing.leaseMs).toISOString();
+       const placeholder = `<pending-${crypto.createHash('sha256').update(`${input.idempotencyKey}:${fingerprint}`).digest('hex')}@invalid>`;
+       const inserted = db.prepare(`
+         INSERT INTO matrix_stream_jobs (
+           work_item_id, version_id, idempotency_key, content_hash, message_id, state,
+           attempt_count, error_class, redacted_diagnostic, created_by, owner_token,
+-          lease_expires_at, recipient_domain, reservation_day, created_at, updated_at
+-        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, '', '', ?, ?, ?, ?, ?, ?, ?)
++          lease_expires_at, recipient_domain, sender_email, reservation_day, created_at, updated_at
++        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, '', '', ?, ?, ?, ?, ?, ?, ?, ?)
+       `).run(input.workItemId, input.versionId, input.idempotencyKey, input.expectedContentHash,
+-        placeholder, input.actorUserId, ownerToken, leaseExpiresAt, recipientDomain,
++        placeholder, input.actorUserId, ownerToken, leaseExpiresAt, recipientDomain, from,
+         shanghaiDay(context.ms), context.iso, context.iso);
+       const jobId = Number(inserted.lastInsertRowid);
+       const messageId = `<matrix-stream-${jobId}-${input.expectedContentHash.slice(0, 20)}@${domain}>`;
+       db.prepare(`
+         UPDATE matrix_stream_jobs SET message_id = ?, state = 'sending', attempt_count = 1, updated_at = ?
+         WHERE id = ? AND state = 'pending'
+       `).run(messageId, context.iso, jobId);
+       const eventKeys = reserveEventKeys(jobId, fingerprint, ownerToken, context);
+       db.prepare(`
+         INSERT INTO matrix_stream_events (
+diff --git a/src/services/matrixStreamFollowup.js b/src/services/matrixStreamFollowup.js
+index ee89e19..a9f46ee 100644
+--- a/src/services/matrixStreamFollowup.js
++++ b/src/services/matrixStreamFollowup.js
+@@ -82,19 +82,17 @@ function closeReplyCheck(db, input = {}) {
+   const close = db.transaction(() => {
+     const row = db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE originating_job_id = ?').get(jobId);
+     if (!row) throw new Error('reply check not found');
+     if (row.state === 'active') {
+       db.prepare(`
+         UPDATE matrix_stream_reply_checks
+         SET due_at = NULL, state = 'closed', terminal_reason = ?, closed_at = ?
+         WHERE id = ? AND state = 'active'
+       `).run(reason, closedAt, row.id);
+       syncWorkItemDue(db, row.work_item_id, closedAt);
+-    } else if (row.terminal_reason !== reason) {
+-      throw new Error('reply check already closed with another terminal reason');
+     }
+     return db.prepare('SELECT * FROM matrix_stream_reply_checks WHERE id = ?').get(row.id);
+   });
+   return close.immediate();
+ }
+ 
+ module.exports = { thirdWeekdayAtTen, scheduleReplyCheck, closeReplyCheck };

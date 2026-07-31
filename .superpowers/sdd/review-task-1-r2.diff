@@ -1,0 +1,815 @@
+# Review package: 9106535..f40d2a9
+
+## Commits
+f40d2a9 fix: preserve matrix stream approval evidence
+2dbf508 feat: add matrix stream review state
+
+## Files changed
+ frontend-next/src/components/Admin.tsx  |  25 +++++-
+ scripts/smoke-test.js                   |   8 +-
+ scripts/test-admin-access-regression.js |   8 ++
+ scripts/test-matrix-stream-review.js    | 155 ++++++++++++++++++++++++++++++++
+ shared/permissions-model.json           |  37 +++++---
+ src/db.js                               | 154 +++++++++++++++++++++++++++++++
+ src/lib/permissions.js                  |   5 +-
+ 7 files changed, 374 insertions(+), 18 deletions(-)
+
+## Diff
+diff --git a/frontend-next/src/components/Admin.tsx b/frontend-next/src/components/Admin.tsx
+index 2ba2e7a..369cdac 100644
+--- a/frontend-next/src/components/Admin.tsx
++++ b/frontend-next/src/components/Admin.tsx
+@@ -39,20 +39,21 @@ export default function Admin() {
+   const [pkgConfig, setPkgConfig] = useState<any>(null);
+   const [pkgBuilding, setPkgBuilding] = useState(false);
+   const [pkgMsg, setPkgMsg] = useState('');
+   const [userSearchQuery, setUserSearchQuery] = useState('');
+   const [userRoleFilter, setUserRoleFilter] = useState('');
+   const [showUserModal, setShowUserModal] = useState<'new' | 'edit' | null>(null);
+   const [editingUser, setEditingUser] = useState<any>(null);
+   const [modalLoading, setModalLoading] = useState(false);
+   const [userForm, setUserForm] = useState({ username: '', password: '', fullName: '', role: 'ai_sales' });
+   const [modulePerms, setModulePerms] = useState<Record<string, boolean>>({});
++  const [matrixSend, setMatrixSend] = useState(false);
+ 
+   const ALL_MODULES: { key: string; label: string }[] = [
+     { key: 'orders', label: '订单中心' },
+     { key: 'workorder', label: '开单管理' },
+     { key: 'board', label: '生产看板' },
+     { key: 'cost', label: '成本核算' },
+     { key: 'stats', label: '统计分析' },
+     { key: 'admin', label: '系统管理' },
+     { key: 'crm', label: '外贸客户管理' },
+   ];
+@@ -104,21 +105,21 @@ export default function Admin() {
+     <div className="space-y-6">
+       <div className="flex flex-wrap items-center justify-between gap-4">
+         <div className="flex flex-wrap gap-3">
+           <input type="text" value={userSearchQuery} onChange={e => setUserSearchQuery(e.target.value)} placeholder="搜账号/姓名" className="h-9 px-3 border border-slate-200 rounded-xl text-[13px] bg-white outline-none w-64" />
+           <select value={userRoleFilter} onChange={e => setUserRoleFilter(e.target.value)} className="h-9 px-3 border border-slate-200 rounded-xl text-[13px] bg-white outline-none">
+             <option value="">全部角色</option>
+             {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+           </select>
+           <button onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="搜账号/姓名"]')?.focus()} className="h-9 px-4 bg-slate-900 text-white rounded-xl text-[13px] font-bold">搜索</button>
+         </div>
+-        <button onClick={() => { setEditingUser(null); setUserForm({ username: '', password: '', fullName: '', role: 'ai_sales' }); setModulePerms({ ...getDefaultRoleModules('ai_sales') }); setShowUserModal('new'); }} className="h-9 px-4 bg-indigo-600 text-white rounded-xl text-[13px] font-bold flex items-center gap-2">
++        <button onClick={() => { setEditingUser(null); setUserForm({ username: '', password: '', fullName: '', role: 'ai_sales' }); setModulePerms({ ...getDefaultRoleModules('ai_sales') }); setMatrixSend(false); setShowUserModal('new'); }} className="h-9 px-4 bg-indigo-600 text-white rounded-xl text-[13px] font-bold flex items-center gap-2">
+           <UserPlus className="w-4 h-4" /> 新增用户
+         </button>
+       </div>
+ 
+       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+         <div className="overflow-x-auto">
+           <table className="w-full text-left whitespace-nowrap">
+             <thead>
+               <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-black uppercase text-slate-500 tracking-wider">
+                 <th className="py-3 px-4">登录账号 / 姓名</th>
+@@ -178,20 +179,21 @@ export default function Admin() {
+                          className="p-1.5 text-amber-600 hover:bg-amber-50 rounded"
+                        >
+                          <Users className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => {
+                          const modules = u.permissions?.modules || {};
+                          const hasModules = Object.keys(modules).length > 0;
+                          setEditingUser(u);
+                          setUserForm({ username: u.username, password: '', fullName: u.full_name || '', role: u.role || 'ai_sales' });
+                          setModulePerms(hasModules ? { ...modules } : { ...getDefaultRoleModules(u.role || 'ai_sales') });
++                         setMatrixSend(!!u.permissions?.capabilities?.matrixSend);
+                          setShowUserModal('edit');
+                        }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded"><Edit className="w-4 h-4" /></button>
+                        <button onClick={async () => {
+                          if (!confirm(`确认删除用户 ${u.username}？`)) return;
+                          try {
+                            await mockService.deleteUser(u.id);
+                            window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: `用户 ${u.username} 已删除` } }));
+                            const data = await mockService.getUsers();
+                            setUsers(Array.isArray(data) ? data : []);
+                          } catch (err: any) {
+@@ -255,35 +257,54 @@ export default function Admin() {
+                         type="checkbox"
+                         checked={!!modulePerms[m.key]}
+                         onChange={e => setModulePerms(p => ({...p, [m.key]: e.target.checked}))}
+                         className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                       />
+                       <span className="text-[13px] font-medium text-slate-700 group-hover:text-indigo-600 transition-colors">{m.label}</span>
+                     </label>
+                   ))}
+                 </div>
+               </div>
++              <label className="flex items-center gap-2 cursor-pointer group">
++                <input
++                  type="checkbox"
++                  checked={matrixSend}
++                  onChange={e => setMatrixSend(e.target.checked)}
++                  className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
++                />
++                <span className="text-[13px] font-medium text-slate-700 group-hover:text-indigo-600 transition-colors">Matrix Stream 发送确认</span>
++              </label>
+             </div>
+             <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-end gap-3">
+               <button onClick={() => setShowUserModal(null)} className="h-10 px-4 border border-slate-200 rounded-xl text-sm font-bold text-slate-600">取消</button>
+               <button disabled={modalLoading} onClick={async () => {
+                 setModalLoading(true);
+                 try {
+                   if (showUserModal === 'new') {
+                     if (!userForm.username || !userForm.password || !userForm.fullName) {
+                       window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'warning', message: '请填写完整信息' } }));
+                       setModalLoading(false); return;
+                     }
+                     await mockService.registerUser(userForm.username, userForm.password, userForm.fullName);
+                     window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户已创建，等待审批' } }));
+                   } else if (editingUser) {
+-                    await mockService.updateUserPermissions(editingUser.id, { role: userForm.role, permissions: { modules: modulePerms } });
++                    await mockService.updateUserPermissions(editingUser.id, {
++                      role: userForm.role,
++                      permissions: {
++                        ...(editingUser.permissions || {}),
++                        modules: modulePerms,
++                        capabilities: {
++                          ...(editingUser.permissions?.capabilities || {}),
++                          matrixSend,
++                        },
++                      },
++                    });
+                     window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'success', message: '用户角色和权限已更新' } }));
+                   }
+                   setShowUserModal(null);
+                   const data = await mockService.getUsers();
+                   setUsers(Array.isArray(data) ? data : []);
+                 } catch (err: any) {
+                   window.dispatchEvent(new CustomEvent('app-notification', { detail: { type: 'error', message: err?.message || '操作失败' } }));
+                 }
+                 setModalLoading(false);
+               }} className="h-10 px-4 bg-indigo-600 text-white rounded-xl text-sm font-black disabled:opacity-60">
+diff --git a/scripts/smoke-test.js b/scripts/smoke-test.js
+index 6c33a29..b804ba2 100644
+--- a/scripts/smoke-test.js
++++ b/scripts/smoke-test.js
+@@ -292,21 +292,21 @@ async function main() {
+   await login('admin', 'wrong-password', 401);
+   const adminLogin = await login('admin', adminPwd);
+   assert(adminLogin?.token, 'admin login should return token');
+   const adminToken = adminLogin.token;
+ 
+   await assertForeignCostingAssistantFlow(adminToken);
+ 
+   const me = await httpJson('/api/auth/me', { token: adminToken });
+   assert.strictEqual(me.user.username, 'admin');
+   assert.strictEqual(me.user.role, 'super_admin');
+-  assert.deepStrictEqual(me.user.permissions, { all: true });
++  assert.deepStrictEqual(me.user.permissions, { all: true, capabilities: { matrixSend: false } });
+ 
+   await httpJson('/api/orders', { expectedStatus: 401 });
+ 
+   await httpJson('/api/auth/register', {
+     method: 'POST',
+     body: { username: 'chenyongjie', password: 'guard123', fullName: '成本守护' }
+   });
+   await httpJson('/api/auth/register', {
+     method: 'POST',
+     body: { username: 'worker_print_guard', password: 'guard123', fullName: '印刷守护' }
+@@ -378,21 +378,22 @@ async function main() {
+     body: { role: 'freight_user' }
+   });
+ 
+   const costLogin = await login('chenyongjie', 'guard123');
+   assert(costLogin?.token, 'cost user login should return token');
+   const scopedSalesLogin = await login('sales_scope_guard', 'guard123');
+   const scopedSalesMe = await httpJson('/api/auth/me', { token: scopedSalesLogin.token });
+   assert.deepStrictEqual(scopedSalesMe.user.permissions, {
+     modules: { orders: true, workorder: true, board: false, cost: false, stats: false, admin: false, crm: false },
+     ordersStages: ['印刷', '复膜', '制袋', '发货', '完成', '全部'],
+-    boardStages: []
++    boardStages: [],
++    capabilities: { matrixSend: false }
+   });
+ 
+   const crmAdminLogin = await login('crm_admin_guard', 'guard123');
+   assert(crmAdminLogin?.token, 'crm admin login should return token');
+   const crmAdminMe = await httpJson('/api/auth/me', { token: crmAdminLogin.token });
+   assert.strictEqual(crmAdminMe.user.role, 'foreign_trade_crm_admin');
+   assert.strictEqual(crmAdminMe.user.permissions.modules.crm, true, 'crm admin role should have crm module');
+   assert.strictEqual(crmAdminMe.user.permissions.modules.orders, true, 'crm admin role should retain basic order visibility');
+   const boundaryOrder = await httpJson('/api/orders', {
+     method: 'POST',
+@@ -1730,21 +1731,22 @@ async function main() {
+     modules: {
+       orders: true,
+       workorder: false,
+       board: true,
+       cost: false,
+       stats: false,
+       admin: false,
+       crm: false
+     },
+     ordersStages: ['印刷'],
+-    boardStages: ['印刷']
++    boardStages: ['印刷'],
++    capabilities: { matrixSend: false }
+   });
+   const workerOrders = await httpJson('/api/orders', { token: workerLogin.token });
+   assert(workerOrders.some(row => Number(row.id) === orderId), 'worker should see assigned order');
+ 
+   const nextRes = await httpJson(`/api/orders/${orderId}/next`, {
+     method: 'PATCH',
+     token: workerLogin.token,
+     body: { source: '1号印刷机', qty: 1200 }
+   });
+   assert.strictEqual(nextRes.ok, true);
+diff --git a/scripts/test-admin-access-regression.js b/scripts/test-admin-access-regression.js
+new file mode 100644
+index 0000000..4467be0
+--- /dev/null
++++ b/scripts/test-admin-access-regression.js
+@@ -0,0 +1,8 @@
++const assert = require('node:assert');
++const { normalizePermissions } = require('../src/lib/permissions');
++
++assert.strictEqual(normalizePermissions('foreign_trade_crm_admin', {}).capabilities.matrixSend, false);
++assert.strictEqual(normalizePermissions('foreign_trade_crm_admin', { capabilities: { matrixSend: true } }).capabilities.matrixSend, true);
++assert.strictEqual(normalizePermissions('super_admin', { capabilities: { matrixSend: true } }).capabilities.matrixSend, true);
++assert.strictEqual(normalizePermissions('worker', { capabilities: { matrixSend: true } }).capabilities.matrixSend, false);
++assert.strictEqual(normalizePermissions('worker', { all: true }).capabilities.matrixSend, true);
+diff --git a/scripts/test-matrix-stream-review.js b/scripts/test-matrix-stream-review.js
+new file mode 100644
+index 0000000..87ea829
+--- /dev/null
++++ b/scripts/test-matrix-stream-review.js
+@@ -0,0 +1,155 @@
++const assert = require('node:assert');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++
++const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-review-'));
++process.env.DB_PATH = path.join(root, 'app.db');
++
++let db;
++
++try {
++  const LegacyDatabase = require('better-sqlite3');
++  const legacyDb = new LegacyDatabase(process.env.DB_PATH);
++  legacyDb.exec(`
++    CREATE TABLE matrix_stream_versions (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      work_item_id INTEGER NOT NULL,
++      crm_draft_id INTEGER,
++      revision INTEGER NOT NULL,
++      recipient_email TEXT NOT NULL,
++      recipient_source_url TEXT NOT NULL,
++      recipient_verified_at TEXT NOT NULL,
++      subject TEXT NOT NULL,
++      body_en TEXT NOT NULL,
++      body_cn TEXT NOT NULL,
++      strategy_summary TEXT NOT NULL DEFAULT '',
++      source_snapshot_json TEXT NOT NULL DEFAULT '{}',
++      content_hash TEXT NOT NULL,
++      quality_score INTEGER NOT NULL DEFAULT 0,
++      quality_json TEXT NOT NULL DEFAULT '{}',
++      status TEXT NOT NULL CHECK(status IN ('draft','approved','superseded')),
++      created_by INTEGER NOT NULL,
++      approved_by INTEGER,
++      approved_at TEXT,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      UNIQUE(work_item_id, revision)
++    );
++    CREATE TRIGGER trg_matrix_stream_versions_approved_content_immutable
++    BEFORE UPDATE ON matrix_stream_versions
++    WHEN OLD.status = 'approved' AND NEW.subject IS NOT OLD.subject
++    BEGIN
++      SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
++    END;
++  `);
++  legacyDb.close();
++
++  const database = require('../src/db');
++  db = database.db;
++  database.initDb();
++
++  for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events']) {
++    assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
++  }
++
++  const workColumns = db.prepare('PRAGMA table_info(matrix_work_items)').all().map(row => row.name);
++  assert(workColumns.includes('stream_state'));
++  assert(workColumns.includes('current_stream_version_id'));
++
++  const draftColumns = db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(row => row.name);
++  assert(draftColumns.includes('matrix_work_item_id'));
++
++  const indexColumns = indexName => db.prepare(`PRAGMA index_info(${indexName})`).all().map(row => row.name);
++  assert.deepStrictEqual(indexColumns('idx_matrix_stream_versions_work_revision'), ['work_item_id', 'revision']);
++  assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_state_updated'), ['state', 'updated_at']);
++  assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_message_id'), ['message_id']);
++
++  const now = '2026-07-18T00:00:00.000Z';
++  const userId = Number(db.prepare(`
++    INSERT INTO users (username, password, role, status, created_at)
++    VALUES ('matrix_stream_review_guard', 'unused', 'super_admin', 'active', ?)
++  `).run(now).lastInsertRowid);
++  const workItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++    VALUES (900001, ?, ?, ?)
++  `).run(userId, now, now).lastInsertRowid);
++
++  const insertVersion = db.prepare(`
++    INSERT INTO matrix_stream_versions (
++      work_item_id, revision, recipient_email, recipient_source_url,
++      recipient_verified_at, subject, body_en, body_cn, content_hash,
++      status, created_by, approved_by, approved_at, created_at, updated_at
++    ) VALUES (?, ?, ?, 'https://example.test/source', ?, ?, 'Body EN', '正文', ?, ?, ?, ?, ?, ?, ?)
++  `);
++  const approvedVersionId = Number(insertVersion.run(
++    workItemId, 1, 'recipient@example.test', now, 'Approved subject',
++    'approved-hash', 'approved', userId, userId, now, now, now
++  ).lastInsertRowid);
++  const supersededVersionId = Number(insertVersion.run(
++    workItemId, 2, 'recipient@example.test', now, 'Superseded subject',
++    'superseded-hash', 'approved', userId, userId, now, now, now
++  ).lastInsertRowid);
++
++  assert.throws(
++    () => db.prepare('UPDATE matrix_stream_versions SET subject=? WHERE id=?').run('Changed', approvedVersionId),
++    /immutable/
++  );
++  db.prepare("UPDATE matrix_stream_versions SET status='superseded', updated_at=? WHERE id=?").run(now, supersededVersionId);
++  assert.throws(
++    () => db.prepare('UPDATE matrix_stream_versions SET body_en=? WHERE id=?').run('Changed after supersession', supersededVersionId),
++    /immutable/
++  );
++  assert.throws(
++    () => db.prepare('DELETE FROM matrix_stream_versions WHERE id=?').run(supersededVersionId),
++    /immutable/
++  );
++  assert.throws(
++    () => db.prepare("UPDATE matrix_stream_versions SET status='draft' WHERE id=?").run(supersededVersionId),
++    /lifecycle/
++  );
++  assert.throws(
++    () => db.prepare('DELETE FROM matrix_stream_versions WHERE id=?').run(approvedVersionId),
++    /immutable/
++  );
++
++  assert.throws(
++    () => insertVersion.run(
++      workItemId, 1, 'duplicate@example.test', now, 'Duplicate revision',
++      'duplicate-hash', 'draft', userId, null, null, now, now
++    ),
++    /UNIQUE constraint failed: matrix_stream_versions.work_item_id, matrix_stream_versions.revision/
++  );
++
++  const eventId = Number(db.prepare(`
++    INSERT INTO matrix_stream_events (work_item_id, version_id, action, idempotency_key, created_at)
++    VALUES (?, ?, 'approved', 'event-key-1', ?)
++  `).run(workItemId, approvedVersionId, now).lastInsertRowid);
++  assert.throws(
++    () => db.prepare('UPDATE matrix_stream_events SET action=? WHERE id=?').run('changed', eventId),
++    /append-only/
++  );
++  assert.throws(
++    () => db.prepare('DELETE FROM matrix_stream_events WHERE id=?').run(eventId),
++    /append-only/
++  );
++
++  const insertJob = db.prepare(`
++    INSERT INTO matrix_stream_jobs (
++      work_item_id, version_id, idempotency_key, content_hash, message_id,
++      state, created_by, created_at, updated_at
++    ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
++  `);
++  insertJob.run(workItemId, approvedVersionId, 'job-key-1', 'approved-hash', 'message-1', userId, now, now);
++  assert.throws(
++    () => insertJob.run(workItemId, approvedVersionId, 'job-key-1', 'approved-hash', 'message-2', userId, now, now),
++    /UNIQUE constraint failed: matrix_stream_jobs.idempotency_key/
++  );
++  assert.throws(
++    () => insertJob.run(workItemId, approvedVersionId, 'job-key-2', 'approved-hash', 'message-1', userId, now, now),
++    /UNIQUE constraint failed: matrix_stream_jobs.message_id/
++  );
++} finally {
++  if (db?.open) db.close();
++  fs.rmSync(root, { recursive: true, force: true });
++}
+diff --git a/shared/permissions-model.json b/shared/permissions-model.json
+index f9d0115..0bf3d69 100644
+--- a/shared/permissions-model.json
++++ b/shared/permissions-model.json
+@@ -1,151 +1,164 @@
+ {
+   "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin", "crm"],
++  "capabilityKeys": ["matrixSend"],
+   "defaultsByRole": {
+     "super_admin": {
+-      "all": true
++      "all": true,
++      "capabilities": { "matrixSend": false }
+     },
+     "manager": {
+       "modules": {
+         "orders": true,
+         "workorder": true,
+         "board": true,
+         "cost": true,
+         "stats": true,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+-      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"]
++      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
++      "capabilities": { "matrixSend": false }
+     },
+     "foreign_trade_crm_admin": {
+       "modules": {
+         "orders": true,
+         "workorder": true,
+         "board": false,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": true
+       },
+       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+-      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"]
++      "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
++      "capabilities": { "matrixSend": false }
+     },
+     "costing_user": {
+       "modules": {
+         "orders": false,
+         "workorder": false,
+         "board": false,
+         "cost": true,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": [],
+-      "boardStages": []
++      "boardStages": [],
++      "capabilities": { "matrixSend": false }
+     },
+     "freight_user": {
+       "modules": {
+         "orders": false,
+         "workorder": false,
+         "board": false,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": [],
+-      "boardStages": []
++      "boardStages": [],
++      "capabilities": { "matrixSend": false }
+     },
+     "ai_sales": {
+       "modules": {
+         "orders": true,
+         "workorder": true,
+         "board": false,
+         "cost": true,
+         "stats": true,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+-      "boardStages": []
++      "boardStages": [],
++      "capabilities": { "matrixSend": false }
+     },
+     "worker_print": {
+       "modules": {
+         "orders": true,
+         "workorder": false,
+         "board": true,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["印刷"],
+-      "boardStages": ["印刷"]
++      "boardStages": ["印刷"],
++      "capabilities": { "matrixSend": false }
+     },
+     "worker_film": {
+       "modules": {
+         "orders": true,
+         "workorder": false,
+         "board": true,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["复膜"],
+-      "boardStages": ["复膜"]
++      "boardStages": ["复膜"],
++      "capabilities": { "matrixSend": false }
+     },
+     "worker_bag": {
+       "modules": {
+         "orders": true,
+         "workorder": false,
+         "board": true,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["制袋"],
+-      "boardStages": ["制袋"]
++      "boardStages": ["制袋"],
++      "capabilities": { "matrixSend": false }
+     },
+     "worker_ship": {
+       "modules": {
+         "orders": true,
+         "workorder": false,
+         "board": true,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["发货"],
+-      "boardStages": ["发货"]
++      "boardStages": ["发货"],
++      "capabilities": { "matrixSend": false }
+     },
+     "worker": {
+       "modules": {
+         "orders": true,
+         "workorder": false,
+         "board": true,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["印刷", "复膜", "制袋", "发货"],
+-      "boardStages": ["印刷", "复膜", "制袋", "发货"]
++      "boardStages": ["印刷", "复膜", "制袋", "发货"],
++      "capabilities": { "matrixSend": false }
+     },
+     "default": {
+       "modules": {
+         "orders": true,
+         "workorder": false,
+         "board": false,
+         "cost": false,
+         "stats": false,
+         "admin": false,
+         "crm": false
+       },
+       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+-      "boardStages": []
++      "boardStages": [],
++      "capabilities": { "matrixSend": false }
+     }
+   }
+ }
+diff --git a/src/db.js b/src/db.js
+index 4e96005..d753b23 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -851,41 +851,195 @@ function initDb() {
+       action TEXT NOT NULL,
+       before_json TEXT NOT NULL,
+       after_json TEXT NOT NULL,
+       reason TEXT NOT NULL DEFAULT '',
+       idempotency_key TEXT NOT NULL UNIQUE,
+       created_at TEXT NOT NULL,
+       FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+       FOREIGN KEY(actor_user_id) REFERENCES users(id)
+     );
+ 
++    CREATE TABLE IF NOT EXISTS matrix_stream_versions (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      work_item_id INTEGER NOT NULL,
++      crm_draft_id INTEGER,
++      revision INTEGER NOT NULL,
++      recipient_email TEXT NOT NULL,
++      recipient_source_url TEXT NOT NULL,
++      recipient_verified_at TEXT NOT NULL,
++      subject TEXT NOT NULL,
++      body_en TEXT NOT NULL,
++      body_cn TEXT NOT NULL,
++      strategy_summary TEXT NOT NULL DEFAULT '',
++      source_snapshot_json TEXT NOT NULL DEFAULT '{}',
++      content_hash TEXT NOT NULL,
++      quality_score INTEGER NOT NULL DEFAULT 0,
++      quality_json TEXT NOT NULL DEFAULT '{}',
++      status TEXT NOT NULL CHECK(status IN ('draft','approved','superseded')),
++      created_by INTEGER NOT NULL,
++      approved_by INTEGER,
++      approved_at TEXT,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      UNIQUE(work_item_id, revision),
++      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
++      FOREIGN KEY(crm_draft_id) REFERENCES crm_reply_drafts(id)
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_stream_jobs (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      work_item_id INTEGER NOT NULL,
++      version_id INTEGER NOT NULL,
++      idempotency_key TEXT NOT NULL UNIQUE,
++      content_hash TEXT NOT NULL,
++      message_id TEXT NOT NULL UNIQUE,
++      state TEXT NOT NULL CHECK(state IN ('pending','sending','accepted','failed','ambiguous')),
++      attempt_count INTEGER NOT NULL DEFAULT 0,
++      error_class TEXT NOT NULL DEFAULT '',
++      redacted_diagnostic TEXT NOT NULL DEFAULT '',
++      created_by INTEGER NOT NULL,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
++      FOREIGN KEY(version_id) REFERENCES matrix_stream_versions(id)
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_stream_events (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      work_item_id INTEGER NOT NULL,
++      version_id INTEGER,
++      job_id INTEGER,
++      actor_user_id INTEGER,
++      matrix_binding_id INTEGER,
++      chat_id TEXT NOT NULL DEFAULT '',
++      card_event_id TEXT NOT NULL DEFAULT '',
++      action TEXT NOT NULL,
++      idempotency_key TEXT NOT NULL UNIQUE,
++      content_hash TEXT NOT NULL DEFAULT '',
++      before_json TEXT NOT NULL DEFAULT '{}',
++      after_json TEXT NOT NULL DEFAULT '{}',
++      diagnostic TEXT NOT NULL DEFAULT '',
++      created_at TEXT NOT NULL
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_stream_sender_checks (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      sender_domain TEXT NOT NULL,
++      checked_at TEXT NOT NULL,
++      expires_at TEXT NOT NULL,
++      spf_ok INTEGER NOT NULL,
++      dkim_ok INTEGER NOT NULL,
++      dmarc_ok INTEGER NOT NULL,
++      tls_ok INTEGER NOT NULL,
++      smtp_ok INTEGER NOT NULL,
++      detail_json TEXT NOT NULL DEFAULT '{}',
++      UNIQUE(sender_domain, checked_at)
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_stream_country_policies (
++      country_code TEXT NOT NULL,
++      channel TEXT NOT NULL,
++      status TEXT NOT NULL CHECK(status IN ('approved','paused','blocked')),
++      sender_identity_required INTEGER NOT NULL DEFAULT 1,
++      opt_out_required INTEGER NOT NULL DEFAULT 1,
++      reviewed_by INTEGER NOT NULL,
++      reviewed_at TEXT NOT NULL,
++      expires_at TEXT NOT NULL,
++      source_urls_json TEXT NOT NULL,
++      PRIMARY KEY(country_code, channel)
++    );
++
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_actor ON matrix_sessions(actor_user_id, expires_at);
+     CREATE INDEX IF NOT EXISTS idx_matrix_sessions_context_recent ON matrix_sessions(actor_user_id, chat_id, thread_id, updated_at DESC, id DESC);
+     CREATE INDEX IF NOT EXISTS idx_matrix_work_items_owner ON matrix_work_items(owner_user_id, stage, updated_at);
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_versions_work_revision ON matrix_stream_versions(work_item_id, revision);
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_state_updated ON matrix_stream_jobs(state, updated_at);
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_message_id ON matrix_stream_jobs(message_id);
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_update
+     BEFORE UPDATE ON matrix_selection_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_selection_events_no_delete
+     BEFORE DELETE ON matrix_selection_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_selection_events is append-only');
+     END;
++
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_update
++    BEFORE UPDATE ON matrix_stream_events
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
++    END;
++
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_delete
++    BEFORE DELETE ON matrix_stream_events
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
++    END;
++
++    DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;
++    CREATE TRIGGER trg_matrix_stream_versions_approved_content_immutable
++    BEFORE UPDATE ON matrix_stream_versions
++    WHEN OLD.status IN ('approved', 'superseded') AND (
++      NEW.work_item_id IS NOT OLD.work_item_id OR
++      NEW.crm_draft_id IS NOT OLD.crm_draft_id OR
++      NEW.revision IS NOT OLD.revision OR
++      NEW.recipient_email IS NOT OLD.recipient_email OR
++      NEW.recipient_source_url IS NOT OLD.recipient_source_url OR
++      NEW.recipient_verified_at IS NOT OLD.recipient_verified_at OR
++      NEW.subject IS NOT OLD.subject OR
++      NEW.body_en IS NOT OLD.body_en OR
++      NEW.body_cn IS NOT OLD.body_cn OR
++      NEW.strategy_summary IS NOT OLD.strategy_summary OR
++      NEW.source_snapshot_json IS NOT OLD.source_snapshot_json OR
++      NEW.content_hash IS NOT OLD.content_hash OR
++      NEW.quality_score IS NOT OLD.quality_score OR
++      NEW.quality_json IS NOT OLD.quality_json OR
++      NEW.created_by IS NOT OLD.created_by OR
++      NEW.approved_by IS NOT OLD.approved_by OR
++      NEW.approved_at IS NOT OLD.approved_at OR
++      NEW.created_at IS NOT OLD.created_at
++    )
++    BEGIN
++      SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
++    END;
++
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approved_no_delete
++    BEFORE DELETE ON matrix_stream_versions
++    WHEN OLD.status IN ('approved', 'superseded')
++    BEGIN
++      SELECT RAISE(ABORT, 'approved matrix_stream_versions evidence is immutable');
++    END;
++
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_versions_approval_lifecycle
++    BEFORE UPDATE OF status ON matrix_stream_versions
++    WHEN (OLD.status = 'approved' AND NEW.status NOT IN ('approved', 'superseded'))
++      OR (OLD.status = 'superseded' AND NEW.status != 'superseded')
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_versions approval lifecycle is irreversible');
++    END;
+   `);
+ 
+   const sessionColumns = new Set(db.prepare('PRAGMA table_info(matrix_sessions)').all().map(column => column.name));
+   if (!sessionColumns.has('snapshot_key')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN snapshot_key TEXT NOT NULL DEFAULT ''");
+   if (!sessionColumns.has('candidate_ids_json')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN candidate_ids_json TEXT NOT NULL DEFAULT '[]'");
+ 
++  const matrixWorkItemColumns = new Set(db.prepare('PRAGMA table_info(matrix_work_items)').all().map(column => column.name));
++  if (!matrixWorkItemColumns.has('stream_state')) db.exec("ALTER TABLE matrix_work_items ADD COLUMN stream_state TEXT NOT NULL DEFAULT 'selected'");
++  if (!matrixWorkItemColumns.has('current_stream_version_id')) db.exec('ALTER TABLE matrix_work_items ADD COLUMN current_stream_version_id INTEGER');
++
++  const matrixReplyDraftColumns = new Set(db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(column => column.name));
++  if (!matrixReplyDraftColumns.has('matrix_work_item_id')) db.exec('ALTER TABLE crm_reply_drafts ADD COLUMN matrix_work_item_id INTEGER');
++
+   db.prepare(`
+     UPDATE matrix_sessions
+     SET filters_json = json_remove(filters_json, '$.page')
+     WHERE json_valid(filters_json) = 1
+       AND json_type(filters_json) = 'object'
+       AND json_type(filters_json, '$.page') IS NOT NULL
+   `).run();
+ 
+   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+   if (!cols.includes('priority')) {
+diff --git a/src/lib/permissions.js b/src/lib/permissions.js
+index 5125152..e9e4abb 100644
+--- a/src/lib/permissions.js
++++ b/src/lib/permissions.js
+@@ -9,31 +9,34 @@ function clone(obj) {
+ 
+ function defaultPermissionsByRole(role = 'ai_sales') {
+   const key = String(role || 'default');
+   const hit = DEFAULTS[key] || DEFAULTS.default || { modules: {} };
+   return clone(hit);
+ }
+ 
+ function normalizePermissions(role = 'ai_sales', permissions) {
+   const defaults = defaultPermissionsByRole(role);
+   if (!permissions || typeof permissions !== 'object') return defaults;
+-  if (permissions.all) return { all: true };
++  if (permissions.all) return { all: true, capabilities: { matrixSend: true } };
+ 
+   const baseModules = {};
+   MODULE_KEYS.forEach((key) => {
+     baseModules[key] = !!(defaults.modules && defaults.modules[key]);
+   });
+   const mergedModules = { ...baseModules, ...(permissions.modules || {}) };
+ 
+   const uniq = (arr = []) => [...new Set(arr.filter(Boolean))];
++  const allowedForRole = role === 'super_admin' || role === 'foreign_trade_crm_admin';
++  const requested = !!permissions?.capabilities?.matrixSend;
+   return {
+     modules: mergedModules,
+     ordersStages: uniq(Array.isArray(permissions.ordersStages) ? permissions.ordersStages : (defaults.ordersStages || [])),
+     boardStages: uniq(Array.isArray(permissions.boardStages) ? permissions.boardStages : (defaults.boardStages || [])),
++    capabilities: { matrixSend: allowedForRole && requested },
+   };
+ }
+ 
+ module.exports = {
+   MODULE_KEYS,
+   defaultPermissionsByRole,
+   normalizePermissions,
+ };

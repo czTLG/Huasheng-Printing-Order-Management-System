@@ -1,0 +1,854 @@
+# Review package: 2ccd62b..13cb17d
+
+## Commits
+13cb17d feat: add matrix stream review versions
+
+## Files changed
+ scripts/test-matrix-stream-review.js | 227 ++++++++++++++++++++++++++-
+ src/services/aiProvider.js           |  56 ++++++-
+ src/services/matrixStreamReview.js   | 291 +++++++++++++++++++++++++++++++++++
+ src/services/matrixStreamText.js     | 113 ++++++++++++++
+ 4 files changed, 684 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/scripts/test-matrix-stream-review.js b/scripts/test-matrix-stream-review.js
+index 8178628..855bc70 100644
+--- a/scripts/test-matrix-stream-review.js
++++ b/scripts/test-matrix-stream-review.js
+@@ -1,18 +1,19 @@
+ const assert = require('node:assert');
+ const fs = require('node:fs');
+ const os = require('node:os');
+ const path = require('node:path');
+ 
+ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-review-'));
+ process.env.DB_PATH = path.join(root, 'app.db');
+ 
++async function main() {
+ let db;
+ 
+ try {
+   const LegacyDatabase = require('better-sqlite3');
+   const legacyDb = new LegacyDatabase(process.env.DB_PATH);
+   legacyDb.exec(`
+     CREATE TABLE matrix_stream_versions (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       work_item_id INTEGER NOT NULL,
+       crm_draft_id INTEGER,
+@@ -40,21 +41,27 @@ try {
+     BEFORE UPDATE ON matrix_stream_versions
+     WHEN OLD.status = 'approved' AND NEW.subject IS NOT OLD.subject
+     BEGIN
+       SELECT RAISE(ABORT, 'approved matrix_stream_versions content is immutable');
+     END;
+   `);
+   legacyDb.close();
+ 
+   const database = require('../src/db');
+   db = database.db;
+-  database.initDb();
++  const originalConsoleLog = console.log;
++  console.log = () => {};
++  try {
++    database.initDb();
++  } finally {
++    console.log = originalConsoleLog;
++  }
+ 
+   for (const table of ['matrix_stream_versions', 'matrix_stream_jobs', 'matrix_stream_events']) {
+     assert(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), `${table} missing`);
+   }
+ 
+   const workColumns = db.prepare('PRAGMA table_info(matrix_work_items)').all().map(row => row.name);
+   assert(workColumns.includes('stream_state'));
+   assert(workColumns.includes('current_stream_version_id'));
+ 
+   const draftColumns = db.prepare('PRAGMA table_info(crm_reply_drafts)').all().map(row => row.name);
+@@ -63,20 +70,232 @@ try {
+   const indexColumns = indexName => db.prepare(`PRAGMA index_info(${indexName})`).all().map(row => row.name);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_versions_work_revision'), ['work_item_id', 'revision']);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_state_updated'), ['state', 'updated_at']);
+   assert.deepStrictEqual(indexColumns('idx_matrix_stream_jobs_message_id'), ['message_id']);
+ 
+   const now = '2026-07-18T00:00:00.000Z';
+   const userId = Number(db.prepare(`
+     INSERT INTO users (username, password, role, status, created_at)
+     VALUES ('matrix_stream_review_guard', 'unused', 'super_admin', 'active', ?)
+   `).run(now).lastInsertRowid);
++  const review = require('../src/services/matrixStreamReview');
++  assert.throws(
++    () => review.validateRecipient({ email: 'guessed@person.test', sourceUrl: '', verifiedAt: '' }, new Date('2026-07-17T00:00:00Z')),
++    /source/i
++  );
++  const reviewWorkItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++    VALUES (900000, ?, ?, ?)
++  `).run(userId, now, now).lastInsertRowid);
++  const v1 = review.createInitialVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    expectedWorkVersion: 1,
++    recipient: {
++      email: 'sales@alpha.test',
++      sourceUrl: 'https://alpha.test/contact',
++      verifiedAt: '2026-07-16T00:00:00Z',
++      kind: 'public_company'
++    },
++    subject: 'A focused proposal for Alpha',
++    bodyEn: 'Dear Alpha team,\nPlease confirm your current requirements.\nBest regards',
++    bodyCn: '您好，请确认当前需求。',
++    strategySummary: '公开产品页显示匹配品类',
++    sourceSnapshot: { url: 'https://alpha.test/products' },
++    idempotencyKey: 'version-create-1'
++  });
++  assert.strictEqual(v1.revision, 1);
++  const { createMatrixStreamText } = require('../src/services/matrixStreamText');
++  const textService = createMatrixStreamText({
++    callJson: async () => ({
++      subject: 'Short proposal for Alpha',
++      body_en: 'Dear Alpha team,\nCould you share annual volume?\nBest regards',
++      body_cn: '您好，请问能否提供年用量？'
++    })
++  });
++  const revisedText = await textService.revise({ current: v1, instruction: '语气更简洁，询问年用量' });
++  assert.strictEqual(revisedText.subject, 'Short proposal for Alpha');
++  assert.match(revisedText.body_en, /annual volume/i);
++  assert.match(revisedText.body_cn, /年用量/);
++  await assert.rejects(
++    () => createMatrixStreamText({ callJson: async () => ({ body_en: 'missing fields' }) })
++      .revise({ current: v1, instruction: '简化' }),
++    /invalid bilingual output/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'Hello', body_cn: '您好', extra: 'not allowed'
++      })
++    }).revise({ current: v1, instruction: '简化' }),
++    /invalid bilingual output/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'See https://unknown.test', body_cn: '请查看链接'
++      })
++    }).revise({ current: v1, instruction: '增加链接' }),
++    /introduced URL/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Short proposal', body_en: 'The price is USD 99.', body_cn: '价格为99美元。'
++      })
++    }).revise({ current: v1, instruction: '增加价格' }),
++    /unsupported price/i
++  );
++  await assert.rejects(
++    () => createMatrixStreamText({
++      callJson: async () => ({
++        subject: 'Certified supplier', body_en: 'We are ISO certified.', body_cn: '我们已通过认证。'
++      })
++    }).revise({ current: v1, instruction: '增加资质' }),
++    /unsupported qualification/i
++  );
++  const translated = await createMatrixStreamText({
++    callJson: async () => ({
++      translation_cn: '请提供报价。',
++      requirements_cn: '需要报价',
++      suggested_subject: 'Re: Alpha requirements',
++      suggested_body_en: 'Dear Alpha team,\nThank you for your message.',
++      suggested_body_cn: '您好，感谢您的来信。'
++    })
++  }).translateInbound({ inboundText: 'Please provide a proposal.' });
++  assert.deepStrictEqual(Object.keys(translated).sort(), [
++    'requirements_cn', 'suggested_body_cn', 'suggested_body_en', 'suggested_subject', 'translation_cn'
++  ]);
++  const previousTextProvider = process.env.MATRIX_TEXT_PROVIDER;
++  process.env.MATRIX_TEXT_PROVIDER = 'mock';
++  const versionCountBeforeUnavailable = db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count;
++  const unavailable = await createMatrixStreamText().revise({ current: v1, instruction: '简化' });
++  assert.deepStrictEqual({ ok: unavailable.ok, reason: unavailable.reason }, { ok: false, reason: 'text_provider_unavailable' });
++  assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_versions').get().count, versionCountBeforeUnavailable);
++  if (previousTextProvider === undefined) delete process.env.MATRIX_TEXT_PROVIDER;
++  else process.env.MATRIX_TEXT_PROVIDER = previousTextProvider;
++  const staleEvidenceWorkItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
++    VALUES (899999, ?, ?, ?)
++  `).run(userId, now, now).lastInsertRowid);
++  const staleEvidenceDraft = review.createInitialVersion(db, {
++    actorUserId: userId,
++    workItemId: staleEvidenceWorkItemId,
++    expectedWorkVersion: 1,
++    recipient: {
++      email: 'public@stale.test',
++      sourceUrl: 'https://stale.test/contact',
++      verifiedAt: '2026-07-16T00:00:00Z',
++      kind: 'public_company'
++    },
++    subject: 'Evidence freshness check',
++    bodyEn: 'Dear team,\nPlease confirm your requirements.',
++    bodyCn: '您好，请确认需求。',
++    sourceSnapshot: { url: 'https://stale.test/contact' },
++    idempotencyKey: 'stale-evidence-create'
++  });
++  db.prepare('UPDATE matrix_stream_versions SET recipient_verified_at = ? WHERE id = ?')
++    .run('2020-01-01T00:00:00.000Z', staleEvidenceDraft.id);
++  assert.throws(() => review.approveVersion(db, {
++    actorUserId: userId,
++    workItemId: staleEvidenceWorkItemId,
++    versionId: staleEvidenceDraft.id,
++    expectedWorkVersion: 2,
++    expectedContentHash: staleEvidenceDraft.content_hash,
++    idempotencyKey: 'stale-evidence-approve'
++  }), /stale/i);
++  const approved = review.approveVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    versionId: v1.id,
++    expectedWorkVersion: 2,
++    expectedContentHash: v1.content_hash,
++    idempotencyKey: 'approve-1'
++  });
++  assert.strictEqual(approved.status, 'approved');
++  const v2 = review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v1.id,
++    expectedWorkVersion: 3,
++    subject: v1.subject,
++    bodyEn: `${v1.body_en}\nPlease share annual volume.`,
++    bodyCn: `${v1.body_cn}\n请提供年用量。`,
++    idempotencyKey: 'revise-1'
++  });
++  assert.strictEqual(v2.revision, 2);
++  assert.strictEqual(review.getVersion(db, { actorUserId: userId, versionId: v1.id }).status, 'superseded');
++  assert.strictEqual(review.approveVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    versionId: v1.id,
++    expectedWorkVersion: 1,
++    expectedContentHash: 'intentionally-stale',
++    idempotencyKey: 'approve-1'
++  }).id, v1.id);
++  assert.strictEqual(review.createInitialVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    expectedWorkVersion: 1,
++    idempotencyKey: 'version-create-1'
++  }).id, v1.id);
++  assert.throws(() => review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v2.id,
++    expectedWorkVersion: 3,
++    subject: v2.subject,
++    bodyEn: v2.body_en,
++    bodyCn: v2.body_cn,
++    idempotencyKey: 'stale-revise'
++  }), /stale/i);
++  const hashInput = {
++    recipientEmail: v2.recipient_email,
++    recipientSourceUrl: v2.recipient_source_url,
++    subject: v2.subject,
++    bodyEn: v2.body_en,
++    bodyCn: v2.body_cn
++  };
++  for (const [key, value] of Object.entries({
++    recipientEmail: 'other@alpha.test',
++    recipientSourceUrl: 'https://alpha.test/other',
++    subject: `${v2.subject}!`,
++    bodyEn: `${v2.body_en}!`,
++    bodyCn: `${v2.body_cn}！`
++  })) {
++    assert.notStrictEqual(review.contentHash({ ...hashInput, [key]: value }), v2.content_hash, `${key} must change hash`);
++  }
++  const v3 = review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v2.id,
++    expectedWorkVersion: 4,
++    subject: v2.subject,
++    bodyEn: `${v2.body_en}\nWhat is your timeline?`,
++    bodyCn: `${v2.body_cn}\n项目时间如何？`,
++    idempotencyKey: 'revise-concurrent-winner'
++  });
++  assert.strictEqual(v3.revision, 3);
++  assert.throws(() => review.reviseVersion(db, {
++    actorUserId: userId,
++    workItemId: reviewWorkItemId,
++    baseVersionId: v2.id,
++    expectedWorkVersion: 4,
++    subject: v2.subject,
++    bodyEn: `${v2.body_en}\nConcurrent loser`,
++    bodyCn: `${v2.body_cn}\n并发失败`,
++    idempotencyKey: 'revise-concurrent-loser'
++  }), /stale/i);
++  assert.strictEqual(
++    db.prepare("SELECT COUNT(*) AS count FROM matrix_stream_events WHERE idempotency_key = 'revise-concurrent-loser'").get().count,
++    0
++  );
+   const workItemId = Number(db.prepare(`
+     INSERT INTO matrix_work_items (candidate_id, owner_user_id, created_at, updated_at)
+     VALUES (900001, ?, ?, ?)
+   `).run(userId, now, now).lastInsertRowid);
+ 
+   const insertVersion = db.prepare(`
+     INSERT INTO matrix_stream_versions (
+       work_item_id, revision, recipient_email, recipient_source_url,
+       recipient_verified_at, subject, body_en, body_cn, content_hash,
+       status, created_by, approved_by, approved_at, created_at, updated_at
+@@ -157,10 +376,16 @@ try {
+     /UNIQUE constraint failed: matrix_stream_jobs.idempotency_key/
+   );
+   assert.throws(
+     () => insertJob.run(workItemId, approvedVersionId, 'job-key-2', 'approved-hash', 'message-1', userId, now, now),
+     /UNIQUE constraint failed: matrix_stream_jobs.message_id/
+   );
+ } finally {
+   if (db?.open) db.close();
+   fs.rmSync(root, { recursive: true, force: true });
+ }
++}
++
++main().catch(error => {
++  console.error(error);
++  process.exitCode = 1;
++});
+diff --git a/src/services/aiProvider.js b/src/services/aiProvider.js
+index 45e0fb1..7623a90 100644
+--- a/src/services/aiProvider.js
++++ b/src/services/aiProvider.js
+@@ -72,50 +72,101 @@ function validateStructuredObject(value, schemaName = 'assistant', requiredKeys
+   return { ok: true };
+ }
+ 
+ function buildMessages({ systemPrompt, userPrompt }) {
+   const messages = [];
+   if (systemPrompt) messages.push({ role: 'system', content: String(systemPrompt) });
+   messages.push({ role: 'user', content: String(userPrompt || '') });
+   return messages;
+ }
+ 
+-async function fetchJson(endpoint, payload, apiKey) {
++async function fetchJson(endpoint, payload, apiKey, { signal } = {}) {
+   if (typeof fetch !== 'function') {
+     throw new Error('global fetch is not available in this runtime');
+   }
+ 
+   const res = await fetch(endpoint, {
+     method: 'POST',
+     headers: {
+       'Content-Type': 'application/json',
+       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+     },
+-    body: JSON.stringify(payload)
++    body: JSON.stringify(payload),
++    ...(signal ? { signal } : {})
+   });
+ 
+   const text = await res.text();
+   let json = null;
+   try {
+     json = text ? JSON.parse(text) : null;
+   } catch (err) {
+     json = { raw: text };
+   }
+ 
+   if (!res.ok) {
+     const message = json?.error?.message || json?.message || text || `HTTP ${res.status}`;
+     throw new Error(message);
+   }
+ 
+   return json;
+ }
+ 
++async function callJsonProvider({
++  provider,
++  model,
++  systemPrompt,
++  userPrompt,
++  exactKeys,
++  temperature = 0,
++  maxTokens = 1200,
++  timeoutMs = 15000
++} = {}) {
++  try {
++    const keys = Array.isArray(exactKeys) ? [...exactKeys] : [];
++    if (!keys.length || keys.some(key => typeof key !== 'string' || !key)) {
++      throw new Error('caller-owned exact key set required');
++    }
++    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4000) throw new Error('invalid maximum token count');
++    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw new Error('invalid timeout');
++    const cfg = getProviderConfig(provider || process.env.MATRIX_TEXT_PROVIDER);
++    if (cfg.provider === 'mock' || !cfg.apiKey) {
++      return { ok: false, reason: 'text_provider_unavailable', provider: cfg.provider, model: cfg.model };
++    }
++    const payload = {
++      model: model || cfg.model,
++      temperature,
++      max_tokens: maxTokens,
++      response_format: { type: 'json_object' },
++      messages: buildMessages({ systemPrompt, userPrompt })
++    };
++    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
++      ? AbortSignal.timeout(timeoutMs) : undefined;
++    const raw = await fetchJson(cfg.endpoint || DEFAULT_ENDPOINTS[cfg.provider] || DEFAULT_ENDPOINTS.openai, payload, cfg.apiKey, { signal });
++    const content = raw?.choices?.[0]?.message?.content ?? raw?.choices?.[0]?.text ?? '';
++    const json = safeJsonParse(content);
++    if (!isPlainObject(json)) throw new Error('JSON provider output must be an object');
++    const actualKeys = Object.keys(json).sort();
++    const expectedKeys = [...keys].sort();
++    if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
++      throw new Error(`JSON provider output must contain exactly: ${keys.join(', ')}`);
++    }
++    return { ok: true, provider: cfg.provider, model: payload.model, json };
++  } catch (err) {
++    return {
++      ok: false,
++      reason: err.name === 'TimeoutError' ? 'text_provider_timeout' : err.message,
++      provider: String(provider || process.env.MATRIX_TEXT_PROVIDER || '').trim().toLowerCase(),
++      model: model || null
++    };
++  }
++}
++
+ async function callStructuredProvider({
+   provider,
+   model,
+   systemPrompt,
+   userPrompt,
+   temperature = 0,
+   maxTokens = 2000
+ }) {
+   try {
+     const cfg = getProviderConfig(provider);
+@@ -172,12 +223,13 @@ async function callStructuredProvider({
+   }
+ }
+ 
+ module.exports = {
+   DEFAULT_ENDPOINTS,
+   SUPPORTED_PROVIDERS,
+   getProviderConfig,
+   stripCodeFences,
+   safeJsonParse,
+   validateStructuredObject,
++  callJsonProvider,
+   callStructuredProvider
+ };
+diff --git a/src/services/matrixStreamReview.js b/src/services/matrixStreamReview.js
+new file mode 100644
+index 0000000..8150606
+--- /dev/null
++++ b/src/services/matrixStreamReview.js
+@@ -0,0 +1,291 @@
++const crypto = require('node:crypto');
++
++function positiveInteger(value, name) {
++  const number = Number(value);
++  if (!Number.isInteger(number) || number <= 0) throw new Error(`${name} must be a positive integer`);
++  return number;
++}
++
++function normalizeEmail(value) {
++  return String(value || '').trim().toLowerCase();
++}
++
++function normalizeBody(value) {
++  return String(value || '').replace(/\r\n?/g, '\n').trim();
++}
++
++function contentHash(value) {
++  return crypto.createHash('sha256').update(JSON.stringify({
++    recipient: normalizeEmail(value.recipientEmail),
++    source: String(value.recipientSourceUrl),
++    subject: String(value.subject).trim(),
++    body_en: normalizeBody(value.bodyEn),
++    body_cn: normalizeBody(value.bodyCn)
++  })).digest('hex');
++}
++
++function validateRecipient(input, nowValue = new Date()) {
++  const recipient = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
++  const email = normalizeEmail(recipient.email);
++  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('valid recipient email required');
++  let sourceUrl;
++  try {
++    sourceUrl = new URL(String(recipient.sourceUrl || ''));
++  } catch (_) {
++    throw new Error('recipient source must be a valid HTTPS URL');
++  }
++  if (sourceUrl.protocol !== 'https:') throw new Error('recipient source must use HTTPS');
++  if (recipient.kind !== 'public_company') throw new Error('recipient must be a public-company address');
++
++  const verifiedAtMs = Date.parse(String(recipient.verifiedAt || ''));
++  const nowMs = nowValue instanceof Date ? nowValue.getTime() : Date.parse(String(nowValue));
++  if (!Number.isFinite(verifiedAtMs) || !Number.isFinite(nowMs)) throw new Error('valid recipient verification timestamp required');
++  if (verifiedAtMs > nowMs) throw new Error('recipient verification timestamp is in the future');
++  const configuredDays = Number(process.env.MATRIX_RECIPIENT_MAX_AGE_DAYS || 180);
++  const maxAgeDays = Number.isFinite(configuredDays) && configuredDays > 0 ? configuredDays : 180;
++  if (nowMs - verifiedAtMs > maxAgeDays * 86400000) throw new Error('recipient verification is stale');
++
++  return {
++    email,
++    sourceUrl: sourceUrl.toString(),
++    verifiedAt: new Date(verifiedAtMs).toISOString(),
++    kind: 'public_company'
++  };
++}
++
++function requiredText(value, name) {
++  const text = normalizeBody(value);
++  if (!text) throw new Error(`${name} required`);
++  return text;
++}
++
++function requiredKey(value) {
++  const key = String(value || '').trim();
++  if (!key) throw new Error('idempotency key required');
++  return key;
++}
++
++function timestamp() {
++  return new Date().toISOString();
++}
++
++function versionById(db, versionId) {
++  return db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ?').get(versionId) || null;
++}
++
++function validateStoredRecipient(version) {
++  return validateRecipient({
++    email: version.recipient_email,
++    sourceUrl: version.recipient_source_url,
++    verifiedAt: version.recipient_verified_at,
++    kind: 'public_company'
++  });
++}
++
++function ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion) {
++  const actor = db.prepare('SELECT id, status FROM users WHERE id = ?').get(actorUserId);
++  if (!actor || actor.status !== 'active') throw new Error('actor is not active');
++  const item = db.prepare('SELECT * FROM matrix_work_items WHERE id = ?').get(workItemId);
++  if (!item || item.owner_user_id !== actorUserId) throw new Error('not authorized');
++  if (item.stage === 'suppressed' || item.stream_state === 'suppressed') throw new Error('work item is suppressed');
++  if (item.version !== expectedWorkVersion) throw new Error('stale work version');
++  return item;
++}
++
++function replay(db, idempotencyKey, actorUserId) {
++  const event = db.prepare('SELECT * FROM matrix_stream_events WHERE idempotency_key = ?').get(idempotencyKey);
++  if (!event) return null;
++  if (event.actor_user_id !== actorUserId) throw new Error('not authorized');
++  const after = JSON.parse(event.after_json || '{}');
++  const version = versionById(db, after.version_id || event.version_id);
++  if (!version) throw new Error('recorded version not found');
++  return version;
++}
++
++function addEvent(db, { workItemId, versionId, actorUserId, action, idempotencyKey, contentHash: hash, before, after, at }) {
++  db.prepare(`
++    INSERT INTO matrix_stream_events (
++      work_item_id, version_id, actor_user_id, action, idempotency_key,
++      content_hash, before_json, after_json, created_at
++    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
++  `).run(
++    workItemId, versionId, actorUserId, action, idempotencyKey, hash,
++    JSON.stringify(before || {}), JSON.stringify(after || {}), at
++  );
++}
++
++function createInitialVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const workItemId = positiveInteger(input.workItemId, 'work item id');
++  const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
++  const idempotencyKey = requiredKey(input.idempotencyKey);
++  const transaction = db.transaction(() => {
++    const previous = replay(db, idempotencyKey, actorUserId);
++    if (previous) return previous;
++    ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
++    const recipient = validateRecipient(input.recipient);
++    const subject = requiredText(input.subject, 'subject');
++    const bodyEn = requiredText(input.bodyEn, 'English body');
++    const bodyCn = requiredText(input.bodyCn, 'Chinese body');
++    const sourceSnapshot = input.sourceSnapshot && typeof input.sourceSnapshot === 'object' && !Array.isArray(input.sourceSnapshot)
++      ? input.sourceSnapshot : {};
++    const hash = contentHash({
++      recipientEmail: recipient.email,
++      recipientSourceUrl: recipient.sourceUrl,
++      subject,
++      bodyEn,
++      bodyCn
++    });
++    const at = timestamp();
++    const inserted = db.prepare(`
++      INSERT INTO matrix_stream_versions (
++        work_item_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
++        subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
++        status, created_by, created_at, updated_at
++      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
++    `).run(
++      workItemId, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
++      subject, bodyEn, bodyCn, String(input.strategySummary || '').trim(), JSON.stringify(sourceSnapshot),
++      hash, actorUserId, at, at
++    );
++    const versionId = Number(inserted.lastInsertRowid);
++    const updated = db.prepare(`
++      UPDATE matrix_work_items
++      SET stage = 'draft_pending', stream_state = 'draft_pending', current_stream_version_id = ?,
++          version = version + 1, updated_at = ?
++      WHERE id = ? AND owner_user_id = ? AND version = ?
++    `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
++    if (updated.changes !== 1) throw new Error('stale work version');
++    const result = versionById(db, versionId);
++    addEvent(db, {
++      workItemId, versionId, actorUserId, action: 'created', idempotencyKey,
++      contentHash: hash, before: {}, after: { version_id: versionId, revision: 1, status: result.status }, at
++    });
++    return result;
++  });
++  return transaction.immediate();
++}
++
++function approveVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const workItemId = positiveInteger(input.workItemId, 'work item id');
++  const versionId = positiveInteger(input.versionId, 'version id');
++  const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
++  const idempotencyKey = requiredKey(input.idempotencyKey);
++  const expectedContentHash = String(input.expectedContentHash || '').trim();
++  if (!expectedContentHash) throw new Error('expected content hash required');
++  const transaction = db.transaction(() => {
++    const previous = replay(db, idempotencyKey, actorUserId);
++    if (previous) return previous;
++    ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
++    const version = versionById(db, versionId);
++    if (!version || version.work_item_id !== workItemId) throw new Error('version not found');
++    if (version.status !== 'draft') throw new Error('version is not a draft');
++    if (version.content_hash !== expectedContentHash) throw new Error('content hash mismatch');
++    validateStoredRecipient(version);
++    const at = timestamp();
++    const changed = db.prepare(`
++      UPDATE matrix_stream_versions
++      SET status = 'approved', approved_by = ?, approved_at = ?, updated_at = ?
++      WHERE id = ? AND work_item_id = ? AND status = 'draft' AND content_hash = ?
++    `).run(actorUserId, at, at, versionId, workItemId, expectedContentHash);
++    if (changed.changes !== 1) throw new Error('version approval conflict');
++    const updated = db.prepare(`
++      UPDATE matrix_work_items
++      SET stage = 'review_pending', stream_state = 'approved', current_stream_version_id = ?,
++          version = version + 1, updated_at = ?
++      WHERE id = ? AND owner_user_id = ? AND version = ?
++    `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
++    if (updated.changes !== 1) throw new Error('stale work version');
++    const result = versionById(db, versionId);
++    addEvent(db, {
++      workItemId, versionId, actorUserId, action: 'approved', idempotencyKey,
++      contentHash: result.content_hash, before: { status: version.status },
++      after: { version_id: versionId, revision: result.revision, status: result.status }, at
++    });
++    return result;
++  });
++  return transaction.immediate();
++}
++
++function reviseVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const workItemId = positiveInteger(input.workItemId, 'work item id');
++  const baseVersionId = positiveInteger(input.baseVersionId, 'base version id');
++  const expectedWorkVersion = positiveInteger(input.expectedWorkVersion, 'expected work version');
++  const idempotencyKey = requiredKey(input.idempotencyKey);
++  const transaction = db.transaction(() => {
++    const previous = replay(db, idempotencyKey, actorUserId);
++    if (previous) return previous;
++    ownedWorkItem(db, workItemId, actorUserId, expectedWorkVersion);
++    const base = versionById(db, baseVersionId);
++    if (!base || base.work_item_id !== workItemId) throw new Error('base version not found');
++    if (!['draft', 'approved'].includes(base.status)) throw new Error('base version cannot be revised');
++    validateStoredRecipient(base);
++    const subject = requiredText(input.subject, 'subject');
++    const bodyEn = requiredText(input.bodyEn, 'English body');
++    const bodyCn = requiredText(input.bodyCn, 'Chinese body');
++    const hash = contentHash({
++      recipientEmail: base.recipient_email,
++      recipientSourceUrl: base.recipient_source_url,
++      subject,
++      bodyEn,
++      bodyCn
++    });
++    const at = timestamp();
++    const nextRevision = Number(db.prepare(
++      'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM matrix_stream_versions WHERE work_item_id = ?'
++    ).get(workItemId).revision);
++    db.prepare(`
++      UPDATE matrix_stream_versions SET status = 'superseded', updated_at = ?
++      WHERE id = ? AND status IN ('draft', 'approved')
++    `).run(at, baseVersionId);
++    const inserted = db.prepare(`
++      INSERT INTO matrix_stream_versions (
++        work_item_id, revision, recipient_email, recipient_source_url, recipient_verified_at,
++        subject, body_en, body_cn, strategy_summary, source_snapshot_json, content_hash,
++        status, created_by, created_at, updated_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
++    `).run(
++      workItemId, nextRevision, base.recipient_email, base.recipient_source_url, base.recipient_verified_at,
++      subject, bodyEn, bodyCn, base.strategy_summary, base.source_snapshot_json, hash, actorUserId, at, at
++    );
++    const versionId = Number(inserted.lastInsertRowid);
++    const updated = db.prepare(`
++      UPDATE matrix_work_items
++      SET stage = 'draft_pending', stream_state = 'draft_pending', current_stream_version_id = ?,
++          version = version + 1, updated_at = ?
++      WHERE id = ? AND owner_user_id = ? AND version = ?
++    `).run(versionId, at, workItemId, actorUserId, expectedWorkVersion);
++    if (updated.changes !== 1) throw new Error('stale work version');
++    const result = versionById(db, versionId);
++    addEvent(db, {
++      workItemId, versionId, actorUserId, action: 'revised', idempotencyKey,
++      contentHash: hash, before: { version_id: base.id, revision: base.revision, status: base.status },
++      after: { version_id: versionId, revision: result.revision, status: result.status }, at
++    });
++    return result;
++  });
++  return transaction.immediate();
++}
++
++function getVersion(db, input = {}) {
++  const actorUserId = positiveInteger(input.actorUserId, 'actor user id');
++  const versionId = positiveInteger(input.versionId, 'version id');
++  const version = versionById(db, versionId);
++  if (!version) return null;
++  const item = db.prepare('SELECT owner_user_id FROM matrix_work_items WHERE id = ?').get(version.work_item_id);
++  if (!item || item.owner_user_id !== actorUserId) throw new Error('not authorized');
++  const actor = db.prepare('SELECT status FROM users WHERE id = ?').get(actorUserId);
++  if (!actor || actor.status !== 'active') throw new Error('actor is not active');
++  return version;
++}
++
++module.exports = {
++  contentHash,
++  createInitialVersion,
++  reviseVersion,
++  approveVersion,
++  getVersion,
++  validateRecipient
++};
+diff --git a/src/services/matrixStreamText.js b/src/services/matrixStreamText.js
+new file mode 100644
+index 0000000..a6ef0ab
+--- /dev/null
++++ b/src/services/matrixStreamText.js
+@@ -0,0 +1,113 @@
++const { callJsonProvider } = require('./aiProvider');
++
++const REVISION_KEYS = ['subject', 'body_en', 'body_cn'];
++const INBOUND_KEYS = [
++  'translation_cn',
++  'requirements_cn',
++  'suggested_subject',
++  'suggested_body_en',
++  'suggested_body_cn'
++];
++
++function isPlainObject(value) {
++  return !!value && typeof value === 'object' && !Array.isArray(value);
++}
++
++function exactObject(value, keys) {
++  if (!isPlainObject(value)) return false;
++  const actual = Object.keys(value).sort();
++  const expected = [...keys].sort();
++  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
++}
++
++function extractUrls(value) {
++  return String(value || '').match(/https?:\/\/[^\s<>'"）)]+/gi) || [];
++}
++
++function priceClaims(value) {
++  return String(value || '').match(/(?:[$€£¥]\s*\d[\d,.]*|\b(?:usd|eur|gbp|cny|rmb)\s*\d[\d,.]*|\b\d[\d,.]*\s*(?:usd|eur|gbp|cny|rmb)\b)/gi) || [];
++}
++
++function qualificationClaims(value) {
++  return String(value || '').match(/\b(?:ISO(?:\s*\d+)?|BRCGS?|FDA|HACCP|certified|qualified)\b/gi) || [];
++}
++
++function evidenceText(input) {
++  return JSON.stringify(input?.sourceSnapshot || input?.source_snapshot || input?.publicEvidence || input?.public_evidence || {});
++}
++
++function validateClaims(output, input) {
++  const outputText = Object.values(output).join('\n');
++  const source = evidenceText(input);
++  const allowedUrlText = [source, JSON.stringify(input?.current || {}), String(input?.inboundText || input?.message || '')].join('\n');
++  for (const url of extractUrls(outputText)) {
++    if (!allowedUrlText.includes(url)) throw new Error('invalid bilingual output: model introduced URL');
++  }
++  for (const price of priceClaims(outputText)) {
++    if (!source.toLowerCase().includes(price.toLowerCase())) throw new Error('invalid bilingual output: unsupported price claim');
++  }
++  for (const claim of qualificationClaims(outputText)) {
++    if (!source.toLowerCase().includes(claim.toLowerCase())) throw new Error('invalid bilingual output: unsupported qualification claim');
++  }
++}
++
++function validatedOutput(value, keys, input) {
++  if (!exactObject(value, keys) || keys.some(key => !String(value[key] || '').trim())) {
++    throw new Error('invalid bilingual output: exact non-empty fields required');
++  }
++  const normalized = Object.fromEntries(keys.map(key => [key, String(value[key]).replace(/\r\n?/g, '\n').trim()]));
++  validateClaims(normalized, input);
++  return normalized;
++}
++
++function unwrapProviderResult(value) {
++  if (value && value.ok === false) {
++    if (value.reason === 'text_provider_unavailable') return value;
++    throw new Error(`text provider failed: ${value.reason || 'unknown error'}`);
++  }
++  return value && value.ok === true && isPlainObject(value.json) ? value.json : value;
++}
++
++function createMatrixStreamText({ callJson = callJsonProvider } = {}) {
++  if (typeof callJson !== 'function') throw new Error('callJson function required');
++
++  async function run({ keys, systemPrompt, userPrompt, input }) {
++    const providerValue = await callJson({
++      systemPrompt,
++      userPrompt,
++      exactKeys: keys,
++      timeoutMs: 15000,
++      maxTokens: 1200
++    });
++    const output = unwrapProviderResult(providerValue);
++    if (output && output.ok === false && output.reason === 'text_provider_unavailable') return output;
++    return validatedOutput(output, keys, input);
++  }
++
++  return {
++    revise(input = {}) {
++      if (!isPlainObject(input.current)) return Promise.reject(new Error('current version required'));
++      const instruction = String(input.instruction || '').trim();
++      if (!instruction) return Promise.reject(new Error('revision instruction required'));
++      return run({
++        keys: REVISION_KEYS,
++        systemPrompt: 'Return only the requested bilingual JSON fields. Preserve evidence; introduce no facts, prices, qualifications, or URLs.',
++        userPrompt: JSON.stringify({ current: input.current, instruction }),
++        input: { ...input, sourceSnapshot: input.sourceSnapshot || input.current.source_snapshot_json }
++      });
++    },
++
++    translateInbound(input = {}) {
++      const inboundText = String(input.inboundText || input.message || '').trim();
++      if (!inboundText) return Promise.reject(new Error('inbound text required'));
++      return run({
++        keys: INBOUND_KEYS,
++        systemPrompt: 'Translate and suggest a bilingual response using only supplied public evidence. Return only the requested JSON fields.',
++        userPrompt: JSON.stringify({ inbound_text: inboundText, public_evidence: input.publicEvidence || {} }),
++        input: { ...input, inboundText }
++      });
++    }
++  };
++}
++
++module.exports = { createMatrixStreamText };

@@ -1,0 +1,1718 @@
+# Review package: 142dda2..711fde0
+
+## Commits
+711fde0 fix: harden matrix stream delivery reservations
+1b6dabf feat: add restricted matrix stream delivery
+
+## Files changed
+ .superpowers/sdd/task-4-report.md      |  85 +++++
+ scripts/test-matrix-api.js             |  56 +++
+ scripts/test-matrix-stream-delivery.js | 666 +++++++++++++++++++++++++++++++++
+ src/db.js                              |  54 +++
+ src/routes/matrix.js                   |  62 ++-
+ src/services/matrixStreamDelivery.js   | 516 +++++++++++++++++++++++++
+ 6 files changed, 1438 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/.superpowers/sdd/task-4-report.md b/.superpowers/sdd/task-4-report.md
+new file mode 100644
+index 0000000..ac89b43
+--- /dev/null
++++ b/.superpowers/sdd/task-4-report.md
+@@ -0,0 +1,85 @@
++# Task 4 Report — Restricted Single-Message Delivery
++
++## Status
++
++DONE_WITH_CONCERNS
++
++## Scope
++
++- Added `createMatrixStreamDelivery({ db, transport, clock, fromAddress, messageIdDomain })` with an injected transport only. The implementation does not construct a transport, load SMTP environment variables, import a mail library, or call any existing production sender.
++- Bound the first confirmation to the immutable persisted approved version and its append-only approval event. The separate send confirmation records actor, binding, chat, card event, expected work-item version, expected content hash, and idempotency key before invoking the injected transport.
++- Reloaded active actor/binding, explicit `matrixSend`, owner, suppression, current version, canonical content hash, recipient evidence/snapshot/domain/freshness, recomputed quality, identity/cooling/quota, persisted sender readiness, and current country/channel policy inside the immediate pre-transport transaction.
++- Persisted `pending` with a stable job-derived Message-ID, transitioned to `sending`, and invoked the injected transport with only `from`, persisted `to`, persisted `subject`, persisted English plain text, stable `messageId`, and the single reviewed version header. No HTML, attachment, reply override, callback, client recipient/body, or retry option is accepted.
++- Classified recipient acceptance as `accepted`, explicit 5xx/550 rejection as `failed`, and timeout/disconnect/unknown post-invocation outcomes as `ambiguous`. There is no internal retry. A definite failure permits a new deliberate key; accepted/ambiguous/sending state blocks a new attempt for the same approved content.
++- Replaced process-local ownership with a durable owner token and bounded lease. A second process polls only the durable job, never invokes transport, and either observes a terminal result or returns a fixed in-progress timeout. Expired ownership is compare-and-set to `ambiguous`; a late or replaced owner cannot overwrite durable state.
++- Reserved daily/domain capacity in the same immediate transaction that creates the job. `pending`, `sending`, `accepted`, and `ambiguous` consume the daily limit; `failed` releases it. Active and ambiguous jobs block the recipient domain, while accepted jobs enforce the 90-day domain window.
++- Reserved both internal start/result event keys before transport in a dedicated immutable table. The user idempotency key is not reused as a global stream-event key, and a trigger prevents unrelated events from taking a reserved delivery key.
++- Bound readiness to the configured sender domain, freshness window, and exact configured selector parsed from the canonical readiness detail JSON.
++- Scheduled the reply check only inside the accepted durable result transaction. Failed and ambiguous results create no reply check.
++- Added the narrow send API with an exact five-field allowlist. Its response is fixed to `state`, `error_class`, and `work_item_version`; Message-ID is persisted only in the delivery job and is absent from public API results and stream event diagnostics.
++- Added `country_code` to the server-derived immutable source snapshot so delivery can reload the exact reviewed country policy without accepting a client country field.
++- No costing, price, FOB, freight, quotation, order, or unrelated workflow was changed.
++
++## RED / GREEN Evidence
++
++1. Accepted delivery and replay
++   - RED: `node scripts/test-matrix-stream-delivery.js` failed with `MODULE_NOT_FOUND` for `matrixStreamDelivery`.
++   - GREEN: the fake transport received exactly six top-level fields, exact persisted recipient/subject/plain-text body, a stable job-derived Message-ID, and one reviewed header. Exact replay returned the same public result and kept transport count at one.
++   - Repair RED: authoritative replay was initially blocked by the accepted job's own 90-day cooling record.
++   - GREEN: replay now performs fresh authorization and exact request-scope verification while returning the already durable historical result without re-running one-time pre-send gates.
++2. Result classification and duplicate prevention
++   - RED: a fake `responseCode=550` exception escaped with raw server text.
++   - GREEN: 550 persists only `failed/recipient_rejected`; a new deliberate key may make one new attempt. `ETIMEDOUT` persists only `ambiguous/transport_outcome_unknown`, exposes no raw diagnostic, and blocks every new key.
++   - Two overlapping exact confirmations share the in-process durable job result and invoke transport exactly once. A restarted-process replay of a leftover `sending` job becomes `ambiguous` instead of retrying.
++   - Repair RED: resolved `undefined`, empty, unrelated, or contradictory accepted/rejected responses were treated as definite failure.
++   - GREEN: only an exact accepted recipient without an exact rejection is `accepted`; only an exact rejected recipient without acceptance is `failed`; every other resolved outcome is durable `ambiguous` and blocks resend.
++   - Repair RED: two service instances could treat the same durable `sending` row as locally owned, and a late owner could overwrite a recovered result.
++   - GREEN: active-lease replays poll without transport or mutation, stale leases are CAS-recovered to `ambiguous`, owner replacement rejects the old finalizer, and late results cannot overwrite the durable terminal state.
++3. Fresh fail-closed gates
++   - Mutation tests revoke or alter binding, owner, current version, expected hash, recipient evidence, quality, suppression, sender readiness, country policy, 90-day cooling, and daily quota.
++   - Every mutation rejects before transport and leaves the fake transport count at zero.
++   - Repair RED: readiness accepted a fresh row without proving the configured selector, and quota/cooling checks had no in-flight reservation.
++   - GREEN: missing/wrong/malformed selector detail fails closed; two database connections racing the same domain or the fifth/sixth daily slots allow only the single transaction that owns available capacity to reach transport.
++4. Send API
++   - RED: the route returned 404.
++   - GREEN: the exact five identifier fields reach the injected service; recipient, subject, body, SMTP host, callback URL, attachment, and retry fields each return 400 before the service call.
++   - RED: the Task 3 source snapshot lacked `country_code`, preventing server-side policy reload.
++   - GREEN: the server-derived snapshot now persists the reviewed candidate country.
++   - RED: an injected service result containing `message_id` was passed through by the route.
++   - GREEN: the public response is an explicit three-field projection and cannot expose Message-ID or other dependency fields.
++   - Repair RED: the bounded cross-process waiter surfaced as a generic 500.
++   - GREEN: the API returns the fixed `503 delivery_in_progress` response without exposing internal state or diagnostics.
++5. Event-key isolation
++   - Repair RED: a client key colliding with an unrelated stream event failed before delivery, and predictable result keys could collide after transport.
++   - GREEN: random job-bound internal start/result keys are collision-checked and atomically pre-reserved before transport; raw client keys and legacy predictable collisions do not affect delivery persistence.
++
++## Verification
++
++- `node scripts/test-matrix-stream-delivery.js` — PASS.
++- `node scripts/test-matrix-api.js` — PASS on the approved localhost-capable path.
++- `node scripts/test-matrix-stream-review.js` — PASS.
++- `node scripts/test-matrix-stream-gates.js` — PASS.
++- `node scripts/test-matrix-policy.js` — PASS.
++- `node scripts/test-packet-gate.js` — PASS.
++- `node scripts/test-admin-access-regression.js` — PASS.
++- `node scripts/smoke-test.js` — PASS.
++- `node --check` on the database schema, delivery service, Matrix route, delivery tests, and API tests — PASS.
++- Static production-source boundary assertions — PASS: one injected `transport.sendMail` call site; no transport construction, SMTP environment access, mail-library import, attachment, HTML, reply override, callback, or automatic retry capability.
++- `git diff --check` — PASS.
++
++## Concerns
++
++- Production transport construction and rollout remain intentionally absent. Without an injected reviewed delivery service the endpoint fails closed with `delivery_unavailable`; Task 7/8 controlled rollout must separately retain the disabled flag and explicit operator grant.
++- Sender readiness is consumed from the persisted, unexpired Task 2A result. Delivery does not perform DNS, TLS, or SMTP verification itself and never calls a verification transport.
++- `accepted` means only that the injected receiving transport accepted the recipient for queueing. It does not mean inbox delivery, reply, editorial acceptance, publication, or a live external result.
++- A post-invocation timeout or disconnect is deliberately ambiguous and cannot be resent automatically. Manual reconciliation remains required.
++- Lease renewal/heartbeat is intentionally absent. If an injected transport takes beyond the bounded lease, finalization is conservatively `ambiguous`; this favors duplicate prevention over claiming a late definite result.
++- `ambiguous` reservations consume their Shanghai-day quota and retain the domain reservation until manual reconciliation. There is no automatic expiry or automatic retry path.
++- The existing reply-check calendar excludes weekends but does not infer public holidays.
++- Automated fake-transport tests and local API calls are not approval for any real external message. Every real message still requires the user's explicit final approval for that exact recipient, subject, and plain-text body.
++
++## 蒸馏进度
++
++- 已确认模块：不可变 approved version 与双确认审计链、exact persisted body/recipient、selector-bound readiness、durable owner/lease CAS、跨进程单次 transport、原子 daily/domain reservation、预留内部事件键、严格 accepted/failed/ambiguous 分类、accepted-only follow-up、窄化 API 与固定超时边界。
++- 未解决模块：生产 transport 受控接线、lease heartbeat 取舍、ambiguous 人工对账与容量释放、法定节假日日历；均未被本地 fake-transport 测试宣称为完成。
++- 下一优先知识缺口：Task 7/8 受控 rollout 中 ambiguous reconciliation 的授权操作、容量释放审计和逐封最终批准证据。
+diff --git a/scripts/test-matrix-api.js b/scripts/test-matrix-api.js
+index 14f33be..5b05bf1 100644
+--- a/scripts/test-matrix-api.js
++++ b/scripts/test-matrix-api.js
+@@ -504,20 +504,21 @@ function reviewState(workItemId) {
+       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+       body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
+     });
+     assert.strictEqual(createdVersion.status, 201, JSON.stringify(createdVersion.body));
+     assert.strictEqual(createdVersion.body.revision, 1);
+     assert.strictEqual(createdVersion.body.recipient_email, 'team@alpha.test');
+     assert.strictEqual(createdVersion.body.recipient_source_url, 'https://alpha.test/contact');
+     assert.strictEqual(createdVersion.body.work_item_version, 2);
+     assert.ok(createdVersion.body.quality_score >= 80);
+     assert.strictEqual(JSON.parse(createdVersion.body.quality_json).passed, true);
++    assert.strictEqual(JSON.parse(createdVersion.body.source_snapshot_json).country_code, 'VN');
+     mutateCandidate(db => {
+       db.prepare("UPDATE cache_records SET public_email='', contact_url='' WHERE id=1").run();
+       db.prepare('DELETE FROM cache_evidence WHERE record_id=1').run();
+     });
+     const createdReplayState = reviewState(workItemId);
+     const createdReplay = await request(versionRoute, {
+       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
+       body: { expected_work_version: 1, idempotency_key: 'draft-api-1' }
+     });
+     assert.strictEqual(createdReplay.status, 200, JSON.stringify(createdReplay.body));
+@@ -608,36 +609,91 @@ function reviewState(workItemId) {
+       body_en: current.body_en,
+       body_cn: current.body_cn
+     });
+     const injectedTextService = {
+       revise(input) {
+         providerCalls += 1;
+         return providerImpl(input);
+       }
+     };
+     const claimOptions = { leaseMs: 5000, waitMs: 1000, pollMs: 10 };
++    const deliveryCalls = [];
++    let deliveryImpl = async () => ({ state: 'accepted', error_class: '', work_item_version: 4, message_id: '<must-not-leave-api@sender.test>' });
++    const injectedDeliveryService = {
++      async confirm(input) {
++        deliveryCalls.push(input);
++        return deliveryImpl(input);
++      }
++    };
+     const injectedApp = express();
+     injectedApp.use(express.json());
+     injectedApp.use('/api/matrix', createMatrixBridgeAuth({ db: injectedDb, bridgeToken }));
+     injectedApp.use('/api/matrix', createMatrixRouter({
+       db: injectedDb,
+       audit: () => undefined,
+       candidateDbPath,
+       reviewService: injectedReviewService,
++      deliveryService: injectedDeliveryService,
+       textService: injectedTextService,
+       claimOptions
+     }));
+     const injectedServer = await new Promise((resolve, reject) => {
+       const server = injectedApp.listen(injectedPort, '127.0.0.1', () => resolve(server));
+       server.once('error', reject);
+     });
+     try {
++      const sendRoute = `${versionRoute}/${createdVersion.body.id}/send`;
++      const sendBody = {
++        expected_work_version: 3,
++        expected_content_hash: createdVersion.body.content_hash,
++        chat_id: 'chat-send-api',
++        card_event_id: 'card-send-api',
++        idempotency_key: 'send-api-1'
++      };
++      const sent = await request(sendRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: sendBody
++      });
++      assert.deepStrictEqual(sent, {
++        status: 200,
++        body: { state: 'accepted', error_class: '', work_item_version: 4 }
++      });
++      assert.strictEqual(deliveryCalls.length, 1);
++      assert.deepStrictEqual(deliveryCalls[0], {
++        actorUserId: 103,
++        bindingId: 1,
++        workItemId,
++        versionId: createdVersion.body.id,
++        expectedWorkVersion: 3,
++        expectedContentHash: createdVersion.body.content_hash,
++        chatId: 'chat-send-api',
++        cardEventId: 'card-send-api',
++        idempotencyKey: 'send-api-1'
++      });
++      deliveryImpl = async () => { throw new Error('delivery in progress timeout'); };
++      const timedOut = await request(sendRoute, {
++        port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++        body: { ...sendBody, idempotency_key: 'send-api-timeout-1' }
++      });
++      assert.deepStrictEqual(timedOut, {
++        status: 503,
++        body: { error: { code: 'delivery_in_progress', message: 'Delivery confirmation is still in progress.' } }
++      });
++      deliveryImpl = async () => ({ state: 'accepted', error_class: '', work_item_version: 4 });
++      for (const field of ['recipient', 'subject', 'body', 'smtp_host', 'callback_url', 'attachment', 'retry']) {
++        const rejected = await request(sendRoute, {
++          port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',
++          body: { ...sendBody, idempotency_key: `send-api-reject-${field}`, [field]: true }
++        });
++        assert.strictEqual(rejected.status, 400, `${field}: ${JSON.stringify(rejected.body)}`);
++      }
++      assert.strictEqual(deliveryCalls.length, 2, 'unknown send fields must be rejected before delivery service');
++
+       const reviseBody = {
+         expected_work_version: 3,
+         base_version_id: createdVersion.body.id,
+         revision_instruction: '保持证据边界并缩短措辞',
+         idempotency_key: 'revision-api-success-1'
+       };
+       const revisedVersion = await request(versionRoute, {
+         port: injectedPort, method: 'POST', serviceToken: bridgeToken, openId: 'ou-service', body: reviseBody
+       });
+       assert.strictEqual(revisedVersion.status, 201, JSON.stringify(revisedVersion.body));
+diff --git a/scripts/test-matrix-stream-delivery.js b/scripts/test-matrix-stream-delivery.js
+new file mode 100644
+index 0000000..8c583a6
+--- /dev/null
++++ b/scripts/test-matrix-stream-delivery.js
+@@ -0,0 +1,666 @@
++'use strict';
++
++const assert = require('node:assert');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const Database = require('better-sqlite3');
++
++const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-delivery-'));
++process.env.DB_PATH = path.join(root, 'app.db');
++
++const { db, initDb } = require('../src/db');
++const review = require('../src/services/matrixStreamReview');
++const { createMatrixStreamDelivery } = require('../src/services/matrixStreamDelivery');
++
++initDb();
++
++const NOW = '2026-07-18T01:00:00.000Z';
++const senderId = 701;
++
++function seedApprovedFixture(index = 1, { lowQuality = false, organizationKey = '' } = {}) {
++  db.prepare(`
++    INSERT INTO users (id, username, password, role, status, permissions_json, created_at)
++    VALUES (?, ?, 'test-only', 'foreign_trade_crm_admin', 'active', ?, ?)
++  `).run(senderId + index - 1, `matrix-delivery-${index}`, JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: true } }), NOW);
++  const actorUserId = senderId + index - 1;
++  const bindingId = Number(db.prepare(`
++    INSERT INTO matrix_actor_bindings (feishu_open_id, user_id, status, bound_by, bound_at)
++    VALUES (?, ?, 'active', ?, ?)
++  `).run(`ou-delivery-${index}`, actorUserId, actorUserId, NOW).lastInsertRowid);
++  const workItemId = Number(db.prepare(`
++    INSERT INTO matrix_work_items (
++      candidate_id, stage, owner_user_id, current_summary, next_action,
++      version, created_at, updated_at, stream_state
++    ) VALUES (?, 'selected', ?, '', '', 1, ?, ?, 'selected')
++  `).run(9000 + index, actorUserId, NOW, NOW).lastInsertRowid);
++
++  const organization = organizationKey || (index === 1 ? 'alpha' : `alpha${index}`);
++  const organizationDomain = `${organization}.test`;
++  const company = index === 1 ? 'Alpha Coffee' : `Alpha ${index} Coffee`;
++
++  const recipient = {
++    email: `sales@${organizationDomain}`,
++    sourceUrl: `https://${organizationDomain}/contact`,
++    verifiedAt: '2026-07-17T00:00:00.000Z',
++    kind: 'public_company'
++  };
++  const sourceSnapshot = {
++    organization_domain: organizationDomain,
++    recipient_email: recipient.email,
++    source_url: recipient.sourceUrl,
++    country_code: 'VN',
++    company,
++    categories: ['coffee'],
++    products: ['250g roasted coffee', '500g roasted coffee'],
++    entryProduct: 'high-barrier valve pouch',
++    supportedClaims: ['stable repeat printing'],
++    evidenceIds: [11, 12]
++  };
++  db.prepare(`
++    INSERT INTO matrix_stream_recipient_evidence (
++      work_item_id, organization_domain, recipient_email, source_url, verified_at,
++      snapshot_json, status, created_by, created_at
++    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
++  `).run(workItemId, organizationDomain, recipient.email, recipient.sourceUrl, recipient.verifiedAt,
++    JSON.stringify(sourceSnapshot), actorUserId, NOW);
++
++  const approvedBody = lowQuality ? 'Hello' : `Dear ${company} team,\nWe reviewed your 250g and 500g roasted coffee range. We would like to discuss high-barrier valve pouches with stable repeat printing. Could you share your current structure and annual volume?\nBest regards`;
++  const created = review.createInitialVersion(db, {
++    actorUserId,
++    workItemId,
++    expectedWorkVersion: 1,
++    recipient,
++    subject: lowQuality ? 'Hello' : `250g and 500g coffee pouch options for ${company}`,
++    bodyEn: approvedBody,
++    bodyCn: lowQuality ? '你好' : '您好，我们查看了贵司250g和500g烘焙咖啡产品，希望沟通高阻隔带阀袋及稳定套色。请问当前材料结构和年用量？',
++    strategySummary: 'official evidence reviewed',
++    sourceSnapshot,
++    idempotencyKey: `delivery-version-create-${index}`
++  });
++  const version = review.approveVersion(db, {
++    actorUserId,
++    workItemId,
++    versionId: created.id,
++    expectedWorkVersion: 2,
++    expectedContentHash: created.content_hash,
++    idempotencyKey: `delivery-version-approve-${index}`
++  });
++
++  db.prepare(`
++    INSERT OR IGNORE INTO matrix_stream_sender_checks (
++      sender_domain, checked_at, expires_at, spf_ok, dkim_ok, dmarc_ok,
++      tls_ok, smtp_ok, detail_json
++    ) VALUES ('sender.test', '2026-07-18T00:00:00.000Z', '2026-07-19T00:00:00.000Z', 1, 1, 1, 1, 1, '{"selector":"selector"}')
++  `).run();
++  db.prepare(`
++    INSERT OR REPLACE INTO matrix_stream_country_policies (
++      country_code, channel, status, sender_identity_required, opt_out_required,
++      reviewed_by, reviewed_at, expires_at, source_urls_json
++    ) VALUES ('VN', 'email', 'approved', 1, 1, ?, '2026-07-17T00:00:00.000Z',
++      '2026-08-17T00:00:00.000Z', '["https://authority.test/policy"]')
++  `).run(actorUserId);
++  return { actorUserId, bindingId, workItemId, version, approvedBody };
++}
++
++function confirmationInput(fixture, key) {
++  return {
++    actorUserId: fixture.actorUserId,
++    bindingId: fixture.bindingId,
++    workItemId: fixture.workItemId,
++    versionId: fixture.version.id,
++    expectedWorkVersion: 3,
++    expectedContentHash: fixture.version.content_hash,
++    chatId: `chat-${key}`,
++    cardEventId: `card-${key}`,
++    idempotencyKey: key
++  };
++}
++
++(async () => {
++  try {
++    const fixture = seedApprovedFixture();
++    const accepted = [];
++    const service = createMatrixStreamDelivery({
++      db,
++      fromAddress: 'sales@sender.test',
++      messageIdDomain: 'sender.test',
++      dkimSelector: 'selector',
++      clock: () => new Date(NOW),
++      transport: {
++        sendMail: async mail => {
++          accepted.push(mail);
++          return { accepted: [mail.to], rejected: [], messageId: mail.messageId };
++        }
++      }
++    });
++    const input = confirmationInput(fixture, 'send-1');
++    const result = await service.confirm(input);
++    assert.strictEqual(result.state, 'accepted');
++    assert.strictEqual(accepted.length, 1);
++    assert.deepStrictEqual(Object.keys(accepted[0]).sort(), ['from', 'headers', 'messageId', 'subject', 'text', 'to'].sort());
++    assert.strictEqual(accepted[0].from, 'sales@sender.test');
++    assert.strictEqual(accepted[0].to, 'sales@alpha.test');
++    assert.strictEqual(accepted[0].subject, fixture.version.subject);
++    assert.strictEqual(accepted[0].text, fixture.approvedBody);
++    assert.match(accepted[0].messageId, /^<matrix-stream-/);
++    assert.deepStrictEqual(accepted[0].headers, { 'X-Matrix-Stream-Version': String(fixture.version.id) });
++    assert.deepStrictEqual(await service.confirm(input), result);
++    assert.strictEqual(accepted.length, 1);
++    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_reply_checks').get().count, 1);
++    assert.ok(!JSON.stringify(result).includes(accepted[0].messageId));
++    assert.ok(!JSON.stringify(db.prepare('SELECT * FROM matrix_stream_events').all()).includes(accepted[0].messageId));
++
++    const failedFixture = seedApprovedFixture(2);
++    let failedCalls = 0;
++    const failedService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: {
++        sendMail: async mail => {
++          failedCalls += 1;
++          if (failedCalls === 1) {
++            const error = new Error('550 raw server detail SMTP_PASS=secret');
++            error.responseCode = 550;
++            throw error;
++          }
++          return { accepted: [mail.to], rejected: [] };
++        }
++      }
++    });
++    const failed = await failedService.confirm(confirmationInput(failedFixture, 'send-failed-1'));
++    assert.deepStrictEqual(failed, { state: 'failed', error_class: 'recipient_rejected', work_item_version: 3 });
++    const deliberateRetry = await failedService.confirm(confirmationInput(failedFixture, 'send-failed-2'));
++    assert.strictEqual(deliberateRetry.state, 'accepted');
++    assert.strictEqual(failedCalls, 2, 'definite failure permits one new deliberate key only');
++    const failedRows = db.prepare('SELECT * FROM matrix_stream_jobs WHERE work_item_id = ? ORDER BY id').all(failedFixture.workItemId);
++    assert.deepStrictEqual(failedRows.map(row => row.state), ['failed', 'accepted']);
++    assert.ok(!JSON.stringify(failedRows).includes('SMTP_PASS'));
++    assert.ok(!JSON.stringify(failedRows).includes('raw server detail'));
++
++    const rejectedFixture = seedApprovedFixture(37);
++    let rejectedCalls = 0;
++    const rejectedService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { rejectedCalls += 1; return { accepted: [], rejected: [mail.to] }; } }
++    });
++    const rejectedResult = await rejectedService.confirm(confirmationInput(rejectedFixture, 'send-explicit-rejected'));
++    assert.strictEqual(rejectedResult.state, 'failed');
++    assert.strictEqual(rejectedResult.error_class, 'recipient_rejected');
++    assert.strictEqual(rejectedCalls, 1);
++
++    const ambiguousFixture = seedApprovedFixture(3);
++    let ambiguousCalls = 0;
++    const ambiguousService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async () => {
++        ambiguousCalls += 1;
++        const error = new Error('socket timeout host=private SMTP_USER=secret');
++        error.code = 'ETIMEDOUT';
++        throw error;
++      } }
++    });
++    const ambiguous = await ambiguousService.confirm(confirmationInput(ambiguousFixture, 'send-ambiguous-1'));
++    assert.strictEqual(ambiguous.state, 'ambiguous');
++    await assert.rejects(
++      () => ambiguousService.confirm(confirmationInput(ambiguousFixture, 'send-ambiguous-2')),
++      /ambiguous blocks resend/
++    );
++    assert.strictEqual(ambiguousCalls, 1, 'ambiguous delivery must never retry internally or under a new key');
++    const ambiguousRow = db.prepare('SELECT * FROM matrix_stream_jobs WHERE work_item_id = ?').get(ambiguousFixture.workItemId);
++    assert.ok(!JSON.stringify(ambiguousRow).includes('SMTP_USER'));
++    assert.ok(!JSON.stringify(ambiguousRow).includes('private'));
++
++    const forbiddenFixture = seedApprovedFixture(4);
++    db.prepare('UPDATE users SET permissions_json = ? WHERE id = ?')
++      .run(JSON.stringify({ modules: { crm: true }, capabilities: { matrixSend: false } }), forbiddenFixture.actorUserId);
++    let forbiddenCalls = 0;
++    const forbiddenService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async () => { forbiddenCalls += 1; return { accepted: [] }; } }
++    });
++    await assert.rejects(() => forbiddenService.confirm(confirmationInput(forbiddenFixture, 'send-forbidden')), /matrixSend capability/);
++    assert.strictEqual(forbiddenCalls, 0);
++    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_jobs WHERE work_item_id = ?').get(forbiddenFixture.workItemId).count, 0);
++
++    const concurrentFixture = seedApprovedFixture(5);
++    let concurrentCalls = 0;
++    let releaseTransport;
++    let enterTransport;
++    const entered = new Promise(resolve => { enterTransport = resolve; });
++    const release = new Promise(resolve => { releaseTransport = resolve; });
++    const concurrentService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => {
++        concurrentCalls += 1;
++        enterTransport();
++        await release;
++        return { accepted: [mail.to], rejected: [] };
++      } }
++    });
++    const concurrentInput = confirmationInput(concurrentFixture, 'send-concurrent');
++    const concurrentFirst = concurrentService.confirm(concurrentInput);
++    await entered;
++    const concurrentSecond = concurrentService.confirm(concurrentInput);
++    releaseTransport();
++    const concurrentResults = await Promise.all([concurrentFirst, concurrentSecond]);
++    assert.deepStrictEqual(concurrentResults[0], concurrentResults[1]);
++    assert.strictEqual(concurrentResults[0].state, 'accepted');
++    assert.strictEqual(concurrentCalls, 1);
++
++    const extraFixture = seedApprovedFixture(6);
++    let extraCalls = 0;
++    const extraService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async () => { extraCalls += 1; return { accepted: [] }; } }
++    });
++    for (const field of ['recipient', 'body', 'smtpHost', 'callbackUrl', 'attachment', 'retry']) {
++      await assert.rejects(
++        () => extraService.confirm({ ...confirmationInput(extraFixture, `send-extra-${field}`), [field]: true }),
++        /unknown delivery confirmation field/
++      );
++    }
++    assert.strictEqual(extraCalls, 0);
++
++    assert.throws(() => createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', clock: () => new Date(NOW),
++      transport: { sendMail: async () => ({ accepted: [] }) }
++    }), /DKIM selector/i);
++    const selectorFixture = seedApprovedFixture(18);
++    let selectorCalls = 0;
++    const wrongSelectorService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'wrong-selector',
++      clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { selectorCalls += 1; return { accepted: [mail.to] }; } }
++    });
++    await assert.rejects(
++      () => wrongSelectorService.confirm(confirmationInput(selectorFixture, 'send-wrong-selector')),
++      /sender readiness/
++    );
++    assert.strictEqual(selectorCalls, 0);
++    db.prepare("UPDATE matrix_stream_sender_checks SET detail_json='not-json' WHERE sender_domain='sender.test'").run();
++    const malformedSelectorService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector',
++      clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { selectorCalls += 1; return { accepted: [mail.to] }; } }
++    });
++    await assert.rejects(
++      () => malformedSelectorService.confirm(confirmationInput(selectorFixture, 'send-malformed-selector')),
++      /sender readiness/
++    );
++    assert.strictEqual(selectorCalls, 0);
++    db.prepare("UPDATE matrix_stream_sender_checks SET detail_json='{\"selector\":\"selector\"}' WHERE sender_domain='sender.test'").run();
++
++    db.prepare(`
++      UPDATE matrix_stream_jobs
++      SET reservation_day='2026-07-17', created_at='2026-07-17T00:00:00.000Z', updated_at='2026-07-17T00:00:00.000Z'
++      WHERE state IN ('accepted','ambiguous')
++    `).run();
++
++    const startCollisionFixture = seedApprovedFixture(19);
++    const startCollisionInput = confirmationInput(startCollisionFixture, 'global-review-event-key');
++    db.prepare(`
++      INSERT INTO matrix_stream_events (
++        work_item_id, version_id, actor_user_id, action, idempotency_key,
++        content_hash, before_json, after_json, diagnostic, created_at
++      ) VALUES (?, ?, ?, 'unrelated_review_event', ?, '', '{}', '{}', '', ?)
++    `).run(startCollisionFixture.workItemId, startCollisionFixture.version.id,
++      startCollisionFixture.actorUserId, startCollisionInput.idempotencyKey, NOW);
++    let startCollisionCalls = 0;
++    const startCollisionService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { startCollisionCalls += 1; return { accepted: [mail.to] }; } }
++    });
++    assert.strictEqual((await startCollisionService.confirm(startCollisionInput)).state, 'accepted');
++    assert.strictEqual(startCollisionCalls, 1);
++    const startEvent = db.prepare("SELECT * FROM matrix_stream_events WHERE job_id IS NOT NULL AND action='delivery_started' AND work_item_id=?").get(startCollisionFixture.workItemId);
++    assert.notStrictEqual(startEvent.idempotency_key, startCollisionInput.idempotencyKey);
++
++    const resultCollisionFixture = seedApprovedFixture(20);
++    const nextJobId = Number(db.prepare("SELECT COALESCE(seq, 0) + 1 AS id FROM sqlite_sequence WHERE name='matrix_stream_jobs'").get()?.id || 1);
++    db.prepare(`
++      INSERT INTO matrix_stream_events (
++        work_item_id, version_id, actor_user_id, action, idempotency_key,
++        content_hash, before_json, after_json, diagnostic, created_at
++      ) VALUES (?, ?, ?, 'unrelated_result_collision', ?, '', '{}', '{}', '', ?)
++    `).run(resultCollisionFixture.workItemId, resultCollisionFixture.version.id,
++      resultCollisionFixture.actorUserId, `delivery-result-${nextJobId}`, NOW);
++    let resultCollisionCalls = 0;
++    const resultCollisionService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { resultCollisionCalls += 1; return { accepted: [mail.to] }; } }
++    });
++    assert.strictEqual((await resultCollisionService.confirm(confirmationInput(resultCollisionFixture, 'send-result-collision'))).state, 'accepted');
++    assert.strictEqual(resultCollisionCalls, 1);
++    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM matrix_stream_delivery_event_keys WHERE job_id IN (?, ?)').get(startEvent.job_id, nextJobId).count, 4);
++
++    db.prepare(`
++      UPDATE matrix_stream_jobs
++      SET reservation_day='2026-07-17', created_at='2026-07-17T00:00:00.000Z', updated_at='2026-07-17T00:00:00.000Z'
++      WHERE state IN ('accepted','ambiguous')
++    `).run();
++
++    const unknownResponses = [
++      ['undefined', undefined],
++      ['empty-object', {}],
++      ['empty-lists', { accepted: [], rejected: [] }],
++      ['unrelated-lists', { accepted: ['other@outside.test'], rejected: [] }],
++      ['conflicting-lists', { accepted: ['TARGET'], rejected: ['TARGET'] }]
++    ];
++    for (let offset = 0; offset < unknownResponses.length; offset += 1) {
++      const [label, configured] = unknownResponses[offset];
++      const unknownFixture = seedApprovedFixture(21 + offset);
++      const target = unknownFixture.version.recipient_email;
++      const response = label === 'conflicting-lists'
++        ? { accepted: [target], rejected: [target] }
++        : configured;
++      let unknownCalls = 0;
++      const unknownService = createMatrixStreamDelivery({
++        db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++        transport: { sendMail: async () => { unknownCalls += 1; return response; } }
++      });
++      const unknownResult = await unknownService.confirm(confirmationInput(unknownFixture, `send-unknown-${label}`));
++      assert.strictEqual(unknownResult.state, 'ambiguous', label);
++      assert.strictEqual(unknownCalls, 1, label);
++      await assert.rejects(
++        () => unknownService.confirm(confirmationInput(unknownFixture, `send-unknown-${label}-retry`)),
++        /ambiguous blocks resend/
++      );
++      assert.strictEqual(unknownCalls, 1, `${label} must not retry`);
++    }
++
++    db.prepare(`
++      UPDATE matrix_stream_jobs
++      SET reservation_day='2026-07-17', created_at='2026-07-17T00:00:00.000Z', updated_at='2026-07-17T00:00:00.000Z'
++      WHERE state IN ('accepted','ambiguous')
++    `).run();
++
++    const activeLeaseFixture = seedApprovedFixture(30);
++    let leaseNowMs = Date.parse(NOW);
++    let activeOwnerCalls = 0;
++    let activeWaiterCalls = 0;
++    let releaseActive;
++    let enterActive;
++    const activeEntered = new Promise(resolve => { enterActive = resolve; });
++    const activeRelease = new Promise(resolve => { releaseActive = resolve; });
++    const activeOwner = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector',
++      clock: () => new Date(leaseNowMs), leaseMs: 5000, waitMs: 100, pollMs: 10,
++      transport: { sendMail: async mail => { activeOwnerCalls += 1; enterActive(); await activeRelease; return { accepted: [mail.to] }; } }
++    });
++    const secondDb = new Database(process.env.DB_PATH);
++    secondDb.pragma('foreign_keys = ON');
++    secondDb.pragma('busy_timeout = 5000');
++    const activeWaiter = createMatrixStreamDelivery({
++      db: secondDb, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector',
++      clock: () => new Date(leaseNowMs), leaseMs: 5000, waitMs: 60, pollMs: 10,
++      transport: { sendMail: async mail => { activeWaiterCalls += 1; return { accepted: [mail.to] }; } }
++    });
++    const activeInput = confirmationInput(activeLeaseFixture, 'send-active-owner');
++    const activeOwnerResult = activeOwner.confirm(activeInput);
++    await activeEntered;
++    await assert.rejects(() => activeWaiter.confirm(activeInput), /delivery in progress/i);
++    const activeJob = secondDb.prepare("SELECT * FROM matrix_stream_jobs WHERE idempotency_key=?").get(activeInput.idempotencyKey);
++    assert.strictEqual(activeJob.state, 'sending');
++    assert.ok(activeJob.owner_token);
++    assert.ok(Date.parse(activeJob.lease_expires_at) > leaseNowMs);
++    assert.strictEqual(activeWaiterCalls, 0);
++    releaseActive();
++    assert.strictEqual((await activeOwnerResult).state, 'accepted');
++    assert.strictEqual(activeOwnerCalls, 1);
++    secondDb.close();
++
++    const staleLeaseFixture = seedApprovedFixture(31);
++    let staleNowMs = Date.parse(NOW);
++    let staleOwnerCalls = 0;
++    let staleWaiterCalls = 0;
++    let releaseStale;
++    let enterStale;
++    const staleEntered = new Promise(resolve => { enterStale = resolve; });
++    const staleRelease = new Promise(resolve => { releaseStale = resolve; });
++    const staleOwner = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector',
++      clock: () => new Date(staleNowMs), leaseMs: 1000, waitMs: 100, pollMs: 10,
++      transport: { sendMail: async mail => { staleOwnerCalls += 1; enterStale(); await staleRelease; return { accepted: [mail.to] }; } }
++    });
++    const staleDb = new Database(process.env.DB_PATH);
++    staleDb.pragma('foreign_keys = ON');
++    staleDb.pragma('busy_timeout = 5000');
++    const staleWaiter = createMatrixStreamDelivery({
++      db: staleDb, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector',
++      clock: () => new Date(staleNowMs), leaseMs: 1000, waitMs: 100, pollMs: 10,
++      transport: { sendMail: async mail => { staleWaiterCalls += 1; return { accepted: [mail.to] }; } }
++    });
++    const staleInput = confirmationInput(staleLeaseFixture, 'send-stale-owner');
++    const staleOwnerResult = staleOwner.confirm(staleInput);
++    await staleEntered;
++    staleNowMs += 2000;
++    assert.strictEqual((await staleWaiter.confirm(staleInput)).state, 'ambiguous');
++    assert.strictEqual(staleWaiterCalls, 0);
++    releaseStale();
++    assert.strictEqual((await staleOwnerResult).state, 'ambiguous');
++    assert.strictEqual(staleOwnerCalls, 1);
++    assert.strictEqual(staleDb.prepare('SELECT state FROM matrix_stream_jobs WHERE idempotency_key=?').get(staleInput.idempotencyKey).state, 'ambiguous');
++    staleDb.close();
++
++    db.prepare("UPDATE matrix_stream_jobs SET reservation_day='2026-07-17' WHERE state IN ('accepted','ambiguous')").run();
++
++    const domainFixtureA = seedApprovedFixture(32, { organizationKey: 'shared-domain' });
++    const domainFixtureB = seedApprovedFixture(33, { organizationKey: 'shared-domain' });
++    let domainCallsA = 0;
++    let domainCallsB = 0;
++    let releaseDomain;
++    let enterDomain;
++    const domainEntered = new Promise(resolve => { enterDomain = resolve; });
++    const domainRelease = new Promise(resolve => { releaseDomain = resolve; });
++    const domainServiceA = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { domainCallsA += 1; enterDomain(); await domainRelease; return { accepted: [mail.to] }; } }
++    });
++    const domainDb = new Database(process.env.DB_PATH);
++    domainDb.pragma('foreign_keys = ON');
++    domainDb.pragma('busy_timeout = 5000');
++    const domainServiceB = createMatrixStreamDelivery({
++      db: domainDb, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { domainCallsB += 1; return { accepted: [mail.to] }; } }
++    });
++    const domainFirst = domainServiceA.confirm(confirmationInput(domainFixtureA, 'send-domain-a'));
++    await domainEntered;
++    await assert.rejects(() => domainServiceB.confirm(confirmationInput(domainFixtureB, 'send-domain-b')), /domain.*(?:reserved|cooling)/i);
++    assert.strictEqual(domainCallsB, 0);
++    releaseDomain();
++    assert.strictEqual((await domainFirst).state, 'accepted');
++    assert.strictEqual(domainCallsA, 1);
++    domainDb.close();
++
++    db.prepare(`
++      UPDATE matrix_stream_jobs
++      SET reservation_day='2026-07-17', created_at='2026-07-17T00:00:00.000Z', updated_at='2026-07-17T00:00:00.000Z'
++      WHERE state IN ('accepted','ambiguous')
++    `).run();
++    const quotaSeed = seedApprovedFixture(34);
++    for (let index = 0; index < 4; index += 1) {
++      db.prepare(`
++        INSERT INTO matrix_stream_jobs (
++          work_item_id, version_id, idempotency_key, content_hash, message_id, state,
++          attempt_count, error_class, redacted_diagnostic, created_by, created_at, updated_at,
++          owner_token, lease_expires_at, recipient_domain, reservation_day
++        ) VALUES (?, ?, ?, ?, ?, 'accepted', 1, '', '', ?, ?, ?, '', '', ?, '2026-07-18')
++      `).run(quotaSeed.workItemId, quotaSeed.version.id, `quota-reservation-${index}`, `${index}`.repeat(64),
++        `<quota-reservation-${index}@sender.test>`, quotaSeed.actorUserId, NOW, NOW, `quota-${index}.test`);
++    }
++    const dailyFixtureA = seedApprovedFixture(35);
++    const dailyFixtureB = seedApprovedFixture(36);
++    let dailyCallsA = 0;
++    let dailyCallsB = 0;
++    let releaseDaily;
++    let enterDaily;
++    const dailyEntered = new Promise(resolve => { enterDaily = resolve; });
++    const dailyRelease = new Promise(resolve => { releaseDaily = resolve; });
++    const dailyServiceA = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { dailyCallsA += 1; enterDaily(); await dailyRelease; return { accepted: [mail.to] }; } }
++    });
++    const dailyDb = new Database(process.env.DB_PATH);
++    dailyDb.pragma('foreign_keys = ON');
++    dailyDb.pragma('busy_timeout = 5000');
++    const dailyServiceB = createMatrixStreamDelivery({
++      db: dailyDb, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++      transport: { sendMail: async mail => { dailyCallsB += 1; return { accepted: [mail.to] }; } }
++    });
++    const dailyFirst = dailyServiceA.confirm(confirmationInput(dailyFixtureA, 'send-daily-a'));
++    await dailyEntered;
++    await assert.rejects(() => dailyServiceB.confirm(confirmationInput(dailyFixtureB, 'send-daily-b')), /daily.*(?:limit|reservation)/i);
++    assert.strictEqual(dailyCallsB, 0);
++    releaseDaily();
++    assert.strictEqual((await dailyFirst).state, 'accepted');
++    assert.strictEqual(dailyCallsA, 1);
++    dailyDb.close();
++    db.prepare(`
++      UPDATE matrix_stream_jobs
++      SET reservation_day='2026-07-17', created_at='2026-07-17T00:00:00.000Z', updated_at='2026-07-17T00:00:00.000Z'
++      WHERE state IN ('accepted','ambiguous')
++    `).run();
++
++    const lostOwnerFixture = seedApprovedFixture(38);
++    let lostNowMs = Date.parse(NOW);
++    let lostOwnerCalls = 0;
++    let lostRecoveryCalls = 0;
++    let releaseLostOwner;
++    let enterLostOwner;
++    const lostOwnerEntered = new Promise(resolve => { enterLostOwner = resolve; });
++    const lostOwnerRelease = new Promise(resolve => { releaseLostOwner = resolve; });
++    const lostOwnerService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector',
++      clock: () => new Date(lostNowMs), leaseMs: 5000, waitMs: 100, pollMs: 10,
++      transport: { sendMail: async mail => { lostOwnerCalls += 1; enterLostOwner(); await lostOwnerRelease; return { accepted: [mail.to] }; } }
++    });
++    const lostOwnerInput = confirmationInput(lostOwnerFixture, 'send-owner-token-lost');
++    const lostOwnerResult = lostOwnerService.confirm(lostOwnerInput);
++    await lostOwnerEntered;
++    db.prepare(`
++      UPDATE matrix_stream_jobs SET owner_token='replacement-owner', lease_expires_at=?
++      WHERE idempotency_key=? AND state='sending'
++    `).run(new Date(lostNowMs + 5000).toISOString(), lostOwnerInput.idempotencyKey);
++    releaseLostOwner();
++    await assert.rejects(() => lostOwnerResult, /ownership lost/);
++    const lostRow = db.prepare('SELECT * FROM matrix_stream_jobs WHERE idempotency_key=?').get(lostOwnerInput.idempotencyKey);
++    assert.strictEqual(lostRow.state, 'sending');
++    assert.strictEqual(lostRow.owner_token, 'replacement-owner');
++    lostNowMs += 6000;
++    const lostRecoveryService = createMatrixStreamDelivery({
++      db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector',
++      clock: () => new Date(lostNowMs), leaseMs: 5000, waitMs: 100, pollMs: 10,
++      transport: { sendMail: async mail => { lostRecoveryCalls += 1; return { accepted: [mail.to] }; } }
++    });
++    assert.strictEqual((await lostRecoveryService.confirm(lostOwnerInput)).state, 'ambiguous');
++    assert.strictEqual(lostOwnerCalls, 1);
++    assert.strictEqual(lostRecoveryCalls, 0);
++    db.prepare(`
++      UPDATE matrix_stream_jobs
++      SET reservation_day='2026-07-17', created_at='2026-07-17T00:00:00.000Z', updated_at='2026-07-17T00:00:00.000Z'
++      WHERE state IN ('accepted','ambiguous')
++    `).run();
++
++    function gateProbe(fixture) {
++      let calls = 0;
++      return {
++        get calls() { return calls; },
++        service: createMatrixStreamDelivery({
++          db, fromAddress: 'sales@sender.test', messageIdDomain: 'sender.test', dkimSelector: 'selector', clock: () => new Date(NOW),
++          transport: { sendMail: async mail => { calls += 1; return { accepted: [mail.to], rejected: [] }; } }
++        })
++      };
++    }
++
++    const hashFixture = seedApprovedFixture(7);
++    const hashProbe = gateProbe(hashFixture);
++    await assert.rejects(
++      () => hashProbe.service.confirm({ ...confirmationInput(hashFixture, 'send-stale-hash'), expectedContentHash: 'f'.repeat(64) }),
++      /content hash mismatch/
++    );
++    assert.strictEqual(hashProbe.calls, 0);
++
++    const bindingFixture = seedApprovedFixture(8);
++    db.prepare("UPDATE matrix_actor_bindings SET status='revoked', revoked_at=? WHERE id=?").run(NOW, bindingFixture.bindingId);
++    const bindingProbe = gateProbe(bindingFixture);
++    await assert.rejects(() => bindingProbe.service.confirm(confirmationInput(bindingFixture, 'send-revoked-binding')), /active actor binding/);
++    assert.strictEqual(bindingProbe.calls, 0);
++
++    const ownerFixture = seedApprovedFixture(9);
++    db.prepare('UPDATE matrix_work_items SET owner_user_id=? WHERE id=?').run(senderId, ownerFixture.workItemId);
++    const ownerProbe = gateProbe(ownerFixture);
++    await assert.rejects(() => ownerProbe.service.confirm(confirmationInput(ownerFixture, 'send-wrong-owner')), /not authorized/);
++    assert.strictEqual(ownerProbe.calls, 0);
++
++    const currentFixture = seedApprovedFixture(10);
++    db.prepare('UPDATE matrix_work_items SET current_stream_version_id=NULL WHERE id=?').run(currentFixture.workItemId);
++    const currentProbe = gateProbe(currentFixture);
++    await assert.rejects(() => currentProbe.service.confirm(confirmationInput(currentFixture, 'send-not-current')), /not current/);
++    assert.strictEqual(currentProbe.calls, 0);
++
++    const provenanceFixture = seedApprovedFixture(11);
++    db.prepare("UPDATE matrix_stream_recipient_evidence SET status='revoked' WHERE id=?").run(provenanceFixture.version.recipient_evidence_id);
++    const provenanceProbe = gateProbe(provenanceFixture);
++    await assert.rejects(() => provenanceProbe.service.confirm(confirmationInput(provenanceFixture, 'send-revoked-source')), /recipient provenance/);
++    assert.strictEqual(provenanceProbe.calls, 0);
++
++    const qualityFixture = seedApprovedFixture(12, { lowQuality: true });
++    assert.ok(qualityFixture.version.quality_score < 80);
++    const qualityProbe = gateProbe(qualityFixture);
++    await assert.rejects(() => qualityProbe.service.confirm(confirmationInput(qualityFixture, 'send-low-quality')), /quality final gate/);
++    assert.strictEqual(qualityProbe.calls, 0);
++
++    const suppressedFixture = seedApprovedFixture(13);
++    db.prepare("UPDATE matrix_work_items SET stage='suppressed', stream_state='suppressed' WHERE id=?").run(suppressedFixture.workItemId);
++    const suppressedProbe = gateProbe(suppressedFixture);
++    await assert.rejects(() => suppressedProbe.service.confirm(confirmationInput(suppressedFixture, 'send-suppressed')), /suppressed/);
++    assert.strictEqual(suppressedProbe.calls, 0);
++
++    const readinessFixture = seedApprovedFixture(14);
++    db.prepare("UPDATE matrix_stream_sender_checks SET expires_at='2026-07-18T00:30:00.000Z' WHERE sender_domain='sender.test'").run();
++    const readinessProbe = gateProbe(readinessFixture);
++    await assert.rejects(() => readinessProbe.service.confirm(confirmationInput(readinessFixture, 'send-expired-readiness')), /sender readiness/);
++    assert.strictEqual(readinessProbe.calls, 0);
++    db.prepare("UPDATE matrix_stream_sender_checks SET expires_at='2026-07-19T00:00:00.000Z' WHERE sender_domain='sender.test'").run();
++
++    const policyFixture = seedApprovedFixture(15);
++    db.prepare("UPDATE matrix_stream_country_policies SET status='blocked' WHERE country_code='VN' AND channel='email'").run();
++    const policyProbe = gateProbe(policyFixture);
++    await assert.rejects(() => policyProbe.service.confirm(confirmationInput(policyFixture, 'send-blocked-policy')), /country channel policy/);
++    assert.strictEqual(policyProbe.calls, 0);
++    db.prepare("UPDATE matrix_stream_country_policies SET status='approved' WHERE country_code='VN' AND channel='email'").run();
++
++    const coolingFixture = seedApprovedFixture(16);
++    db.prepare(`
++      INSERT INTO matrix_stream_jobs (
++        work_item_id, version_id, idempotency_key, content_hash, message_id, state,
++        attempt_count, error_class, redacted_diagnostic, created_by, created_at, updated_at
++      ) VALUES (?, ?, 'cooling-history', ?, '<cooling-history@sender.test>', 'accepted', 1, '', '', ?, ?, ?)
++    `).run(coolingFixture.workItemId, coolingFixture.version.id, '0'.repeat(64), coolingFixture.actorUserId, NOW, NOW);
++    const coolingProbe = gateProbe(coolingFixture);
++    await assert.rejects(() => coolingProbe.service.confirm(confirmationInput(coolingFixture, 'send-cooling')), /domain_cooling_90_days/);
++    assert.strictEqual(coolingProbe.calls, 0);
++
++    const quotaFixture = seedApprovedFixture(17);
++    for (let index = 0; index < 4; index += 1) {
++      db.prepare(`
++        INSERT INTO matrix_stream_jobs (
++          work_item_id, version_id, idempotency_key, content_hash, message_id, state,
++          attempt_count, error_class, redacted_diagnostic, created_by, created_at, updated_at
++        ) VALUES (?, ?, ?, ?, ?, 'accepted', 1, '', '', ?, ?, ?)
++      `).run(fixture.workItemId, fixture.version.id, `quota-history-${index}`, `${index + 1}`.repeat(64),
++        `<quota-history-${index}@sender.test>`, fixture.actorUserId, NOW, NOW);
++    }
++    const quotaProbe = gateProbe(quotaFixture);
++    await assert.rejects(() => quotaProbe.service.confirm(confirmationInput(quotaFixture, 'send-quota')), /daily_accepted_limit_5/);
++    assert.strictEqual(quotaProbe.calls, 0);
++
++    console.log('matrix stream delivery tests passed');
++  } finally {
++    db.close();
++    fs.rmSync(root, { recursive: true, force: true });
++  }
++})().catch(error => {
++  console.error(error);
++  process.exitCode = 1;
++});
+diff --git a/src/db.js b/src/db.js
+index 20f9d67..f9b98ca 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -907,20 +907,24 @@ function initDb() {
+       work_item_id INTEGER NOT NULL,
+       version_id INTEGER NOT NULL,
+       idempotency_key TEXT NOT NULL UNIQUE,
+       content_hash TEXT NOT NULL,
+       message_id TEXT NOT NULL UNIQUE,
+       state TEXT NOT NULL CHECK(state IN ('pending','sending','accepted','failed','ambiguous')),
+       attempt_count INTEGER NOT NULL DEFAULT 0,
+       error_class TEXT NOT NULL DEFAULT '',
+       redacted_diagnostic TEXT NOT NULL DEFAULT '',
+       created_by INTEGER NOT NULL,
++      owner_token TEXT NOT NULL DEFAULT '',
++      lease_expires_at TEXT NOT NULL DEFAULT '',
++      recipient_domain TEXT NOT NULL DEFAULT '',
++      reservation_day TEXT NOT NULL DEFAULT '',
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       FOREIGN KEY(work_item_id) REFERENCES matrix_work_items(id),
+       FOREIGN KEY(version_id) REFERENCES matrix_stream_versions(id)
+     );
+ 
+     CREATE TABLE IF NOT EXISTS matrix_stream_events (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       work_item_id INTEGER NOT NULL,
+       version_id INTEGER,
+@@ -932,20 +936,30 @@ function initDb() {
+       action TEXT NOT NULL,
+       idempotency_key TEXT NOT NULL UNIQUE,
+       request_fingerprint TEXT NOT NULL DEFAULT '',
+       content_hash TEXT NOT NULL DEFAULT '',
+       before_json TEXT NOT NULL DEFAULT '{}',
+       after_json TEXT NOT NULL DEFAULT '{}',
+       diagnostic TEXT NOT NULL DEFAULT '',
+       created_at TEXT NOT NULL
+     );
+ 
++    CREATE TABLE IF NOT EXISTS matrix_stream_delivery_event_keys (
++      event_key TEXT PRIMARY KEY,
++      job_id INTEGER NOT NULL,
++      event_kind TEXT NOT NULL CHECK(event_kind IN ('start','result')),
++      request_hash TEXT NOT NULL,
++      created_at TEXT NOT NULL,
++      UNIQUE(job_id, event_kind),
++      FOREIGN KEY(job_id) REFERENCES matrix_stream_jobs(id)
++    );
++
+     CREATE TABLE IF NOT EXISTS matrix_stream_api_requests (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       actor_user_id INTEGER NOT NULL,
+       work_item_id INTEGER NOT NULL,
+       action TEXT NOT NULL CHECK(action IN ('create','revise','approve')),
+       idempotency_key TEXT NOT NULL UNIQUE,
+       request_fingerprint TEXT NOT NULL,
+       version_id INTEGER NOT NULL,
+       response_json TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+@@ -1040,20 +1054,47 @@ function initDb() {
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_events_no_delete
+     BEFORE DELETE ON matrix_stream_events
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_events is append-only');
+     END;
+ 
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_delivery_event_keys_no_update
++    BEFORE UPDATE ON matrix_stream_delivery_event_keys
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_delivery_event_keys is immutable');
++    END;
++
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_delivery_event_keys_no_delete
++    BEFORE DELETE ON matrix_stream_delivery_event_keys
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix_stream_delivery_event_keys is immutable');
++    END;
++
++    CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_reserved_event_key
++    BEFORE INSERT ON matrix_stream_events
++    WHEN EXISTS (
++      SELECT 1 FROM matrix_stream_delivery_event_keys k
++      WHERE k.event_key = NEW.idempotency_key
++        AND NOT (
++          k.job_id = NEW.job_id
++          AND ((k.event_kind = 'start' AND NEW.action = 'delivery_started')
++            OR (k.event_kind = 'result' AND NEW.action IN ('delivery_accepted','delivery_failed','delivery_ambiguous')))
++        )
++    )
++    BEGIN
++      SELECT RAISE(ABORT, 'matrix stream delivery event key is reserved');
++    END;
++
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_api_requests_no_update
+     BEFORE UPDATE ON matrix_stream_api_requests
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_api_requests is immutable');
+     END;
+ 
+     CREATE TRIGGER IF NOT EXISTS trg_matrix_stream_api_requests_no_delete
+     BEFORE DELETE ON matrix_stream_api_requests
+     BEGIN
+       SELECT RAISE(ABORT, 'matrix_stream_api_requests is immutable');
+@@ -1103,20 +1144,33 @@ function initDb() {
+   if (!sessionColumns.has('snapshot_key')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN snapshot_key TEXT NOT NULL DEFAULT ''");
+   if (!sessionColumns.has('candidate_ids_json')) db.exec("ALTER TABLE matrix_sessions ADD COLUMN candidate_ids_json TEXT NOT NULL DEFAULT '[]'");
+ 
+   const matrixWorkItemColumns = new Set(db.prepare('PRAGMA table_info(matrix_work_items)').all().map(column => column.name));
+   if (!matrixWorkItemColumns.has('stream_state')) db.exec("ALTER TABLE matrix_work_items ADD COLUMN stream_state TEXT NOT NULL DEFAULT 'selected'");
+   if (!matrixWorkItemColumns.has('current_stream_version_id')) db.exec('ALTER TABLE matrix_work_items ADD COLUMN current_stream_version_id INTEGER');
+ 
+   const matrixStreamVersionColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_versions)').all().map(column => column.name));
+   if (!matrixStreamVersionColumns.has('recipient_evidence_id')) db.exec('ALTER TABLE matrix_stream_versions ADD COLUMN recipient_evidence_id INTEGER');
+ 
++  const matrixStreamJobColumns = new Set(db.prepare('PRAGMA table_info(matrix_stream_jobs)').all().map(column => column.name));
++  if (!matrixStreamJobColumns.has('owner_token')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''");
++  if (!matrixStreamJobColumns.has('lease_expires_at')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''");
++  if (!matrixStreamJobColumns.has('recipient_domain')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN recipient_domain TEXT NOT NULL DEFAULT ''");
++  if (!matrixStreamJobColumns.has('reservation_day')) db.exec("ALTER TABLE matrix_stream_jobs ADD COLUMN reservation_day TEXT NOT NULL DEFAULT ''");
++  db.exec(`
++    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_stream_jobs_active_domain_reservation
++      ON matrix_stream_jobs(recipient_domain)
++      WHERE recipient_domain <> '' AND state IN ('pending','sending','ambiguous');
++    CREATE INDEX IF NOT EXISTS idx_matrix_stream_jobs_reservation_day
++      ON matrix_stream_jobs(reservation_day, state);
++  `);
++
+   db.exec(`
+     DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_content_immutable;
+     DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approved_no_delete;
+     DROP TRIGGER IF EXISTS trg_matrix_stream_versions_content_immutable;
+     DROP TRIGGER IF EXISTS trg_matrix_stream_versions_no_delete;
+     DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approval_metadata;
+     DROP TRIGGER IF EXISTS trg_matrix_stream_versions_approval_lifecycle;
+ 
+     CREATE TRIGGER trg_matrix_stream_versions_content_immutable
+     BEFORE UPDATE ON matrix_stream_versions
+diff --git a/src/routes/matrix.js b/src/routes/matrix.js
+index 7c8f012..83a2c41 100644
+--- a/src/routes/matrix.js
++++ b/src/routes/matrix.js
+@@ -8,20 +8,21 @@ const { createPacketGate } = require('../lib/packetGate');
+ const { createMatrixStreamText } = require('../services/matrixStreamText');
+ 
+ const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
+ const REGIONS = new Set(['africa', 'americas', 'asia', 'europe', 'oceania']);
+ const PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);
+ const STATUSES = new Set(['valid', 'needs_review']);
+ const STAGES = new Set(['selected', 'draft_pending', 'review_pending', 'suppressed']);
+ const LIST_FIELDS = new Set(['region', 'country', 'category', 'priority', 'status', 'page', 'page_size']);
+ const VERSION_FIELDS = new Set(['expected_work_version', 'base_version_id', 'revision_instruction', 'idempotency_key']);
+ const APPROVAL_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'idempotency_key']);
++const SEND_FIELDS = new Set(['expected_work_version', 'expected_content_hash', 'chat_id', 'card_event_id', 'idempotency_key']);
+ 
+ function plainObject(value, label) {
+   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
+   return value;
+ }
+ 
+ function rejectUnknown(value, allowed, label) {
+   const object = plainObject(value, label);
+   const unknown = Object.keys(object).find(key => !allowed.has(key));
+   if (unknown) throw new Error(`unknown ${label} field: ${unknown}`);
+@@ -157,34 +158,59 @@ function reviewErrorDescriptor(error) {
+   }
+   return { status: 500, code: 'internal_error', message: 'Review request could not be completed.' };
+ }
+ 
+ function sendReviewError(res, error) {
+   const descriptor = reviewErrorDescriptor(error);
+   if (descriptor.status >= 500) console.warn(`[matrix-review] ${descriptor.code}`);
+   return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
+ }
+ 
++function deliveryErrorDescriptor(error) {
++  const message = String(error?.message || '');
++  if (/delivery service unavailable/.test(message)) {
++    return { status: 503, code: 'delivery_unavailable', message: 'Delivery confirmation is unavailable.' };
++  }
++  if (/delivery in progress timeout/.test(message)) {
++    return { status: 503, code: 'delivery_in_progress', message: 'Delivery confirmation is still in progress.' };
++  }
++  if (/active actor binding|administrator role|matrixSend capability|not authorized/.test(message)) {
++    return { status: 403, code: 'delivery_forbidden', message: 'Delivery confirmation is not authorized.' };
++  }
++  if (/stale work version|idempotency conflict|blocks resend|not current|result conflict/.test(message)) {
++    return { status: 409, code: 'delivery_conflict', message: 'Delivery confirmation conflicts with current state.' };
++  }
++  if (/required|invalid|unknown|mismatch|blocked|suppressed|approved|provenance|quality|readiness|policy/.test(message)) {
++    return { status: 400, code: 'invalid_delivery_confirmation', message: 'Invalid delivery confirmation.' };
++  }
++  return { status: 500, code: 'delivery_internal_error', message: 'Delivery confirmation could not be completed.' };
++}
++
++function sendDeliveryError(res, error) {
++  const descriptor = deliveryErrorDescriptor(error);
++  if (descriptor.status >= 500) console.warn(`[matrix-delivery] ${descriptor.code}`);
++  return res.status(descriptor.status).json({ error: { code: descriptor.code, message: descriptor.message } });
++}
++
+ function createMatrixRouter({
+   db,
+   audit,
+   candidateDbPath = process.env.MATRIX_STREAM_DB_PATH,
+   clock,
+   reviewService = require('../services/matrixStreamReview'),
+   deliveryService,
+   textService = createMatrixStreamText(),
+   claimOptions = {}
+ } = {}) {
+   const router = express.Router();
+   const view = createCacheIndexView({ dbPath: candidateDbPath });
+   const gate = createPacketGate({ db, now: clock, candidateValidator: candidateId => Boolean(view.recommendationById(candidateId)) });
+-  void deliveryService;
+ 
+   router.use(requireMatrixRole);
+ 
+   router.get('/ready', (req, res) => {
+     try {
+       if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+       rejectUnknown(req.query, new Set(), 'query');
+       view.ready();
+       res.json({ ok: true, service: 'matrix' });
+     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+@@ -459,20 +485,21 @@ function createMatrixRouter({
+     const specTextCn = specs.join('和');
+     const company = String(detail.company_name || '').trim();
+     const entryProduct = `${category} pouch`;
+     const subject = `${specText} ${entryProduct} options for ${company}`;
+     const bodyEn = `Dear ${company} team,\nWe reviewed your ${specText} ${category} range. We would like to discuss ${category} pouches. Could you share your current material structure and annual volume?\nBest regards`;
+     const bodyCn = `您好，\n我们查看了贵司${specTextCn}${categoryCn}产品，希望沟通${categoryCn}袋。请问能否提供当前材料结构和年用量？\n此致敬礼`;
+     const snapshot = {
+       organization_domain: organizationDomain,
+       recipient_email: email,
+       source_url: sourceUrl,
++      country_code: String(detail.country_code || '').trim().toUpperCase(),
+       company,
+       categories: detail.categories || [],
+       products,
+       entryProduct,
+       supportedClaims: [],
+       evidenceIds: evidence.map(row => row.source_url).filter(Boolean),
+       official_evidence: evidence.map(row => ({
+         source_url: row.source_url,
+         observed_at: row.observed_at,
+         excerpt: row.excerpt
+@@ -776,14 +803,47 @@ function createMatrixRouter({
+       rejectUnknown(req.query, new Set(), 'query');
+       const workItemId = positiveInteger(req.params.id, 'work item id');
+       const versionId = positiveInteger(req.params.versionId, 'version id');
+       const item = ownedReviewItem(workItemId, req.user.id);
+       const preview = reviewService.finalPreview(db, { actorUserId: req.user.id, versionId });
+       if (!preview || preview.version.work_item_id !== item.id) throw new Error('version not found');
+       res.json({ ...preview, work_item_version: item.version });
+     } catch (error) { sendReviewError(res, error); }
+   });
+ 
++  router.post('/work-items/:id/versions/:versionId/send', async (req, res) => {
++    try {
++      const body = rejectUnknown(req.body, SEND_FIELDS, 'body');
++      if (!deliveryService || typeof deliveryService.confirm !== 'function') throw new Error('delivery service unavailable');
++      const identity = reviewIdentity(req);
++      const requiredToken = (value, label, maximum = 256) => {
++        const token = String(value || '').trim();
++        if (!token || token.length > maximum || /[\r\n\0]/.test(token)) throw new Error(`${label} required`);
++        return token;
++      };
++      const result = await deliveryService.confirm({
++        actorUserId: identity.actorUserId,
++        bindingId: identity.bindingId,
++        workItemId: positiveInteger(req.params.id, 'work item id'),
++        versionId: positiveInteger(req.params.versionId, 'version id'),
++        expectedWorkVersion: positiveInteger(body.expected_work_version, 'expected work version'),
++        expectedContentHash: requiredToken(body.expected_content_hash, 'expected content hash', 64),
++        chatId: requiredToken(body.chat_id, 'chat id'),
++        cardEventId: requiredToken(body.card_event_id, 'card event id'),
++        idempotencyKey: requiredToken(body.idempotency_key, 'idempotency key', 200)
++      });
++      const state = String(result?.state || '');
++      if (!new Set(['accepted', 'failed', 'ambiguous']).has(state)) throw new Error('invalid delivery result');
++      res.json({
++        state,
++        error_class: String(result?.error_class || ''),
++        work_item_version: positiveInteger(result?.work_item_version, 'delivery work item version')
++      });
++    } catch (error) {
++      sendDeliveryError(res, error);
++    }
++  });
++
+   return router;
+ }
+ 
+ module.exports = { createMatrixBridgeAuth, createMatrixRouter };
+diff --git a/src/services/matrixStreamDelivery.js b/src/services/matrixStreamDelivery.js
+new file mode 100644
+index 0000000..e810ddf
+--- /dev/null
++++ b/src/services/matrixStreamDelivery.js
+@@ -0,0 +1,516 @@
++'use strict';
++
++const crypto = require('node:crypto');
++const { parse: parseDomain } = require('tldts');
++const { normalizePermissions } = require('../lib/permissions');
++const review = require('./matrixStreamReview');
++const { scoreDraft, evaluateInitialContact } = require('./matrixStreamGate');
++const { scheduleReplyCheck } = require('./matrixStreamFollowup');
++
++const INPUT_FIELDS = new Set([
++  'actorUserId', 'bindingId', 'workItemId', 'versionId', 'expectedWorkVersion',
++  'expectedContentHash', 'chatId', 'cardEventId', 'idempotencyKey'
++]);
++const ALLOWED_ROLES = new Set(['super_admin', 'foreign_trade_crm_admin']);
++
++function positiveInteger(value, label) {
++  const number = Number(value);
++  if (!Number.isInteger(number) || number <= 0) throw new Error(`${label} required`);
++  return number;
++}
++
++function exactInput(value) {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('delivery confirmation input required');
++  const unknown = Object.keys(value).find(key => !INPUT_FIELDS.has(key));
++  if (unknown) throw new Error(`unknown delivery confirmation field: ${unknown}`);
++  const token = (field, maximum = 256) => {
++    const result = String(value[field] || '').trim();
++    if (!result || result.length > maximum || /[\r\n\0]/.test(result)) throw new Error(`${field} required`);
++    return result;
++  };
++  const expectedContentHash = token('expectedContentHash', 64).toLowerCase();
++  if (!/^[a-f0-9]{64}$/.test(expectedContentHash)) throw new Error('valid expectedContentHash required');
++  return {
++    actorUserId: positiveInteger(value.actorUserId, 'actor user id'),
++    bindingId: positiveInteger(value.bindingId, 'binding id'),
++    workItemId: positiveInteger(value.workItemId, 'work item id'),
++    versionId: positiveInteger(value.versionId, 'version id'),
++    expectedWorkVersion: positiveInteger(value.expectedWorkVersion, 'expected work version'),
++    expectedContentHash,
++    chatId: token('chatId'),
++    cardEventId: token('cardEventId'),
++    idempotencyKey: token('idempotencyKey', 200)
++  };
++}
++
++function clockIso(clock) {
++  const value = clock();
++  const timestamp = value instanceof Date ? value.getTime() : Date.parse(String(value));
++  if (!Number.isFinite(timestamp)) throw new Error('delivery clock invalid');
++  return { iso: new Date(timestamp).toISOString(), ms: timestamp };
++}
++
++function normalizedEmail(value) {
++  return String(value || '').trim().toLowerCase();
++}
++
++function domainIdentity(value) {
++  const parsed = parseDomain(String(value || '').trim().toLowerCase().replace(/\.$/, ''), {
++    allowPrivateDomains: true,
++    validateHostname: true
++  });
++  const supported = parsed.isIcann || parsed.isPrivate || parsed.publicSuffix === 'test';
++  return supported && !parsed.isIp && parsed.hostname && parsed.domain ? parsed.domain : null;
++}
++
++function plainAddress(value, label) {
++  const address = normalizedEmail(value);
++  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address) || /[\r\n]/.test(String(value || ''))) {
++    throw new Error(`valid ${label} required`);
++  }
++  return address;
++}
++
++function validHostname(value, label) {
++  const hostname = String(value || '').trim().toLowerCase().replace(/\.$/, '');
++  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname)) {
++    throw new Error(`valid ${label} required`);
++  }
++  return hostname;
++}
++
++function validSelector(value) {
++  const selector = String(value || '').trim().toLowerCase();
++  if (!/^[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?$/.test(selector)) throw new Error('valid DKIM selector required');
++  return selector;
++}
++
++function jsonObject(value, label) {
++  try {
++    const parsed = JSON.parse(String(value || ''));
++    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(label);
++    return parsed;
++  } catch (_) {
++    throw new Error(`${label} invalid`);
++  }
++}
++
++function httpsSources(value) {
++  let sources;
++  try { sources = JSON.parse(String(value || '')); } catch (_) { return false; }
++  return Array.isArray(sources) && sources.length > 0 && sources.every(source => {
++    try {
++      const url = new URL(String(source || ''));
++      return url.protocol === 'https:' && Boolean(domainIdentity(url.hostname));
++    } catch (_) { return false; }
++  });
++}
++
++function requestFingerprint(input) {
++  return crypto.createHash('sha256').update(review.canonicalJson(input)).digest('hex');
++}
++
++function shanghaiDay(timestamp) {
++  return new Date(timestamp + 8 * 3600000).toISOString().slice(0, 10);
++}
++
++function internalEventKey(kind, jobId, fingerprint, ownerToken) {
++  const digest = crypto.createHash('sha256').update(`${kind}:${jobId}:${fingerprint}:${ownerToken}`).digest('hex');
++  return `mx.delivery.${kind}.${jobId}.${digest}`;
++}
++
++function resultFor(db, job) {
++  const workItem = db.prepare('SELECT version FROM matrix_work_items WHERE id = ?').get(job.work_item_id);
++  return {
++    state: job.state,
++    error_class: String(job.error_class || ''),
++    work_item_version: workItem?.version || null
++  };
++}
++
++function currentApprovalEvent(db, version) {
++  return db.prepare(`
++    SELECT id FROM matrix_stream_events
++    WHERE work_item_id = ? AND version_id = ? AND actor_user_id = ?
++      AND action = 'approved' AND content_hash = ?
++    ORDER BY id DESC LIMIT 1
++  `).get(version.work_item_id, version.id, version.approved_by, version.content_hash);
++}
++
++function freshReplayAuthorization(db, input) {
++  const row = db.prepare(`
++    SELECT b.status AS binding_status, u.role, u.status AS actor_status, u.permissions_json,
++           w.id AS work_item_id, w.owner_user_id
++    FROM matrix_actor_bindings b
++    JOIN users u ON u.id = b.user_id
++    LEFT JOIN matrix_work_items w ON w.id = ?
++    WHERE b.id = ? AND b.user_id = ?
++  `).get(input.workItemId, input.bindingId, input.actorUserId);
++  if (!row || row.binding_status !== 'active' || row.actor_status !== 'active') throw new Error('active actor binding required');
++  if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
++  let permissions;
++  try { permissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { permissions = null; }
++  if (!normalizePermissions(row.role, permissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
++  if (!row.work_item_id || row.owner_user_id !== input.actorUserId) throw new Error('delivery not authorized');
++}
++
++function freshDeliveryGate(db, input, context) {
++  const row = db.prepare(`
++    SELECT b.id AS binding_id, b.status AS binding_status,
++           u.id AS actor_user_id, u.role, u.status AS actor_status, u.permissions_json,
++           w.id AS work_item_id, w.owner_user_id, w.stage, w.stream_state,
++           w.current_stream_version_id, w.version AS work_item_version
++    FROM matrix_actor_bindings b
++    JOIN users u ON u.id = b.user_id
++    LEFT JOIN matrix_work_items w ON w.id = ?
++    WHERE b.id = ? AND b.user_id = ?
++  `).get(input.workItemId, input.bindingId, input.actorUserId);
++  if (!row || row.binding_status !== 'active' || row.actor_status !== 'active') throw new Error('active actor binding required');
++  if (!ALLOWED_ROLES.has(row.role)) throw new Error('matrix administrator role required');
++  let permissions;
++  try { permissions = JSON.parse(row.permissions_json || 'null'); } catch (_) { permissions = null; }
++  if (!normalizePermissions(row.role, permissions).capabilities?.matrixSend) throw new Error('explicit matrixSend capability required');
++  if (!row.work_item_id || row.owner_user_id !== input.actorUserId) throw new Error('delivery not authorized');
++  if (row.stage === 'suppressed' || row.stream_state === 'suppressed') throw new Error('work item is suppressed');
++  if (row.work_item_version !== input.expectedWorkVersion) throw new Error('stale work version');
++  if (row.current_stream_version_id !== input.versionId) throw new Error('approved version is not current');
++
++  const version = db.prepare('SELECT * FROM matrix_stream_versions WHERE id = ? AND work_item_id = ?').get(input.versionId, input.workItemId);
++  if (!version || version.status !== 'approved' || !version.approved_by || !version.approved_at) throw new Error('persisted approved version required');
++  const canonicalHash = review.contentHash({
++    recipientEmail: version.recipient_email,
++    recipientSourceUrl: version.recipient_source_url,
++    subject: version.subject,
++    bodyEn: version.body_en,
++    bodyCn: version.body_cn
++  });
++  if (canonicalHash !== version.content_hash || canonicalHash !== input.expectedContentHash) throw new Error('content hash mismatch');
++  if (!currentApprovalEvent(db, version)) throw new Error('persisted approval evidence required');
++
++  const recipient = review.validateRecipient({
++    email: version.recipient_email,
++    sourceUrl: version.recipient_source_url,
++    verifiedAt: version.recipient_verified_at,
++    kind: 'public_company'
++  }, new Date(context.ms));
++  const evidence = db.prepare(`
++    SELECT * FROM matrix_stream_recipient_evidence
++    WHERE id = ? AND work_item_id = ? AND status = 'active'
++  `).get(version.recipient_evidence_id, input.workItemId);
++  if (!evidence || normalizedEmail(evidence.recipient_email) !== recipient.email
++      || String(evidence.source_url) !== recipient.sourceUrl
++      || new Date(Date.parse(evidence.verified_at)).toISOString() !== recipient.verifiedAt) {
++    throw new Error('active recipient provenance required');
++  }
++  const evidenceSnapshot = jsonObject(evidence.snapshot_json, 'recipient evidence snapshot');
++  const versionSnapshot = jsonObject(version.source_snapshot_json, 'version source snapshot');
++  if (review.canonicalJson(evidenceSnapshot) !== review.canonicalJson(versionSnapshot)) throw new Error('recipient provenance snapshot mismatch');
++  let sourceHost;
++  try { sourceHost = new URL(recipient.sourceUrl).hostname; } catch (_) { throw new Error('recipient provenance source invalid'); }
++  const recipientDomain = recipient.email.split('@')[1];
++  const organizationDomain = domainIdentity(evidence.organization_domain);
++  if (!organizationDomain || domainIdentity(recipientDomain) !== organizationDomain
++      || domainIdentity(sourceHost) !== organizationDomain) throw new Error('recipient provenance domain mismatch');
++
++  const storedQuality = jsonObject(version.quality_json, 'stored quality');
++  const quality = scoreDraft({
++    subject: version.subject,
++    bodyEn: version.body_en,
++    bodyCn: version.body_cn,
++    recipient,
++    evidence: versionSnapshot,
++    now: context.iso
++  });
++  if (!quality.passed || quality.score < 80 || quality.score !== version.quality_score
++      || review.canonicalJson(quality) !== review.canonicalJson(storedQuality)) throw new Error('quality final gate blocked');
++
++  const identity = evaluateInitialContact(db, {
++    email: recipient.email,
++    domain: recipientDomain,
++    companyName: versionSnapshot.company,
++    aliases: versionSnapshot.aliases,
++    now: context.iso
++  });
++  if (!identity.allowed || identity.route !== 'initial_contact') throw new Error(`initial contact gate blocked: ${identity.reasons.join(',')}`);
++
++  const senderChecks = db.prepare(`
++    SELECT * FROM matrix_stream_sender_checks
++    WHERE sender_domain = ? AND checked_at <= ? AND expires_at > ?
++    ORDER BY checked_at DESC
++  `).all(context.messageIdDomain, context.iso, context.iso);
++  const senderCheck = senderChecks.find(check => {
++    try { return jsonObject(check.detail_json, 'sender readiness detail').selector === context.dkimSelector; } catch (_) { return false; }
++  });
++  if (!senderCheck || !senderCheck.spf_ok || !senderCheck.dkim_ok || !senderCheck.dmarc_ok
++      || !senderCheck.tls_ok || !senderCheck.smtp_ok) throw new Error('sender readiness blocked');
++  const countryCode = String(versionSnapshot.country_code || '').trim().toUpperCase();
++  const policy = db.prepare(`
++    SELECT * FROM matrix_stream_country_policies WHERE country_code = ? AND channel = 'email'
++  `).get(countryCode);
++  const reviewedAt = Date.parse(String(policy?.reviewed_at || ''));
++  const expiresAt = Date.parse(String(policy?.expires_at || ''));
++  if (!/^[A-Z]{2}$/.test(countryCode) || !policy || policy.status !== 'approved'
++      || policy.sender_identity_required !== 1 || policy.opt_out_required !== 1
++      || !Number.isFinite(reviewedAt) || reviewedAt > context.ms
++      || !Number.isFinite(expiresAt) || expiresAt <= context.ms
++      || !httpsSources(policy.source_urls_json)) throw new Error('country channel policy blocked');
++
++  return { row, version };
++}
++
++function createMatrixStreamDelivery({
++  db, transport, clock = () => new Date(), fromAddress, messageIdDomain, dkimSelector,
++  leaseMs = 30000, waitMs = 20000, pollMs = 25
++} = {}) {
++  if (!db || typeof db.prepare !== 'function' || !transport || typeof transport.sendMail !== 'function' || typeof clock !== 'function') {
++    throw new Error('delivery dependencies required');
++  }
++  const from = plainAddress(fromAddress, 'from address');
++  const domain = validHostname(messageIdDomain, 'message id domain');
++  const selector = validSelector(dkimSelector);
++  if (from.split('@')[1] !== domain) throw new Error('sender and message id domain mismatch');
++  const bounded = (value, fallback, minimum, maximum) => {
++    const number = Number(value);
++    return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, Math.trunc(number))) : fallback;
++  };
++  const timing = {
++    leaseMs: bounded(leaseMs, 30000, 100, 300000),
++    waitMs: bounded(waitMs, 20000, 25, 60000),
++    pollMs: bounded(pollMs, 25, 5, 1000)
++  };
++  const inFlight = new Map();
++
++  function reserveCapacity(recipientDomain, context) {
++    const rows = db.prepare(`
++      SELECT j.state, j.reservation_day, j.updated_at, j.recipient_domain, v.recipient_email
++      FROM matrix_stream_jobs j
++      LEFT JOIN matrix_stream_versions v ON v.id = j.version_id
++      WHERE j.state IN ('pending','sending','accepted','ambiguous')
++    `).all();
++    const daily = rows.filter(row => {
++      const day = String(row.reservation_day || '').trim();
++      if (day) return day === shanghaiDay(context.ms);
++      const at = Date.parse(String(row.updated_at || ''));
++      return Number.isFinite(at) && shanghaiDay(at) === shanghaiDay(context.ms);
++    }).length;
++    if (daily >= 5) throw new Error('daily delivery reservation limit 5');
++    const coolingStart = context.ms - 90 * 86400000;
++    const blockedDomain = rows.some(row => {
++      const storedDomain = String(row.recipient_domain || '').trim().toLowerCase()
++        || normalizedEmail(row.recipient_email).split('@')[1] || '';
++      if (domainIdentity(storedDomain) !== recipientDomain) return false;
++      if (row.state !== 'accepted') return true;
++      const at = Date.parse(String(row.updated_at || ''));
++      return Number.isFinite(at) && at >= coolingStart && at <= context.ms;
++    });
++    if (blockedDomain) throw new Error('recipient domain reservation or cooling active');
++  }
++
++  function reserveEventKeys(jobId, fingerprint, ownerToken, context) {
++    const keys = {
++      start: internalEventKey('start', jobId, fingerprint, ownerToken),
++      result: internalEventKey('result', jobId, fingerprint, ownerToken)
++    };
++    for (const [kind, eventKey] of Object.entries(keys)) {
++      if (db.prepare('SELECT 1 FROM matrix_stream_events WHERE idempotency_key = ?').get(eventKey)) {
++        throw new Error('delivery event key collision');
++      }
++      db.prepare(`
++        INSERT INTO matrix_stream_delivery_event_keys (event_key, job_id, event_kind, request_hash, created_at)
++        VALUES (?, ?, ?, ?, ?)
++      `).run(eventKey, jobId, kind, fingerprint, context.iso);
++    }
++    return keys;
++  }
++
++  function prepare(input) {
++    const context = { ...clockIso(clock), messageIdDomain: domain, dkimSelector: selector };
++    const fingerprint = requestFingerprint(input);
++    const transaction = db.transaction(() => {
++      const existing = db.prepare('SELECT * FROM matrix_stream_jobs WHERE idempotency_key = ?').get(input.idempotencyKey);
++      if (existing) {
++        const event = db.prepare(`
++          SELECT request_fingerprint FROM matrix_stream_events
++          WHERE job_id = ? AND action = 'delivery_started' ORDER BY id ASC LIMIT 1
++        `).get(existing.id);
++        if (!event || event.request_fingerprint !== fingerprint
++            || existing.work_item_id !== input.workItemId || existing.version_id !== input.versionId) {
++          throw new Error('delivery idempotency conflict');
++        }
++        freshReplayAuthorization(db, input);
++        if (existing.state === 'sending') {
++          const leaseExpiresAt = Date.parse(String(existing.lease_expires_at || ''));
++          return { kind: Number.isFinite(leaseExpiresAt) && leaseExpiresAt > context.ms ? 'wait' : 'expired', job: existing };
++        }
++        return { kind: 'replay', job: existing };
++      }
++      const gated = freshDeliveryGate(db, input, context);
++      const blocking = db.prepare(`
++        SELECT state FROM matrix_stream_jobs
++        WHERE version_id = ? AND content_hash = ? AND state IN ('pending','sending','accepted','ambiguous')
++        ORDER BY id DESC LIMIT 1
++      `).get(input.versionId, input.expectedContentHash);
++      if (blocking) throw new Error(`delivery ${blocking.state} blocks resend`);
++      const recipientDomain = domainIdentity(normalizedEmail(gated.version.recipient_email).split('@')[1]);
++      if (!recipientDomain) throw new Error('valid recipient reservation domain required');
++      reserveCapacity(recipientDomain, context);
++      const ownerToken = crypto.randomUUID();
++      const leaseExpiresAt = new Date(context.ms + timing.leaseMs).toISOString();
++      const placeholder = `<pending-${crypto.createHash('sha256').update(`${input.idempotencyKey}:${fingerprint}`).digest('hex')}@invalid>`;
++      const inserted = db.prepare(`
++        INSERT INTO matrix_stream_jobs (
++          work_item_id, version_id, idempotency_key, content_hash, message_id, state,
++          attempt_count, error_class, redacted_diagnostic, created_by, owner_token,
++          lease_expires_at, recipient_domain, reservation_day, created_at, updated_at
++        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, '', '', ?, ?, ?, ?, ?, ?, ?)
++      `).run(input.workItemId, input.versionId, input.idempotencyKey, input.expectedContentHash,
++        placeholder, input.actorUserId, ownerToken, leaseExpiresAt, recipientDomain,
++        shanghaiDay(context.ms), context.iso, context.iso);
++      const jobId = Number(inserted.lastInsertRowid);
++      const messageId = `<matrix-stream-${jobId}-${input.expectedContentHash.slice(0, 20)}@${domain}>`;
++      db.prepare(`
++        UPDATE matrix_stream_jobs SET message_id = ?, state = 'sending', attempt_count = 1, updated_at = ?
++        WHERE id = ? AND state = 'pending'
++      `).run(messageId, context.iso, jobId);
++      const eventKeys = reserveEventKeys(jobId, fingerprint, ownerToken, context);
++      db.prepare(`
++        INSERT INTO matrix_stream_events (
++          work_item_id, version_id, job_id, actor_user_id, matrix_binding_id,
++          chat_id, card_event_id, action, idempotency_key, request_fingerprint,
++          content_hash, before_json, after_json, diagnostic, created_at
++        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'delivery_started', ?, ?, ?, ?, ?, '', ?)
++      `).run(input.workItemId, input.versionId, jobId, input.actorUserId, input.bindingId,
++        input.chatId, input.cardEventId, eventKeys.start, fingerprint, input.expectedContentHash,
++        JSON.stringify({ version_status: gated.version.status, approval_event: true }),
++        JSON.stringify({ state: 'sending', version_id: input.versionId }), context.iso);
++      return { kind: 'new', job: db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(jobId), version: gated.version };
++    });
++    return transaction.immediate();
++  }
++
++  function persistResult(job, input, state, errorClass) {
++    if (!['accepted', 'failed', 'ambiguous'].includes(state)) throw new Error('valid delivery result required');
++    const context = clockIso(clock);
++    const transaction = db.transaction(() => {
++      let current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
++      if (!current) throw new Error('delivery job not found');
++      if (current.state !== 'sending') return resultFor(db, current);
++      const currentLeaseMs = Date.parse(String(current.lease_expires_at || ''));
++      const ownsActiveLease = current.owner_token === job.owner_token
++        && current.lease_expires_at === job.lease_expires_at
++        && Number.isFinite(currentLeaseMs) && currentLeaseMs > context.ms;
++      if (!ownsActiveLease && Number.isFinite(currentLeaseMs) && currentLeaseMs > context.ms) {
++        throw new Error('delivery ownership lost');
++      }
++      const finalState = ownsActiveLease ? state : 'ambiguous';
++      const finalErrorClass = ownsActiveLease ? errorClass : 'expired_send_lease';
++      const changed = db.prepare(`
++        UPDATE matrix_stream_jobs
++        SET state = ?, error_class = ?, redacted_diagnostic = ?, updated_at = ?
++        WHERE id = ? AND state = 'sending' AND owner_token = ? AND lease_expires_at = ?
++      `).run(finalState, finalErrorClass, finalErrorClass, context.iso, job.id, current.owner_token, current.lease_expires_at);
++      if (changed.changes !== 1) {
++        current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
++        if (current && current.state !== 'sending') return resultFor(db, current);
++        throw new Error('delivery result conflict');
++      }
++      if (finalState === 'accepted') {
++        scheduleReplyCheck(db, { jobId: job.id, channel: 'email', priority: 'normal' });
++        db.prepare(`
++          UPDATE matrix_work_items
++          SET stream_state = 'sent', version = version + 1, updated_at = ?
++          WHERE id = ? AND current_stream_version_id = ?
++        `).run(context.iso, job.work_item_id, job.version_id);
++      } else if (finalState === 'ambiguous') {
++        db.prepare(`
++          UPDATE matrix_work_items SET stream_state = 'delivery_ambiguous', updated_at = ?
++          WHERE id = ? AND current_stream_version_id = ?
++        `).run(context.iso, job.work_item_id, job.version_id);
++      }
++      const eventKey = db.prepare(`
++        SELECT event_key FROM matrix_stream_delivery_event_keys
++        WHERE job_id = ? AND event_kind = 'result' AND request_hash = ?
++      `).get(job.id, requestFingerprint(input))?.event_key;
++      if (!eventKey) throw new Error('reserved delivery result event key required');
++      db.prepare(`
++        INSERT INTO matrix_stream_events (
++          work_item_id, version_id, job_id, actor_user_id, matrix_binding_id,
++          chat_id, card_event_id, action, idempotency_key, request_fingerprint, content_hash,
++          before_json, after_json, diagnostic, created_at
++        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, '{"state":"sending"}', ?, ?, ?)
++      `).run(job.work_item_id, job.version_id, job.id, input.actorUserId, input.bindingId,
++        input.chatId, input.cardEventId, `delivery_${finalState}`, eventKey, job.content_hash,
++        JSON.stringify({ state: finalState, followup: finalState === 'accepted' ? 'scheduled' : 'not_scheduled' }), finalErrorClass, context.iso);
++      return resultFor(db, db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id));
++    });
++    return transaction.immediate();
++  }
++
++  function classifyError(error) {
++    const responseCode = Number(error?.responseCode || error?.statusCode || 0);
++    if (responseCode >= 500 && responseCode <= 599) return { state: 'failed', errorClass: 'recipient_rejected' };
++    return { state: 'ambiguous', errorClass: 'transport_outcome_unknown' };
++  }
++
++  async function deliver(prepared, input) {
++    const { job, version } = prepared;
++    let response;
++    try {
++      response = await transport.sendMail({
++        from,
++        to: version.recipient_email,
++        subject: version.subject,
++        text: version.body_en,
++        messageId: job.message_id,
++        headers: { 'X-Matrix-Stream-Version': String(version.id) }
++      });
++    } catch (error) {
++      const classified = classifyError(error);
++      return persistResult(job, input, classified.state, classified.errorClass);
++    }
++    const target = normalizedEmail(version.recipient_email);
++    const accepted = Array.isArray(response?.accepted) ? response.accepted.map(normalizedEmail) : [];
++    const rejected = Array.isArray(response?.rejected) ? response.rejected.map(normalizedEmail) : [];
++    const targetAccepted = accepted.includes(target);
++    const targetRejected = rejected.includes(target);
++    if (targetAccepted && !targetRejected) return persistResult(job, input, 'accepted', '');
++    if (targetRejected && !targetAccepted) return persistResult(job, input, 'failed', 'recipient_rejected');
++    return persistResult(job, input, 'ambiguous', 'transport_outcome_unknown');
++  }
++
++  async function waitForTerminal(job, input) {
++    const deadline = Date.now() + timing.waitMs;
++    while (true) {
++      const current = db.prepare('SELECT * FROM matrix_stream_jobs WHERE id = ?').get(job.id);
++      if (!current) throw new Error('delivery job not found');
++      if (current.state !== 'sending') return resultFor(db, current);
++      const now = clockIso(clock);
++      const leaseExpiresAt = Date.parse(String(current.lease_expires_at || ''));
++      if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now.ms) {
++        return persistResult(current, input, 'ambiguous', 'expired_send_lease');
++      }
++      if (Date.now() >= deadline) throw new Error('delivery in progress timeout');
++      await new Promise(resolve => setTimeout(resolve, timing.pollMs));
++    }
++  }
++
++  return {
++    async confirm(rawInput) {
++      const input = exactInput(rawInput);
++      const prepared = prepare(input);
++      if (prepared.kind === 'wait') {
++        if (inFlight.has(prepared.job.id)) return inFlight.get(prepared.job.id);
++        return waitForTerminal(prepared.job, input);
++      }
++      if (prepared.kind === 'expired') return persistResult(prepared.job, input, 'ambiguous', 'expired_send_lease');
++      if (prepared.kind === 'replay') {
++        return resultFor(db, prepared.job);
++      }
++      const pending = deliver(prepared, input);
++      inFlight.set(prepared.job.id, pending);
++      try { return await pending; } finally { inFlight.delete(prepared.job.id); }
++    }
++  };
++}
++
++module.exports = { createMatrixStreamDelivery };
