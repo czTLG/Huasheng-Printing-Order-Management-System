@@ -297,6 +297,12 @@ function reviewState(workItemId) {
     assert.deepStrictEqual((await request('/api/matrix/ready', { serviceToken: bridgeToken, openId: 'ou-service' })), { status: 200, body: { ok: true, service: 'matrix' } });
     assert.strictEqual((await request('/api/matrix/ready', { token: crmAdminToken })).status, 403);
     assert.strictEqual((await request('/api/matrix/ready', { serviceToken: bridgeToken, openId: 'ou-none' })).status, 403);
+    const supervisorDigest = await request('/api/matrix/supervisor/digest', { serviceToken: bridgeToken, openId: 'ou-service' });
+    assert.strictEqual(supervisorDigest.status, 200);
+    assert.ok(/^[a-f0-9]{32}$/.test(supervisorDigest.body.digest_id));
+    assert.deepStrictEqual(supervisorDigest.body.channels.map(item => item.channel), ['bill', 'vmci']);
+    assert.strictEqual((await request('/api/matrix/supervisor/digest', { token: crmAdminToken })).status, 403);
+    assert.strictEqual((await request('/api/matrix/supervisor/digest?unexpected=1', { serviceToken: bridgeToken, openId: 'ou-service' })).status, 400);
 
     const rejectedSession = await request('/api/matrix/sessions', {
       method: 'POST', serviceToken: bridgeToken, openId: 'ou-service',

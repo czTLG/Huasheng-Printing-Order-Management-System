@@ -1,0 +1,13 @@
+[Unit]
+Description=Matrix diagnostics collector
+After=network.target docker.service
+
+[Service]
+Type=oneshot
+User=admin
+ExecStart=/home/admin/.local/bin/matrix-diagnostics check
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/matrix-diagnostics /home/admin/work/packaging-system/.runtime/vm_debug_ci/workspace/store/matrix-diagnostics

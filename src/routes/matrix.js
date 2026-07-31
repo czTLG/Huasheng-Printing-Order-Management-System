@@ -15,6 +15,7 @@ const { createMatrixLedgerCommand } = require('../services/matrixLedgerCommand')
 const { createMatrixLedgerStore } = require('../services/matrixLedgerStore');
 const { createMatrixIntakeBridge } = require('../services/matrixIntakeBridge');
 const { createMatrixManualOutbound } = require('../services/matrixManualOutbound');
+const { createMatrixProactiveSupervisor } = require('../services/matrixProactiveSupervisor');
 const {
   profileFor,
   scopeProfileProducts,
@@ -405,6 +406,11 @@ function createMatrixRouter({
       currentEvidence: async ({ workItem, version }) => assertVersionStrategyCurrent(workItem, version)
     }) : null);
   const manualOutbound = createMatrixManualOutbound({ db, clock });
+  const proactiveSupervisor = createMatrixProactiveSupervisor({
+    db,
+    clock,
+    backlogItems: productionBacklogItems
+  });
 
   router.use(requireMatrixRole);
 
@@ -432,6 +438,14 @@ function createMatrixRouter({
       if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
       rejectUnknown(req.query, new Set(), 'query');
       res.json({ ok: true, ...inboxWorkbench(db, { backlogItems: productionBacklogItems() }) });
+    } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
+  });
+
+  router.get('/supervisor/digest', (req, res) => {
+    try {
+      if (req.authMode !== 'matrix_bridge' || !req.matrixBinding) throw new Error('active service binding required');
+      rejectUnknown(req.query, new Set(), 'query');
+      res.json({ ok: true, ...proactiveSupervisor.prepare() });
     } catch (error) { res.status(errorStatus(error)).json({ error: error.message }); }
   });
 

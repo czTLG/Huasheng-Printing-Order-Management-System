@@ -5,6 +5,7 @@ const fs = require('fs');
 const defaultChoiceContext = require('../scripts/matrix-choice-context.js');
 const defaultAssetContext = require('../scripts/matrix-asset-context.js');
 const defaultDiagnosticsWatcher = require('../scripts/matrix-diagnostics-watch.js');
+const defaultSupervisorWatcher = require('../scripts/matrix-supervisor-watch.js');
 
 const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.ledger_preview', 'mx.ledger_confirm', 'mx.reply_draft', 'mx.retry_translation', 'mx.thread_approve', 'mx.thread_preview', 'mx.thread_confirm'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
@@ -669,6 +670,7 @@ function register(context) {
   const client = context.client || require('../scripts/matrix-client.js');
   const choiceContext = context.choiceContext || defaultChoiceContext;
   const diagnosticsWatcher = context.diagnosticsWatcher || defaultDiagnosticsWatcher;
+  const supervisorWatcher = context.supervisorWatcher || defaultSupervisorWatcher;
   const now = typeof context.now === 'function' ? context.now : () => Date.now();
   const assetContext = context.assetContext || defaultAssetContext.createStore({
     target: context.assetContextPath,
@@ -744,6 +746,18 @@ function register(context) {
         }
       } catch (error) {
         logReminder(`[stream-card] diagnostics delivery failed: ${error?.message || 'unknown error'}`);
+      }
+      try {
+        await supervisorWatcher.deliverDailyDigest({
+          client, channel, sendManagedCard,
+          appId: process.env.STREAM_APP_ID,
+          openId: process.env.MATRIX_OWNER_OPEN_ID,
+          stateRoot: context.supervisorStateRoot,
+          bridgeRoot: context.supervisorBridgeRoot,
+          clock: () => new Date(clockMillis())
+        });
+      } catch (error) {
+        logReminder(`[stream-card] supervisor delivery failed: ${error?.message || 'unknown error'}`);
       }
     } finally {
       reminderPollActive = false;

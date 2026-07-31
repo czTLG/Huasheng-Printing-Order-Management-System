@@ -19,6 +19,7 @@ const CONTAINER_NAMES = Object.freeze([
   'vm_debug_ci', 'stream-publisher-app', 'stream-publisher-flow', 'stream-publisher-flow-ui',
   'stream-publisher-flow-db', 'stream-publisher-db', 'stream-publisher-cache', 'stream-publisher-index'
 ]);
+const REQUIRED_CONTAINERS = Object.freeze(new Set(['vm_debug_ci']));
 
 function output(command, args) {
   return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -98,7 +99,13 @@ function collectSnapshot({
   for (const name of serviceNames) {
     components[name] = parseSystemd(execFile('systemctl', ['show', name, '--property=ActiveState,NRestarts', '--no-pager']));
   }
-  for (const name of containerNames) components[name] = parseContainer(execFile('docker', ['inspect', name]));
+  for (const name of containerNames) {
+    try {
+      components[name] = parseContainer(execFile('docker', ['inspect', name]));
+    } catch (error) {
+      if (REQUIRED_CONTAINERS.has(name)) throw error;
+    }
+  }
   return { at: atDate.toISOString(), boot_id: bootId, disk_percent: diskPercent, components };
 }
 
@@ -246,6 +253,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  SERVICE_NAMES, CONTAINER_NAMES, collectSnapshot, writeEvent, runCheck,
+  SERVICE_NAMES, CONTAINER_NAMES, REQUIRED_CONTAINERS, collectSnapshot, writeEvent, runCheck,
   buildCleanupPlan, verifyRetention, listInventory, runtimeFamily
 };

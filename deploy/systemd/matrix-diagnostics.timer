@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Matrix diagnostics every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=matrix-diagnostics.service
+
+[Install]
+WantedBy=timers.target

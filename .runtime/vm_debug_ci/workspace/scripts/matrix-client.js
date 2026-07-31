@@ -143,6 +143,10 @@ function inboxWorkbench(openId) {
   return call(openId, '/inbox/workbench');
 }
 
+function supervisorDigest(openId) {
+  return call(openId, '/supervisor/digest');
+}
+
 function contextSearch(openId, query) {
   const value = String(query || '').trim();
   if (value.length < 2 || value.length > 160) throw new Error('context query must contain 2 to 160 characters');
@@ -277,7 +281,7 @@ function taskList(openId, customerId) {
 
 module.exports = {
   facets, createSession, rehydrateSession, listCandidates, candidateDetail, today,
-  selectCandidate, createIntake, workItems, getVersion, claimInboxJob, inboxWorkbench, contextSearch,
+  selectCandidate, createIntake, workItems, getVersion, claimInboxJob, inboxWorkbench, supervisorDigest, contextSearch,
   contextResolve, contextRecord, ackInboxJob, failInboxJob, startReplyDraft,
   retryTranslation, claimNotification, ackNotification, nackNotification,
   notificationStatus, createVersion, reviseVersion, approveVersion,

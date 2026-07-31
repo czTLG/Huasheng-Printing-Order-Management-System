@@ -25,7 +25,7 @@ async function testNarrowClient() {
     'contextResolve', 'contextSearch', 'createIntake', 'createSession', 'createVersion', 'customerGet', 'facets',
     'failInboxJob', 'finalPreview', 'getVersion', 'inboxWorkbench', 'listCandidates', 'nackNotification',
     'notificationStatus', 'prepareThreadRoute', 'previewThreadRoute', 'rehydrateSession', 'resumeThreadRoute', 'retryTranslation', 'reviseVersion',
-    'selectCandidate', 'startReplyDraft', 'taskList', 'threadList', 'today', 'versionPreview', 'workItems'
+    'selectCandidate', 'startReplyDraft', 'supervisorDigest', 'taskList', 'threadList', 'today', 'versionPreview', 'workItems'
   ]);
   const originalFetch = global.fetch;
   const requests = [];
