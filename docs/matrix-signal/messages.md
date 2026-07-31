@@ -39,6 +39,466 @@ Would this topic fit your Best Practices coverage?
 
 Huasheng Packaging Editorial Team
 
+## draft_cand_net_064
+
+- Candidate ID: cand_net_064
+- Root domain: netcovn.com.vn
+- Official contact URL: https://netcovn.com.vn/contact/?lang=en
+- Target URL: https://gdhspack.com/vi/applications/daily-chemical-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to botgiatnet@netcovn.com.vn
+- Delivery route: Public organizational address shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Packaging review for one NETCO detergent SKU
+
+Dear NETCO Team,
+
+I noticed that NETCO manufactures detergent powder, liquid detergent, fabric softener and dishwashing liquid for both domestic and export markets, including outsourced production for other brands.
+
+These product groups require different packaging controls. Liquid refill pouches need formula-compatibility, seal-contamination and transport-leak review, while powder-detergent bags need moisture protection, clean sealing and stable handling at the target pack weight.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed pouches and roll film and review each project according to the actual product, filling process, pack size and distribution conditions rather than applying one standard structure to every SKU.
+
+Could we begin with one current priority SKU: a liquid-detergent refill pouch or a powder-detergent bag? A photo of the existing pack, its dimensions or current specification would be enough for an initial manufacturability review.
+
+Vietnamese household-care packaging guide:
+https://gdhspack.com/vi/applications/daily-chemical-packaging
+
+About Huasheng in Vietnamese:
+https://gdhspack.com/vi/about
+
+Cảm ơn Quý công ty đã dành thời gian xem thư. Chúng tôi mong có cơ hội trao đổi cùng đội ngũ của Quý công ty.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_unitea_115
+
+- Candidate ID: cand_unitea_115
+- Root domain: unitea.kz
+- Official contact URL: https://teafactory.kz/en
+- Target URL: https://gdhspack.com/ru/applications/tea-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to procurement@unitea.kz
+- Delivery route: Public procurement address shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Tea pouch and roll-film review for one UNITEA SKU
+
+Dear UNITEA Procurement Team,
+
+I noticed that UNITEA produces granulated tea, leaf tea and tea bags across multiple own brands, with more than 50 warehouse SKUs and distribution across more than 35 cities. Your supplier page also states that UNITEA is interested in packaging suppliers, including metallized foil and related packing materials.
+
+For tea packaging, the first review should connect aroma and moisture protection with the actual packing equipment. Pack format, fill weight, roll width, repeat length, unwind direction, eye-mark position, coefficient of friction and sealing conditions affect the practical material and production decision. Multiple brands and SKUs also require clear artwork separation and repeat-order version control.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed tea pouches and roll film, including structures using metallized film where the product, machine and storage requirements support it. We would begin with one representative SKU rather than recommend one structure for the entire range.
+
+Could you share one current leaf-tea, granulated-tea or tea-bag outer-pack SKU that is open for supplier review? A photo of the existing pack plus its dimensions, fill weight or current roll specification would be enough for an initial manufacturability check.
+
+Russian tea-packaging guide:
+https://gdhspack.com/ru/applications/tea-packaging
+
+About Huasheng in Russian:
+https://gdhspack.com/ru/about
+
+Спасибо за уделённое время. Будем рады обсудить возможное сотрудничество с командой UNITEA.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_pagoda_084
+
+- Candidate ID: cand_pagoda_084
+- Root domain: pagoda.com.my
+- Official contact URL: https://pagoda.com.my/contact-us/
+- Target URL: https://gdhspack.com/applications/snack-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to enquiry@pagoda.com.my
+- Delivery route: Public organizational address shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Nitrogen-flushed nut pack review for one Pagoda SKU
+
+Dear Pagoda Foods Team,
+
+I noticed that Pagoda has produced nuts and dried-fruit products since 1945 and supplies mini packs, multipacks and larger retail formats for Malaysia and export markets. Your baked-cashew product information also confirms the use of nitrogen flushing to maintain freshness.
+
+For nitrogen-flushed nut packs, the first review should connect the product and packing process with the package. Residual-oxygen targets, seal integrity, oil exposure, sharp product edges, pack size and representative storage conditions all affect the material and sealing decision. Mini packs, outer multipacks and larger retail bags also need clear artwork and specification control across the pack family.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed pouches and roll film and manage artwork, print repeatability and production handoff across multiple SKUs. We would begin with one current pack rather than promise one structure for every size.
+
+Could you share one nut or dried-fruit SKU that is open for packaging review? A photo of the current pack plus its dimensions, fill weight and available nitrogen-flush or residual-oxygen information would be enough for an initial manufacturability check.
+
+Snack and nitrogen-flushed packaging guide:
+https://gdhspack.com/applications/snack-packaging
+
+Malaysia food-packaging guide:
+https://gdhspack.com/markets/malaysia-food-packaging
+
+Terima kasih atas masa pihak tuan/puan. Kami berharap dapat berbincang dengan pasukan Pagoda Foods.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_heritage_012
+
+- Candidate ID: cand_heritage_012
+- Root domain: heritagethailand.com
+- Official contact URL: https://www.heritagethailand.com/corp/contact-us/
+- Target URL: https://gdhspack.com/th/applications/snack-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to contact@heritagethailand.com
+- Delivery route: Public organizational address shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Packaging review for one Heritage nut or dried-fruit SKU
+
+Dear Heritage Team,
+
+I noticed that Heritage Group manages 12 brands, private-label programs and consumer and food-service products across more than 60 countries, with nuts, dried fruit and other healthy-snack categories at the center of its portfolio.
+
+For nut and dried-fruit packaging, the first review should be tied to the actual product and packing process. Nitrogen flushing, residual-oxygen targets, oil exposure, sharp product edges, moisture and oxygen protection, and the sealing conditions all affect the final structure. Multiple brands and private-label programs also require clear artwork separation and repeat-order version control.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed pouches and roll film and manage artwork, print repeatability and production handoff across multiple SKUs. We would begin with one representative pack rather than propose one structure for an entire product family.
+
+Could you share one current nut or dried-fruit SKU that is open for packaging review? A photo of the existing pack, its dimensions or fill weight, and whether nitrogen flushing is used would be enough for an initial manufacturability check.
+
+Thai snack-packaging guide:
+https://gdhspack.com/th/applications/snack-packaging
+
+About Huasheng in Thai:
+https://gdhspack.com/th/about
+
+ขอบคุณที่สละเวลาอ่านอีเมลฉบับนี้ เราหวังว่าจะมีโอกาสพูดคุยกับทีมของท่าน
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_hexa_027
+
+- Candidate ID: cand_hexa_027
+- Root domain: hexafood.com
+- Official contact URL: https://www.hexafood.com/contact-us/
+- Target URL: https://gdhspack.com/applications/food-snack-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to gary@hexafood.com
+- Delivery route: Named export-sales address shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Packaging review for one Hexa seasoning SKU
+
+Dear Gary,
+
+I noticed that Hexa Food supports retail, food-service, OEM and private-label customers across more than 100 spices, herbs, seasonings, premixes and marinades, with pack formats ranging from 500 g retail packs to 20 kg food-service bags.
+
+For seasoning powders, the first packaging review should begin with the actual product and filling process. Particle size, oil content, moisture sensitivity and fill weight affect seal contamination, aroma and moisture protection, bag stiffness and handling. A retail pouch and a larger laminated food-service bag should therefore not be assigned one standard structure without reviewing these inputs.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed pouches, laminated bags and roll film and manage artwork and repeat-production consistency across multiple SKUs. We would start from one representative product rather than sending a generic catalogue.
+
+Could you share one current seasoning, spice or premix SKU that is open for packaging review? A photo of the existing pack plus its fill weight, dimensions or current structure would be enough for an initial manufacturability check.
+
+Seasoning and powder packaging guide:
+https://gdhspack.com/applications/food-snack-packaging
+
+Malaysia food-packaging guide:
+https://gdhspack.com/markets/malaysia-food-packaging
+
+Terima kasih atas masa pihak tuan. Kami berharap dapat berbincang dengan pihak Hexa Food.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_ofi_087
+
+- Candidate ID: cand_ofi_087
+- Root domain: ofih.com.my
+- Official contact URL: https://www.ofih.com.my/contact-us/
+- Target URL: https://gdhspack.com/applications/snack-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to info@ofi.com.my
+- Delivery route: Public organizational address shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Roll-film review for one Oriental Food snack line
+
+Dear Oriental Food Industries Team,
+
+I noticed that your public product range covers snacks, potato products, biscuits, wafers and cakes across single-serve, retail and multipack formats.
+
+For a portfolio with many SKUs and pack sizes, the first packaging review should focus on the actual packing line: web width, repeat length, eye-mark position, unwind direction, coefficient of friction and sealing window. For nitrogen-flushed or oil-containing snacks, seal cleanliness, residual oxygen and transport leakage also need to be checked against the real product and process.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed roll film and pouches and manage artwork, print repeatability and production handoff across multiple SKUs. We would start from one representative line rather than sending a generic catalogue.
+
+Could you share one current snack, biscuit or wafer SKU that is open for packaging review? A photo of the existing pack plus its width and repeat length would be enough for an initial manufacturability check.
+
+Snack packaging and roll-film review:
+https://gdhspack.com/applications/snack-packaging
+
+Malaysia food-packaging guide:
+https://gdhspack.com/markets/malaysia-food-packaging
+
+Terima kasih atas masa pihak tuan/puan. Kami berharap dapat berbincang dengan pasukan anda.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_orda_116
+
+- Candidate ID: cand_orda_116
+- Root domain: ordatradeastana.kz
+- Official contact URL: https://ordatradeastana.kz/about-en
+- Target URL: https://gdhspack.com/ru/applications/tea-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to callcenter@ordatradeastana.kz
+- Delivery route: Public organizational email shown on the official Orda Trade Astana website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Tea pouch review for one Orda Trade retail SKU
+
+Dear Orda Trade Astana Team,
+
+I noticed that your factory produces around 3,000 tonnes of tea annually across several own brands and retail pack sizes, and that packaging materials are included in your multi-stage quality control. For granulated and leaf tea, aroma protection, moisture control and repeat print consistency need to be reviewed together with the actual pack and filling method.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom printed tea pouches and automatic-packing roll film, with each structure reviewed against the product, pack size, machine and distribution conditions rather than using one standard material for every SKU.
+
+Could we start with one current 200 g, 250 g or 500 g retail tea pack? A photo of the existing pack, its dimensions or current material structure would be enough for an initial review.
+
+Russian tea packaging guide:
+https://gdhspack.com/ru/applications/tea-packaging
+
+About Huasheng in Russian:
+https://gdhspack.com/ru/about
+
+Спасибо за ваше время. Будем рады обсудить один из ваших текущих форматов упаковки.
+
+Best regards,
+Gavin
+Huasheng Printing Co., Ltd.
+
+## draft_cand_mit_018
+
+- Candidate ID: cand_mit_018
+- Root domain: mitmongkol.com
+- Official contact URL: https://www.mitmongkol.com/about-us/contact-us.html
+- Target URL: https://gdhspack.com/th/applications/daily-chemical-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to pksourcing@mitmongkol.com
+- Delivery route: Public organizational packaging-sourcing email shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Refill pouch review for one Mit Mongkol liquid-care SKU
+
+Dear Packaging Sourcing Team,
+
+I noticed that Mit Mongkol combines formulation, packaging development and large-scale OEM/ODM production for personal-care and household products.
+
+For shampoo and body-wash refill pouches, packaging performance often depends on formula compatibility, filling conditions, sealing reliability and print consistency across multiple SKUs and repeat orders.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed refill pouches, spouted pouches and roll film. Instead of recommending one generic material structure, we review each project according to the actual product, filling process and current packaging specification.
+
+Could we begin with one representative shampoo or body-wash SKU? A photo of the current pouch, its dimensions or existing material specification would be enough for an initial manufacturability review.
+
+Thai liquid-care packaging guide:
+https://gdhspack.com/th/applications/daily-chemical-packaging
+
+About Huasheng in Thai:
+https://gdhspack.com/th/about
+
+ขอบคุณที่สละเวลาอ่าน และหวังว่าจะมีโอกาสพูดคุยกับทีมของคุณครับ
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_lix_063
+
+- Candidate ID: cand_lix_063
+- Root domain: lixco.com
+- Official contact URL: https://lixco.com/lien-he.html
+- Target URL: https://gdhspack.com/vi/applications/daily-chemical-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to export@lixco.com
+- Delivery route: Public organizational export email shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Packaging review for one LIXCO detergent refill SKU
+
+Dear Export Team,
+
+I noticed that LIXCO supplies both liquid-detergent refill pouches and powder-detergent bags across a broad household-care portfolio.
+
+These two formats require different packaging controls. Liquid refill pouches need careful review of formula compatibility, seal contamination and transport leakage, while powder-detergent bags require moisture protection and clean, stable sealing.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed pouches and roll film and evaluate each structure according to the product, filling conditions, pack weight and distribution requirements.
+
+Which format is currently more relevant to your sourcing plan: a liquid-detergent refill pouch or a powder-detergent bag?
+
+We can begin with one existing pack photo or specification and conduct an initial manufacturability review before discussing a wider group of SKUs.
+
+Vietnamese household-care packaging guide:
+https://gdhspack.com/vi/applications/daily-chemical-packaging
+
+About Huasheng in Vietnamese:
+https://gdhspack.com/vi/about
+
+Cảm ơn Quý công ty đã dành thời gian xem thư. Chúng tôi mong có cơ hội trao đổi cùng đội ngũ của Quý công ty.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_jdf_075
+
+- Candidate ID: cand_jdf_075
+- Root domain: jdfthailand.com
+- Official contact URL: https://www.jdfthailand.com/en/
+- Target URL: https://gdhspack.com/th/applications/sauce-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to export@jdfthailand.com
+- Delivery route: Public organizational export-sales email shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: One-pack review for JD Food sauce or seasoning packaging
+
+Dear Export Sales Team,
+
+I noticed that JD Food brings Technical Sales and R&D together throughout product development, from requirement definition and formulation trials through production.
+
+Your seasoning powders, sauces and coconut snacks also create different flexible-packaging requirements, particularly for moisture protection, aroma retention, oil resistance and sealing performance.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed pouches and roll film. We prefer to evaluate one actual product and packing process before recommending a material structure.
+
+Could we begin with one recurring export SKU, such as a sauce pouch, seasoning pack or coconut-chip pouch?
+
+A photo of the existing pack, its dimensions and whether it runs as a premade pouch or roll film would allow us to make the first review specific and practical.
+
+Thai sauce and seasoning packaging guide:
+https://gdhspack.com/th/applications/sauce-packaging
+
+About Huasheng in Thai:
+https://gdhspack.com/th/about
+
+ขอบคุณที่สละเวลาอ่าน และหวังว่าจะมีโอกาสพูดคุยกับทีมของคุณครับ
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_chx_121
+
+- Candidate ID: cand_chx_121
+- Root domain: cholimexfood.com.vn
+- Official contact URL: https://cholimexfood.com.vn/contact-us/
+- Target URL: https://gdhspack.com/vi/applications/sauce-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to cholimexfood@cholimexfood.com.vn
+- Delivery route: Public organizational international-business email shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Flexible-pack review for one Cholimex sauce SKU
+
+Dear International Business Team,
+
+I noticed that Cholimex Food serves both domestic and export markets with a broad range of sauces and condiments in multiple portion and retail sizes.
+
+For sauce sachets and pouches, viscosity, oil or acid exposure, filling temperature and contamination around the sealing area can all affect the appropriate packaging structure and production stability.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed pouches and roll film and review each project according to the actual sauce, filling method, pack size and target distribution conditions.
+
+Could we begin with one sauce SKU that you currently source or plan to review?
+
+A photo of the existing pack, its dimensions and whether it is filled as a premade pouch or from roll film would be enough for a focused initial assessment.
+
+Vietnamese sauce packaging guide:
+https://gdhspack.com/vi/applications/sauce-packaging
+
+About Huasheng in Vietnamese:
+https://gdhspack.com/vi/about
+
+Cảm ơn Quý công ty đã dành thời gian xem thư. Chúng tôi mong có cơ hội trao đổi cùng đội ngũ của Quý công ty.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
+## draft_cand_adev_098
+
+- Candidate ID: cand_adev_098
+- Root domain: adev.co.id
+- Official contact URL: https://adev.co.id/contact/
+- Target URL: https://gdhspack.com/id/applications/daily-chemical-packaging
+- Approval: approved 2026-07-23; user explicitly authorized sending this exact final version to marketing@adev.co.id
+- Delivery route: Public organizational marketing email shown on the official company website.
+- Attachments: none
+
+### Exact outbound content
+
+Subject: Refill pouch review for one ADEV personal-care SKU
+
+Dear Marketing Team,
+
+I noticed that ADEV supports brands from product concept and formula development through samples, registration, production and repeat orders.
+
+For shampoo, body-care and household-liquid products, reviewing the packaging early can help control formula compatibility, filling conditions, sealing reliability, artwork versions and repeat consistency across multiple SKUs.
+
+Huasheng Printing Co., Ltd. is a flexible-packaging manufacturer in Guangdong, China. We produce custom-printed refill pouches, spouted pouches and roll film. Each project is reviewed according to the actual formula and filling process rather than applying one standard structure to every product.
+
+Could we begin with one representative shampoo, body-care or household-liquid SKU?
+
+A photo of the current pack, its dimensions or basic filling information would allow us to check the practical packaging route before discussing a larger group of SKUs.
+
+Indonesian personal-care packaging guide:
+https://gdhspack.com/id/applications/daily-chemical-packaging
+
+About Huasheng in Indonesian:
+https://gdhspack.com/id/about
+
+Terima kasih atas waktu Anda. Kami berharap dapat berdiskusi dengan tim Anda.
+
+Best regards,
+
+Gavin
+Huasheng Printing Co., Ltd.
+https://gdhspack.com
+
 ## draft_cand_019
 
 - Candidate ID: cand_019
