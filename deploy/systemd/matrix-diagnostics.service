@@ -5,6 +5,7 @@ After=network.target docker.service
 [Service]
 Type=oneshot
 User=admin
+SupplementaryGroups=docker
 ExecStart=/home/admin/.local/bin/matrix-diagnostics check
 NoNewPrivileges=true
 PrivateTmp=true
