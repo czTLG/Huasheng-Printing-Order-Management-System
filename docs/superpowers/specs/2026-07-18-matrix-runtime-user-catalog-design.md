@@ -1,7 +1,7 @@
 # Matrix Runtime User Catalog Design
 
-**Date:** 2026-07-18  
-**Status:** Design confirmed; pending document review  
+**Date:** 2026-07-18
+**Status:** Design confirmed; pending document review
 **User scope:** Linux user `admin` on this host
 
 ## Purpose

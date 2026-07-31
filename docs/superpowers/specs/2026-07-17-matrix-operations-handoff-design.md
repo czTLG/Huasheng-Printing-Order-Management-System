@@ -1,7 +1,7 @@
 # Matrix Operations Handoff Design
 
-**Date:** 2026-07-17  
-**Status:** Design confirmed; pending document review  
+**Date:** 2026-07-17
+**Status:** Design confirmed; pending document review
 **Target branch:** `feature/matrix-operations-handoff`
 
 ## Purpose
