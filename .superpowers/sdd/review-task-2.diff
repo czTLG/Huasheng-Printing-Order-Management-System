@@ -1,0 +1,423 @@
+# Review package: ac8af11..9063af4
+
+## Commits
+9063af4 feat: add signal cache storage
+
+## Files changed
+ package.json                 |   1 +
+ scripts/test-signal-cache.js |  83 ++++++++++++++++++
+ src/db.js                    |  61 +++++++++++++
+ src/lib/signalCache.js       | 203 +++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 348 insertions(+)
+
+## Diff
+diff --git a/package.json b/package.json
+index b79a0b5..d43de83 100644
+--- a/package.json
++++ b/package.json
+@@ -3,20 +3,21 @@
+   "version": "0.1.0",
+   "description": "包装袋印刷厂智能生产管理系统（演示版后端）",
+   "main": "src/server.js",
+   "scripts": {
+     "start": "node src/server.js",
+     "baseline:verify": "node scripts/verify-baseline.js",
+     "verify:smoke": "node scripts/smoke-test.js",
+     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+     "test:private-baseline": "node scripts/test-private-baseline.js",
+     "test:matrix-rank": "node scripts/test-schema-rank.js",
++    "test:signal-cache": "node scripts/test-signal-cache.js",
+     "runtime:audit": "node scripts/runtime-audit.js",
+     "runtime:backup": "node scripts/runtime-backup.js",
+     "runtime:verify": "node scripts/runtime-verify.js",
+     "baseline:generate-private": "node scripts/generate-private-baseline.js"
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.3",
+     "better-sqlite3": "^11.8.1",
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+diff --git a/scripts/test-signal-cache.js b/scripts/test-signal-cache.js
+new file mode 100644
+index 0000000..647d790
+--- /dev/null
++++ b/scripts/test-signal-cache.js
+@@ -0,0 +1,83 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-cache-'));
++process.env.DB_PATH = path.join(tempDir, 'test.db');
++
++const { db, initDb } = require('../src/db');
++const {
++  createRun,
++  upsertEntity,
++  appendEvidence,
++  saveClassification,
++  listCandidates
++} = require('../src/lib/signalCache');
++const { RULESET_VERSION } = require('../src/lib/schemaRank');
++
++try {
++  initDb();
++
++  const run = createRun(db, { name: 'phase-one', countries: ['Vietnam'] });
++  assert.ok(run.id);
++  assert.equal(run.ruleset_version, RULESET_VERSION);
++
++  const first = upsertEntity(db, {
++    official_domain: 'brand.example',
++    display_name: 'Brand',
++    country: 'Vietnam',
++    public_contacts: {
++      email: 'hello@brand.example',
++      raw_html: '<html>source page</html>'
++    }
++  });
++  const second = upsertEntity(db, {
++    official_domain: 'https://www.brand.example/',
++    display_name: 'Brand Co',
++    country: 'Vietnam'
++  });
++  assert.equal(first.id, second.id);
++  assert.equal(second.normalized_domain, 'brand.example');
++  assert.deepEqual(JSON.parse(second.public_contacts_json), { email: 'hello@brand.example' });
++  const third = upsertEntity(db, {
++    official_domain: 'https://user:pass@www.brand.example:443/path?q=1#about'
++  });
++  assert.equal(first.id, third.id);
++
++  const evidence = {
++    field: 'product',
++    value: 'coffee',
++    source_url: 'https://brand.example/products',
++    retrieved_at: '2026-07-16T00:00:00Z',
++    confidence: 'high'
++  };
++  const storedEvidence = appendEvidence(db, first.id, evidence);
++  const duplicateEvidence = appendEvidence(db, first.id, evidence);
++  assert.equal(storedEvidence.id, duplicateEvidence.id);
++  assert.throws(
++    () => appendEvidence(db, first.id, { ...evidence, source_url: '   ' }),
++    /source URL/i
++  );
++  assert.throws(
++    () => appendEvidence(db, first.id, { ...evidence, retrieved_at: '' }),
++    /retrieval time/i
++  );
++
++  const classification = saveClassification(db, first.id, {
++    classification: 'valid',
++    priority: 'A',
++    reason_codes: ['official_domain']
++  }, run.id);
++  assert.ok(classification.id);
++  assert.equal(listCandidates(db, { classification: 'valid' }).length, 1);
++  assert.equal(listCandidates(db, { classification: 'noise' }).length, 0);
++  assert.equal(db.prepare('select count(*) n from customers').get().n, 0);
++
++  console.log('signal-cache tests passed');
++} finally {
++  db.close();
++  fs.rmSync(tempDir, { recursive: true, force: true });
++}
+diff --git a/src/db.js b/src/db.js
+index 1bcf21d..65e449b 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -792,20 +792,81 @@ function initDb() {
+       vol_ratio REAL,
+       buy_index REAL,
+       trend TEXT,
+       signal TEXT,
+       risk TEXT,
+       source TEXT,
+       note TEXT,
+       created_at TEXT NOT NULL,
+       UNIQUE(trade_date, code)
+     );
++
++    CREATE TABLE IF NOT EXISTS matrix_runs (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      campaign_json TEXT NOT NULL,
++      ruleset_version TEXT NOT NULL,
++      status TEXT NOT NULL DEFAULT 'running',
++      counters_json TEXT NOT NULL DEFAULT '{}',
++      actor TEXT,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      completed_at TEXT
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_entities (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      normalized_domain TEXT NOT NULL,
++      display_name TEXT,
++      country TEXT,
++      public_contacts_json TEXT NOT NULL DEFAULT '{}',
++      status TEXT NOT NULL DEFAULT 'active',
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_evidence (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      entity_id INTEGER NOT NULL,
++      field TEXT NOT NULL,
++      value TEXT,
++      source_url TEXT NOT NULL,
++      page_title TEXT,
++      retrieved_at TEXT NOT NULL,
++      content_fingerprint TEXT NOT NULL,
++      confidence TEXT,
++      extraction_method TEXT,
++      created_at TEXT NOT NULL,
++      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id)
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_classifications (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      entity_id INTEGER NOT NULL,
++      run_id INTEGER NOT NULL,
++      classification TEXT NOT NULL,
++      priority TEXT,
++      reason_json TEXT NOT NULL DEFAULT '[]',
++      confidence REAL,
++      human_override_classification TEXT,
++      human_override_reason TEXT,
++      human_override_actor TEXT,
++      human_override_at TEXT,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id),
++      FOREIGN KEY(run_id) REFERENCES matrix_runs(id)
++    );
++
++    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_entities_domain
++      ON matrix_entities(normalized_domain);
++    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_evidence_identity
++      ON matrix_evidence(entity_id, field, source_url, content_fingerprint);
+   `);
+ 
+   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+   if (!cols.includes('priority')) {
+     db.exec("ALTER TABLE orders ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
+   }
+ 
+   const ocols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+   if (!ocols.includes('assigned_shipping_worker')) db.exec("ALTER TABLE orders ADD COLUMN assigned_shipping_worker TEXT");
+   if (!ocols.includes('order_qty')) db.exec("ALTER TABLE orders ADD COLUMN order_qty TEXT");
+diff --git a/src/lib/signalCache.js b/src/lib/signalCache.js
+new file mode 100644
+index 0000000..8ee291a
+--- /dev/null
++++ b/src/lib/signalCache.js
+@@ -0,0 +1,203 @@
++'use strict';
++
++const crypto = require('crypto');
++const { RULESET_VERSION } = require('./schemaRank');
++
++function timestamp() {
++  return new Date().toISOString();
++}
++
++function normalizeDomain(input) {
++  if (typeof input !== 'string' || !input.trim()) {
++    throw new Error('official domain is required');
++  }
++
++  let parsed;
++  try {
++    parsed = new URL(input.includes('://') ? input : `https://${input}`);
++  } catch {
++    throw new Error('official domain is invalid');
++  }
++
++  const domain = parsed.hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
++  if (!domain) throw new Error('official domain is required');
++  return domain;
++}
++
++function sanitizePublicContacts(contacts) {
++  if (!contacts || typeof contacts !== 'object' || Array.isArray(contacts)) return {};
++  return Object.fromEntries(
++    Object.entries(contacts).filter(([key]) => !/html/i.test(key))
++  );
++}
++
++function createRun(db, campaign = {}) {
++  const createdAt = timestamp();
++  const insert = db.transaction(() => db.prepare(`
++    INSERT INTO matrix_runs (
++      campaign_json, ruleset_version, status, counters_json, actor, created_at, updated_at
++    ) VALUES (?, ?, ?, ?, ?, ?, ?)
++  `).run(
++    JSON.stringify(campaign),
++    RULESET_VERSION,
++    campaign.status || 'running',
++    JSON.stringify(campaign.counters || {}),
++    campaign.actor || null,
++    createdAt,
++    createdAt
++  ));
++  const result = insert();
++  return db.prepare('SELECT * FROM matrix_runs WHERE id = ?').get(result.lastInsertRowid);
++}
++
++function upsertEntity(db, input = {}) {
++  const normalizedDomain = normalizeDomain(input.official_domain);
++  const changedAt = timestamp();
++  const publicContacts = input.public_contacts === undefined
++    ? null
++    : JSON.stringify(sanitizePublicContacts(input.public_contacts));
++  const upsert = db.transaction(() => {
++    db.prepare(`
++      INSERT INTO matrix_entities (
++        normalized_domain, display_name, country, public_contacts_json, status, created_at, updated_at
++      ) VALUES (?, ?, ?, COALESCE(?, '{}'), ?, ?, ?)
++      ON CONFLICT(normalized_domain) DO UPDATE SET
++        display_name = COALESCE(excluded.display_name, matrix_entities.display_name),
++        country = COALESCE(excluded.country, matrix_entities.country),
++        public_contacts_json = COALESCE(?, matrix_entities.public_contacts_json),
++        status = COALESCE(excluded.status, matrix_entities.status),
++        updated_at = excluded.updated_at
++    `).run(
++      normalizedDomain,
++      input.display_name || null,
++      input.country || null,
++      publicContacts,
++      input.status || 'active',
++      changedAt,
++      changedAt,
++      publicContacts
++    );
++    return db.prepare('SELECT * FROM matrix_entities WHERE normalized_domain = ?').get(normalizedDomain);
++  });
++  return upsert();
++}
++
++function evidenceFingerprint(evidence) {
++  if (evidence.content_fingerprint) return String(evidence.content_fingerprint);
++  return crypto.createHash('sha256')
++    .update(JSON.stringify([evidence.field, evidence.value, evidence.source_url]))
++    .digest('hex');
++}
++
++function appendEvidence(db, entityId, evidence = {}) {
++  if (typeof evidence.source_url !== 'string' || !evidence.source_url.trim()) {
++    throw new Error('source URL is required');
++  }
++  if (typeof evidence.retrieved_at !== 'string' || !evidence.retrieved_at.trim()) {
++    throw new Error('retrieval time is required');
++  }
++  if (typeof evidence.field !== 'string' || !evidence.field.trim()) {
++    throw new Error('evidence field is required');
++  }
++
++  const sourceUrl = evidence.source_url.trim();
++  const fingerprint = evidenceFingerprint({ ...evidence, source_url: sourceUrl });
++  const append = db.transaction(() => {
++    db.prepare(`
++      INSERT OR IGNORE INTO matrix_evidence (
++        entity_id, field, value, source_url, page_title, retrieved_at,
++        content_fingerprint, confidence, extraction_method, created_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++    `).run(
++      entityId,
++      evidence.field.trim(),
++      evidence.value === undefined ? null : String(evidence.value),
++      sourceUrl,
++      evidence.page_title || null,
++      evidence.retrieved_at.trim(),
++      fingerprint,
++      evidence.confidence || null,
++      evidence.extraction_method || null,
++      timestamp()
++    );
++    return db.prepare(`
++      SELECT * FROM matrix_evidence
++      WHERE entity_id = ? AND field = ? AND source_url = ? AND content_fingerprint = ?
++    `).get(entityId, evidence.field.trim(), sourceUrl, fingerprint);
++  });
++  return append();
++}
++
++function saveClassification(db, entityId, result = {}, runId) {
++  if (!result.classification) throw new Error('classification is required');
++  const changedAt = timestamp();
++  const save = db.transaction(() => {
++    const inserted = db.prepare(`
++      INSERT INTO matrix_classifications (
++        entity_id, run_id, classification, priority, reason_json, confidence,
++        human_override_classification, human_override_reason, human_override_actor,
++        human_override_at, created_at, updated_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++    `).run(
++      entityId,
++      runId,
++      result.classification,
++      result.priority || null,
++      JSON.stringify(result.reason_codes || []),
++      result.confidence === undefined ? null : result.confidence,
++      result.human_override_classification || null,
++      result.human_override_reason || null,
++      result.human_override_actor || null,
++      result.human_override_at || null,
++      changedAt,
++      changedAt
++    );
++    return db.prepare('SELECT * FROM matrix_classifications WHERE id = ?').get(inserted.lastInsertRowid);
++  });
++  return save();
++}
++
++function listCandidates(db, filters = {}) {
++  const clauses = [];
++  const params = [];
++  const mappings = [
++    ['classification', 'c.classification'],
++    ['priority', 'c.priority'],
++    ['country', 'e.country'],
++    ['status', 'e.status'],
++    ['run_id', 'c.run_id']
++  ];
++  for (const [key, column] of mappings) {
++    if (filters[key] !== undefined && filters[key] !== null && filters[key] !== '') {
++      clauses.push(`${column} = ?`);
++      params.push(filters[key]);
++    }
++  }
++
++  return db.prepare(`
++    SELECT
++      e.*,
++      c.id AS classification_id,
++      c.run_id,
++      c.classification,
++      c.priority,
++      c.reason_json,
++      c.confidence AS classification_confidence
++    FROM matrix_entities e
++    JOIN matrix_classifications c ON c.id = (
++      SELECT latest.id FROM matrix_classifications latest
++      WHERE latest.entity_id = e.id
++      ORDER BY latest.id DESC LIMIT 1
++    )
++    ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
++    ORDER BY e.id
++  `).all(...params);
++}
++
++module.exports = {
++  createRun,
++  upsertEntity,
++  appendEvidence,
++  saveClassification,
++  listCandidates
++};

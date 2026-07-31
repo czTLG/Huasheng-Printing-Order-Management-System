@@ -1,0 +1,3928 @@
+# Review package: 11422b0..585447a
+
+## Commits
+585447a test: expand matrix phase one safety verification
+bf2eef3 test: verify matrix stream phase one
+d21d18c refactor: enforce matrix reason code contract
+400059a refactor: centralize matrix reason codes
+2d32ca2 feat: expose read only matrix candidates
+965b4ae fix: harden current matrix dry run
+822daaf feat: add current matrix dry run
+ef87174 fix: verify matrix stream transport peers
+882a509 fix: pin matrix stream network probes
+f2f4eee feat: add guarded matrix stream import
+4068ffe fix: harden signal cache boundaries
+9063af4 feat: add signal cache storage
+ac8af11 fix: harden schema rank boundaries
+67548f9 feat: add schema rank classifier
+
+## Files changed
+ docs/operations/matrix-phase1-runbook.md | 149 ++++++++++
+ package.json                             |   6 +
+ scripts/matrix-classify-current.js       | 135 +++++++++
+ scripts/test-matrix-api.js               | 241 ++++++++++++++++
+ scripts/test-matrix-crm-adapter.js       | 440 +++++++++++++++++++++++++++++
+ scripts/test-matrix-stream.js            | 456 +++++++++++++++++++++++++++++++
+ scripts/test-schema-rank.js              | 156 +++++++++++
+ scripts/test-signal-cache.js             | 181 ++++++++++++
+ scripts/verify-matrix-phase1.js          | 324 ++++++++++++++++++++++
+ src/db.js                                |  61 +++++
+ src/lib/matrixCrmAdapter.js              | 428 +++++++++++++++++++++++++++++
+ src/lib/matrixStream.js                  | 434 +++++++++++++++++++++++++++++
+ src/lib/schemaRank.js                    | 179 ++++++++++++
+ src/lib/signalCache.js                   | 309 +++++++++++++++++++++
+ src/routes/matrix.js                     | 215 +++++++++++++++
+ src/server.js                            |   2 +
+ 16 files changed, 3716 insertions(+)
+
+## Diff
+diff --git a/docs/operations/matrix-phase1-runbook.md b/docs/operations/matrix-phase1-runbook.md
+new file mode 100644
+index 0000000..272dabe
+--- /dev/null
++++ b/docs/operations/matrix-phase1-runbook.md
+@@ -0,0 +1,149 @@
++# Matrix Phase 1 运行手册
++
++本阶段只做确定性分类、公开证据导入和只读候选查看。它不发送邮件、WhatsApp 或表单消息，也不创建、更新或删除正式 CRM 记录。
++
++## 安全验证
++
++每次运行前，在仓库根目录执行：
++
++```bash
++npm run verify:matrix-phase1
++```
++
++验证器使用系统临时目录中的独立 SQLite 数据库，初始化完整 schema，并覆盖分类、证据存储、受限导入、当前 CRM 只读适配器和候选 API。它同时确认：
++
++- 允许国家严格为 Vietnam、Thailand、Malaysia、Indonesia、Philippines、Kazakhstan；India 被排除；
++- 每个国家最多接受 20 条，每个 run 最多输入 120 条；
++- 导入和只读操作不会改写 `customers`、`crm_messages`、`email_messages`、`communication_logs`；
++- Matrix 路由没有写接口，相关模块没有交付适配器。
++
++验证器会在结束时删除临时数据库。出现任一断言失败时退出码非零，不得继续导入。
++
++## 当前 CRM 只读干跑
++
++默认命令只输出聚合计数、内部 identity 和源记录 ID：
++
++```bash
++node scripts/matrix-classify-current.js
++```
++
++它读取 `customers`、`crm_messages`、`email_messages`，不写数据库，也不输出消息正文。若确需本机人工核对联系方式，必须同时满足本地已认证 operator 上下文，并显式使用 `--include-private-preview`；不要把该输出写入工单、聊天或共享日志。
++
++只有需要保留不含私密预览的审计结果时才指定工作区内路径：
++
++```bash
++node scripts/matrix-classify-current.js --output ./matrix-current-summary.json
++```
++
++`--output` 当前只接受工作区根目录中的普通文件；不能使用 `./tmp/...` 等子目录路径。目标存在时必须仍是单硬链接普通文件。核对完成后按内部留存规则处理该报告，不要把它加入 Git。
++
++输出前后应记录数据库文件校验和；校验和变化即停止操作并调查。
++
++## 公开证据导入 schema
++
++输入是 JSON 数组。每条记录仅允许公开页面可验证的公司字段：
++
++```json
++[
++  {
++    "country": "Vietnam",
++    "display_name": "Example Foods",
++    "official_url": "https://example.com/",
++    "business_email": "sales@example.com",
++    "public_contacts": {
++      "email": "sales@example.com",
++      "phone": "+84 000 000 000",
++      "whatsapp": "+84 000 000 000",
++      "linkedin_url": "https://www.linkedin.com/company/example",
++      "contact_page_url": "https://example.com/contact"
++    },
++    "product_evidence": ["coffee"],
++    "evidence": [
++      {
++        "field": "product",
++        "value": "coffee",
++        "source_url": "https://example.com/products",
++        "page_title": "Products",
++        "retrieved_at": "2026-07-16T00:00:00Z",
++        "content_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
++        "confidence": "high",
++        "extraction_method": "public-page-review"
++      }
++    ]
++  }
++]
++```
++
++`country`、`official_url` 和至少一个 `evidence` 项是必需的；每个 evidence 必须有非空 `field`、`source_url`、`retrieved_at`。`content_fingerprint` 如提供，必须是 32–128 位十六进制摘要。不要存整页 HTML、登录后页面、私人资料、猜测的个人邮箱、cookie、token、API key 或内部规则文本。
++
++导入必须通过调用 `importDiscoveryBatch(db, runId, records, { dnsLookup, transport, now })` 的受控本地 runner 完成。生产 transport 必须保留地址固定和每跳重定向复验；不得用普通 `fetch` 替代。Phase 1 没有面向操作员的通用导入 CLI，不能临时拼接脚本绕过这些守卫。
++
++## 计数与抽检
++
++`importDiscoveryBatch(...)` 返回内存中的 `summary`，包含以下计数：
++
++- `input`：输入总数，包含随后排除或报错的记录；
++- `excluded`：India 等明确排除记录；
++- `test`：已知测试或验证伪记录；
++- `noise`：系统通知等噪声；
++- `needs_review`：证据或身份不足，必须人工复核；
++- `valid`：通过当前规则的候选；
++- `errors`：URL、证据、国家上限或存储校验失败。
++
++受控 runner 必须把 run ID 与返回的完整 summary 同时打印到命令标准输出；操作员将该段输出写入本次审计记录。当前实现不会把 import 返回的 summary 更新到 `matrix_runs.counters_json`，不得把该列当作本次导入计数来源，也不得手工伪造其内容。
++
++summary 必须满足 `input = excluded + test + noise + needs_review + valid + errors`。若不相等、任一国家超过 20、总输入超过 120、出现 India 实体，立即停止。
++
++人工抽检至少覆盖每个国家和每个非零分类；每组抽取 10%，不足 10 条时至少 1 条。逐项核对 official domain、证据 URL、检索时间、confidence、分类 reason code，并确认 API 只展示掩码联系方式。`needs_review` 和 `errors` 不得按 valid 使用。
++
++可用只读 SQL 复核：
++
++```sql
++SELECT id, status, ruleset_version, created_at
++FROM matrix_runs
++WHERE id = :run_id;
++
++SELECT e.country, c.classification, COUNT(*) AS count
++FROM matrix_classifications c
++JOIN matrix_entities e ON e.id = c.entity_id
++WHERE c.run_id = :run_id
++GROUP BY e.country, c.classification
++ORDER BY e.country, c.classification;
++
++SELECT e.id, e.normalized_domain, e.country, c.classification,
++       c.priority, c.reason_json
++FROM matrix_classifications c
++JOIN matrix_entities e ON e.id = c.entity_id
++WHERE c.run_id = :run_id
++ORDER BY e.country, e.id;
++```
++
++## 回滚
++
++优先在临时数据库执行整次演练，回滚方式是在关闭连接后删除该临时数据库文件。对持久数据库，Phase 1 能明确证明归属某个 run 的只有 `matrix_classifications.run_id` 和该 `matrix_runs.id`；`matrix_entities` 与 `matrix_evidence` 可被多个 run 复用，不能凭时间或 domain 推测归属并删除。
++
++先备份数据库并确认 `:run_id`，然后在单个事务中仅删除该 run 明确拥有的 Matrix 行：
++
++```sql
++BEGIN IMMEDIATE;
++
++SELECT COUNT(*) AS classifications_to_delete
++FROM matrix_classifications
++WHERE run_id = :run_id;
++
++DELETE FROM matrix_classifications
++WHERE run_id = :run_id;
++
++DELETE FROM matrix_runs
++WHERE id = :run_id;
++
++COMMIT;
++```
++
++不要删除或更新任何非 `matrix_*` 表。不要对 `matrix_entities` 或 `matrix_evidence` 做级联清理；当前 schema 没有足够的 run 所有权信息。若必须清理这些共享行，停止并走单独的变更评审，而不是扩大本回滚。
++
++## 秘密隔离与交付状态
++
++DNS/HTTP provider 凭据、数据库凭据、JWT、SMTP、邮箱和消息平台秘密只能来自进程环境或受管秘密存储，不能进入导入 JSON、`campaign_json`、evidence、日志、报告或仓库。公开证据数据与正式 CRM 数据使用独立表；私密预览不得持久化到 Matrix 表。
++
++Phase 1 的 delivery 明确不可用：没有邮件或 WhatsApp 发送适配器，没有自动表单提交，没有 Matrix POST/PATCH/DELETE API，也没有最终发送按钮或后台交付任务。任何交付需求都属于后续独立阶段；不得通过现有通用邮件模块旁路实现。
+diff --git a/package.json b/package.json
+index e652420..5ab4d14 100644
+--- a/package.json
++++ b/package.json
+@@ -2,20 +2,26 @@
+   "name": "packaging-printing-mes-demo",
+   "version": "0.1.0",
+   "description": "包装袋印刷厂智能生产管理系统（演示版后端）",
+   "main": "src/server.js",
+   "scripts": {
+     "start": "node src/server.js",
+     "baseline:verify": "node scripts/verify-baseline.js",
+     "verify:smoke": "node scripts/smoke-test.js",
+     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+     "test:private-baseline": "node scripts/test-private-baseline.js",
++    "test:matrix-rank": "node scripts/test-schema-rank.js",
++    "test:signal-cache": "node scripts/test-signal-cache.js",
++    "test:matrix-stream": "node scripts/test-matrix-stream.js",
++    "test:matrix-crm": "node scripts/test-matrix-crm-adapter.js",
++    "test:matrix-api": "node scripts/test-matrix-api.js",
++    "verify:matrix-phase1": "npm run test:matrix-stream && npm run test:matrix-api && node scripts/verify-matrix-phase1.js",
+     "runtime:audit": "node scripts/runtime-audit.js",
+     "runtime:backup": "node scripts/runtime-backup.js",
+     "runtime:verify": "node scripts/runtime-verify.js",
+     "baseline:generate-private": "node scripts/generate-private-baseline.js"
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.3",
+     "better-sqlite3": "^11.8.1",
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+diff --git a/scripts/matrix-classify-current.js b/scripts/matrix-classify-current.js
+new file mode 100644
+index 0000000..23d7636
+--- /dev/null
++++ b/scripts/matrix-classify-current.js
+@@ -0,0 +1,135 @@
++'use strict';
++
++const fs = require('fs');
++const path = require('path');
++const crypto = require('crypto');
++const Database = require('better-sqlite3');
++const jwt = require('jsonwebtoken');
++const { classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
++
++function parseArgs(argv) {
++  const parsed = { includePrivatePreview: false, output: '' };
++  for (let index = 0; index < argv.length; index += 1) {
++    const arg = argv[index];
++    if (arg === '--include-private-preview') parsed.includePrivatePreview = true;
++    else if (arg === '--output') {
++      if (!argv[index + 1]) throw new Error('--output requires a path');
++      parsed.output = argv[index += 1];
++    } else {
++      throw new Error(`unknown argument: ${arg}`);
++    }
++  }
++  return parsed;
++}
++
++function authenticatedLocalOperator(db) {
++  const token = process.env.MATRIX_LOCAL_OPERATOR_TOKEN;
++  const secret = process.env.JWT_SECRET;
++  if (!token || !secret || secret === 'change-this-in-production') return false;
++  try {
++    const payload = jwt.verify(token, secret);
++    const id = Number(payload.sub);
++    if (!Number.isInteger(id) || id <= 0) return false;
++    const hasUsers = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
++    if (!hasUsers) return false;
++    const user = db.prepare('SELECT id, role, status FROM users WHERE id = ?').get(id);
++    return Boolean(user
++      && user.status === 'active'
++      && ['super_admin', 'foreign_trade_crm_admin'].includes(user.role));
++  } catch {
++    return false;
++  }
++}
++
++function workspaceOutputPath(value) {
++  const workspace = fs.realpathSync(path.resolve(__dirname, '..'));
++  const output = path.resolve(process.cwd(), value);
++  if (output !== workspace && !output.startsWith(`${workspace}${path.sep}`)) {
++    throw new Error('--output must stay inside the workspace');
++  }
++  if (path.dirname(output) !== workspace) {
++    throw new Error('--output must be a file in the workspace root');
++  }
++  const outputEntry = fs.lstatSync(output, { throwIfNoEntry: false });
++  if (outputEntry && (!outputEntry.isFile() || outputEntry.nlink !== 1)) {
++    throw new Error('--output must be a single-link regular file');
++  }
++  let ancestor = path.dirname(output);
++  while (!fs.existsSync(ancestor)) {
++    const parent = path.dirname(ancestor);
++    if (parent === ancestor) throw new Error('--output has no existing parent');
++    ancestor = parent;
++  }
++  const realAncestor = fs.realpathSync(ancestor);
++  if (realAncestor !== workspace && !realAncestor.startsWith(`${workspace}${path.sep}`)) {
++    throw new Error('--output parent must stay inside the workspace');
++  }
++  return output;
++}
++
++function writeWorkspaceOutput(output, content) {
++  const target = workspaceOutputPath(output);
++  const workspace = fs.realpathSync(path.resolve(__dirname, '..'));
++  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
++  const temporary = path.join(workspace, `.matrix-output-${process.pid}-${crypto.randomBytes(12).toString('hex')}.tmp`);
++  let fd;
++  try {
++    fd = fs.openSync(temporary, flags, 0o600);
++    const opened = fs.fstatSync(fd);
++    if (!opened.isFile() || opened.nlink !== 1) throw new Error('temporary output is not a single-link regular file');
++    fs.writeFileSync(fd, content, { encoding: 'utf8' });
++    fs.fsyncSync(fd);
++    fs.closeSync(fd);
++    fd = undefined;
++
++    if (fs.realpathSync(path.dirname(target)) !== workspace) {
++      throw new Error('--output parent changed during write');
++    }
++    const destination = fs.lstatSync(target, { throwIfNoEntry: false });
++    if (destination && (!destination.isFile() || destination.nlink !== 1)) {
++      throw new Error('--output changed to a non-regular or linked file');
++    }
++    const staged = fs.lstatSync(temporary);
++    if (!staged.isFile() || staged.nlink !== 1) throw new Error('temporary output changed during write');
++
++    fs.renameSync(temporary, target);
++    const directoryFd = fs.openSync(workspace, fs.constants.O_RDONLY);
++    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
++  } finally {
++    if (fd !== undefined) fs.closeSync(fd);
++    fs.rmSync(temporary, { force: true });
++  }
++}
++
++function main() {
++  const args = parseArgs(process.argv.slice(2));
++  const dbPath = process.env.DB_PATH
++    ? path.resolve(process.env.DB_PATH)
++    : path.resolve(__dirname, '..', 'data', 'app.db');
++  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
++  let report;
++  try {
++    const authenticated = authenticatedLocalOperator(db);
++    if (args.includePrivatePreview && !authenticated) {
++      throw new Error('private preview requires an authenticated local CRM administrator context');
++    }
++    report = classifyCurrentCrm(db, {
++      includePrivatePreview: args.includePrivatePreview,
++      authenticatedLocalOperator: authenticated,
++      now: new Date().toISOString().slice(0, 10)
++    });
++  } finally {
++    db.close();
++  }
++
++  const json = `${JSON.stringify(report, null, 2)}\n`;
++  if (args.output) writeWorkspaceOutput(args.output, json);
++  process.stdout.write(json);
++}
++
++try {
++  main();
++} catch (error) {
++  process.stderr.write(`${error.message}\n`);
++  process.exitCode = 1;
++}
+diff --git a/scripts/test-matrix-api.js b/scripts/test-matrix-api.js
+new file mode 100644
+index 0000000..a534977
+--- /dev/null
++++ b/scripts/test-matrix-api.js
+@@ -0,0 +1,241 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++const { spawn } = require('child_process');
++const Database = require('better-sqlite3');
++const { REASON_CODES, PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
++
++const root = path.resolve(__dirname, '..');
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-api-'));
++const dbPath = path.join(tempDir, 'app.db');
++const port = Number(process.env.MATRIX_API_TEST_PORT || 19115);
++const baseUrl = `http://127.0.0.1:${port}`;
++let child;
++let stderr = '';
++
++function sleep(ms) {
++  return new Promise(resolve => setTimeout(resolve, ms));
++}
++
++async function waitForHealth() {
++  const deadline = Date.now() + 15000;
++  while (Date.now() < deadline) {
++    try {
++      const response = await fetch(`${baseUrl}/health`);
++      if (response.ok) return;
++    } catch (_) {}
++    await sleep(100);
++  }
++  throw new Error(`server health timeout: ${stderr.slice(-1000)}`);
++}
++
++async function request(urlPath, { method = 'GET', token, body, status = 200 } = {}) {
++  const headers = {};
++  if (token) headers.authorization = `Bearer ${token}`;
++  if (body !== undefined) headers['content-type'] = 'application/json';
++  const response = await fetch(`${baseUrl}${urlPath}`, {
++    method,
++    headers,
++    body: body === undefined ? undefined : JSON.stringify(body)
++  });
++  const text = await response.text();
++  let json;
++  try { json = text ? JSON.parse(text) : null; } catch (_) { json = { raw: text }; }
++  assert.equal(response.status, status, `${method} ${urlPath}: ${text}`);
++  return json;
++}
++
++async function login(username) {
++  const result = await request('/api/auth/login', {
++    method: 'POST',
++    body: { username, password: 'guard123' }
++  });
++  assert(result.token, `${username} login should return a token`);
++  return result.token;
++}
++
++function assertNoPrivateFields(value, forbiddenValues = []) {
++  const serialized = JSON.stringify(value);
++  const forbiddenKeys = [
++    'public_contacts_json', 'reason_json', 'campaign_json', 'ruleset_version',
++    'content_fingerprint', 'extraction_method', 'human_override_reason',
++    'human_override_actor', 'raw_page', 'page_text', 'message_body',
++    'secret', 'config'
++  ];
++  forbiddenKeys.forEach(key => assert(!serialized.toLowerCase().includes(`"${key.toLowerCase()}"`), `response leaked ${key}`));
++  forbiddenValues.forEach(secret => assert(!serialized.includes(secret), `response leaked ${secret}`));
++}
++
++function seed() {
++  process.env.DB_PATH = dbPath;
++  const { db, initDb } = require('../src/db');
++  const { createRun, upsertEntity, appendEvidence, saveClassification } = require('../src/lib/signalCache');
++  initDb();
++  const createdAt = '2026-07-16 09:00:00';
++  const insertUser = db.prepare(`
++    INSERT INTO users (username, password, role, status, created_at, approved_at)
++    VALUES (?, 'guard123', ?, 'active', ?, ?)
++  `);
++  insertUser.run('matrix_super', 'super_admin', createdAt, createdAt);
++  insertUser.run('matrix_crm', 'foreign_trade_crm_admin', createdAt, createdAt);
++  insertUser.run('matrix_sales', 'ai_sales', createdAt, createdAt);
++
++  const firstRun = createRun(db, {
++    name: 'Southeast Asia public scan',
++    countries: ['Vietnam'],
++    actor: 'SECRET_CONFIG_ACTOR'
++  });
++  const secondRun = createRun(db, { name: 'Thailand public scan', countries: ['Thailand'] });
++  const first = upsertEntity(db, {
++    official_domain: 'alpha.example',
++    display_name: 'Alpha Foods',
++    country: 'Vietnam',
++    public_contacts: {
++      email: 'buyer@alpha.example',
++      phone: '+84 912 345 678',
++      whatsapp: '+84 998 765 432',
++      linkedin_url: 'https://linkedin.example/private-contact',
++      contact_page_url: 'https://alpha.example/private-contact'
++    }
++  });
++  const second = upsertEntity(db, {
++    official_domain: 'beta.example',
++    display_name: 'Beta Foods',
++    country: 'Thailand',
++    public_contacts: { email: 'owner@beta.example' }
++  });
++  appendEvidence(db, first.id, {
++    field: 'SECRET_EVIDENCE_FIELD_SENTINEL',
++    value: 'RAW_PAGE_TEXT_SENTINEL private CRM message body',
++    source_url: 'https://alpha.example/products',
++    page_title: 'Alpha public products',
++    retrieved_at: '2026-07-16T01:00:00Z',
++    confidence: 'high',
++    extraction_method: 'SECRET_INTERNAL_RULE'
++  });
++  saveClassification(db, first.id, {
++    classification: 'valid',
++    priority: 'A',
++    reason_codes: [...PUBLIC_REASON_CODES, 'SECRET_REASON_RULE_SENTENCE'],
++    confidence: 0.95,
++    human_override_reason: 'SECRET_OVERRIDE_TEXT',
++    human_override_actor: 'private-reviewer'
++  }, firstRun.id);
++  saveClassification(db, second.id, {
++    classification: 'needs_review',
++    priority: 'B',
++    reason_codes: ['missing_identity'],
++    confidence: 0.5
++  }, secondRun.id);
++  db.close();
++  return { firstId: Number(first.id) };
++}
++
++async function main() {
++  assert(REASON_CODES && typeof REASON_CODES === 'object' && !Array.isArray(REASON_CODES), 'schemaRank should export REASON_CODES');
++  assert(Object.isFrozen(REASON_CODES), 'REASON_CODES should be immutable');
++  assert(Array.isArray(PUBLIC_REASON_CODES) && Object.isFrozen(PUBLIC_REASON_CODES), 'PUBLIC_REASON_CODES should be an immutable collection');
++  const reasonCodeValues = Object.values(REASON_CODES);
++  assert.equal(reasonCodeValues.length, 20, 'reason-code contract should cover all 20 current codes');
++  assert.equal(new Set(reasonCodeValues).size, 20, 'reason-code values should be unique');
++  assert.deepEqual(PUBLIC_REASON_CODES, reasonCodeValues, 'every REASON_CODES value should be public');
++
++  const schemaSource = fs.readFileSync(path.join(root, 'src', 'lib', 'schemaRank.js'), 'utf8');
++  const schemaProducerSource = schemaSource.slice(schemaSource.indexOf('function result'));
++  const crmProducerSource = fs.readFileSync(path.join(root, 'src', 'lib', 'matrixCrmAdapter.js'), 'utf8');
++  for (const code of reasonCodeValues) {
++    const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++    const literal = new RegExp(`['"]${escaped}['"]`);
++    assert(!literal.test(schemaProducerSource), `schemaRank producer should consume REASON_CODES for ${code}`);
++    assert(!literal.test(crmProducerSource), `matrixCrmAdapter producer should consume REASON_CODES for ${code}`);
++  }
++
++  const { firstId } = seed();
++  child = spawn(process.execPath, ['src/server.js'], {
++    cwd: root,
++    env: { ...process.env, DB_PATH: dbPath, PORT: String(port), DISABLE_CRON: '1', FORCE_HTTPS: '0' },
++    stdio: ['ignore', 'ignore', 'pipe']
++  });
++  child.stderr.on('data', chunk => { stderr += String(chunk); });
++  await waitForHealth();
++
++  await request('/api/matrix/candidates', { status: 401 });
++  const salesToken = await login('matrix_sales');
++  await request('/api/matrix/candidates', { token: salesToken, status: 403 });
++  const adminToken = await login('matrix_super');
++  const crmToken = await login('matrix_crm');
++
++  const list = await request('/api/matrix/candidates?page=1&page_size=1&classification=valid&priority=A&country=Vietnam', { token: crmToken });
++  assert.deepEqual(Object.keys(list).sort(), ['page', 'page_size', 'rows', 'total', 'total_pages']);
++  assert.equal(list.page, 1);
++  assert.equal(list.page_size, 1);
++  assert.equal(list.total, 1);
++  assert.equal(list.rows.length, 1);
++  const publicReasonCodes = [...PUBLIC_REASON_CODES];
++  assert.deepEqual(list.rows[0].reason_codes, publicReasonCodes);
++  assert.deepEqual(list.rows[0].evidence_urls, ['https://alpha.example/products']);
++  assert.equal(list.rows[0].contacts.email, 'b***@alpha.example');
++  assert.equal(list.rows[0].contacts.phone, '***5678');
++  assertNoPrivateFields(list, [
++    'buyer@alpha.example', '+84 912 345 678', '+84 998 765 432',
++    'private-contact', 'RAW_PAGE_TEXT_SENTINEL', 'SECRET_INTERNAL_RULE',
++    'SECRET_OVERRIDE_TEXT', 'private-reviewer', 'SECRET_REASON_RULE_SENTENCE'
++  ]);
++
++  const capped = await request('/api/matrix/candidates?page_size=999', { token: adminToken });
++  assert.equal(capped.page_size, 100);
++  assert.equal(capped.total, 2);
++  await request('/api/matrix/candidates?classification=unknown', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?priority=urgent', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?country=Neverland', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?page=0', { token: adminToken, status: 400 });
++  await request(`/api/matrix/candidates?page=${'9'.repeat(400)}`, { token: adminToken, status: 400 });
++
++  const secondPage = await request('/api/matrix/candidates?page=2&page_size=1', { token: adminToken });
++  assert.equal(secondPage.page, 2);
++  assert.equal(secondPage.rows.length, 1);
++
++  const runs = await request('/api/matrix/runs', { token: adminToken });
++  assert.equal(runs.total, 2);
++  assert.equal(runs.rows[0].id > 0, true);
++  assertNoPrivateFields(runs, ['SECRET_CONFIG_ACTOR']);
++
++  const before = new Database(dbPath, { readonly: true });
++  const entityBefore = before.prepare('SELECT * FROM matrix_entities WHERE id = ?').get(firstId);
++  const classificationBefore = before.prepare('SELECT * FROM matrix_classifications WHERE entity_id = ? ORDER BY id DESC LIMIT 1').get(firstId);
++  const auditBefore = before.prepare("SELECT count(*) count FROM audit_logs WHERE action = 'read_matrix_candidate_detail'").get().count;
++  before.close();
++
++  const detail = await request(`/api/matrix/candidates/${firstId}`, { token: crmToken });
++  assert.equal(detail.id, firstId);
++  assert.deepEqual(detail.reason_codes, publicReasonCodes);
++  assert.deepEqual(detail.evidence.map(item => item.source_url), ['https://alpha.example/products']);
++  assert.deepEqual(Object.keys(detail.evidence[0]).sort(), ['confidence', 'retrieved_at', 'source_url']);
++  assertNoPrivateFields(detail, [
++    'buyer@alpha.example', 'RAW_PAGE_TEXT_SENTINEL', 'SECRET_INTERNAL_RULE',
++    'SECRET_OVERRIDE_TEXT', 'SECRET_REASON_RULE_SENTENCE', 'SECRET_EVIDENCE_FIELD_SENTINEL'
++  ]);
++  await request('/api/matrix/candidates/999999', { token: crmToken, status: 404 });
++
++  const after = new Database(dbPath, { readonly: true });
++  assert.deepEqual(after.prepare('SELECT * FROM matrix_entities WHERE id = ?').get(firstId), entityBefore);
++  assert.deepEqual(after.prepare('SELECT * FROM matrix_classifications WHERE entity_id = ? ORDER BY id DESC LIMIT 1').get(firstId), classificationBefore);
++  assert.equal(after.prepare("SELECT count(*) count FROM audit_logs WHERE action = 'read_matrix_candidate_detail'").get().count, auditBefore + 1);
++  after.close();
++
++  for (const method of ['POST', 'PATCH', 'DELETE']) {
++    await request('/api/matrix/candidates', { method, token: adminToken, body: {}, status: 404 });
++  }
++  console.log('matrix API tests passed');
++}
++
++main().catch(error => {
++  console.error(error.stack || error);
++  process.exitCode = 1;
++}).finally(() => {
++  if (child) child.kill('SIGTERM');
++  fs.rmSync(tempDir, { recursive: true, force: true });
++});
+diff --git a/scripts/test-matrix-crm-adapter.js b/scripts/test-matrix-crm-adapter.js
+new file mode 100644
+index 0000000..8a7f1cb
+--- /dev/null
++++ b/scripts/test-matrix-crm-adapter.js
+@@ -0,0 +1,440 @@
++'use strict';
++
++const assert = require('assert');
++const crypto = require('crypto');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++const Database = require('better-sqlite3');
++const jwt = require('jsonwebtoken');
++const { spawnSync } = require('child_process');
++const { REASON_CODES, PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
++
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-crm-'));
++const dbPath = path.join(tempDir, 'fixture.db');
++const db = new Database(dbPath);
++
++function digest() {
++  return crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
++}
++
++function bySourceId(report, sourceType, id) {
++  return report.records.find((record) => record.source_ids[sourceType]?.includes(id));
++}
++
++try {
++  db.pragma('journal_mode = DELETE');
++  db.exec(`
++    CREATE TABLE users (
++      id INTEGER PRIMARY KEY,
++      username TEXT,
++      role TEXT,
++      status TEXT
++    );
++    CREATE TABLE customers (
++      id INTEGER PRIMARY KEY,
++      name TEXT,
++      company_name TEXT,
++      country TEXT,
++      email TEXT,
++      whatsapp TEXT,
++      phone TEXT,
++      website TEXT,
++      source_channel TEXT,
++      main_product TEXT,
++      notes TEXT,
++      last_contact_at TEXT,
++      created_at TEXT,
++      updated_at TEXT
++    );
++    CREATE TABLE crm_messages (
++      id INTEGER PRIMARY KEY,
++      source_type TEXT,
++      source_message_id TEXT,
++      thread_id TEXT,
++      customer_id INTEGER,
++      direction TEXT,
++      sender_name TEXT,
++      sender_contact TEXT,
++      receiver_contact TEXT,
++      message_text TEXT,
++      raw_payload_json TEXT,
++      received_at TEXT,
++      created_at TEXT,
++      updated_at TEXT
++    );
++    CREATE TABLE email_messages (
++      id INTEGER PRIMARY KEY,
++      message_id TEXT,
++      thread_id TEXT,
++      from_email TEXT,
++      from_name TEXT,
++      to_emails TEXT,
++      cc_emails TEXT,
++      bcc_emails TEXT,
++      subject TEXT,
++      text_body TEXT,
++      cleaned_text TEXT,
++      sent_at TEXT,
++      received_at TEXT,
++      direction TEXT,
++      contact_email TEXT,
++      contact_name TEXT,
++      matched_customer_id INTEGER,
++      business_relevance TEXT,
++      noise_level TEXT,
++      raw_headers_json TEXT,
++      detected_signals_json TEXT,
++      parser_hints_json TEXT,
++      created_at TEXT,
++      updated_at TEXT
++    );
++  `);
++
++  const insertCustomer = db.prepare(`
++    INSERT INTO customers (
++      id, name, company_name, country, email, whatsapp, phone, website,
++      source_channel, main_product, notes, last_contact_at, created_at, updated_at
++    ) VALUES (
++      @id, @name, @company_name, @country, @email, @whatsapp, @phone, @website,
++      @source_channel, @main_product, @notes, @last_contact_at, @created_at, @updated_at
++    )
++  `);
++  const customerDefaults = {
++    email: '', whatsapp: '', phone: '', website: '', source_channel: '',
++    main_product: '', notes: '', last_contact_at: '2026-07-01T00:00:00Z',
++    created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z'
++  };
++  insertCustomer.run({ ...customerDefaults, id: 1, name: '国内老客户', company_name: '本地食品厂', country: '中国' });
++  insertCustomer.run({ ...customerDefaults, id: 2, name: 'Token Test', company_name: 'Token Test', country: '', source_channel: 'whatsapp' });
++  insertCustomer.run({
++    ...customerDefaults,
++    id: 5,
++    name: 'Overseas Mail Contact',
++    company_name: 'Vietnam Coffee Brand',
++    country: 'Vietnam',
++    email: 'buyer@vietcoffee.example',
++    website: 'https://vietcoffee.example',
++    source_channel: 'email',
++    main_product: 'coffee pouch'
++  });
++  insertCustomer.run({
++    ...customerDefaults,
++    id: 6,
++    name: 'Overseas Chat Contact',
++    company_name: 'Indonesia Care Brand',
++    country: 'Indonesia',
++    whatsapp: '+628123456789',
++    website: 'https://carebrand.example',
++    source_channel: 'whatsapp',
++    main_product: 'detergent refill pouch'
++  });
++  insertCustomer.run({ ...customerDefaults, id: 7, name: 'Legacy Local', company_name: 'Legacy Local', country: '' });
++  insertCustomer.run({ ...customerDefaults, id: 8, name: 'Duplicate Chat', company_name: 'Duplicate Brand', country: 'Thailand', whatsapp: '+66812345678', website: 'duplicate.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 9, name: 'Broken Payload', company_name: 'Payload Brand', country: 'Malaysia', email: 'buyer@payload.example', website: 'payload.example', main_product: 'liquid pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 10, name: 'Greeting Only', company_name: '', country: 'Philippines', email: 'hello@greeting.example', website: 'greeting.example', main_product: '' });
++  insertCustomer.run({ ...customerDefaults, id: 11, name: 'Local Linked Legacy', company_name: 'Local Linked Legacy', country: '' });
++  insertCustomer.run({ ...customerDefaults, id: 12, name: 'Malformed Time Brand', company_name: 'Malformed Time Brand', country: 'Vietnam', email: 'buyer@timebrand.example', website: 'timebrand.example', main_product: 'coffee pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 13, name: 'Repeated Messages', company_name: 'Repeated Messages Brand', country: 'Indonesia', whatsapp: '+628555555555', website: 'repeatbrand.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 14, name: 'Unknown Linked Legacy', company_name: 'Unknown Linked Legacy', country: '' });
++  insertCustomer.run({ ...customerDefaults, id: 15, name: 'Broken Mail JSON', company_name: 'Broken Mail JSON Brand', country: 'Vietnam', email: 'buyer@brokenmail.example', website: 'brokenmail.example', main_product: 'coffee pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 16, name: 'Company Shell', company_name: 'Company Only', country: 'Vietnam', email: 'buyer@companyshell.example', website: 'companyshell.example', main_product: '' });
++  insertCustomer.run({ ...customerDefaults, id: 17, name: 'Impossible Day', company_name: 'Impossible Day Brand', country: 'Vietnam', email: 'buyer@daybrand.example', website: 'daybrand.example', main_product: 'coffee pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 18, name: 'Impossible Month', company_name: 'Impossible Month Brand', country: 'Thailand', email: 'buyer@monthbrand.example', website: 'monthbrand.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 19, name: 'Permissive Date', company_name: 'Permissive Date Brand', country: 'Malaysia', email: 'buyer@datebrand.example', website: 'datebrand.example', main_product: 'liquid pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 20, name: 'Bad Customer Update', company_name: 'Bad Customer Update Brand', country: 'Vietnam', email: 'buyer@customerupdate.example', website: 'customerupdate.example', main_product: 'coffee pouch', updated_at: '2026-02-30' });
++  insertCustomer.run({ ...customerDefaults, id: 21, name: 'Bad CRM Update', company_name: 'Bad CRM Update Brand', country: 'Thailand', email: 'buyer@crmupdate.example', website: 'crmupdate.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 22, name: 'Bad Email Update', company_name: 'Bad Email Update Brand', country: 'Malaysia', email: 'buyer@emailupdate.example', website: 'emailupdate.example', main_product: 'liquid pouch' });
++
++  const insertCrm = db.prepare(`
++    INSERT INTO crm_messages (
++      id, source_type, source_message_id, thread_id, customer_id, direction,
++      sender_name, sender_contact, receiver_contact, message_text, raw_payload_json,
++      received_at, created_at, updated_at
++    ) VALUES (
++      @id, @source_type, @source_message_id, @thread_id, @customer_id, @direction,
++      @sender_name, @sender_contact, @receiver_contact, @message_text, @raw_payload_json,
++      @received_at, @created_at, @updated_at
++    )
++  `);
++  const crmDefaults = {
++    source_message_id: '', thread_id: '', customer_id: null, direction: 'inbound',
++    sender_name: '', sender_contact: '', receiver_contact: '', raw_payload_json: '{}',
++    received_at: '2026-07-01T00:00:00Z', created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z'
++  };
++  insertCrm.run({ ...crmDefaults, id: 20, source_type: 'whatsapp', customer_id: 2, sender_name: 'Token Test', message_text: 'hello token ok' });
++  insertCrm.run({
++    ...crmDefaults,
++    id: 40,
++    source_type: 'whatsapp',
++    sender_name: '',
++    sender_contact: '',
++    message_text: 'Hello\nHello',
++    received_at: 'not-a-date'
++  });
++  insertCrm.run({
++    ...crmDefaults,
++    id: 60,
++    source_type: 'whatsapp',
++    customer_id: 6,
++    sender_name: 'Purchasing',
++    sender_contact: '+628123456789',
++    message_text: 'Need detergent refill pouch specifications'
++  });
++  insertCrm.run({ ...crmDefaults, id: 80, source_type: 'whatsapp', customer_id: 8, sender_name: 'Buyer', sender_contact: '+66812345678', message_text: 'Need snack pouch\nNeed snack pouch' });
++  insertCrm.run({ ...crmDefaults, id: 90, source_type: 'whatsapp', customer_id: 9, sender_name: 'Buyer', sender_contact: '+60123456789', message_text: 'Need liquid pouch specifications', raw_payload_json: '{broken' });
++  insertCrm.run({ ...crmDefaults, id: 110, source_type: 'whatsapp', customer_id: 11, sender_name: 'Local', sender_contact: '+8613812345678', message_text: '本地沟通' });
++  insertCrm.run({ ...crmDefaults, id: 120, source_type: 'whatsapp', direction: 'outbound', sender_contact: '+8613900000000', receiver_contact: '+84911111111', message_text: 'First overseas conversation' });
++  insertCrm.run({ ...crmDefaults, id: 121, source_type: 'whatsapp', direction: 'outbound', sender_contact: '+8613900000000', receiver_contact: '+66822222222', message_text: 'Second overseas conversation' });
++  insertCrm.run({ ...crmDefaults, id: 122, source_type: 'whatsapp', direction: 'unknown', sender_contact: '+84933333333', receiver_contact: '+8613900000000', message_text: 'Direction is uncertain' });
++  insertCrm.run({ ...crmDefaults, id: 130, source_type: 'whatsapp', customer_id: 12, sender_name: 'Buyer', sender_contact: '+84944444444', message_text: 'Need coffee pouch specifications', received_at: 'bad-time' });
++  insertCrm.run({ ...crmDefaults, id: 131, source_type: 'whatsapp', customer_id: 12, sender_name: 'Buyer', sender_contact: '+84944444444', message_text: 'Follow up coffee pouch specifications', received_at: '2026-07-02T00:00:00Z' });
++  insertCrm.run({ ...crmDefaults, id: 132, source_type: 'whatsapp', customer_id: 13, sender_name: 'Buyer', sender_contact: '+628555555555', message_text: 'Need the same snack pouch specification with zipper and matte finish' });
++  insertCrm.run({ ...crmDefaults, id: 133, source_type: 'whatsapp', customer_id: 13, sender_name: 'Buyer', sender_contact: '+628555555555', message_text: 'Forwarded context: Need the same snack pouch specification with zipper and matte finish. Thanks.' });
++  insertCrm.run({ ...crmDefaults, id: 140, source_type: 'whatsapp', customer_id: 14, sender_name: '', sender_contact: '', receiver_contact: '', message_text: 'Unknown overseas identity' });
++  insertCrm.run({ ...crmDefaults, id: 170, source_type: 'whatsapp', customer_id: 17, sender_name: 'Buyer', sender_contact: '+84955555555', message_text: 'Need coffee pouch specifications', received_at: '2026-02-30' });
++  insertCrm.run({ ...crmDefaults, id: 180, source_type: 'whatsapp', customer_id: 18, sender_name: 'Buyer', sender_contact: '+66866666666', message_text: 'Need snack pouch specifications', received_at: '2026-13-01' });
++  insertCrm.run({ ...crmDefaults, id: 190, source_type: 'whatsapp', customer_id: 19, sender_name: 'Buyer', sender_contact: '+60177777777', message_text: 'Need liquid pouch specifications', received_at: '2026/07/01' });
++  insertCrm.run({ ...crmDefaults, id: 200, source_type: 'whatsapp', customer_id: 20, sender_name: 'Buyer', sender_contact: '+84966666666', message_text: 'Need coffee pouch specifications' });
++  insertCrm.run({ ...crmDefaults, id: 210, source_type: 'whatsapp', customer_id: 21, sender_name: 'Buyer', sender_contact: '+66877777777', message_text: 'Need snack pouch specifications', updated_at: '2026-13-01' });
++
++  const insertEmail = db.prepare(`
++    INSERT INTO email_messages (
++      id, message_id, thread_id, from_email, from_name, to_emails, cc_emails, bcc_emails, subject,
++      text_body, cleaned_text, sent_at, received_at, direction, contact_email,
++      contact_name, matched_customer_id, business_relevance, noise_level,
++      raw_headers_json, detected_signals_json, parser_hints_json, created_at, updated_at
++    ) VALUES (
++      @id, @message_id, @thread_id, @from_email, @from_name, @to_emails, @cc_emails, @bcc_emails, @subject,
++      @text_body, @cleaned_text, @sent_at, @received_at, @direction, @contact_email,
++      @contact_name, @matched_customer_id, @business_relevance, @noise_level,
++      @raw_headers_json, @detected_signals_json, @parser_hints_json, @created_at, @updated_at
++    )
++  `);
++  const emailDefaults = {
++    thread_id: '', from_name: '', to_emails: '["sales@factory.invalid"]', cc_emails: '[]', bcc_emails: '[]',
++    sent_at: '2026-07-01T00:00:00Z', received_at: '2026-07-01T00:00:00Z',
++    direction: 'inbound', contact_email: '', contact_name: '', matched_customer_id: null,
++    business_relevance: 'low', noise_level: 'low', raw_headers_json: '{}', detected_signals_json: '{}', parser_hints_json: '{}', created_at: '2026-07-01T00:00:00Z',
++    updated_at: '2026-07-01T00:00:00Z'
++  };
++  insertEmail.run({
++    ...emailDefaults,
++    id: 30,
++    message_id: '<system-30@example.invalid>',
++    from_email: 'no-reply@accounts.example.invalid',
++    subject: 'Security alert',
++    text_body: 'Automated account verification notice',
++    cleaned_text: 'Automated account verification notice',
++    contact_email: 'no-reply@accounts.example.invalid',
++    noise_level: 'high'
++  });
++  insertEmail.run({
++    ...emailDefaults,
++    id: 50,
++    message_id: '<business-50@vietcoffee.example>',
++    from_email: 'buyer@vietcoffee.example',
++    from_name: 'Buyer',
++    subject: 'Coffee pouch inquiry',
++    text_body: 'Please quote printed coffee pouches',
++    cleaned_text: 'Please quote printed coffee pouches',
++    contact_email: 'buyer@vietcoffee.example',
++    contact_name: 'Buyer',
++    matched_customer_id: 5,
++    business_relevance: 'high'
++  });
++  insertEmail.run({ ...emailDefaults, id: 100, message_id: '<greeting-100@greeting.example>', from_email: 'hello@greeting.example', subject: 'Hello', text_body: 'Hello', cleaned_text: 'Hello', contact_email: 'hello@greeting.example', matched_customer_id: 10 });
++  insertEmail.run({ ...emailDefaults, id: 150, message_id: '<broken-150@brokenmail.example>', from_email: 'buyer@brokenmail.example', subject: 'Coffee pouch inquiry', text_body: 'Need coffee pouch specifications', cleaned_text: 'Need coffee pouch specifications', contact_email: 'buyer@brokenmail.example', matched_customer_id: 15, business_relevance: 'high', bcc_emails: '{broken' });
++  insertEmail.run({ ...emailDefaults, id: 220, message_id: '<update-220@emailupdate.example>', from_email: 'buyer@emailupdate.example', subject: 'Liquid pouch inquiry', text_body: 'Need liquid pouch specifications', cleaned_text: 'Need liquid pouch specifications', contact_email: 'buyer@emailupdate.example', matched_customer_id: 22, business_relevance: 'high', updated_at: '2026/07/01' });
++
++  const before = digest();
++  const { readEligibleCrmRecords, classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
++  const normalized = readEligibleCrmRecords(db);
++  const report = classifyCurrentCrm(db, { now: '2026-07-16' });
++  const after = digest();
++
++  assert.equal(before, after, 'classification must not change the database bytes');
++  assert.equal(normalized.excluded_domestic_ids.includes(1), true);
++  assert.equal(normalized.excluded_domestic_ids.includes(7), true);
++  assert.equal(normalized.excluded_domestic_ids.includes(11), true);
++  assert.equal(normalized.excluded_domestic_ids.includes(14), true);
++  assert.equal(report.counts.excluded_domestic, 4);
++  assert.equal(bySourceId(report, 'crm_message_ids', 20).classification, 'test');
++  assert.equal(bySourceId(report, 'email_message_ids', 30).classification, 'noise');
++  assert.equal(bySourceId(report, 'crm_message_ids', 40).classification, 'needs_review');
++  assert.equal(bySourceId(report, 'email_message_ids', 50).classification, 'valid');
++  assert.equal(bySourceId(report, 'crm_message_ids', 60).classification, 'valid');
++  assert.equal(bySourceId(report, 'crm_message_ids', 80).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 80).reason_codes.includes('duplicated_message_segments'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 90).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 90).reason_codes.includes('malformed_json_payload'));
++  assert.equal(bySourceId(report, 'email_message_ids', 100).classification, 'needs_review');
++  assert(bySourceId(report, 'email_message_ids', 100).reason_codes.includes('missing_business_evidence'));
++  assert.notEqual(bySourceId(report, 'crm_message_ids', 120).identity_id, bySourceId(report, 'crm_message_ids', 121).identity_id);
++  assert.equal(bySourceId(report, 'crm_message_ids', 122).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 122).reason_codes.includes('uncertain_direction'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 130).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 130).reason_codes.includes('malformed_source_time'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 132).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 132).reason_codes.includes('duplicated_message_segments'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 140).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 140).reason_codes.includes('unknown_whatsapp_sender'));
++  assert.equal(bySourceId(report, 'email_message_ids', 150).classification, 'needs_review');
++  assert(bySourceId(report, 'email_message_ids', 150).reason_codes.includes('malformed_json_payload'));
++  const companyShell = report.records.find((record) => record.source_ids.customer_ids.includes(16));
++  assert.equal(companyShell.classification, 'needs_review');
++  assert(companyShell.reason_codes.includes('missing_business_evidence'));
++  for (const id of [170, 180, 190]) {
++    assert.equal(bySourceId(report, 'crm_message_ids', id).classification, 'needs_review');
++    assert(bySourceId(report, 'crm_message_ids', id).reason_codes.includes('malformed_source_time'));
++  }
++  for (const id of [200, 210, 220]) {
++    const sourceType = id === 220 ? 'email_message_ids' : 'crm_message_ids';
++    assert.equal(bySourceId(report, sourceType, id).classification, 'needs_review');
++    assert(bySourceId(report, sourceType, id).reason_codes.includes('malformed_source_time'));
++  }
++
++  const errorReport = classifyCurrentCrm(db, {
++    now: '2026-07-16',
++    classifier() { throw new Error('fixture classifier failure'); }
++  });
++  assert.equal(errorReport.counts.errors, errorReport.counts.input);
++  assert.equal(errorReport.counts.needs_review, errorReport.counts.input);
++  assert.equal(errorReport.records.length, errorReport.counts.input);
++  assert(errorReport.records.every((record) => record.classification === 'needs_review'));
++  assert(errorReport.records.every((record) => record.reason_codes.includes('classification_error')));
++  assert(errorReport.records.every((record) => record.identity_id && record.source_ids));
++  const publicReasonCodeSet = new Set(PUBLIC_REASON_CODES);
++  const observedAdapterCodes = new Set([...report.records, ...errorReport.records].flatMap(record => record.reason_codes));
++  observedAdapterCodes.forEach(code => assert(publicReasonCodeSet.has(code), `matrixCrmAdapter produced non-public reason code: ${code}`));
++  [
++    REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
++    REASON_CODES.BUSINESS_EVIDENCE,
++    REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS,
++    REASON_CODES.MALFORMED_JSON_PAYLOAD,
++    REASON_CODES.UNCERTAIN_DIRECTION,
++    REASON_CODES.MISSING_BUSINESS_EVIDENCE,
++    REASON_CODES.CLASSIFICATION_ERROR
++  ].forEach(code => assert(observedAdapterCodes.has(code), `matrixCrmAdapter contract did not exercise ${code}`));
++  assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('unknown_whatsapp_sender'));
++  assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('malformed_source_time'));
++  assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('duplicated_message_segments'));
++
++  const defaultJson = JSON.stringify(report);
++  for (const secret of [
++    'buyer@vietcoffee.example',
++    '+628123456789',
++    'no-reply@accounts.example.invalid',
++    'Please quote printed coffee pouches'
++  ]) {
++    assert.equal(defaultJson.includes(secret), false, `default report leaked private value: ${secret}`);
++  }
++  assert(report.records.every((record) => !Object.hasOwn(record, 'private_preview')));
++
++  const flagOnly = classifyCurrentCrm(db, { includePrivatePreview: true, authenticatedLocalOperator: false });
++  assert(flagOnly.records.every((record) => !Object.hasOwn(record, 'private_preview')));
++  const authOnly = classifyCurrentCrm(db, { includePrivatePreview: false, authenticatedLocalOperator: true });
++  assert(authOnly.records.every((record) => !Object.hasOwn(record, 'private_preview')));
++  const privateReport = classifyCurrentCrm(db, { includePrivatePreview: true, authenticatedLocalOperator: true });
++  assert(privateReport.records.some((record) => record.private_preview?.contact));
++  assert(privateReport.records.every((record) => !record.private_preview?.message_body));
++
++  db.exec("INSERT INTO users (id, username, role, status) VALUES (10, 'crm-operator', 'foreign_trade_crm_admin', 'active')");
++  db.exec("INSERT INTO users (id, username, role, status) VALUES (11, 'inactive-admin', 'super_admin', 'pending')");
++  db.exec("INSERT INTO users (id, username, role, status) VALUES (12, 'ordinary-user', 'worker', 'active')");
++  const cliPath = path.join(__dirname, 'matrix-classify-current.js');
++  const insecureToken = jwt.sign({ sub: '10', role: 'super_admin' }, 'change-this-in-production');
++  const insecurePreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++    env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: insecureToken, JWT_SECRET: '' },
++    encoding: 'utf8'
++  });
++  assert.notEqual(insecurePreview.status, 0, 'private preview must reject the public fallback JWT secret');
++
++  const jwtSecret = 'fixture-secret-that-is-explicitly-configured';
++  const missingUserToken = jwt.sign({ sub: '999', role: 'super_admin' }, jwtSecret);
++  const missingUserPreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++    env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: missingUserToken, JWT_SECRET: jwtSecret },
++    encoding: 'utf8'
++  });
++  assert.notEqual(missingUserPreview.status, 0, 'private preview must reject a token without an active database user');
++
++  const validToken = jwt.sign({ sub: '10', role: 'foreign_trade_crm_admin' }, jwtSecret);
++  const validPreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++    env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: validToken, JWT_SECRET: jwtSecret },
++    encoding: 'utf8'
++  });
++  assert.equal(validPreview.status, 0, validPreview.stderr);
++
++  for (const id of ['11', '12']) {
++    const deniedToken = jwt.sign({ sub: id, role: 'super_admin' }, jwtSecret);
++    const deniedPreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++      env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: deniedToken, JWT_SECRET: jwtSecret },
++      encoding: 'utf8'
++    });
++    assert.notEqual(deniedPreview.status, 0, `database user ${id} must not receive a private preview`);
++  }
++
++  const escapedOutput = path.join(tempDir, 'escaped-report.json');
++  const linkPath = path.join(__dirname, '.matrix-output-link');
++  fs.rmSync(linkPath, { force: true });
++  fs.symlinkSync(escapedOutput, linkPath);
++  const symlinkOutput = spawnSync(process.execPath, [cliPath, '--output', linkPath], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(linkPath, { force: true });
++  assert.notEqual(symlinkOutput.status, 0, 'output must reject a symlink target');
++  assert.equal(fs.existsSync(escapedOutput), false, 'output symlink escaped the workspace');
++
++  const escapedDirectory = path.join(tempDir, 'escaped-directory');
++  fs.mkdirSync(escapedDirectory);
++  const directoryLink = path.join(__dirname, '.matrix-output-directory-link');
++  fs.rmSync(directoryLink, { recursive: true, force: true });
++  fs.symlinkSync(escapedDirectory, directoryLink);
++  const ancestorEscape = spawnSync(process.execPath, [cliPath, '--output', path.join(directoryLink, 'report.json')], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(directoryLink, { force: true });
++  assert.notEqual(ancestorEscape.status, 0, 'output must reject a symlinked parent directory');
++  assert.equal(fs.existsSync(path.join(escapedDirectory, 'report.json')), false);
++
++  const externalHardLinkTarget = path.resolve(__dirname, '..', '..', '..', `.matrix-external-hard-link-${process.pid}.json`);
++  const hardLinkOutput = path.join(__dirname, '..', '.matrix-hard-link-output.json');
++  fs.writeFileSync(externalHardLinkTarget, 'external sentinel', { mode: 0o600 });
++  fs.rmSync(hardLinkOutput, { force: true });
++  fs.linkSync(externalHardLinkTarget, hardLinkOutput);
++  const hardLinkWrite = spawnSync(process.execPath, [cliPath, '--output', hardLinkOutput], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(hardLinkOutput, { force: true });
++  assert.notEqual(hardLinkWrite.status, 0, 'output must reject an existing hard link');
++  assert.equal(fs.readFileSync(externalHardLinkTarget, 'utf8'), 'external sentinel');
++  fs.rmSync(externalHardLinkTarget, { force: true });
++
++  const nonRegularOutput = path.join(__dirname, '..', '.matrix-non-regular-output');
++  fs.rmSync(nonRegularOutput, { recursive: true, force: true });
++  fs.mkdirSync(nonRegularOutput);
++  const nonRegularWrite = spawnSync(process.execPath, [cliPath, '--output', nonRegularOutput], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(nonRegularOutput, { recursive: true, force: true });
++  assert.notEqual(nonRegularWrite.status, 0, 'output must reject non-regular files');
++
++  const safeOutput = path.join(__dirname, '..', '.matrix-safe-output-test.json');
++  fs.rmSync(safeOutput, { force: true });
++  const safeWrite = spawnSync(process.execPath, [cliPath, '--output', safeOutput], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  assert.equal(safeWrite.status, 0, safeWrite.stderr);
++  assert.equal(fs.statSync(safeOutput).mode & 0o777, 0o600);
++  fs.rmSync(safeOutput, { force: true });
++
++  console.log('matrix CRM adapter tests passed');
++} finally {
++  db.close();
++  fs.rmSync(tempDir, { recursive: true, force: true });
++}
+diff --git a/scripts/test-matrix-stream.js b/scripts/test-matrix-stream.js
+new file mode 100644
+index 0000000..0ee9566
+--- /dev/null
++++ b/scripts/test-matrix-stream.js
+@@ -0,0 +1,456 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const net = require('net');
++const os = require('os');
++const path = require('path');
++
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-'));
++process.env.DB_PATH = path.join(tempDir, 'test.db');
++
++const { db, initDb } = require('../src/db');
++const { createRun } = require('../src/lib/signalCache');
++const {
++  validatePublicUrl,
++  normalizeDiscoveryRecord,
++  importDiscoveryBatch,
++  pinnedRequest
++} = require('../src/lib/matrixStream');
++
++const PUBLIC_ADDRESS = '203.0.113.10';
++const dnsCalls = [];
++async function publicDnsLookup(hostname, options) {
++  dnsCalls.push({ hostname, options });
++  if (hostname.endsWith('.example')) {
++    return options && options.all
++      ? [{ address: PUBLIC_ADDRESS, family: 4 }]
++      : { address: PUBLIC_ADDRESS, family: 4 };
++  }
++  throw new Error(`unexpected DNS lookup: ${hostname}`);
++}
++
++function response(status, location) {
++  return {
++    status,
++    headers: {
++      get(name) {
++        return name.toLowerCase() === 'location' ? location || null : null;
++      }
++    }
++  };
++}
++
++function pinnedResponse(status, location, options) {
++  return {
++    ...response(status, location),
++    connectedAddress: options.connectAddress,
++    connectedFamily: options.connectFamily
++  };
++}
++
++function discoveryRecord(index, overrides = {}) {
++  const domain = `brand-${index}.example`;
++  return {
++    country: 'Vietnam',
++    display_name: `Brand ${index}`,
++    official_url: `https://${domain}/`,
++    business_email: `sales@${domain}`,
++    product_evidence: ['coffee'],
++    evidence: [{
++      field: 'product',
++      value: 'coffee',
++      source_url: `https://${domain}/products`,
++      retrieved_at: '2026-07-16T00:00:00Z',
++      confidence: 'high'
++    }],
++    ...overrides
++  };
++}
++
++function fakeRequestFactory(captures, remoteAddress = PUBLIC_ADDRESS, remoteFamily = 'IPv4') {
++  return (requestOptions, onResponse) => {
++    captures.push(requestOptions);
++    const listeners = {};
++    const request = {
++      setTimeout() {},
++      once(event, listener) {
++        listeners[event] = listener;
++        return request;
++      },
++      destroy(error) {
++        if (listeners.error) listeners.error(error);
++      },
++      end() {
++        onResponse({
++          statusCode: 200,
++          headers: {},
++          socket: { remoteAddress, remoteFamily },
++          resume() {}
++        });
++      }
++    };
++    return request;
++  };
++}
++
++async function main() {
++  initDb();
++  assert.equal(typeof pinnedRequest, 'function', 'production pinned request adapter must be directly testable');
++
++  const rejectedUrls = [
++    ['loopback IPv4', 'http://127.0.0.1', 'blocked_address'],
++    ['link-local IPv4', 'http://169.254.169.254', 'blocked_address'],
++    ['private IPv4', 'http://10.0.0.1', 'blocked_address'],
++    ['carrier-grade NAT', 'http://100.64.0.1', 'blocked_address'],
++    ['IPv6 loopback', 'http://[::1]', 'blocked_address'],
++    ['IPv6 unique-local', 'http://[fd00::1]', 'blocked_address'],
++    ['IPv4-mapped private', 'http://[::ffff:10.0.0.1]', 'blocked_address'],
++    ['credentials', 'https://user:pass@official.example/', 'credentials_not_allowed'],
++    ['non-HTTP scheme', 'file:///etc/passwd', 'unsupported_protocol'],
++    ['nonstandard port', 'https://official.example:8443/', 'port_not_allowed']
++  ];
++  for (const [label, url, reason] of rejectedUrls) {
++    const result = await validatePublicUrl(url, publicDnsLookup);
++    assert.equal(result.ok, false, `${label} must be rejected`);
++    assert.equal(result.reason, reason, `${label} rejection reason`);
++  }
++
++  const acceptedUrl = await validatePublicUrl('HTTPS://Official.Example/docs#intro', publicDnsLookup);
++  assert.deepEqual(acceptedUrl, {
++    ok: true,
++    normalized_url: 'https://official.example/docs',
++    reason: null
++  });
++
++  const mixedDns = async (hostname, options) => {
++    assert.equal(hostname, 'mixed.example');
++    assert.equal(options.all, true);
++    return [
++      { address: PUBLIC_ADDRESS, family: 4 },
++      { address: '192.168.1.9', family: 4 }
++    ];
++  };
++  const mixedResult = await validatePublicUrl('https://mixed.example', mixedDns);
++  assert.equal(mixedResult.ok, false);
++  assert.equal(mixedResult.reason, 'blocked_address');
++
++  const normalized = normalizeDiscoveryRecord({
++    country: '  Vietnam ',
++    display_name: ' Brand ',
++    official_url: 'HTTPS://WWW.Brand.Example/path',
++    business_email: ' SALES@BRAND.EXAMPLE ',
++    evidence: [{
++      field: ' product ',
++      value: ' coffee ',
++      source_url: ' HTTPS://Brand.Example/products ',
++      retrieved_at: ' 2026-07-16T00:00:00Z '
++    }]
++  });
++  assert.equal(normalized.country, 'Vietnam');
++  assert.equal(normalized.display_name, 'Brand');
++  assert.equal(normalized.official_url, 'https://www.brand.example/path');
++  assert.equal(normalized.official_domain, 'brand.example');
++  assert.equal(normalized.business_email, 'sales@brand.example');
++  assert.equal(normalized.evidence[0].field, 'product');
++
++  const run = createRun(db, { name: 'matrix-stream-test', countries: ['Vietnam'] });
++  const transportCalls = [];
++  const safeTransport = async (url, options) => {
++    transportCalls.push({ url, options });
++    const parsed = new URL(url);
++    const targetHostname = parsed.hostname.replace(/^\[|\]$/g, '');
++    assert.equal(options.connectAddress, net.isIP(targetHostname) ? targetHostname : PUBLIC_ADDRESS);
++    assert.equal(options.headers.Host, parsed.host);
++    assert.equal(options.redirect, 'manual');
++    if (parsed.protocol === 'https:') {
++      const tlsName = targetHostname;
++      assert.equal(options.servername, net.isIP(tlsName) ? undefined : tlsName);
++      assert.equal(options.rejectUnauthorized, true);
++    }
++    if (url === 'https://redirect.example/') {
++      return pinnedResponse(302, 'http://10.0.0.1/admin', options);
++    }
++    if (url === 'https://multi-hop.example/') {
++      return pinnedResponse(301, '/second-hop', options);
++    }
++    if (url === 'https://multi-hop.example/second-hop') {
++      return pinnedResponse(302, '/landing', options);
++    }
++    if (url === 'https://evidence-redirect.example/start') {
++      return pinnedResponse(302, 'https://evidence-hop.example/final', options);
++    }
++    return pinnedResponse(200, null, options);
++  };
++
++  const records = [
++    discoveryRecord('valid'),
++    discoveryRecord('india', { country: 'India' }),
++    discoveryRecord('missing-source', {
++      evidence: [{ field: 'product', value: 'coffee', retrieved_at: '2026-07-16T00:00:00Z' }]
++    }),
++    discoveryRecord('missing-official', { official_url: '' }),
++    discoveryRecord('empty-evidence', { evidence: [] }),
++    discoveryRecord('unsafe-evidence', {
++      evidence: [{
++        field: 'product',
++        value: '<article>full page</article>',
++        source_url: 'https://unsafe-evidence.example/products',
++        retrieved_at: '2026-07-16T00:00:00Z'
++      }]
++    }),
++    discoveryRecord('redirect', {
++      official_url: 'https://redirect.example/',
++      business_email: 'sales@redirect.example',
++      evidence: [{
++        field: 'product',
++        value: 'coffee',
++        source_url: 'https://redirect.example/products',
++        retrieved_at: '2026-07-16T00:00:00Z'
++      }]
++    }),
++    discoveryRecord('multi-hop', {
++      official_url: 'https://multi-hop.example/',
++      business_email: 'sales@multi-hop.example'
++    }),
++    discoveryRecord('evidence-redirect', {
++      official_url: 'https://evidence-redirect.example/',
++      business_email: 'sales@evidence-redirect.example',
++      evidence: [{
++        field: 'product',
++        value: 'coffee',
++        source_url: 'https://evidence-redirect.example/start',
++        retrieved_at: '2026-07-16T00:00:00Z'
++      }]
++    })
++  ];
++  const summary = await importDiscoveryBatch(db, run.id, records, {
++    dnsLookup: publicDnsLookup,
++    transport: safeTransport,
++    now: '2026-07-16'
++  });
++  assert.deepEqual(summary, {
++    input: 9,
++    excluded: 1,
++    test: 0,
++    noise: 0,
++    needs_review: 0,
++    valid: 3,
++    errors: 5
++  });
++  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n, 3);
++  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_evidence').get().n, 3);
++  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_classifications').get().n, 3);
++  assert.equal(db.prepare('SELECT COUNT(*) n FROM customers').get().n, 0);
++  assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_messages').get().n, 0);
++  assert(transportCalls.some(call => call.url === 'https://redirect.example/'));
++  assert(
++    !transportCalls.some(call => call.url === 'http://10.0.0.1/admin'),
++    'blocked redirect destination must be revalidated before fetch'
++  );
++  assert.deepEqual(
++    transportCalls.filter(call => new URL(call.url).hostname === 'multi-hop.example')
++      .map(call => call.url),
++    [
++      'https://multi-hop.example/',
++      'https://multi-hop.example/second-hop',
++      'https://multi-hop.example/landing'
++    ]
++  );
++  assert(transportCalls.some(call => call.url === 'https://evidence-hop.example/final'));
++
++  const rebindingRun = createRun(db, { name: 'dns-rebinding', countries: ['Thailand'] });
++  let rebindingLookups = 0;
++  async function rebindingDnsLookup(hostname, options) {
++    if (hostname !== 'rebind.example') return publicDnsLookup(hostname, options);
++    rebindingLookups += 1;
++    const address = rebindingLookups === 1 ? PUBLIC_ADDRESS : '127.0.0.1';
++    return options && options.all ? [{ address, family: 4 }] : { address, family: 4 };
++  }
++  const reachedAddresses = [];
++  async function rebindingTransport(url, options) {
++    let address = options && options.connectAddress;
++    if (!address) {
++      const answers = await rebindingDnsLookup(new URL(url).hostname, { all: true });
++      address = answers[0].address;
++    }
++    reachedAddresses.push(address);
++    return pinnedResponse(200, null, options);
++  }
++  const rebindingSummary = await importDiscoveryBatch(db, rebindingRun.id, [
++    discoveryRecord('rebind', {
++      country: 'Thailand',
++      official_url: 'https://rebind.example/',
++      business_email: 'sales@rebind.example',
++      evidence: [{
++        field: 'product',
++        value: 'coffee',
++        source_url: 'https://rebind-evidence.example/products',
++        retrieved_at: '2026-07-16T00:00:00Z'
++      }]
++    })
++  ], {
++    dnsLookup: rebindingDnsLookup,
++    transport: rebindingTransport,
++    now: '2026-07-16'
++  });
++  assert.equal(rebindingSummary.valid, 1);
++  assert.equal(rebindingLookups, 1, 'connection must not resolve the original hostname again');
++  assert(!reachedAddresses.includes('127.0.0.1'), 'connection must stay pinned to validated public IP');
++  assert(reachedAddresses.every(address => address === PUBLIC_ADDRESS));
++
++  const ordinaryFetchRun = createRun(db, { name: 'ordinary-fetch-rejected', countries: ['Thailand'] });
++  await assert.rejects(
++    importDiscoveryBatch(db, ordinaryFetchRun.id, [
++      discoveryRecord('ordinary-fetch-option', { country: 'Thailand' })
++    ], {
++      dnsLookup: publicDnsLookup,
++      fetch: async () => response(200),
++      now: '2026-07-16'
++    }),
++    /fetch.*not supported/i
++  );
++  const ordinaryFetchSummary = await importDiscoveryBatch(db, ordinaryFetchRun.id, [
++    discoveryRecord('ordinary-fetch-response', { country: 'Thailand' })
++  ], {
++    dnsLookup: publicDnsLookup,
++    transport: async () => response(200),
++    now: '2026-07-16'
++  });
++  assert.equal(ordinaryFetchSummary.valid, 0);
++  assert.equal(ordinaryFetchSummary.errors, 1, 'response without connected peer proof must be rejected');
++
++  const ipv6Run = createRun(db, { name: 'public-ipv6', countries: ['Indonesia'] });
++  const ipv6Summary = await importDiscoveryBatch(db, ipv6Run.id, [
++    discoveryRecord('ipv6', {
++      country: 'Indonesia',
++      official_url: 'https://[2001:db8::10]/',
++      business_email: 'sales@ipv6.example',
++      evidence: [{
++        field: 'product',
++        value: 'coffee',
++        source_url: 'https://[2001:db8::10]/products',
++        retrieved_at: '2026-07-16T00:00:00Z'
++      }]
++    })
++  ], {
++    dnsLookup: publicDnsLookup,
++    transport: safeTransport,
++    now: '2026-07-16'
++  });
++  assert.equal(ipv6Summary.needs_review, 1);
++
++  const pinnedCaptures = [];
++  const directPinnedResponse = await pinnedRequest('https://adapter.example/probe?q=1', {
++    method: 'HEAD',
++    connectAddress: PUBLIC_ADDRESS,
++    connectFamily: 4,
++    headers: { Host: 'adapter.example' },
++    servername: 'adapter.example',
++    rejectUnauthorized: true,
++    requestFactories: { https: fakeRequestFactory(pinnedCaptures) }
++  });
++  assert.equal(directPinnedResponse.connectedAddress, PUBLIC_ADDRESS);
++  assert.equal(directPinnedResponse.connectedFamily, 4);
++  assert.equal(pinnedCaptures.length, 1);
++  const pinnedOptions = pinnedCaptures[0];
++  assert.equal(pinnedOptions.hostname, 'adapter.example');
++  assert.equal(pinnedOptions.path, '/probe?q=1');
++  assert.equal(pinnedOptions.headers.Host, 'adapter.example');
++  assert.equal(pinnedOptions.servername, 'adapter.example');
++  assert.equal(pinnedOptions.rejectUnauthorized, true);
++  assert.equal(pinnedOptions.agent, false);
++  const pinnedLookup = await new Promise((resolve, reject) => {
++    pinnedOptions.lookup('adapter.example', {}, (error, address, family) => {
++      if (error) reject(error);
++      else resolve({ address, family });
++    });
++  });
++  assert.deepEqual(pinnedLookup, { address: PUBLIC_ADDRESS, family: 4 });
++
++  const defaultAdapterRun = createRun(db, { name: 'default-adapter', countries: ['Philippines'] });
++  const defaultAdapterCaptures = [];
++  const defaultAdapterSummary = await importDiscoveryBatch(db, defaultAdapterRun.id, [
++    discoveryRecord('default-adapter', {
++      country: 'Philippines',
++      official_url: 'https://default-adapter.example/',
++      business_email: 'sales@default-adapter.example',
++      evidence: [{
++        field: 'product',
++        value: 'coffee',
++        source_url: 'https://default-adapter.example/products',
++        retrieved_at: '2026-07-16T00:00:00Z'
++      }]
++    })
++  ], {
++    dnsLookup: publicDnsLookup,
++    requestFactories: { https: fakeRequestFactory(defaultAdapterCaptures) },
++    now: '2026-07-16'
++  });
++  assert.equal(defaultAdapterSummary.valid, 1);
++  assert.equal(defaultAdapterCaptures.length, 2);
++  assert(defaultAdapterCaptures.every(options => options.headers.Host === 'default-adapter.example'));
++  assert(defaultAdapterCaptures.every(options => options.servername === 'default-adapter.example'));
++
++  const mismatchedAdapterRun = createRun(db, { name: 'mismatched-adapter', countries: ['Kazakhstan'] });
++  const entitiesBeforeMismatch = db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n;
++  const mismatchedSummary = await importDiscoveryBatch(db, mismatchedAdapterRun.id, [
++    discoveryRecord('mismatched-adapter', {
++      country: 'Kazakhstan',
++      official_url: 'https://mismatched-adapter.example/',
++      business_email: 'sales@mismatched-adapter.example'
++    })
++  ], {
++    dnsLookup: publicDnsLookup,
++    requestFactories: {
++      https: fakeRequestFactory([], '127.0.0.1', 'IPv4')
++    },
++    now: '2026-07-16'
++  });
++  assert.equal(mismatchedSummary.valid, 0);
++  assert.equal(mismatchedSummary.errors, 1);
++  assert.equal(db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n, entitiesBeforeMismatch);
++
++  const capRun = createRun(db, { name: 'country-cap', countries: ['Malaysia'] });
++  const cappedRecords = Array.from({ length: 21 }, (_, index) => discoveryRecord(`cap-${index}`, {
++    country: 'Malaysia'
++  }));
++  const capSummary = await importDiscoveryBatch(db, capRun.id, cappedRecords, {
++    dnsLookup: publicDnsLookup,
++    transport: safeTransport,
++    now: '2026-07-16'
++  });
++  assert.equal(capSummary.input, 21);
++  assert.equal(capSummary.valid, 20);
++  assert.equal(capSummary.errors, 1);
++
++  const oversizedRun = createRun(db, { name: 'oversized', countries: ['Thailand'] });
++  const entitiesBeforeOversized = db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n;
++  await assert.rejects(
++    importDiscoveryBatch(
++      db,
++      oversizedRun.id,
++      Array.from({ length: 121 }, (_, index) => discoveryRecord(`large-${index}`, { country: 'Thailand' })),
++      { dnsLookup: publicDnsLookup, transport: safeTransport }
++    ),
++    /120/
++  );
++  assert.equal(
++    db.prepare('SELECT COUNT(*) n FROM matrix_entities').get().n,
++    entitiesBeforeOversized,
++    'oversized batch must be rejected before persistence'
++  );
++
++  assert(dnsCalls.length > 0);
++  console.log('matrix-stream tests passed');
++}
++
++main()
++  .finally(() => {
++    db.close();
++    fs.rmSync(tempDir, { recursive: true, force: true });
++  })
++  .catch(error => {
++    console.error(error);
++    process.exitCode = 1;
++  });
+diff --git a/scripts/test-schema-rank.js b/scripts/test-schema-rank.js
+new file mode 100644
+index 0000000..1f9dd26
+--- /dev/null
++++ b/scripts/test-schema-rank.js
+@@ -0,0 +1,156 @@
++const assert = require('assert');
++const {
++  classifyRecord,
++  isApprovedCountry,
++  APPROVED_COUNTRIES,
++  EXCLUDED_COUNTRIES,
++  REASON_CODES,
++  PUBLIC_REASON_CODES,
++  RULESET_VERSION
++} = require('../src/lib/schemaRank');
++
++const publicReasonCodeSet = new Set(PUBLIC_REASON_CODES);
++const observedReasonCodes = new Set();
++
++const assertPublicReasonCodes = (result) => {
++  result.reason_codes.forEach((code) => {
++    assert(publicReasonCodeSet.has(code), `schemaRank produced non-public reason code: ${code}`);
++    observedReasonCodes.add(code);
++  });
++  return result;
++};
++
++const validRecord = (overrides = {}) => ({
++  country: 'Indonesia',
++  official_domain: 'brand.example',
++  business_email: 'sales@brand.example',
++  product_evidence: ['coffee'],
++  last_interaction_at: '2026-07-01',
++  ...overrides
++});
++
++const assertClassification = (record, classification, reasonCode, context = {}) => {
++  const result = assertPublicReasonCodes(classifyRecord(record, context));
++  assert.equal(result.classification, classification);
++  assert(result.reason_codes.includes(reasonCode));
++  assert.equal(typeof result.confidence, 'number');
++  assert(result.confidence >= 0 && result.confidence <= 1);
++  return result;
++};
++
++assert.equal(isApprovedCountry('Vietnam'), true);
++assert.equal(isApprovedCountry('India'), false);
++assert.equal(classifyRecord({ fixture_marker: 'token-verification' }, {}).classification, 'test');
++assert.equal(classifyRecord({ source_kind: 'security_notice', country: 'Malaysia' }, {}).classification, 'noise');
++assert.equal(classifyRecord({ country: 'Thailand', business_email: 'sales@example.co.th' }, {}).classification, 'needs_review');
++const valid = classifyRecord(validRecord(), { now: '2026-07-16' });
++assertPublicReasonCodes(valid);
++assert.equal(valid.classification, 'valid');
++assert(valid.reason_codes.includes('official_domain'));
++
++const expectedApprovedCountries = [
++  'Vietnam',
++  'Thailand',
++  'Malaysia',
++  'Indonesia',
++  'Philippines',
++  'Kazakhstan'
++];
++assert.deepEqual([...APPROVED_COUNTRIES].sort(), [...expectedApprovedCountries].sort());
++for (const country of expectedApprovedCountries) {
++  assert.equal(isApprovedCountry(`  ${country.toUpperCase()}  `), true);
++}
++assert.deepEqual(EXCLUDED_COUNTRIES, ['India']);
++assert.equal(isApprovedCountry(' INDIA '), false);
++assert.equal(typeof RULESET_VERSION, 'string');
++assert(RULESET_VERSION.length > 0);
++
++const testCollision = assertClassification({
++  fixture_marker: 'collision',
++  source_kind: 'security_notice',
++  country: 'India'
++}, 'test', 'fixture_marker');
++assert.equal(testCollision.priority, 'C');
++assert.equal(testCollision.confidence, 1);
++
++const noiseCollision = assertClassification({
++  source_kind: 'security_notice',
++  country: 'Unknown',
++  official_domain: 'one.example',
++  business_email: 'sales@two.example'
++}, 'noise', 'security_notice');
++assert.equal(noiseCollision.priority, 'C');
++assert.equal(noiseCollision.confidence, 1);
++
++const excludedCountry = assertClassification(validRecord({
++  country: ' India '
++}), 'noise', 'excluded_country');
++assert.equal(excludedCountry.priority, 'C');
++
++const missingIdentity = assertClassification({ country: 'Vietnam' }, 'needs_review', 'missing_identity');
++assert.equal(missingIdentity.priority, 'B');
++assert.equal(missingIdentity.confidence, 0.5);
++
++assertClassification({
++  country: 'Thailand',
++  official_domain: 'company.co.th',
++  business_email: 'sales@example.co.th'
++}, 'needs_review', 'ambiguous_contact');
++
++assertClassification(validRecord({
++  source_kind: 'whatsapp',
++  sender_name: '   ',
++  sender_phone: '\t'
++}), 'needs_review', 'unknown_whatsapp_sender');
++
++assertClassification(validRecord({
++  source_kind: 'whatsapp'
++}), 'needs_review', 'unknown_whatsapp_sender');
++
++assertClassification(validRecord({
++  last_interaction_at: '2026-02-30'
++}), 'needs_review', 'malformed_source_time');
++
++assertClassification(validRecord({
++  official_domain: 'brand.example',
++  business_email: 'sales@other.example'
++}), 'needs_review', 'conflicting_domains');
++
++assertClassification(validRecord({
++  country: 'Philippines',
++  official_domain: 'company.ph',
++  business_email: 'sales@gmail.com'
++}), 'needs_review', 'ambiguous_contact');
++
++assert.equal(valid.priority, 'A');
++assert.equal(valid.confidence, 0.95);
++assert(valid.reason_codes.includes('approved_country'));
++assert(valid.reason_codes.includes('product_evidence'));
++assert(valid.reason_codes.includes('valid_source_time'));
++
++const staleValid = assertClassification(validRecord({
++  country: 'Kazakhstan',
++  last_interaction_at: '2026-05-01'
++}), 'valid', 'official_domain', { now: '2026-07-16' });
++assert.equal(staleValid.priority, 'B');
++assert.equal(staleValid.confidence, 0.85);
++
++assert.deepEqual(Object.keys(valid), ['classification', 'priority', 'reason_codes', 'confidence']);
++assertPublicReasonCodes(classifyRecord({ country: 'Unknown' }, {}));
++const schemaRankReasonCodes = [
++  REASON_CODES.FIXTURE_MARKER,
++  REASON_CODES.SECURITY_NOTICE,
++  REASON_CODES.EXCLUDED_COUNTRY,
++  REASON_CODES.UNAPPROVED_COUNTRY,
++  REASON_CODES.MISSING_IDENTITY,
++  REASON_CODES.AMBIGUOUS_CONTACT,
++  REASON_CODES.UNKNOWN_WHATSAPP_SENDER,
++  REASON_CODES.MALFORMED_SOURCE_TIME,
++  REASON_CODES.CONFLICTING_DOMAINS,
++  REASON_CODES.APPROVED_COUNTRY,
++  REASON_CODES.OFFICIAL_DOMAIN,
++  REASON_CODES.PRODUCT_EVIDENCE,
++  REASON_CODES.VALID_SOURCE_TIME
++];
++schemaRankReasonCodes.forEach(code => assert(observedReasonCodes.has(code), `schemaRank contract did not exercise ${code}`));
++console.log('schema-rank tests passed');
+diff --git a/scripts/test-signal-cache.js b/scripts/test-signal-cache.js
+new file mode 100644
+index 0000000..9ed472e
+--- /dev/null
++++ b/scripts/test-signal-cache.js
+@@ -0,0 +1,181 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-cache-'));
++process.env.DB_PATH = path.join(tempDir, 'test.db');
++
++const { db, initDb } = require('../src/db');
++const {
++  createRun,
++  upsertEntity,
++  appendEvidence,
++  saveClassification,
++  listCandidates
++} = require('../src/lib/signalCache');
++const { RULESET_VERSION } = require('../src/lib/schemaRank');
++
++try {
++  initDb();
++
++  const acceptedUnsafeInputs = [];
++  const rollbackProbe = Symbol('rollback probe');
++  function expectRejected(label, operation) {
++    let rejected = false;
++    try {
++      db.transaction(() => {
++        try {
++          operation();
++        } catch {
++          rejected = true;
++        }
++        throw rollbackProbe;
++      })();
++    } catch (error) {
++      if (error !== rollbackProbe) throw error;
++    }
++    if (!rejected) acceptedUnsafeInputs.push(label);
++  }
++
++  expectRejected('nested campaign content', () => createRun(db, {
++    name: 'unsafe-run',
++    counters: { discovered: 1, payload: { body: '<html>full page</html>' } }
++  }));
++  expectRejected('campaign alias field', () => createRun(db, {
++    name: 'unsafe-run',
++    page_content: 'complete page body'
++  }));
++
++  const run = createRun(db, { name: 'phase-one', countries: ['Vietnam'] });
++  assert.ok(run.id);
++  assert.equal(run.ruleset_version, RULESET_VERSION);
++
++  const first = upsertEntity(db, {
++    official_domain: 'brand.example',
++    display_name: 'Brand',
++    country: 'Vietnam',
++    public_contacts: { email: 'hello@brand.example' }
++  });
++  expectRejected('nested contact content', () => upsertEntity(db, {
++    official_domain: 'nested.example',
++    public_contacts: { profile: { raw_html: '<html>source page</html>' } }
++  }));
++  expectRejected('contact body alias', () => upsertEntity(db, {
++    official_domain: 'body.example',
++    public_contacts: { body: 'complete page body' }
++  }));
++  expectRejected('executable contact value', () => upsertEntity(db, {
++    official_domain: 'script.example',
++    public_contacts: { contact_page_url: 'javascript:alert(1)' }
++  }));
++  expectRejected('unknown entity field', () => upsertEntity(db, {
++    official_domain: 'markup.example',
++    markup: '<main>source</main>'
++  }));
++  const second = upsertEntity(db, {
++    official_domain: 'https://www.brand.example/',
++    display_name: 'Brand Co',
++    country: 'Vietnam'
++  });
++  assert.equal(first.id, second.id);
++  assert.equal(second.normalized_domain, 'brand.example');
++  assert.deepEqual(JSON.parse(second.public_contacts_json), { email: 'hello@brand.example' });
++  const third = upsertEntity(db, {
++    official_domain: 'https://user:pass@www.brand.example:443/path?q=1#about'
++  });
++  assert.equal(first.id, third.id);
++  const trailingDots = upsertEntity(db, {
++    official_domain: 'https://www.brand.example.../'
++  });
++  assert.equal(first.id, trailingDots.id);
++  assert.equal(trailingDots.normalized_domain, 'brand.example');
++
++  const evidence = {
++    field: 'product',
++    value: 'coffee',
++    source_url: 'https://brand.example/products',
++    retrieved_at: '2026-07-16T00:00:00Z',
++    confidence: 'high'
++  };
++  const storedEvidence = appendEvidence(db, first.id, evidence);
++  const duplicateEvidence = appendEvidence(db, first.id, evidence);
++  assert.equal(storedEvidence.id, duplicateEvidence.id);
++  expectRejected('evidence HTML value', () => appendEvidence(db, first.id, {
++    ...evidence,
++    value: '<article>complete page</article>'
++  }));
++  expectRejected('evidence executable title', () => appendEvidence(db, first.id, {
++    ...evidence,
++    page_title: '<script>alert(1)</script>'
++  }));
++  expectRejected('evidence full page body', () => appendEvidence(db, first.id, {
++    ...evidence,
++    value: 'x'.repeat(5000)
++  }));
++  expectRejected('unknown evidence alias', () => appendEvidence(db, first.id, {
++    ...evidence,
++    page_content: 'complete page body'
++  }));
++  expectRejected('evidence fingerprint alias', () => appendEvidence(db, first.id, {
++    ...evidence,
++    content_fingerprint: 'complete page body'
++  }));
++  assert.throws(
++    () => appendEvidence(db, first.id, { ...evidence, source_url: '   ' }),
++    /source URL/i
++  );
++  assert.throws(
++    () => appendEvidence(db, first.id, { ...evidence, retrieved_at: '' }),
++    /retrieval time/i
++  );
++
++  const classification = saveClassification(db, first.id, {
++    classification: 'valid',
++    priority: 'A',
++    reason_codes: ['official_domain']
++  }, run.id);
++  assert.ok(classification.id);
++  expectRejected('classification executable reason', () => saveClassification(db, first.id, {
++    classification: 'valid',
++    reason_codes: ['javascript:alert(1)']
++  }, run.id));
++  expectRejected('unknown classification alias', () => saveClassification(db, first.id, {
++    classification: 'valid',
++    raw_content: '<html>complete page</html>'
++  }, run.id));
++  expectRejected('unknown candidate filter', () => listCandidates(db, {
++    classification: 'valid',
++    body: 'complete page body'
++  }));
++  assert.equal(listCandidates(db, { classification: 'valid' }).length, 1);
++  assert.equal(listCandidates(db, { classification: 'noise' }).length, 0);
++
++  const laterRun = createRun(db, { name: 'phase-two', countries: ['Vietnam'] });
++  saveClassification(db, first.id, {
++    classification: 'valid',
++    priority: 'B',
++    reason_codes: ['reviewed_again']
++  }, run.id);
++  saveClassification(db, first.id, {
++    classification: 'noise',
++    priority: 'C',
++    reason_codes: ['later_run']
++  }, laterRun.id);
++  const firstRunCandidates = listCandidates(db, { run_id: run.id });
++  assert.equal(firstRunCandidates.length, 1);
++  assert.equal(firstRunCandidates[0].classification, 'valid');
++  assert.equal(firstRunCandidates[0].priority, 'B');
++  const laterRunCandidates = listCandidates(db, { run_id: laterRun.id });
++  assert.equal(laterRunCandidates.length, 1);
++  assert.equal(laterRunCandidates[0].classification, 'noise');
++  assert.deepEqual(acceptedUnsafeInputs, []);
++  assert.equal(db.prepare('select count(*) n from customers').get().n, 0);
++
++  console.log('signal-cache tests passed');
++} finally {
++  db.close();
++  fs.rmSync(tempDir, { recursive: true, force: true });
++}
+diff --git a/scripts/verify-matrix-phase1.js b/scripts/verify-matrix-phase1.js
+new file mode 100644
+index 0000000..1d45e6e
+--- /dev/null
++++ b/scripts/verify-matrix-phase1.js
+@@ -0,0 +1,324 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const net = require('net');
++const os = require('os');
++const path = require('path');
++const { spawn } = require('child_process');
++
++const root = path.resolve(__dirname, '..');
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-phase1-'));
++const dbPath = path.join(tempDir, 'phase1.db');
++process.env.DB_PATH = dbPath;
++
++const { db, initDb } = require('../src/db');
++const {
++  APPROVED_COUNTRIES,
++  EXCLUDED_COUNTRIES,
++  classifyRecord,
++  isApprovedCountry
++} = require('../src/lib/schemaRank');
++const { createRun } = require('../src/lib/signalCache');
++const { importDiscoveryBatch } = require('../src/lib/matrixStream');
++const { classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
++
++const PUBLIC_ADDRESS = '203.0.113.10';
++const FORMAL_TABLES = Object.freeze([
++  'customers',
++  'crm_messages',
++  'email_messages',
++  'communication_logs'
++]);
++let server;
++let serverError = '';
++
++function record(country, index) {
++  const slug = `${country.toLowerCase().replace(/[^a-z]+/g, '-')}-${index}`;
++  const domain = `${slug}.example`;
++  return {
++    country,
++    display_name: `${country} Brand ${index}`,
++    official_url: `https://${domain}/`,
++    business_email: `sales@${domain}`,
++    product_evidence: ['coffee'],
++    evidence: [{
++      field: 'product',
++      value: 'coffee',
++      source_url: `https://${domain}/products`,
++      retrieved_at: '2026-07-16T00:00:00Z',
++      confidence: 'high'
++    }]
++  };
++}
++
++async function publicDnsLookup(hostname, options) {
++  assert(hostname.endsWith('.example'), `unexpected DNS lookup: ${hostname}`);
++  return options && options.all
++    ? [{ address: PUBLIC_ADDRESS, family: 4 }]
++    : { address: PUBLIC_ADDRESS, family: 4 };
++}
++
++async function safeTransport(_url, options) {
++  return {
++    status: 200,
++    connectedAddress: options.connectAddress,
++    connectedFamily: options.connectFamily,
++    headers: { get: () => null }
++  };
++}
++
++function tableRows(table) {
++  return db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
++}
++
++function formalSnapshot() {
++  return Object.fromEntries(FORMAL_TABLES.map(table => [table, tableRows(table)]));
++}
++
++function seedCurrentCrmFixture() {
++  const now = '2026-07-16T00:00:00Z';
++  const customer = db.prepare(`
++    INSERT INTO customers (name, active, created_at, updated_at)
++    VALUES (?, 1, ?, ?)
++  `).run('Phase One Read Fixture', now, now);
++  db.prepare(`
++    INSERT INTO crm_messages (
++      source_type, source_message_id, customer_id, direction, sender_name,
++      sender_contact, receiver_contact, message_text, raw_payload_json,
++      received_at, dedupe_hash, created_at, updated_at
++    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++  `).run(
++    'whatsapp', 'phase1-fixture', Number(customer.lastInsertRowid), 'inbound',
++    'Fixture', '+84912345678', '', 'hello token ok', '{}', now,
++    'phase1-fixture-dedupe', now, now
++  );
++}
++
++function assertClassification() {
++  assert.deepEqual(APPROVED_COUNTRIES, [
++    'Vietnam', 'Thailand', 'Malaysia', 'Indonesia', 'Philippines', 'Kazakhstan'
++  ]);
++  assert(EXCLUDED_COUNTRIES.includes('India'));
++  for (const country of APPROVED_COUNTRIES) assert.equal(isApprovedCountry(country), true);
++  assert.equal(isApprovedCountry('India'), false);
++  assert.equal(classifyRecord({ fixture_marker: 'token-verification' }, {}).classification, 'test');
++  assert.equal(classifyRecord({ source_kind: 'security_notice', country: 'Malaysia' }, {}).classification, 'noise');
++}
++
++async function assertBoundedImport() {
++  const records = APPROVED_COUNTRIES.flatMap(country =>
++    Array.from({ length: 20 }, (_, index) => record(country, index + 1))
++  );
++  assert.equal(records.length, 120);
++  const run = createRun(db, { name: 'phase-one-verification', countries: APPROVED_COUNTRIES });
++  const summary = await importDiscoveryBatch(db, run.id, records, {
++    dnsLookup: publicDnsLookup,
++    transport: safeTransport,
++    now: '2026-07-16'
++  });
++  assert.deepEqual(summary, {
++    input: 120,
++    excluded: 0,
++    test: 0,
++    noise: 0,
++    needs_review: 0,
++    valid: 120,
++    errors: 0
++  });
++  const persistedCountries = db.prepare(`
++    SELECT country, COUNT(*) count
++    FROM matrix_entities
++    GROUP BY country
++    ORDER BY country
++  `).all();
++  assert.deepEqual(
++    Object.fromEntries(persistedCountries.map(row => [row.country, row.count])),
++    Object.fromEntries(APPROVED_COUNTRIES.map(country => [country, 20]))
++  );
++
++  const indiaRun = createRun(db, { name: 'india-exclusion-check', countries: ['India'] });
++  const indiaSummary = await importDiscoveryBatch(db, indiaRun.id, [record('India', 1)], {
++    dnsLookup: publicDnsLookup,
++    transport: safeTransport,
++    now: '2026-07-16'
++  });
++  assert.equal(indiaSummary.excluded, 1);
++  assert.equal(db.prepare("SELECT COUNT(*) count FROM matrix_entities WHERE lower(country) = 'india'").get().count, 0);
++
++  const countryLimitRun = createRun(db, { name: 'country-limit-check', countries: ['Vietnam'] });
++  const countryLimitSummary = await importDiscoveryBatch(
++    db,
++    countryLimitRun.id,
++    Array.from({ length: 21 }, (_, index) => record('Vietnam', index + 101)),
++    { dnsLookup: publicDnsLookup, transport: safeTransport, now: '2026-07-16' }
++  );
++  assert.equal(countryLimitSummary.valid, 20);
++  assert.equal(countryLimitSummary.errors, 1);
++
++  const oversizedRun = createRun(db, { name: 'run-limit-check', countries: APPROVED_COUNTRIES });
++  await assert.rejects(
++    importDiscoveryBatch(
++      db,
++      oversizedRun.id,
++      Array.from({ length: 121 }, (_, index) => record('Thailand', index + 201)),
++      { dnsLookup: publicDnsLookup, transport: safeTransport, now: '2026-07-16' }
++    ),
++    /exceeds 120 input records/
++  );
++}
++
++function assertCurrentCrmReadOnly() {
++  const before = formalSnapshot();
++  const report = classifyCurrentCrm(db, { now: '2026-07-16' });
++  assert.equal(report.counts.input, 1);
++  assert.equal(report.counts.test, 1);
++  assert.deepEqual(formalSnapshot(), before);
++}
++
++function assertDeliveryUnavailable() {
++  const phaseOneFiles = [
++    'src/lib/schemaRank.js',
++    'src/lib/signalCache.js',
++    'src/lib/matrixStream.js',
++    'src/lib/matrixCrmAdapter.js',
++    'src/routes/matrix.js'
++  ];
++  const prohibitedImports = /require\(['"](?:nodemailer|imapflow)['"]\)|\b(?:sendMail|sendMessage|deliverCandidate)\s*\(/;
++  for (const relative of phaseOneFiles) {
++    const source = fs.readFileSync(path.join(root, relative), 'utf8');
++    assert(!prohibitedImports.test(source), `${relative} must not expose a delivery adapter`);
++  }
++  for (const modulePath of [
++    '../src/lib/schemaRank',
++    '../src/lib/signalCache',
++    '../src/lib/matrixStream',
++    '../src/lib/matrixCrmAdapter'
++  ]) {
++    const exportedNames = Object.keys(require(modulePath));
++    assert(
++      exportedNames.every(name => !/(?:send|deliver|dispatch|smtp|whatsapp)/i.test(name)),
++      `${modulePath} must export zero delivery adapters`
++    );
++  }
++  const routerSource = fs.readFileSync(path.join(root, 'src/routes/matrix.js'), 'utf8');
++  assert(!/router\.(?:post|put|patch|delete)\s*\(/.test(routerSource), 'matrix API must remain read-only');
++  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
++  const phaseScripts = Object.keys(packageJson.scripts || {}).filter(name => name.includes('matrix'));
++  assert(
++    phaseScripts.every(name => !/(?:send|deliver|dispatch|smtp|whatsapp)/i.test(name)),
++    'package scripts must expose zero Matrix delivery commands'
++  );
++}
++
++function assertRunbookAccuracy() {
++  const runbook = fs.readFileSync(path.join(root, 'docs/operations/matrix-phase1-runbook.md'), 'utf8');
++  assert(
++    runbook.includes('node scripts/matrix-classify-current.js --output ./matrix-current-summary.json'),
++    'runbook output example must use a file in the workspace root'
++  );
++  assert(!runbook.includes('--output ./tmp/'), 'runbook must not use a CLI-rejected nested output path');
++  assert(
++    !/SELECT\s+id,\s+status,\s+ruleset_version,\s+counters_json/mi.test(runbook),
++    'runbook must not imply import summaries are persisted in matrix_runs.counters_json'
++  );
++  assert(
++    /importDiscoveryBatch[^\n]*返回[^\n]*summary/.test(runbook),
++    'runbook must identify importDiscoveryBatch returned summary as the counter source'
++  );
++}
++
++function availablePort() {
++  return new Promise((resolve, reject) => {
++    const probe = net.createServer();
++    probe.once('error', reject);
++    probe.listen(0, '127.0.0.1', () => {
++      const port = probe.address().port;
++      probe.close(error => error ? reject(error) : resolve(port));
++    });
++  });
++}
++
++async function waitForHealth(baseUrl) {
++  const deadline = Date.now() + 15000;
++  while (Date.now() < deadline) {
++    try {
++      const response = await fetch(`${baseUrl}/health`);
++      if (response.ok) return;
++    } catch (_) {}
++    await new Promise(resolve => setTimeout(resolve, 100));
++  }
++  throw new Error(`server health timeout: ${serverError.slice(-1000)}`);
++}
++
++async function assertReadOnlyApi() {
++  const now = '2026-07-16T00:00:00Z';
++  db.prepare(`
++    INSERT INTO users (username, password, role, status, created_at, approved_at)
++    VALUES (?, ?, ?, 'active', ?, ?)
++  `).run('phase1_verifier', 'verify123', 'foreign_trade_crm_admin', now, now);
++
++  const before = formalSnapshot();
++  const port = await availablePort();
++  const baseUrl = `http://127.0.0.1:${port}`;
++  server = spawn(process.execPath, ['src/server.js'], {
++    cwd: root,
++    env: {
++      ...process.env,
++      DB_PATH: dbPath,
++      PORT: String(port),
++      DISABLE_CRON: '1',
++      FORCE_HTTPS: '0'
++    },
++    stdio: ['ignore', 'ignore', 'pipe']
++  });
++  server.stderr.on('data', chunk => { serverError += String(chunk); });
++  await waitForHealth(baseUrl);
++
++  const login = await fetch(`${baseUrl}/api/auth/login`, {
++    method: 'POST',
++    headers: { 'content-type': 'application/json' },
++    body: JSON.stringify({ username: 'phase1_verifier', password: 'verify123' })
++  });
++  assert.equal(login.status, 200);
++  const { token } = await login.json();
++  assert(token);
++  const response = await fetch(`${baseUrl}/api/matrix/candidates?page_size=100`, {
++    headers: { authorization: `Bearer ${token}` }
++  });
++  assert.equal(response.status, 200);
++  const payload = await response.json();
++  assert(payload.total >= 120);
++  assert(payload.rows.length <= 100);
++  assert.deepEqual(formalSnapshot(), before);
++}
++
++async function main() {
++  initDb();
++  seedCurrentCrmFixture();
++  assertClassification();
++  const formalBeforeImport = formalSnapshot();
++  await assertBoundedImport();
++  assert.deepEqual(formalSnapshot(), formalBeforeImport, 'guarded import must not write formal CRM tables');
++  assertCurrentCrmReadOnly();
++  assertDeliveryUnavailable();
++  await assertReadOnlyApi();
++  assertRunbookAccuracy();
++
++  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
++  assert.equal(
++    packageJson.scripts && packageJson.scripts['verify:matrix-phase1'],
++    'npm run test:matrix-stream && npm run test:matrix-api && node scripts/verify-matrix-phase1.js',
++    'unified package command must wire guarded-import and full API contracts before integration verification'
++  );
++  console.log('matrix phase-one verification passed');
++}
++
++main().catch(error => {
++  console.error(error.stack || error);
++  process.exitCode = 1;
++}).finally(() => {
++  if (server) server.kill('SIGTERM');
++  try { db.close(); } catch (_) {}
++  fs.rmSync(tempDir, { recursive: true, force: true });
++});
+diff --git a/src/db.js b/src/db.js
+index 1bcf21d..65e449b 100644
+--- a/src/db.js
++++ b/src/db.js
+@@ -792,20 +792,81 @@ function initDb() {
+       vol_ratio REAL,
+       buy_index REAL,
+       trend TEXT,
+       signal TEXT,
+       risk TEXT,
+       source TEXT,
+       note TEXT,
+       created_at TEXT NOT NULL,
+       UNIQUE(trade_date, code)
+     );
++
++    CREATE TABLE IF NOT EXISTS matrix_runs (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      campaign_json TEXT NOT NULL,
++      ruleset_version TEXT NOT NULL,
++      status TEXT NOT NULL DEFAULT 'running',
++      counters_json TEXT NOT NULL DEFAULT '{}',
++      actor TEXT,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      completed_at TEXT
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_entities (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      normalized_domain TEXT NOT NULL,
++      display_name TEXT,
++      country TEXT,
++      public_contacts_json TEXT NOT NULL DEFAULT '{}',
++      status TEXT NOT NULL DEFAULT 'active',
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_evidence (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      entity_id INTEGER NOT NULL,
++      field TEXT NOT NULL,
++      value TEXT,
++      source_url TEXT NOT NULL,
++      page_title TEXT,
++      retrieved_at TEXT NOT NULL,
++      content_fingerprint TEXT NOT NULL,
++      confidence TEXT,
++      extraction_method TEXT,
++      created_at TEXT NOT NULL,
++      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id)
++    );
++
++    CREATE TABLE IF NOT EXISTS matrix_classifications (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      entity_id INTEGER NOT NULL,
++      run_id INTEGER NOT NULL,
++      classification TEXT NOT NULL,
++      priority TEXT,
++      reason_json TEXT NOT NULL DEFAULT '[]',
++      confidence REAL,
++      human_override_classification TEXT,
++      human_override_reason TEXT,
++      human_override_actor TEXT,
++      human_override_at TEXT,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      FOREIGN KEY(entity_id) REFERENCES matrix_entities(id),
++      FOREIGN KEY(run_id) REFERENCES matrix_runs(id)
++    );
++
++    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_entities_domain
++      ON matrix_entities(normalized_domain);
++    CREATE UNIQUE INDEX IF NOT EXISTS idx_matrix_evidence_identity
++      ON matrix_evidence(entity_id, field, source_url, content_fingerprint);
+   `);
+ 
+   const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+   if (!cols.includes('priority')) {
+     db.exec("ALTER TABLE orders ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
+   }
+ 
+   const ocols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+   if (!ocols.includes('assigned_shipping_worker')) db.exec("ALTER TABLE orders ADD COLUMN assigned_shipping_worker TEXT");
+   if (!ocols.includes('order_qty')) db.exec("ALTER TABLE orders ADD COLUMN order_qty TEXT");
+diff --git a/src/lib/matrixCrmAdapter.js b/src/lib/matrixCrmAdapter.js
+new file mode 100644
+index 0000000..85946c6
+--- /dev/null
++++ b/src/lib/matrixCrmAdapter.js
+@@ -0,0 +1,428 @@
++'use strict';
++
++const { classifyRecord, isApprovedCountry, REASON_CODES, RULESET_VERSION } = require('./schemaRank');
++
++const DOMESTIC_COUNTRIES = new Set([
++  'china', 'cn', 'prc', "people's republic of china", '中国', '中国大陆', '中华人民共和国'
++]);
++const AUTOMATED_SENDER = /(?:^|[._-])(no[._-]?reply|do[._-]?not[._-]?reply|mailer[._-]?daemon|postmaster)(?:@|[._-]|$)/i;
++const SYSTEM_NOTICE = /(?:security alert|account verification|verify your account|delivery failure|undeliverable|automated (?:report|notice)|machine notification)/i;
++const FIXTURE_MARKER = /(?:\btoken test\b|\bhello token ok\b|token-verification|sync verification|fixture (?:mailbox|payload))/i;
++const BUSINESS_SIGNAL = /(?:inquir|quot|packag|pouch|film|bag|specification|material|dimension|size|product|coffee|snack|detergent|refill)/i;
++
++function text(value) {
++  return typeof value === 'string' ? value.trim() : '';
++}
++
++function lower(value) {
++  return text(value).toLowerCase();
++}
++
++function tableExists(db, name) {
++  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
++}
++
++function rows(db, table) {
++  return tableExists(db, table) ? db.prepare(`SELECT * FROM ${table} ORDER BY id`).all() : [];
++}
++
++function normalizePhone(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  const digits = raw.replace(/\D/g, '');
++  return raw.startsWith('+') ? `+${digits}` : digits;
++}
++
++function internationalPhone(value) {
++  const phone = normalizePhone(value);
++  return /^\+[1-9]\d{7,14}$/.test(phone) && !phone.startsWith('+86');
++}
++
++function emailDomain(value) {
++  const match = lower(value).match(/^[^@\s]+@([^@\s]+)$/);
++  return match ? match[1].replace(/^www\./, '') : '';
++}
++
++function websiteDomain(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  try {
++    return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.toLowerCase().replace(/^www\./, '');
++  } catch {
++    return '';
++  }
++}
++
++function canonicalTime(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
++    ? `${raw.replace(' ', 'T')}Z`
++    : raw;
++}
++
++function strictSourceTime(value) {
++  const candidate = canonicalTime(value);
++  if (!candidate) return false;
++  const match = candidate.match(/^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/);
++  if (!match) return false;
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  const calendarDate = new Date(Date.UTC(year, month - 1, day));
++  if (calendarDate.getUTCFullYear() !== year
++    || calendarDate.getUTCMonth() !== month - 1
++    || calendarDate.getUTCDate() !== day) return false;
++  return !candidate.includes('T') || !Number.isNaN(Date.parse(candidate));
++}
++
++function normalizedTime(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  const candidate = canonicalTime(raw);
++  return strictSourceTime(candidate) ? candidate : raw;
++}
++
++function isDomestic(customer) {
++  const country = lower(customer?.country);
++  if (DOMESTIC_COUNTRIES.has(country)) return true;
++  const phone = normalizePhone(customer?.whatsapp || customer?.phone);
++  const domain = emailDomain(customer?.email);
++  return Boolean(phone.startsWith('+86') || (domain && domain.endsWith('.cn')));
++}
++
++function customerHasOverseasEvidence(customer) {
++  if (!customer) return false;
++  const country = lower(customer.country);
++  return Boolean(
++    (country && !DOMESTIC_COUNTRIES.has(country))
++    || (emailDomain(customer.email) && !emailDomain(customer.email).endsWith('.cn'))
++    || internationalPhone(customer.whatsapp || customer.phone)
++  );
++}
++
++function repeatedSegments(value) {
++  const segments = text(value)
++    .split(/\r?\n+/)
++    .map((part) => part.trim().toLowerCase())
++    .filter((part) => part.length >= 3);
++  return new Set(segments).size < segments.length;
++}
++
++function substantiallyOverlaps(left, right) {
++  const tokens = (value) => lower(value).match(/[\p{L}\p{N}]+/gu) || [];
++  const shingles = (items) => new Set(items.slice(0, -2).map((_, index) => items.slice(index, index + 3).join(' ')));
++  const leftTokens = tokens(left);
++  const rightTokens = tokens(right);
++  if (Math.min(leftTokens.length, rightTokens.length) < 5) return false;
++  const leftShingles = shingles(leftTokens);
++  const rightShingles = shingles(rightTokens);
++  const smaller = leftShingles.size <= rightShingles.size ? leftShingles : rightShingles;
++  const larger = smaller === leftShingles ? rightShingles : leftShingles;
++  let shared = 0;
++  for (const shingle of smaller) if (larger.has(shingle)) shared += 1;
++  return smaller.size > 0 && shared / smaller.size >= 0.6;
++}
++
++function crmExternalContact(row) {
++  return lower(row.direction) === 'outbound'
++    ? text(row.receiver_contact)
++    : text(row.sender_contact);
++}
++
++function identityKey(kind, row, customer) {
++  if (customer?.id != null) return `customer:${customer.id}`;
++  const contact = kind === 'email'
++    ? lower(row.contact_email || row.from_email)
++    : normalizePhone(crmExternalContact(row));
++  return contact ? `${kind}:${contact}` : `${kind}-record:${row.id}`;
++}
++
++function createGroup(key, customer) {
++  return {
++    identity_id: key,
++    customer,
++    crmMessages: [],
++    emailMessages: []
++  };
++}
++
++function addToGroup(groups, key, customer, kind, row) {
++  if (!groups.has(key)) groups.set(key, createGroup(key, customer));
++  const group = groups.get(key);
++  if (!group.customer && customer) group.customer = customer;
++  (kind === 'email' ? group.emailMessages : group.crmMessages).push(row);
++}
++
++function groupTime(group) {
++  const values = [
++    ...group.crmMessages.map((row) => row.received_at || row.created_at),
++    ...group.emailMessages.map((row) => row.received_at || row.sent_at || row.created_at),
++    group.customer?.last_contact_at,
++    group.customer?.updated_at
++  ].map(normalizedTime).filter(Boolean);
++  return values.sort().at(-1) || '';
++}
++
++function hasMalformedTime(group) {
++  const rowsToCheck = [group.customer, ...group.crmMessages, ...group.emailMessages].filter(Boolean);
++  const values = rowsToCheck.flatMap((row) => Object.entries(row)
++    .filter(([key, value]) => key.endsWith('_at')
++      && value !== null
++      && value !== undefined
++      && String(value).trim())
++    .map(([, value]) => value));
++  return values.some((value) => !strictSourceTime(value));
++}
++
++function hasMalformedJson(group) {
++  const values = [
++    ...group.crmMessages.flatMap((row) => [row.raw_payload_json, row.attachments_json]),
++    ...group.emailMessages.flatMap((row) => [
++      row.raw_headers_json,
++      row.detected_signals_json,
++      row.parser_hints_json,
++      row.attachments_json,
++      row.to_emails,
++      row.cc_emails,
++      row.bcc_emails
++    ])
++  ].map(text).filter(Boolean);
++  return values.some((value) => {
++    try { JSON.parse(value); return false; } catch { return true; }
++  });
++}
++
++function hasFixtureMarker(group) {
++  const values = [
++    group.customer?.name,
++    group.customer?.company_name,
++    ...group.crmMessages.flatMap((row) => [row.sender_name, row.message_text, row.raw_payload_json, row.source_message_id]),
++    ...group.emailMessages.flatMap((row) => [row.from_email, row.subject, row.text_body, row.cleaned_text, row.message_id])
++  ];
++  return values.some((value) => FIXTURE_MARKER.test(text(value)));
++}
++
++function isSystemGroup(group) {
++  return group.emailMessages.some((row) => {
++    const sender = row.contact_email || row.from_email;
++    const content = `${text(row.subject)} ${text(row.cleaned_text || row.text_body)}`;
++    return AUTOMATED_SENDER.test(text(sender))
++      || SYSTEM_NOTICE.test(content)
++      || lower(row.noise_level) === 'high';
++  });
++}
++
++function businessEvidence(group) {
++  const customer = group.customer || {};
++  const evidence = [customer.main_product, customer.industry, customer.business_background]
++    .map(text).filter(Boolean);
++  const substantive = group.crmMessages.some((row) => BUSINESS_SIGNAL.test(text(row.message_text)))
++    || group.emailMessages.some((row) => lower(row.business_relevance) === 'high'
++      || Number(row.inquiry_detected) === 1
++      || Number(row.quote_detected) === 1
++      || BUSINESS_SIGNAL.test(`${text(row.subject)} ${text(row.cleaned_text || row.text_body)}`));
++  return substantive ? [...evidence, 'substantive_conversation'] : evidence;
++}
++
++function normalizeGroup(group) {
++  const customer = group.customer || {};
++  const latestEmail = group.emailMessages.at(-1);
++  const latestCrm = group.crmMessages.at(-1);
++  const businessEmail = text(customer.email || latestEmail?.contact_email || latestEmail?.from_email);
++  const whatsapp = text(customer.whatsapp || customer.phone || crmExternalContact(latestCrm || {}));
++  const sourceKind = group.crmMessages.some((row) => lower(row.source_type) === 'whatsapp') ? 'whatsapp' : 'email';
++  const officialDomain = websiteDomain(customer.website) || emailDomain(businessEmail);
++  const lastInteraction = groupTime(group);
++  const rawMessageContents = [
++    ...group.crmMessages.map((row) => row.message_text),
++    ...group.emailMessages.map((row) => row.cleaned_text || row.text_body)
++  ].filter((value) => text(value));
++  const messageContents = rawMessageContents.map((value) => lower(value).replace(/\s+/g, ' '));
++  const duplicate = rawMessageContents.some(repeatedSegments)
++    || new Set(messageContents).size < messageContents.length
++    || rawMessageContents.some((left, index) => rawMessageContents
++      .slice(index + 1).some((right) => substantiallyOverlaps(left, right)));
++  const internalIdentity = customer.id != null
++    ? `customer:${customer.id}`
++    : group.crmMessages.length
++      ? `crm-message:${Math.min(...group.crmMessages.map((row) => Number(row.id)))}`
++      : `email-message:${Math.min(...group.emailMessages.map((row) => Number(row.id)))}`;
++
++  return {
++    identity_id: internalIdentity,
++    country: text(customer.country),
++    official_domain: officialDomain,
++    business_email: businessEmail,
++    sender_name: lower(latestCrm?.direction) === 'outbound' ? '' : text(latestCrm?.sender_name || customer.contact_person),
++    sender_phone: normalizePhone(whatsapp),
++    source_kind: isSystemGroup(group) ? REASON_CODES.SECURITY_NOTICE : sourceKind,
++    fixture_marker: hasFixtureMarker(group) ? 'known-verification-artifact' : '',
++    product_evidence: businessEvidence(group),
++    last_interaction_at: lastInteraction,
++    duplicated_message_segments: duplicate,
++    has_malformed_source_time: hasMalformedTime(group),
++    has_malformed_json_payload: hasMalformedJson(group),
++    uncertain_direction: group.crmMessages.some((row) => {
++      const direction = lower(row.direction);
++      return lower(row.source_type) === 'whatsapp' && !['inbound', 'outbound'].includes(direction);
++    }),
++    confirmed_international_whatsapp: internationalPhone(whatsapp),
++    source_ids: {
++      customer_ids: customer.id == null ? [] : [customer.id],
++      crm_message_ids: group.crmMessages.map((row) => row.id),
++      email_message_ids: group.emailMessages.map((row) => row.id)
++    },
++    private_contact: businessEmail || whatsapp || ''
++  };
++}
++
++function readEligibleCrmRecords(db) {
++  const customers = rows(db, 'customers');
++  const crmMessages = rows(db, 'crm_messages');
++  const emailMessages = rows(db, 'email_messages');
++  const customerById = new Map(customers.map((row) => [Number(row.id), row]));
++  const linkedCustomerIds = new Set([
++    ...crmMessages
++      .filter((row) => {
++        const contact = crmExternalContact(row);
++        return FIXTURE_MARKER.test(`${text(row.sender_name)} ${text(row.message_text)} ${text(row.raw_payload_json)}`)
++          || (lower(row.source_type) === 'whatsapp' && internationalPhone(contact));
++      })
++      .map((row) => Number(row.customer_id)).filter(Number.isFinite),
++    ...emailMessages
++      .filter((row) => {
++        const domain = emailDomain(row.contact_email || row.from_email);
++        return domain && !domain.endsWith('.cn');
++      })
++      .map((row) => Number(row.matched_customer_id)).filter(Number.isFinite)
++  ]);
++  const excludedDomesticIds = customers
++    .filter((customer) => isDomestic(customer)
++      || (!customerHasOverseasEvidence(customer) && !linkedCustomerIds.has(Number(customer.id))))
++    .map((row) => row.id);
++  const excludedSet = new Set(excludedDomesticIds.map(Number));
++  const groups = new Map();
++
++  for (const customer of customers) {
++    if (excludedSet.has(Number(customer.id)) || !customerHasOverseasEvidence(customer)) continue;
++    const key = identityKey('customer', {}, customer);
++    if (!groups.has(key)) groups.set(key, createGroup(key, customer));
++  }
++
++  for (const row of crmMessages) {
++    const customer = customerById.get(Number(row.customer_id));
++    if (customer && excludedSet.has(Number(customer.id))) {
++      if (lower(row.source_type) === 'whatsapp' && !crmExternalContact(row)) {
++        addToGroup(groups, identityKey('crm', row, null), null, 'crm', row);
++      }
++      continue;
++    }
++    addToGroup(groups, identityKey('crm', row, customer), customer, 'crm', row);
++  }
++
++  for (const row of emailMessages) {
++    const customer = customerById.get(Number(row.matched_customer_id));
++    if (customer && excludedSet.has(Number(customer.id))) continue;
++    addToGroup(groups, identityKey('email', row, customer), customer, 'email', row);
++  }
++
++  return {
++    records: [...groups.values()].map(normalizeGroup),
++    excluded_domestic_ids: excludedDomesticIds
++  };
++}
++
++function classifyNormalizedRecord(record, context, classifier = classifyRecord) {
++  const base = classifier(record, context);
++  let result = base;
++  if (base.classification === 'needs_review'
++    && isApprovedCountry(record.country)
++    && record.official_domain
++    && record.confirmed_international_whatsapp
++    && record.product_evidence.length
++    && base.reason_codes.every((reason) => reason === REASON_CODES.MISSING_IDENTITY)) {
++    result = {
++      classification: 'valid',
++      priority: 'B',
++      reason_codes: [
++        REASON_CODES.APPROVED_COUNTRY,
++        REASON_CODES.OFFICIAL_DOMAIN,
++        REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
++        REASON_CODES.BUSINESS_EVIDENCE
++      ],
++      confidence: 0.85
++    };
++  }
++
++  const safetyReasons = [];
++  if (record.duplicated_message_segments) safetyReasons.push(REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS);
++  if (record.has_malformed_source_time) safetyReasons.push(REASON_CODES.MALFORMED_SOURCE_TIME);
++  if (record.has_malformed_json_payload) safetyReasons.push(REASON_CODES.MALFORMED_JSON_PAYLOAD);
++  if (record.uncertain_direction) safetyReasons.push(REASON_CODES.UNCERTAIN_DIRECTION);
++  if (result.classification === 'valid' && !record.product_evidence.length) {
++    safetyReasons.push(REASON_CODES.MISSING_BUSINESS_EVIDENCE);
++  }
++  const reasons = [...new Set([...result.reason_codes, ...safetyReasons])];
++  if (!['test', 'noise'].includes(result.classification) && safetyReasons.length) {
++    return { classification: 'needs_review', priority: 'B', reason_codes: reasons, confidence: 0.5 };
++  }
++  return { ...result, reason_codes: reasons };
++}
++
++function classifyCurrentCrm(db, options = {}) {
++  const normalized = readEligibleCrmRecords(db);
++  const counts = {
++    input: normalized.records.length,
++    excluded_domestic: normalized.excluded_domestic_ids.length,
++    test: 0,
++    noise: 0,
++    needs_review: 0,
++    valid: 0,
++    errors: 0
++  };
++  const includePrivate = options.includePrivatePreview === true
++    && options.authenticatedLocalOperator === true;
++  const classifier = typeof options.classifier === 'function' ? options.classifier : classifyRecord;
++  const records = [];
++
++  for (const record of normalized.records) {
++    try {
++      const classification = classifyNormalizedRecord(record, { now: options.now }, classifier);
++      counts[classification.classification] += 1;
++      const output = {
++        identity_id: record.identity_id,
++        source_ids: record.source_ids,
++        classification: classification.classification,
++        priority: classification.priority,
++        reason_codes: classification.reason_codes,
++        confidence: classification.confidence
++      };
++      if (includePrivate) output.private_preview = { contact: record.private_contact };
++      records.push(output);
++    } catch {
++      counts.errors += 1;
++      counts.needs_review += 1;
++      records.push({
++        identity_id: record.identity_id,
++        source_ids: record.source_ids,
++        classification: 'needs_review',
++        priority: 'B',
++        reason_codes: [REASON_CODES.CLASSIFICATION_ERROR],
++        confidence: 0
++      });
++    }
++  }
++
++  return {
++    ruleset_version: RULESET_VERSION,
++    counts,
++    excluded_domestic_ids: normalized.excluded_domestic_ids,
++    records
++  };
++}
++
++module.exports = {
++  readEligibleCrmRecords,
++  classifyCurrentCrm
++};
+diff --git a/src/lib/matrixStream.js b/src/lib/matrixStream.js
+new file mode 100644
+index 0000000..de8057c
+--- /dev/null
++++ b/src/lib/matrixStream.js
+@@ -0,0 +1,434 @@
++'use strict';
++
++const dns = require('dns');
++const http = require('http');
++const https = require('https');
++const net = require('net');
++const { classifyRecord } = require('./schemaRank');
++const { upsertEntity, appendEvidence, saveClassification } = require('./signalCache');
++
++const MAX_BATCH_RECORDS = 120;
++const MAX_COUNTRY_RECORDS = 20;
++const MAX_REDIRECTS = 5;
++const ALLOWED_CONTACT_FIELDS = new Set([
++  'email', 'phone', 'whatsapp', 'linkedin_url', 'contact_page_url'
++]);
++const ALLOWED_EVIDENCE_FIELDS = new Set([
++  'field', 'value', 'source_url', 'page_title', 'retrieved_at',
++  'content_fingerprint', 'confidence', 'extraction_method'
++]);
++
++function rejected(reason) {
++  return { ok: false, normalized_url: null, reason };
++}
++
++function parseIPv4(address) {
++  if (net.isIP(address) !== 4) return null;
++  const octets = address.split('.').map(Number);
++  return octets.length === 4 ? octets : null;
++}
++
++function parseIPv6(address) {
++  let input = address.toLowerCase();
++  if (input.includes('%')) return null;
++
++  let ipv4Tail = null;
++  const ipv4Match = input.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
++  if (ipv4Match) {
++    const octets = parseIPv4(ipv4Match[1]);
++    if (!octets) return null;
++    ipv4Tail = [(octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]];
++    input = input.slice(0, -ipv4Match[1].length).replace(/:$/, '');
++  }
++
++  const halves = input.split('::');
++  if (halves.length > 2) return null;
++  const left = halves[0] ? halves[0].split(':') : [];
++  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
++  const tailLength = ipv4Tail ? 2 : 0;
++  const missing = 8 - left.length - right.length - tailLength;
++  if ((halves.length === 1 && missing !== 0) || (halves.length === 2 && missing < 1)) return null;
++
++  const groups = [
++    ...left,
++    ...Array(halves.length === 2 ? missing : 0).fill('0'),
++    ...right
++  ].map(group => {
++    if (!/^[0-9a-f]{1,4}$/.test(group)) return NaN;
++    return Number.parseInt(group, 16);
++  });
++  if (ipv4Tail) groups.push(...ipv4Tail);
++  return groups.length === 8 && groups.every(Number.isFinite) ? groups : null;
++}
++
++function isBlockedIPv4(address) {
++  const octets = parseIPv4(address);
++  if (!octets) return true;
++  const [a, b] = octets;
++  return a === 0
++    || a === 10
++    || a === 127
++    || (a === 100 && b >= 64 && b <= 127)
++    || (a === 169 && b === 254)
++    || (a === 172 && b >= 16 && b <= 31)
++    || (a === 192 && b === 168)
++    || (a === 198 && (b === 18 || b === 19))
++    || a >= 224;
++}
++
++function isBlockedAddress(address) {
++  const plainAddress = String(address || '').replace(/^\[|\]$/g, '');
++  const family = net.isIP(plainAddress);
++  if (family === 4) return isBlockedIPv4(plainAddress);
++  if (family !== 6) return true;
++
++  const groups = parseIPv6(plainAddress);
++  if (!groups) return true;
++  const allZero = groups.every(group => group === 0);
++  const loopback = groups.slice(0, 7).every(group => group === 0) && groups[7] === 1;
++  const uniqueLocal = (groups[0] & 0xfe00) === 0xfc00;
++  const linkLocal = (groups[0] & 0xffc0) === 0xfe80;
++  const multicast = (groups[0] & 0xff00) === 0xff00;
++  const mappedIPv4 = groups.slice(0, 5).every(group => group === 0) && groups[5] === 0xffff;
++  if (mappedIPv4) {
++    const mapped = `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
++    return isBlockedIPv4(mapped);
++  }
++  return allZero || loopback || uniqueLocal || linkLocal || multicast;
++}
++
++function lookupAddresses(result) {
++  const entries = Array.isArray(result) ? result : [result];
++  return entries.map(entry => {
++    const address = typeof entry === 'string' ? entry : entry && entry.address;
++    const family = typeof entry === 'object' && entry ? Number(entry.family) : net.isIP(address);
++    return address ? { address, family: family || net.isIP(address) } : null;
++  }).filter(entry => entry && (entry.family === 4 || entry.family === 6));
++}
++
++async function resolvePublicUrl(input, dnsLookup) {
++  let parsed;
++  try {
++    parsed = new URL(input);
++  } catch {
++    return { validation: rejected('invalid_url'), addresses: [] };
++  }
++
++  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
++    return { validation: rejected('unsupported_protocol'), addresses: [] };
++  }
++  if (parsed.username || parsed.password) {
++    return { validation: rejected('credentials_not_allowed'), addresses: [] };
++  }
++  if (parsed.port && parsed.port !== '80' && parsed.port !== '443') {
++    return { validation: rejected('port_not_allowed'), addresses: [] };
++  }
++
++  const hostname = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '').toLowerCase();
++  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) {
++    return { validation: rejected('blocked_address'), addresses: [] };
++  }
++
++  const literalFamily = net.isIP(hostname);
++  if (literalFamily && isBlockedAddress(hostname)) {
++    return { validation: rejected('blocked_address'), addresses: [] };
++  }
++
++  let addresses;
++  if (!literalFamily) {
++    try {
++      addresses = lookupAddresses(await dnsLookup(hostname, { all: true, verbatim: true }));
++    } catch {
++      return { validation: rejected('dns_lookup_failed'), addresses: [] };
++    }
++    if (!addresses.length) return { validation: rejected('dns_lookup_failed'), addresses: [] };
++    if (addresses.some(entry => isBlockedAddress(entry.address))) {
++      return { validation: rejected('blocked_address'), addresses: [] };
++    }
++  } else {
++    addresses = [{ address: hostname, family: literalFamily }];
++  }
++
++  parsed.hash = '';
++  parsed.hostname = hostname;
++  return {
++    validation: { ok: true, normalized_url: parsed.toString(), reason: null },
++    addresses
++  };
++}
++
++async function validatePublicUrl(input, dnsLookup = dns.promises.lookup) {
++  return (await resolvePublicUrl(input, dnsLookup)).validation;
++}
++
++function trimText(value) {
++  return typeof value === 'string' ? value.trim() : value;
++}
++
++function normalizedUrlText(value) {
++  if (typeof value !== 'string' || !value.trim()) return '';
++  try {
++    const parsed = new URL(value.trim());
++    parsed.hash = '';
++    parsed.hostname = parsed.hostname.toLowerCase();
++    return parsed.toString();
++  } catch {
++    return value.trim();
++  }
++}
++
++function officialDomain(officialUrl) {
++  try {
++    return new URL(officialUrl).hostname.toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
++  } catch {
++    return '';
++  }
++}
++
++function normalizeDiscoveryRecord(input = {}) {
++  const officialUrl = normalizedUrlText(input.official_url);
++  const publicContacts = {};
++  if (input.public_contacts && typeof input.public_contacts === 'object' && !Array.isArray(input.public_contacts)) {
++    for (const [key, value] of Object.entries(input.public_contacts)) {
++      if (ALLOWED_CONTACT_FIELDS.has(key) && typeof value === 'string' && value.trim()) {
++        publicContacts[key] = value.trim();
++      }
++    }
++  }
++  const businessEmail = typeof input.business_email === 'string'
++    ? input.business_email.trim().toLowerCase()
++    : '';
++  if (businessEmail && !publicContacts.email) publicContacts.email = businessEmail;
++
++  const evidence = Array.isArray(input.evidence) ? input.evidence.map(item => {
++    if (!item || typeof item !== 'object' || Array.isArray(item)) return {};
++    const normalized = {};
++    for (const [key, value] of Object.entries(item)) {
++      if (!ALLOWED_EVIDENCE_FIELDS.has(key)) continue;
++      normalized[key] = key === 'source_url' ? normalizedUrlText(value) : trimText(value);
++    }
++    return normalized;
++  }) : [];
++
++  return {
++    country: typeof input.country === 'string' ? input.country.trim().replace(/\s+/g, ' ') : '',
++    display_name: typeof input.display_name === 'string' ? input.display_name.trim() : '',
++    official_url: officialUrl,
++    official_domain: officialDomain(officialUrl),
++    business_email: businessEmail,
++    public_contacts: publicContacts,
++    product_evidence: Array.isArray(input.product_evidence)
++      ? input.product_evidence.map(trimText).filter(value => typeof value === 'string' && value)
++      : [],
++    evidence,
++    fixture_marker: trimText(input.fixture_marker),
++    source_kind: trimText(input.source_kind),
++    sender_name: trimText(input.sender_name),
++    sender_phone: trimText(input.sender_phone),
++    last_interaction_at: trimText(input.last_interaction_at)
++  };
++}
++
++function socketFamily(value) {
++  if (value === 4 || value === '4' || value === 'IPv4') return 4;
++  if (value === 6 || value === '6' || value === 'IPv6') return 6;
++  return 0;
++}
++
++function pinnedRequest(url, options = {}) {
++  const parsed = new URL(url);
++  const requestFactory = parsed.protocol === 'https:'
++    ? options.requestFactories && options.requestFactories.https || https.request
++    : options.requestFactories && options.requestFactories.http || http.request;
++  if (!options.connectAddress || (options.connectFamily !== 4 && options.connectFamily !== 6)) {
++    return Promise.reject(new Error('validated connection address is required'));
++  }
++
++  return new Promise((resolve, reject) => {
++    const request = requestFactory({
++      protocol: parsed.protocol,
++      hostname: parsed.hostname.replace(/^\[|\]$/g, ''),
++      port: parsed.port || undefined,
++      method: options.method || 'HEAD',
++      path: `${parsed.pathname}${parsed.search}`,
++      headers: options.headers,
++      servername: options.servername,
++      rejectUnauthorized: options.rejectUnauthorized !== false,
++      agent: false,
++      lookup(hostname, lookupOptions, callback) {
++        callback(null, options.connectAddress, options.connectFamily);
++      }
++    }, response => {
++      response.resume();
++      resolve({
++        status: response.statusCode,
++        connectedAddress: response.socket && response.socket.remoteAddress,
++        connectedFamily: socketFamily(response.socket && response.socket.remoteFamily),
++        headers: {
++          get(name) {
++            const value = response.headers[String(name).toLowerCase()];
++            return Array.isArray(value) ? value[0] : value || null;
++          }
++        }
++      });
++    });
++    request.setTimeout(options.timeout || 10000, () => {
++      request.destroy(new Error('public URL probe timed out'));
++    });
++    request.once('error', reject);
++    request.end();
++  });
++}
++
++async function validateRedirectChain(input, options) {
++  let current = input;
++  for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
++    const resolved = await resolvePublicUrl(current, options.dnsLookup);
++    const { validation } = resolved;
++    if (!validation.ok) return validation;
++    const parsed = new URL(validation.normalized_url);
++    const tlsHostname = parsed.hostname.replace(/^\[|\]$/g, '');
++    const target = resolved.addresses[0];
++
++    let response;
++    try {
++      response = await options.transport(validation.normalized_url, {
++        method: 'HEAD',
++        redirect: 'manual',
++        connectAddress: target.address,
++        connectFamily: target.family,
++        headers: { Host: parsed.host },
++        servername: net.isIP(tlsHostname) ? undefined : tlsHostname,
++        rejectUnauthorized: true
++      });
++    } catch {
++      return rejected('transport_failed');
++    }
++
++    if (!response
++      || response.connectedAddress !== target.address
++      || response.connectedFamily !== target.family) {
++      return rejected('connection_address_mismatch');
++    }
++    if (!response || response.status < 300 || response.status >= 400) return validation;
++    const location = response.headers && typeof response.headers.get === 'function'
++      ? response.headers.get('location')
++      : null;
++    if (!location) return rejected('redirect_without_location');
++    if (redirects === MAX_REDIRECTS) return rejected('too_many_redirects');
++    try {
++      current = new URL(location, validation.normalized_url).toString();
++    } catch {
++      return rejected('invalid_redirect');
++    }
++  }
++  return rejected('too_many_redirects');
++}
++
++function emptySummary(input) {
++  return {
++    input,
++    excluded: 0,
++    test: 0,
++    noise: 0,
++    needs_review: 0,
++    valid: 0,
++    errors: 0
++  };
++}
++
++async function importDiscoveryBatch(db, runId, records, options = {}) {
++  if (!Array.isArray(records)) throw new Error('records must be an array');
++  if (records.length > MAX_BATCH_RECORDS) {
++    throw new Error(`batch exceeds ${MAX_BATCH_RECORDS} input records`);
++  }
++  if (Object.prototype.hasOwnProperty.call(options, 'fetch')) {
++    throw new Error('fetch option is not supported; use the pinned transport contract');
++  }
++  const dependencies = {
++    dnsLookup: options.dnsLookup || dns.promises.lookup,
++    transport: options.transport || ((url, transportOptions) => pinnedRequest(url, {
++      ...transportOptions,
++      requestFactories: options.requestFactories
++    }))
++  };
++  if (typeof dependencies.dnsLookup !== 'function') throw new Error('dnsLookup must be a function');
++  if (typeof dependencies.transport !== 'function') throw new Error('transport must be a function');
++
++  const summary = emptySummary(records.length);
++  const countryCounts = new Map();
++
++  for (const rawRecord of records) {
++    const record = normalizeDiscoveryRecord(rawRecord);
++    const countryKey = record.country.toLowerCase();
++    if (countryKey === 'india') {
++      summary.excluded += 1;
++      continue;
++    }
++
++    const countryCount = (countryCounts.get(countryKey) || 0) + 1;
++    countryCounts.set(countryKey, countryCount);
++    if (!countryKey || countryCount > MAX_COUNTRY_RECORDS) {
++      summary.errors += 1;
++      continue;
++    }
++    if (!record.official_url || !record.evidence.length
++      || record.evidence.some(item => !item.source_url)) {
++      summary.errors += 1;
++      continue;
++    }
++
++    const officialValidation = await validateRedirectChain(record.official_url, dependencies);
++    if (!officialValidation.ok) {
++      summary.errors += 1;
++      continue;
++    }
++
++    let evidenceFailed = false;
++    const checkedEvidence = [];
++    for (const evidence of record.evidence) {
++      const validation = await validateRedirectChain(evidence.source_url, dependencies);
++      if (!validation.ok) {
++        evidenceFailed = true;
++        break;
++      }
++      checkedEvidence.push({ ...evidence, source_url: validation.normalized_url });
++    }
++    if (evidenceFailed) {
++      summary.errors += 1;
++      continue;
++    }
++
++    record.official_url = officialValidation.normalized_url;
++    record.official_domain = officialDomain(record.official_url);
++    const classification = classifyRecord(record, { now: options.now });
++    try {
++      db.transaction(() => {
++        const entity = upsertEntity(db, {
++          official_domain: record.official_domain,
++          display_name: record.display_name || undefined,
++          country: record.country,
++          public_contacts: record.public_contacts
++        });
++        for (const evidence of checkedEvidence) appendEvidence(db, entity.id, evidence);
++        saveClassification(db, entity.id, classification, runId);
++      })();
++      if (Object.prototype.hasOwnProperty.call(summary, classification.classification)) {
++        summary[classification.classification] += 1;
++      } else {
++        summary.errors += 1;
++      }
++    } catch {
++      summary.errors += 1;
++    }
++  }
++
++  return summary;
++}
++
++module.exports = {
++  validatePublicUrl,
++  normalizeDiscoveryRecord,
++  importDiscoveryBatch,
++  pinnedRequest
++};
+diff --git a/src/lib/schemaRank.js b/src/lib/schemaRank.js
+new file mode 100644
+index 0000000..0182bb4
+--- /dev/null
++++ b/src/lib/schemaRank.js
+@@ -0,0 +1,179 @@
++'use strict';
++
++const RULESET_VERSION = '1.0.0';
++
++const APPROVED_COUNTRIES = Object.freeze([
++  'Vietnam',
++  'Thailand',
++  'Malaysia',
++  'Indonesia',
++  'Philippines',
++  'Kazakhstan'
++]);
++
++const EXCLUDED_COUNTRIES = Object.freeze([
++  'India'
++]);
++
++const REASON_CODES = Object.freeze({
++  FIXTURE_MARKER: 'fixture_marker',
++  SECURITY_NOTICE: 'security_notice',
++  EXCLUDED_COUNTRY: 'excluded_country',
++  UNAPPROVED_COUNTRY: 'unapproved_country',
++  MISSING_IDENTITY: 'missing_identity',
++  AMBIGUOUS_CONTACT: 'ambiguous_contact',
++  UNKNOWN_WHATSAPP_SENDER: 'unknown_whatsapp_sender',
++  MALFORMED_SOURCE_TIME: 'malformed_source_time',
++  CONFLICTING_DOMAINS: 'conflicting_domains',
++  APPROVED_COUNTRY: 'approved_country',
++  OFFICIAL_DOMAIN: 'official_domain',
++  PRODUCT_EVIDENCE: 'product_evidence',
++  VALID_SOURCE_TIME: 'valid_source_time',
++  CONFIRMED_INTERNATIONAL_WHATSAPP: 'confirmed_international_whatsapp',
++  BUSINESS_EVIDENCE: 'business_evidence',
++  DUPLICATED_MESSAGE_SEGMENTS: 'duplicated_message_segments',
++  MALFORMED_JSON_PAYLOAD: 'malformed_json_payload',
++  UNCERTAIN_DIRECTION: 'uncertain_direction',
++  MISSING_BUSINESS_EVIDENCE: 'missing_business_evidence',
++  CLASSIFICATION_ERROR: 'classification_error'
++});
++const PUBLIC_REASON_CODES = Object.freeze(Object.values(REASON_CODES));
++
++const approvedCountryKeys = new Set(APPROVED_COUNTRIES.map(normalizeCountry));
++const excludedCountryKeys = new Set(EXCLUDED_COUNTRIES.map(normalizeCountry));
++const AMBIGUOUS_CONTACT_DOMAINS = Object.freeze([
++  'gmail.com',
++  'googlemail.com',
++  'hotmail.com',
++  'icloud.com',
++  'live.com',
++  'outlook.com',
++  'proton.me',
++  'protonmail.com',
++  'qq.com',
++  'yahoo.com'
++]);
++const ambiguousContactDomainKeys = new Set(AMBIGUOUS_CONTACT_DOMAINS);
++
++function normalizeCountry(country) {
++  return typeof country === 'string'
++    ? country.trim().toLowerCase().replace(/\s+/g, ' ')
++    : '';
++}
++
++function isApprovedCountry(country) {
++  return approvedCountryKeys.has(normalizeCountry(country));
++}
++
++function emailDomain(email) {
++  if (typeof email !== 'string') return '';
++  const match = email.trim().toLowerCase().match(/^[^@\s]+@([^@\s]+)$/);
++  return match ? match[1].replace(/^www\./, '') : '';
++}
++
++function normalizeDomain(domain) {
++  return typeof domain === 'string'
++    ? domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]
++    : '';
++}
++
++function domainsMatch(left, right) {
++  return left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`);
++}
++
++function validDate(value) {
++  if (typeof value !== 'string') return false;
++  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/);
++  if (!match) return false;
++
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  const calendarDate = new Date(Date.UTC(year, month - 1, day));
++  if (calendarDate.getUTCFullYear() !== year
++    || calendarDate.getUTCMonth() !== month - 1
++    || calendarDate.getUTCDate() !== day) {
++    return false;
++  }
++
++  return !value.includes('T') || !Number.isNaN(Date.parse(value));
++}
++
++function isAmbiguousContactDomain(domain) {
++  return domain.split('.')[0] === 'example' || ambiguousContactDomainKeys.has(domain);
++}
++
++function hasIdentityValue(value) {
++  return typeof value === 'string' && value.trim().length > 0;
++}
++
++function result(classification, priority, reasonCodes, confidence) {
++  return {
++    classification,
++    priority,
++    reason_codes: reasonCodes,
++    confidence
++  };
++}
++
++function classifyRecord(record = {}, context = {}) {
++  const countryKey = normalizeCountry(record.country);
++  const officialDomain = normalizeDomain(record.official_domain);
++  const contactDomain = emailDomain(record.business_email);
++
++  if (record.fixture_marker) {
++    return result('test', 'C', [REASON_CODES.FIXTURE_MARKER], 1);
++  }
++
++  if (record.source_kind === REASON_CODES.SECURITY_NOTICE || excludedCountryKeys.has(countryKey)) {
++    const reason = record.source_kind === REASON_CODES.SECURITY_NOTICE
++      ? REASON_CODES.SECURITY_NOTICE
++      : REASON_CODES.EXCLUDED_COUNTRY;
++    return result('noise', 'C', [reason], 1);
++  }
++
++  const reviewReasons = [];
++  if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push(REASON_CODES.UNAPPROVED_COUNTRY);
++  if (!officialDomain || !contactDomain) reviewReasons.push(REASON_CODES.MISSING_IDENTITY);
++  if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push(REASON_CODES.AMBIGUOUS_CONTACT);
++  if (record.source_kind === 'whatsapp'
++    && !hasIdentityValue(record.sender_name)
++    && !hasIdentityValue(record.sender_phone)) {
++    reviewReasons.push(REASON_CODES.UNKNOWN_WHATSAPP_SENDER);
++  }
++  if (record.last_interaction_at && !validDate(record.last_interaction_at)) {
++    reviewReasons.push(REASON_CODES.MALFORMED_SOURCE_TIME);
++  }
++  if (officialDomain && contactDomain && !domainsMatch(officialDomain, contactDomain)) {
++    reviewReasons.push(REASON_CODES.CONFLICTING_DOMAINS);
++  }
++
++  if (reviewReasons.length) {
++    return result('needs_review', 'B', reviewReasons, 0.5);
++  }
++
++  const validReasons = [REASON_CODES.APPROVED_COUNTRY, REASON_CODES.OFFICIAL_DOMAIN];
++  if (Array.isArray(record.product_evidence) && record.product_evidence.length) {
++    validReasons.push(REASON_CODES.PRODUCT_EVIDENCE);
++  }
++  if (record.last_interaction_at && validDate(record.last_interaction_at)) {
++    validReasons.push(REASON_CODES.VALID_SOURCE_TIME);
++  }
++
++  const now = validDate(context.now) ? Date.parse(context.now) : NaN;
++  const interaction = validDate(record.last_interaction_at) ? Date.parse(record.last_interaction_at) : NaN;
++  const recent = !Number.isNaN(now) && !Number.isNaN(interaction)
++    && now >= interaction && now - interaction <= 30 * 24 * 60 * 60 * 1000;
++
++  return result('valid', recent ? 'A' : 'B', validReasons, recent ? 0.95 : 0.85);
++}
++
++module.exports = {
++  classifyRecord,
++  isApprovedCountry,
++  APPROVED_COUNTRIES,
++  EXCLUDED_COUNTRIES,
++  REASON_CODES,
++  PUBLIC_REASON_CODES,
++  RULESET_VERSION
++};
+diff --git a/src/lib/signalCache.js b/src/lib/signalCache.js
+new file mode 100644
+index 0000000..d9a197f
+--- /dev/null
++++ b/src/lib/signalCache.js
+@@ -0,0 +1,309 @@
++'use strict';
++
++const crypto = require('crypto');
++const { RULESET_VERSION } = require('./schemaRank');
++
++const RUN_FIELDS = new Set(['name', 'countries', 'status', 'counters', 'actor']);
++const COUNTER_FIELDS = new Set([
++  'discovered', 'entities', 'evidence', 'classified', 'valid',
++  'needs_review', 'noise', 'test', 'errors'
++]);
++const ENTITY_FIELDS = new Set([
++  'official_domain', 'display_name', 'country', 'public_contacts', 'status'
++]);
++const CONTACT_FIELDS = new Set([
++  'email', 'phone', 'whatsapp', 'linkedin_url', 'contact_page_url'
++]);
++const EVIDENCE_FIELDS = new Set([
++  'field', 'value', 'source_url', 'page_title', 'retrieved_at',
++  'content_fingerprint', 'confidence', 'extraction_method'
++]);
++const CLASSIFICATION_FIELDS = new Set([
++  'classification', 'priority', 'reason_codes', 'confidence',
++  'human_override_classification', 'human_override_reason',
++  'human_override_actor', 'human_override_at'
++]);
++const FILTER_FIELDS = new Set(['classification', 'priority', 'country', 'status', 'run_id']);
++
++function timestamp() {
++  return new Date().toISOString();
++}
++
++function assertPlainObject(value, label) {
++  const prototype = value && typeof value === 'object' ? Object.getPrototypeOf(value) : null;
++  if (!value || typeof value !== 'object' || Array.isArray(value)
++    || (prototype !== Object.prototype && prototype !== null)) {
++    throw new Error(`${label} must be an object`);
++  }
++}
++
++function assertAllowedFields(value, allowed, label) {
++  assertPlainObject(value, label);
++  for (const key of Object.keys(value)) {
++    if (!allowed.has(key)) throw new Error(`unknown ${label} field: ${key}`);
++  }
++}
++
++function assertSafeText(value, label, maxLength = 2000) {
++  if (value === undefined || value === null) return;
++  if (typeof value !== 'string') throw new Error(`${label} must be text`);
++  if (value.length > maxLength) throw new Error(`${label} exceeds storage limit`);
++  if (/<\s*\/?\s*[a-z][^>]*>/i.test(value)
++    || /\b(?:javascript|vbscript|data)\s*:/i.test(value)
++    || /\bon[a-z]+\s*=/i.test(value)
++    || /\b(?:eval|function|alert|require)\s*\(/i.test(value)
++    || /\b(?:document|window|process)\s*\./i.test(value)) {
++    throw new Error(`${label} contains executable or page content`);
++  }
++}
++
++function validateCampaign(campaign) {
++  assertAllowedFields(campaign, RUN_FIELDS, 'campaign');
++  assertSafeText(campaign.name, 'campaign name', 500);
++  assertSafeText(campaign.status, 'campaign status', 100);
++  assertSafeText(campaign.actor, 'campaign actor', 500);
++  if (campaign.countries !== undefined) {
++    if (!Array.isArray(campaign.countries)) throw new Error('campaign countries must be an array');
++    campaign.countries.forEach(country => assertSafeText(country, 'campaign country', 200));
++  }
++  if (campaign.counters !== undefined) {
++    assertAllowedFields(campaign.counters, COUNTER_FIELDS, 'counter');
++    for (const value of Object.values(campaign.counters)) {
++      if (!Number.isFinite(value) || value < 0) throw new Error('counter values must be non-negative numbers');
++    }
++  }
++}
++
++function validateContacts(contacts) {
++  assertAllowedFields(contacts, CONTACT_FIELDS, 'public contact');
++  for (const [key, value] of Object.entries(contacts)) {
++    assertSafeText(value, `public contact ${key}`, 2000);
++  }
++}
++
++function normalizeDomain(input) {
++  if (typeof input !== 'string' || !input.trim()) {
++    throw new Error('official domain is required');
++  }
++
++  let parsed;
++  try {
++    parsed = new URL(input.includes('://') ? input : `https://${input}`);
++  } catch {
++    throw new Error('official domain is invalid');
++  }
++
++  const domain = parsed.hostname.toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
++  if (!domain) throw new Error('official domain is required');
++  return domain;
++}
++
++function createRun(db, campaign = {}) {
++  validateCampaign(campaign);
++  const createdAt = timestamp();
++  const insert = db.transaction(() => db.prepare(`
++    INSERT INTO matrix_runs (
++      campaign_json, ruleset_version, status, counters_json, actor, created_at, updated_at
++    ) VALUES (?, ?, ?, ?, ?, ?, ?)
++  `).run(
++    JSON.stringify(campaign),
++    RULESET_VERSION,
++    campaign.status || 'running',
++    JSON.stringify(campaign.counters || {}),
++    campaign.actor || null,
++    createdAt,
++    createdAt
++  ));
++  const result = insert();
++  return db.prepare('SELECT * FROM matrix_runs WHERE id = ?').get(result.lastInsertRowid);
++}
++
++function upsertEntity(db, input = {}) {
++  assertAllowedFields(input, ENTITY_FIELDS, 'entity');
++  assertSafeText(input.display_name, 'display name', 500);
++  assertSafeText(input.country, 'country', 200);
++  assertSafeText(input.status, 'entity status', 100);
++  if (input.public_contacts !== undefined) validateContacts(input.public_contacts);
++  const normalizedDomain = normalizeDomain(input.official_domain);
++  const changedAt = timestamp();
++  const publicContacts = input.public_contacts === undefined
++    ? null
++    : JSON.stringify(input.public_contacts);
++  const upsert = db.transaction(() => {
++    db.prepare(`
++      INSERT INTO matrix_entities (
++        normalized_domain, display_name, country, public_contacts_json, status, created_at, updated_at
++      ) VALUES (?, ?, ?, COALESCE(?, '{}'), ?, ?, ?)
++      ON CONFLICT(normalized_domain) DO UPDATE SET
++        display_name = COALESCE(excluded.display_name, matrix_entities.display_name),
++        country = COALESCE(excluded.country, matrix_entities.country),
++        public_contacts_json = COALESCE(?, matrix_entities.public_contacts_json),
++        status = COALESCE(excluded.status, matrix_entities.status),
++        updated_at = excluded.updated_at
++    `).run(
++      normalizedDomain,
++      input.display_name || null,
++      input.country || null,
++      publicContacts,
++      input.status || 'active',
++      changedAt,
++      changedAt,
++      publicContacts
++    );
++    return db.prepare('SELECT * FROM matrix_entities WHERE normalized_domain = ?').get(normalizedDomain);
++  });
++  return upsert();
++}
++
++function evidenceFingerprint(evidence) {
++  if (evidence.content_fingerprint) return String(evidence.content_fingerprint);
++  return crypto.createHash('sha256')
++    .update(JSON.stringify([evidence.field, evidence.value, evidence.source_url]))
++    .digest('hex');
++}
++
++function appendEvidence(db, entityId, evidence = {}) {
++  assertAllowedFields(evidence, EVIDENCE_FIELDS, 'evidence');
++  if (typeof evidence.source_url !== 'string' || !evidence.source_url.trim()) {
++    throw new Error('source URL is required');
++  }
++  if (typeof evidence.retrieved_at !== 'string' || !evidence.retrieved_at.trim()) {
++    throw new Error('retrieval time is required');
++  }
++  if (typeof evidence.field !== 'string' || !evidence.field.trim()) {
++    throw new Error('evidence field is required');
++  }
++  assertSafeText(evidence.field, 'evidence field', 200);
++  assertSafeText(evidence.value, 'evidence value', 2000);
++  assertSafeText(evidence.source_url, 'source URL', 2000);
++  assertSafeText(evidence.page_title, 'page title', 500);
++  assertSafeText(evidence.retrieved_at, 'retrieval time', 100);
++  assertSafeText(evidence.content_fingerprint, 'content fingerprint', 200);
++  if (evidence.content_fingerprint !== undefined
++    && !/^[a-f\d]{32,128}$/i.test(evidence.content_fingerprint)) {
++    throw new Error('content fingerprint must be a hexadecimal digest');
++  }
++  assertSafeText(evidence.confidence, 'evidence confidence', 100);
++  assertSafeText(evidence.extraction_method, 'extraction method', 200);
++
++  const sourceUrl = evidence.source_url.trim();
++  const fingerprint = evidenceFingerprint({ ...evidence, source_url: sourceUrl });
++  const append = db.transaction(() => {
++    db.prepare(`
++      INSERT OR IGNORE INTO matrix_evidence (
++        entity_id, field, value, source_url, page_title, retrieved_at,
++        content_fingerprint, confidence, extraction_method, created_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++    `).run(
++      entityId,
++      evidence.field.trim(),
++      evidence.value === undefined ? null : String(evidence.value),
++      sourceUrl,
++      evidence.page_title || null,
++      evidence.retrieved_at.trim(),
++      fingerprint,
++      evidence.confidence || null,
++      evidence.extraction_method || null,
++      timestamp()
++    );
++    return db.prepare(`
++      SELECT * FROM matrix_evidence
++      WHERE entity_id = ? AND field = ? AND source_url = ? AND content_fingerprint = ?
++    `).get(entityId, evidence.field.trim(), sourceUrl, fingerprint);
++  });
++  return append();
++}
++
++function saveClassification(db, entityId, result = {}, runId) {
++  assertAllowedFields(result, CLASSIFICATION_FIELDS, 'classification');
++  if (!result.classification) throw new Error('classification is required');
++  assertSafeText(result.classification, 'classification', 100);
++  assertSafeText(result.priority, 'priority', 100);
++  assertSafeText(result.human_override_classification, 'human override classification', 100);
++  assertSafeText(result.human_override_reason, 'human override reason', 2000);
++  assertSafeText(result.human_override_actor, 'human override actor', 500);
++  assertSafeText(result.human_override_at, 'human override time', 100);
++  if (result.reason_codes !== undefined) {
++    if (!Array.isArray(result.reason_codes)) throw new Error('reason codes must be an array');
++    result.reason_codes.forEach(code => assertSafeText(code, 'reason code', 200));
++  }
++  if (result.confidence !== undefined && !Number.isFinite(result.confidence)) {
++    throw new Error('classification confidence must be a number');
++  }
++  const changedAt = timestamp();
++  const save = db.transaction(() => {
++    const inserted = db.prepare(`
++      INSERT INTO matrix_classifications (
++        entity_id, run_id, classification, priority, reason_json, confidence,
++        human_override_classification, human_override_reason, human_override_actor,
++        human_override_at, created_at, updated_at
++      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++    `).run(
++      entityId,
++      runId,
++      result.classification,
++      result.priority || null,
++      JSON.stringify(result.reason_codes || []),
++      result.confidence === undefined ? null : result.confidence,
++      result.human_override_classification || null,
++      result.human_override_reason || null,
++      result.human_override_actor || null,
++      result.human_override_at || null,
++      changedAt,
++      changedAt
++    );
++    return db.prepare('SELECT * FROM matrix_classifications WHERE id = ?').get(inserted.lastInsertRowid);
++  });
++  return save();
++}
++
++function listCandidates(db, filters = {}) {
++  assertAllowedFields(filters, FILTER_FIELDS, 'candidate filter');
++  const clauses = [];
++  const params = [];
++  const mappings = [
++    ['classification', 'c.classification'],
++    ['priority', 'c.priority'],
++    ['country', 'e.country'],
++    ['status', 'e.status']
++  ];
++  for (const [key, column] of mappings) {
++    if (filters[key] !== undefined && filters[key] !== null && filters[key] !== '') {
++      clauses.push(`${column} = ?`);
++      params.push(filters[key]);
++    }
++  }
++
++  const runClause = filters.run_id !== undefined && filters.run_id !== null && filters.run_id !== ''
++    ? 'AND latest.run_id = ?'
++    : '';
++  const queryParams = runClause ? [filters.run_id, ...params] : params;
++
++  return db.prepare(`
++    SELECT
++      e.*,
++      c.id AS classification_id,
++      c.run_id,
++      c.classification,
++      c.priority,
++      c.reason_json,
++      c.confidence AS classification_confidence
++    FROM matrix_entities e
++    JOIN matrix_classifications c ON c.id = (
++      SELECT latest.id FROM matrix_classifications latest
++      WHERE latest.entity_id = e.id
++      ${runClause}
++      ORDER BY latest.id DESC LIMIT 1
++    )
++    ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
++    ORDER BY e.id
++  `).all(...queryParams);
++}
++
++module.exports = {
++  createRun,
++  upsertEntity,
++  appendEvidence,
++  saveClassification,
++  listCandidates
++};
+diff --git a/src/routes/matrix.js b/src/routes/matrix.js
+new file mode 100644
+index 0000000..3b7734b
+--- /dev/null
++++ b/src/routes/matrix.js
+@@ -0,0 +1,215 @@
++'use strict';
++
++const express = require('express');
++const { db, audit } = require('../db');
++const { allowRoles } = require('../middleware/auth');
++const { listCandidates } = require('../lib/signalCache');
++const { APPROVED_COUNTRIES, EXCLUDED_COUNTRIES, PUBLIC_REASON_CODES } = require('../lib/schemaRank');
++
++const router = express.Router();
++const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
++const CLASSIFICATIONS = new Set(['valid', 'needs_review', 'noise', 'test']);
++const PRIORITIES = new Set(['A', 'B', 'C']);
++const COUNTRIES = new Set([...APPROVED_COUNTRIES, ...EXCLUDED_COUNTRIES]);
++const PUBLIC_REASON_CODE_SET = new Set(PUBLIC_REASON_CODES);
++
++router.use(allowRoles(...CRM_ROLES));
++
++function parseObject(value) {
++  if (!value) return {};
++  try {
++    const parsed = JSON.parse(String(value));
++    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
++  } catch (_) {
++    return {};
++  }
++}
++
++function publicReasonCodes(value) {
++  if (!value) return [];
++  try {
++    const parsed = JSON.parse(String(value));
++    return Array.isArray(parsed) ? parsed.filter(item => PUBLIC_REASON_CODE_SET.has(item)) : [];
++  } catch (_) {
++    return [];
++  }
++}
++
++function pagination(query) {
++  const rawPage = query.page === undefined ? '1' : String(query.page);
++  const rawPageSize = query.page_size === undefined ? '20' : String(query.page_size);
++  const page = Number(rawPage);
++  const pageSize = Number(rawPageSize);
++  if (!/^\d+$/.test(rawPage) || !Number.isSafeInteger(page) || page < 1) throw new Error('page must be a positive safe integer');
++  if (!/^\d+$/.test(rawPageSize) || !Number.isSafeInteger(pageSize) || pageSize < 1) throw new Error('page_size must be a positive safe integer');
++  return { page, pageSize: Math.min(pageSize, 100) };
++}
++
++function assertQueryFields(query, allowed) {
++  for (const key of Object.keys(query)) {
++    if (!allowed.has(key)) throw new Error(`unknown query field: ${key}`);
++  }
++}
++
++function candidateFilters(query) {
++  assertQueryFields(query, new Set(['classification', 'priority', 'country', 'page', 'page_size']));
++  const filters = {};
++  if (query.classification !== undefined) {
++    if (!CLASSIFICATIONS.has(query.classification)) throw new Error('invalid classification');
++    filters.classification = query.classification;
++  }
++  if (query.priority !== undefined) {
++    if (!PRIORITIES.has(query.priority)) throw new Error('invalid priority');
++    filters.priority = query.priority;
++  }
++  if (query.country !== undefined) {
++    if (!COUNTRIES.has(query.country)) throw new Error('invalid country');
++    filters.country = query.country;
++  }
++  return filters;
++}
++
++function maskContact(key, value) {
++  const text = typeof value === 'string' ? value.trim() : '';
++  if (!text) return '';
++  if (key === 'email') {
++    const match = text.match(/^([^@])[^@]*(@.+)$/);
++    return match ? `${match[1]}***${match[2]}` : '[redacted]';
++  }
++  if (key === 'phone' || key === 'whatsapp') {
++    const digits = text.replace(/\D/g, '');
++    return digits ? `***${digits.slice(-4)}` : '[redacted]';
++  }
++  if (key === 'linkedin_url' || key === 'contact_page_url') return '[available]';
++  return '[redacted]';
++}
++
++function maskedContacts(value) {
++  const contacts = parseObject(value);
++  return Object.fromEntries(Object.entries(contacts).map(([key, item]) => [key, maskContact(key, item)]));
++}
++
++function safeCandidate(row, evidenceUrls = []) {
++  return {
++    id: Number(row.id),
++    domain: row.normalized_domain,
++    display_name: row.display_name || null,
++    country: row.country || null,
++    status: row.status,
++    classification: row.classification,
++    priority: row.priority || null,
++    reason_codes: publicReasonCodes(row.reason_json),
++    confidence: row.classification_confidence,
++    contacts: maskedContacts(row.public_contacts_json),
++    evidence_urls: [...new Set(evidenceUrls)],
++    created_at: row.created_at,
++    updated_at: row.updated_at
++  };
++}
++
++function evidenceUrlsByEntity(rows) {
++  if (!rows.length) return new Map();
++  const ids = rows.map(row => Number(row.id));
++  const placeholders = ids.map(() => '?').join(', ');
++  const evidence = db.prepare(`
++    SELECT entity_id, source_url
++    FROM matrix_evidence
++    WHERE entity_id IN (${placeholders})
++    ORDER BY id
++  `).all(...ids);
++  const grouped = new Map();
++  for (const item of evidence) {
++    const urls = grouped.get(Number(item.entity_id)) || [];
++    urls.push(item.source_url);
++    grouped.set(Number(item.entity_id), urls);
++  }
++  return grouped;
++}
++
++function pagedResponse(rows, page, pageSize) {
++  const total = rows.length;
++  const start = (page - 1) * pageSize;
++  return {
++    rows: rows.slice(start, start + pageSize),
++    page,
++    page_size: pageSize,
++    total,
++    total_pages: total ? Math.ceil(total / pageSize) : 0
++  };
++}
++
++router.get('/runs', (req, res) => {
++  try {
++    assertQueryFields(req.query, new Set(['page', 'page_size']));
++    const { page, pageSize } = pagination(req.query);
++    const rows = db.prepare(`
++      SELECT id, campaign_json, status, created_at, updated_at, completed_at
++      FROM matrix_runs
++      ORDER BY id DESC
++    `).all().map(row => {
++      const campaign = parseObject(row.campaign_json);
++      return {
++        id: Number(row.id),
++        name: typeof campaign.name === 'string' ? campaign.name : null,
++        countries: Array.isArray(campaign.countries)
++          ? campaign.countries.filter(country => typeof country === 'string' && COUNTRIES.has(country))
++          : [],
++        status: row.status,
++        created_at: row.created_at,
++        updated_at: row.updated_at,
++        completed_at: row.completed_at || null
++      };
++    });
++    res.json(pagedResponse(rows, page, pageSize));
++  } catch (error) {
++    res.status(400).json({ error: error.message });
++  }
++});
++
++router.get('/candidates', (req, res) => {
++  try {
++    const filters = candidateFilters(req.query);
++    const { page, pageSize } = pagination(req.query);
++    const matches = listCandidates(db, filters);
++    const total = matches.length;
++    const start = (page - 1) * pageSize;
++    const selected = matches.slice(start, start + pageSize);
++    const evidence = evidenceUrlsByEntity(selected);
++    res.json({
++      rows: selected.map(row => safeCandidate(row, evidence.get(Number(row.id)) || [])),
++      page,
++      page_size: pageSize,
++      total,
++      total_pages: total ? Math.ceil(total / pageSize) : 0
++    });
++  } catch (error) {
++    res.status(400).json({ error: error.message });
++  }
++});
++
++router.get('/candidates/:id', (req, res) => {
++  const id = Number(req.params.id);
++  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'invalid candidate id' });
++  const row = listCandidates(db).find(candidate => Number(candidate.id) === id);
++  if (!row) return res.status(404).json({ error: 'candidate not found' });
++
++  const evidence = db.prepare(`
++    SELECT source_url, retrieved_at, confidence
++    FROM matrix_evidence
++    WHERE entity_id = ?
++    ORDER BY id
++  `).all(id);
++  audit({
++    role: req.user.role,
++    userName: req.user.userName,
++    action: 'read_matrix_candidate_detail',
++    resourceType: 'matrix_candidate',
++    resourceId: id
++  });
++  res.json({
++    ...safeCandidate(row, evidence.map(item => item.source_url)),
++    evidence
++  });
++});
++
++module.exports = router;
+diff --git a/src/server.js b/src/server.js
+index 63044b0..56a1d94 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -17,20 +17,21 @@ const quotesRouter = require('./routes/quotes');
+ const quoteSheetsRouter = require('./routes/quoteSheets');
+ const costRouter = require('./routes/cost');
+ const exportRouter = require('./routes/export');
+ const systemRouter = require('./routes/system');
+ const workOrdersRouter = require('./routes/workOrders');
+ const menuRouter = require('./routes/menu');
+ const stocksRouter = require('./routes/stocks');
+ const futuresRouter = require('./routes/futures');
+ const statsRouter = require('./routes/stats');
+ const crmRouter = require('./routes/crm');
++const matrixRouter = require('./routes/matrix');
+ const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant');
+ 
+ initDb();
+ 
+ const app = express();
+ app.set('trust proxy', 1);
+ 
+ app.use((req, res, next) => {
+   res.setHeader('X-Content-Type-Options', 'nosniff');
+   res.setHeader('X-Frame-Options', 'DENY');
+@@ -97,20 +98,21 @@ app.use('/api/quote-sheets', quoteSheetsRouter);
+ app.use('/api/cost', costRouter);
+ app.use('/api/export', exportRouter);
+ app.use('/api/system', systemRouter);
+ app.use('/api/work-orders', workOrdersRouter);
+ app.use('/api/menu', menuRouter);
+ app.use('/api/stocks', stocksRouter);
+ app.use('/api/futures', futuresRouter);
+ app.use('/api/stats', statsRouter);
+ app.use('/api/foreign-costing-assistant', foreignCostingAssistantRouter);
+ app.use('/api/crm', crmRouter);
++app.use('/api/matrix', matrixRouter);
+ 
+ if (process.env.DISABLE_CRON !== '1') {
+   // 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）
+   cron.schedule('40 14 * * 1-5', async () => {
+     try {
+       await stocksRouter.runStrategy({ sendMail: false, operator: 'cron-stock' });
+       console.log('[股市筛选任务] 已执行（未自动发邮件）');
+     } catch (e) {
+       console.warn('[股市筛选任务] 失败', e?.message || e);
+     }

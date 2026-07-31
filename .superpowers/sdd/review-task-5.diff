@@ -1,0 +1,617 @@
+# Review package: 965b4ae..400059a
+
+## Commits
+400059a refactor: centralize matrix reason codes
+2d32ca2 feat: expose read only matrix candidates
+
+## Files changed
+ package.json               |   1 +
+ scripts/test-matrix-api.js | 239 +++++++++++++++++++++++++++++++++++++++++++++
+ src/lib/schemaRank.js      |  24 +++++
+ src/routes/matrix.js       | 215 ++++++++++++++++++++++++++++++++++++++++
+ src/server.js              |   2 +
+ 5 files changed, 481 insertions(+)
+
+## Diff
+diff --git a/package.json b/package.json
+index 2bd8e1a..242444a 100644
+--- a/package.json
++++ b/package.json
+@@ -6,20 +6,21 @@
+   "scripts": {
+     "start": "node src/server.js",
+     "baseline:verify": "node scripts/verify-baseline.js",
+     "verify:smoke": "node scripts/smoke-test.js",
+     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+     "test:private-baseline": "node scripts/test-private-baseline.js",
+     "test:matrix-rank": "node scripts/test-schema-rank.js",
+     "test:signal-cache": "node scripts/test-signal-cache.js",
+     "test:matrix-stream": "node scripts/test-matrix-stream.js",
+     "test:matrix-crm": "node scripts/test-matrix-crm-adapter.js",
++    "test:matrix-api": "node scripts/test-matrix-api.js",
+     "runtime:audit": "node scripts/runtime-audit.js",
+     "runtime:backup": "node scripts/runtime-backup.js",
+     "runtime:verify": "node scripts/runtime-verify.js",
+     "baseline:generate-private": "node scripts/generate-private-baseline.js"
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.3",
+     "better-sqlite3": "^11.8.1",
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+diff --git a/scripts/test-matrix-api.js b/scripts/test-matrix-api.js
+new file mode 100644
+index 0000000..a30d524
+--- /dev/null
++++ b/scripts/test-matrix-api.js
+@@ -0,0 +1,239 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++const { spawn } = require('child_process');
++const Database = require('better-sqlite3');
++
++const root = path.resolve(__dirname, '..');
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-api-'));
++const dbPath = path.join(tempDir, 'app.db');
++const port = Number(process.env.MATRIX_API_TEST_PORT || 19115);
++const baseUrl = `http://127.0.0.1:${port}`;
++let child;
++let stderr = '';
++
++function sleep(ms) {
++  return new Promise(resolve => setTimeout(resolve, ms));
++}
++
++async function waitForHealth() {
++  const deadline = Date.now() + 15000;
++  while (Date.now() < deadline) {
++    try {
++      const response = await fetch(`${baseUrl}/health`);
++      if (response.ok) return;
++    } catch (_) {}
++    await sleep(100);
++  }
++  throw new Error(`server health timeout: ${stderr.slice(-1000)}`);
++}
++
++async function request(urlPath, { method = 'GET', token, body, status = 200 } = {}) {
++  const headers = {};
++  if (token) headers.authorization = `Bearer ${token}`;
++  if (body !== undefined) headers['content-type'] = 'application/json';
++  const response = await fetch(`${baseUrl}${urlPath}`, {
++    method,
++    headers,
++    body: body === undefined ? undefined : JSON.stringify(body)
++  });
++  const text = await response.text();
++  let json;
++  try { json = text ? JSON.parse(text) : null; } catch (_) { json = { raw: text }; }
++  assert.equal(response.status, status, `${method} ${urlPath}: ${text}`);
++  return json;
++}
++
++async function login(username) {
++  const result = await request('/api/auth/login', {
++    method: 'POST',
++    body: { username, password: 'guard123' }
++  });
++  assert(result.token, `${username} login should return a token`);
++  return result.token;
++}
++
++function assertNoPrivateFields(value, forbiddenValues = []) {
++  const serialized = JSON.stringify(value);
++  const forbiddenKeys = [
++    'public_contacts_json', 'reason_json', 'campaign_json', 'ruleset_version',
++    'content_fingerprint', 'extraction_method', 'human_override_reason',
++    'human_override_actor', 'raw_page', 'page_text', 'message_body',
++    'secret', 'config'
++  ];
++  forbiddenKeys.forEach(key => assert(!serialized.toLowerCase().includes(`"${key.toLowerCase()}"`), `response leaked ${key}`));
++  forbiddenValues.forEach(secret => assert(!serialized.includes(secret), `response leaked ${secret}`));
++}
++
++function seed() {
++  process.env.DB_PATH = dbPath;
++  const { db, initDb } = require('../src/db');
++  const { createRun, upsertEntity, appendEvidence, saveClassification } = require('../src/lib/signalCache');
++  initDb();
++  const createdAt = '2026-07-16 09:00:00';
++  const insertUser = db.prepare(`
++    INSERT INTO users (username, password, role, status, created_at, approved_at)
++    VALUES (?, 'guard123', ?, 'active', ?, ?)
++  `);
++  insertUser.run('matrix_super', 'super_admin', createdAt, createdAt);
++  insertUser.run('matrix_crm', 'foreign_trade_crm_admin', createdAt, createdAt);
++  insertUser.run('matrix_sales', 'ai_sales', createdAt, createdAt);
++
++  const firstRun = createRun(db, {
++    name: 'Southeast Asia public scan',
++    countries: ['Vietnam'],
++    actor: 'SECRET_CONFIG_ACTOR'
++  });
++  const secondRun = createRun(db, { name: 'Thailand public scan', countries: ['Thailand'] });
++  const first = upsertEntity(db, {
++    official_domain: 'alpha.example',
++    display_name: 'Alpha Foods',
++    country: 'Vietnam',
++    public_contacts: {
++      email: 'buyer@alpha.example',
++      phone: '+84 912 345 678',
++      whatsapp: '+84 998 765 432',
++      linkedin_url: 'https://linkedin.example/private-contact',
++      contact_page_url: 'https://alpha.example/private-contact'
++    }
++  });
++  const second = upsertEntity(db, {
++    official_domain: 'beta.example',
++    display_name: 'Beta Foods',
++    country: 'Thailand',
++    public_contacts: { email: 'owner@beta.example' }
++  });
++  appendEvidence(db, first.id, {
++    field: 'SECRET_EVIDENCE_FIELD_SENTINEL',
++    value: 'RAW_PAGE_TEXT_SENTINEL private CRM message body',
++    source_url: 'https://alpha.example/products',
++    page_title: 'Alpha public products',
++    retrieved_at: '2026-07-16T01:00:00Z',
++    confidence: 'high',
++    extraction_method: 'SECRET_INTERNAL_RULE'
++  });
++  saveClassification(db, first.id, {
++    classification: 'valid',
++    priority: 'A',
++    reason_codes: [
++      'approved_country', 'official_domain', 'confirmed_international_whatsapp',
++      'business_evidence', 'duplicated_message_segments', 'malformed_json_payload',
++      'uncertain_direction', 'missing_business_evidence', 'classification_error',
++      'SECRET_REASON_RULE_SENTENCE'
++    ],
++    confidence: 0.95,
++    human_override_reason: 'SECRET_OVERRIDE_TEXT',
++    human_override_actor: 'private-reviewer'
++  }, firstRun.id);
++  saveClassification(db, second.id, {
++    classification: 'needs_review',
++    priority: 'B',
++    reason_codes: ['missing_identity'],
++    confidence: 0.5
++  }, secondRun.id);
++  db.close();
++  return { firstId: Number(first.id) };
++}
++
++async function main() {
++  const { PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
++  assert(Array.isArray(PUBLIC_REASON_CODES), 'schemaRank should export the authoritative public reason-code list');
++  [
++    'approved_country', 'official_domain', 'confirmed_international_whatsapp',
++    'business_evidence', 'duplicated_message_segments', 'malformed_json_payload',
++    'uncertain_direction', 'missing_business_evidence', 'classification_error'
++  ].forEach(code => assert(PUBLIC_REASON_CODES.includes(code), `public reason-code list should include ${code}`));
++
++  const { firstId } = seed();
++  child = spawn(process.execPath, ['src/server.js'], {
++    cwd: root,
++    env: { ...process.env, DB_PATH: dbPath, PORT: String(port), DISABLE_CRON: '1', FORCE_HTTPS: '0' },
++    stdio: ['ignore', 'ignore', 'pipe']
++  });
++  child.stderr.on('data', chunk => { stderr += String(chunk); });
++  await waitForHealth();
++
++  await request('/api/matrix/candidates', { status: 401 });
++  const salesToken = await login('matrix_sales');
++  await request('/api/matrix/candidates', { token: salesToken, status: 403 });
++  const adminToken = await login('matrix_super');
++  const crmToken = await login('matrix_crm');
++
++  const list = await request('/api/matrix/candidates?page=1&page_size=1&classification=valid&priority=A&country=Vietnam', { token: crmToken });
++  assert.deepEqual(Object.keys(list).sort(), ['page', 'page_size', 'rows', 'total', 'total_pages']);
++  assert.equal(list.page, 1);
++  assert.equal(list.page_size, 1);
++  assert.equal(list.total, 1);
++  assert.equal(list.rows.length, 1);
++  const publicReasonCodes = [
++    'approved_country', 'official_domain', 'confirmed_international_whatsapp',
++    'business_evidence', 'duplicated_message_segments', 'malformed_json_payload',
++    'uncertain_direction', 'missing_business_evidence', 'classification_error'
++  ];
++  assert.deepEqual(list.rows[0].reason_codes, publicReasonCodes);
++  assert.deepEqual(list.rows[0].evidence_urls, ['https://alpha.example/products']);
++  assert.equal(list.rows[0].contacts.email, 'b***@alpha.example');
++  assert.equal(list.rows[0].contacts.phone, '***5678');
++  assertNoPrivateFields(list, [
++    'buyer@alpha.example', '+84 912 345 678', '+84 998 765 432',
++    'private-contact', 'RAW_PAGE_TEXT_SENTINEL', 'SECRET_INTERNAL_RULE',
++    'SECRET_OVERRIDE_TEXT', 'private-reviewer', 'SECRET_REASON_RULE_SENTENCE'
++  ]);
++
++  const capped = await request('/api/matrix/candidates?page_size=999', { token: adminToken });
++  assert.equal(capped.page_size, 100);
++  assert.equal(capped.total, 2);
++  await request('/api/matrix/candidates?classification=unknown', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?priority=urgent', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?country=Neverland', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?page=0', { token: adminToken, status: 400 });
++  await request(`/api/matrix/candidates?page=${'9'.repeat(400)}`, { token: adminToken, status: 400 });
++
++  const secondPage = await request('/api/matrix/candidates?page=2&page_size=1', { token: adminToken });
++  assert.equal(secondPage.page, 2);
++  assert.equal(secondPage.rows.length, 1);
++
++  const runs = await request('/api/matrix/runs', { token: adminToken });
++  assert.equal(runs.total, 2);
++  assert.equal(runs.rows[0].id > 0, true);
++  assertNoPrivateFields(runs, ['SECRET_CONFIG_ACTOR']);
++
++  const before = new Database(dbPath, { readonly: true });
++  const entityBefore = before.prepare('SELECT * FROM matrix_entities WHERE id = ?').get(firstId);
++  const classificationBefore = before.prepare('SELECT * FROM matrix_classifications WHERE entity_id = ? ORDER BY id DESC LIMIT 1').get(firstId);
++  const auditBefore = before.prepare("SELECT count(*) count FROM audit_logs WHERE action = 'read_matrix_candidate_detail'").get().count;
++  before.close();
++
++  const detail = await request(`/api/matrix/candidates/${firstId}`, { token: crmToken });
++  assert.equal(detail.id, firstId);
++  assert.deepEqual(detail.reason_codes, publicReasonCodes);
++  assert.deepEqual(detail.evidence.map(item => item.source_url), ['https://alpha.example/products']);
++  assert.deepEqual(Object.keys(detail.evidence[0]).sort(), ['confidence', 'retrieved_at', 'source_url']);
++  assertNoPrivateFields(detail, [
++    'buyer@alpha.example', 'RAW_PAGE_TEXT_SENTINEL', 'SECRET_INTERNAL_RULE',
++    'SECRET_OVERRIDE_TEXT', 'SECRET_REASON_RULE_SENTENCE', 'SECRET_EVIDENCE_FIELD_SENTINEL'
++  ]);
++  await request('/api/matrix/candidates/999999', { token: crmToken, status: 404 });
++
++  const after = new Database(dbPath, { readonly: true });
++  assert.deepEqual(after.prepare('SELECT * FROM matrix_entities WHERE id = ?').get(firstId), entityBefore);
++  assert.deepEqual(after.prepare('SELECT * FROM matrix_classifications WHERE entity_id = ? ORDER BY id DESC LIMIT 1').get(firstId), classificationBefore);
++  assert.equal(after.prepare("SELECT count(*) count FROM audit_logs WHERE action = 'read_matrix_candidate_detail'").get().count, auditBefore + 1);
++  after.close();
++
++  for (const method of ['POST', 'PATCH', 'DELETE']) {
++    await request('/api/matrix/candidates', { method, token: adminToken, body: {}, status: 404 });
++  }
++  console.log('matrix API tests passed');
++}
++
++main().catch(error => {
++  console.error(error.stack || error);
++  process.exitCode = 1;
++}).finally(() => {
++  if (child) child.kill('SIGTERM');
++  fs.rmSync(tempDir, { recursive: true, force: true });
++});
+diff --git a/src/lib/schemaRank.js b/src/lib/schemaRank.js
+index e5bf1f4..4f22653 100644
+--- a/src/lib/schemaRank.js
++++ b/src/lib/schemaRank.js
+@@ -8,20 +8,43 @@ const APPROVED_COUNTRIES = Object.freeze([
+   'Malaysia',
+   'Indonesia',
+   'Philippines',
+   'Kazakhstan'
+ ]);
+ 
+ const EXCLUDED_COUNTRIES = Object.freeze([
+   'India'
+ ]);
+ 
++const PUBLIC_REASON_CODES = Object.freeze([
++  'fixture_marker',
++  'security_notice',
++  'excluded_country',
++  'unapproved_country',
++  'missing_identity',
++  'ambiguous_contact',
++  'unknown_whatsapp_sender',
++  'malformed_source_time',
++  'conflicting_domains',
++  'approved_country',
++  'official_domain',
++  'product_evidence',
++  'valid_source_time',
++  'confirmed_international_whatsapp',
++  'business_evidence',
++  'duplicated_message_segments',
++  'malformed_json_payload',
++  'uncertain_direction',
++  'missing_business_evidence',
++  'classification_error'
++]);
++
+ const approvedCountryKeys = new Set(APPROVED_COUNTRIES.map(normalizeCountry));
+ const excludedCountryKeys = new Set(EXCLUDED_COUNTRIES.map(normalizeCountry));
+ const AMBIGUOUS_CONTACT_DOMAINS = Object.freeze([
+   'gmail.com',
+   'googlemail.com',
+   'hotmail.com',
+   'icloud.com',
+   'live.com',
+   'outlook.com',
+   'proton.me',
+@@ -140,12 +163,13 @@ function classifyRecord(record = {}, context = {}) {
+     && now >= interaction && now - interaction <= 30 * 24 * 60 * 60 * 1000;
+ 
+   return result('valid', recent ? 'A' : 'B', validReasons, recent ? 0.95 : 0.85);
+ }
+ 
+ module.exports = {
+   classifyRecord,
+   isApprovedCountry,
+   APPROVED_COUNTRIES,
+   EXCLUDED_COUNTRIES,
++  PUBLIC_REASON_CODES,
+   RULESET_VERSION
+ };
+diff --git a/src/routes/matrix.js b/src/routes/matrix.js
+new file mode 100644
+index 0000000..3b7734b
+--- /dev/null
++++ b/src/routes/matrix.js
+@@ -0,0 +1,215 @@
++'use strict';
++
++const express = require('express');
++const { db, audit } = require('../db');
++const { allowRoles } = require('../middleware/auth');
++const { listCandidates } = require('../lib/signalCache');
++const { APPROVED_COUNTRIES, EXCLUDED_COUNTRIES, PUBLIC_REASON_CODES } = require('../lib/schemaRank');
++
++const router = express.Router();
++const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
++const CLASSIFICATIONS = new Set(['valid', 'needs_review', 'noise', 'test']);
++const PRIORITIES = new Set(['A', 'B', 'C']);
++const COUNTRIES = new Set([...APPROVED_COUNTRIES, ...EXCLUDED_COUNTRIES]);
++const PUBLIC_REASON_CODE_SET = new Set(PUBLIC_REASON_CODES);
++
++router.use(allowRoles(...CRM_ROLES));
++
++function parseObject(value) {
++  if (!value) return {};
++  try {
++    const parsed = JSON.parse(String(value));
++    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
++  } catch (_) {
++    return {};
++  }
++}
++
++function publicReasonCodes(value) {
++  if (!value) return [];
++  try {
++    const parsed = JSON.parse(String(value));
++    return Array.isArray(parsed) ? parsed.filter(item => PUBLIC_REASON_CODE_SET.has(item)) : [];
++  } catch (_) {
++    return [];
++  }
++}
++
++function pagination(query) {
++  const rawPage = query.page === undefined ? '1' : String(query.page);
++  const rawPageSize = query.page_size === undefined ? '20' : String(query.page_size);
++  const page = Number(rawPage);
++  const pageSize = Number(rawPageSize);
++  if (!/^\d+$/.test(rawPage) || !Number.isSafeInteger(page) || page < 1) throw new Error('page must be a positive safe integer');
++  if (!/^\d+$/.test(rawPageSize) || !Number.isSafeInteger(pageSize) || pageSize < 1) throw new Error('page_size must be a positive safe integer');
++  return { page, pageSize: Math.min(pageSize, 100) };
++}
++
++function assertQueryFields(query, allowed) {
++  for (const key of Object.keys(query)) {
++    if (!allowed.has(key)) throw new Error(`unknown query field: ${key}`);
++  }
++}
++
++function candidateFilters(query) {
++  assertQueryFields(query, new Set(['classification', 'priority', 'country', 'page', 'page_size']));
++  const filters = {};
++  if (query.classification !== undefined) {
++    if (!CLASSIFICATIONS.has(query.classification)) throw new Error('invalid classification');
++    filters.classification = query.classification;
++  }
++  if (query.priority !== undefined) {
++    if (!PRIORITIES.has(query.priority)) throw new Error('invalid priority');
++    filters.priority = query.priority;
++  }
++  if (query.country !== undefined) {
++    if (!COUNTRIES.has(query.country)) throw new Error('invalid country');
++    filters.country = query.country;
++  }
++  return filters;
++}
++
++function maskContact(key, value) {
++  const text = typeof value === 'string' ? value.trim() : '';
++  if (!text) return '';
++  if (key === 'email') {
++    const match = text.match(/^([^@])[^@]*(@.+)$/);
++    return match ? `${match[1]}***${match[2]}` : '[redacted]';
++  }
++  if (key === 'phone' || key === 'whatsapp') {
++    const digits = text.replace(/\D/g, '');
++    return digits ? `***${digits.slice(-4)}` : '[redacted]';
++  }
++  if (key === 'linkedin_url' || key === 'contact_page_url') return '[available]';
++  return '[redacted]';
++}
++
++function maskedContacts(value) {
++  const contacts = parseObject(value);
++  return Object.fromEntries(Object.entries(contacts).map(([key, item]) => [key, maskContact(key, item)]));
++}
++
++function safeCandidate(row, evidenceUrls = []) {
++  return {
++    id: Number(row.id),
++    domain: row.normalized_domain,
++    display_name: row.display_name || null,
++    country: row.country || null,
++    status: row.status,
++    classification: row.classification,
++    priority: row.priority || null,
++    reason_codes: publicReasonCodes(row.reason_json),
++    confidence: row.classification_confidence,
++    contacts: maskedContacts(row.public_contacts_json),
++    evidence_urls: [...new Set(evidenceUrls)],
++    created_at: row.created_at,
++    updated_at: row.updated_at
++  };
++}
++
++function evidenceUrlsByEntity(rows) {
++  if (!rows.length) return new Map();
++  const ids = rows.map(row => Number(row.id));
++  const placeholders = ids.map(() => '?').join(', ');
++  const evidence = db.prepare(`
++    SELECT entity_id, source_url
++    FROM matrix_evidence
++    WHERE entity_id IN (${placeholders})
++    ORDER BY id
++  `).all(...ids);
++  const grouped = new Map();
++  for (const item of evidence) {
++    const urls = grouped.get(Number(item.entity_id)) || [];
++    urls.push(item.source_url);
++    grouped.set(Number(item.entity_id), urls);
++  }
++  return grouped;
++}
++
++function pagedResponse(rows, page, pageSize) {
++  const total = rows.length;
++  const start = (page - 1) * pageSize;
++  return {
++    rows: rows.slice(start, start + pageSize),
++    page,
++    page_size: pageSize,
++    total,
++    total_pages: total ? Math.ceil(total / pageSize) : 0
++  };
++}
++
++router.get('/runs', (req, res) => {
++  try {
++    assertQueryFields(req.query, new Set(['page', 'page_size']));
++    const { page, pageSize } = pagination(req.query);
++    const rows = db.prepare(`
++      SELECT id, campaign_json, status, created_at, updated_at, completed_at
++      FROM matrix_runs
++      ORDER BY id DESC
++    `).all().map(row => {
++      const campaign = parseObject(row.campaign_json);
++      return {
++        id: Number(row.id),
++        name: typeof campaign.name === 'string' ? campaign.name : null,
++        countries: Array.isArray(campaign.countries)
++          ? campaign.countries.filter(country => typeof country === 'string' && COUNTRIES.has(country))
++          : [],
++        status: row.status,
++        created_at: row.created_at,
++        updated_at: row.updated_at,
++        completed_at: row.completed_at || null
++      };
++    });
++    res.json(pagedResponse(rows, page, pageSize));
++  } catch (error) {
++    res.status(400).json({ error: error.message });
++  }
++});
++
++router.get('/candidates', (req, res) => {
++  try {
++    const filters = candidateFilters(req.query);
++    const { page, pageSize } = pagination(req.query);
++    const matches = listCandidates(db, filters);
++    const total = matches.length;
++    const start = (page - 1) * pageSize;
++    const selected = matches.slice(start, start + pageSize);
++    const evidence = evidenceUrlsByEntity(selected);
++    res.json({
++      rows: selected.map(row => safeCandidate(row, evidence.get(Number(row.id)) || [])),
++      page,
++      page_size: pageSize,
++      total,
++      total_pages: total ? Math.ceil(total / pageSize) : 0
++    });
++  } catch (error) {
++    res.status(400).json({ error: error.message });
++  }
++});
++
++router.get('/candidates/:id', (req, res) => {
++  const id = Number(req.params.id);
++  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'invalid candidate id' });
++  const row = listCandidates(db).find(candidate => Number(candidate.id) === id);
++  if (!row) return res.status(404).json({ error: 'candidate not found' });
++
++  const evidence = db.prepare(`
++    SELECT source_url, retrieved_at, confidence
++    FROM matrix_evidence
++    WHERE entity_id = ?
++    ORDER BY id
++  `).all(id);
++  audit({
++    role: req.user.role,
++    userName: req.user.userName,
++    action: 'read_matrix_candidate_detail',
++    resourceType: 'matrix_candidate',
++    resourceId: id
++  });
++  res.json({
++    ...safeCandidate(row, evidence.map(item => item.source_url)),
++    evidence
++  });
++});
++
++module.exports = router;
+diff --git a/src/server.js b/src/server.js
+index 63044b0..56a1d94 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -17,20 +17,21 @@ const quotesRouter = require('./routes/quotes');
+ const quoteSheetsRouter = require('./routes/quoteSheets');
+ const costRouter = require('./routes/cost');
+ const exportRouter = require('./routes/export');
+ const systemRouter = require('./routes/system');
+ const workOrdersRouter = require('./routes/workOrders');
+ const menuRouter = require('./routes/menu');
+ const stocksRouter = require('./routes/stocks');
+ const futuresRouter = require('./routes/futures');
+ const statsRouter = require('./routes/stats');
+ const crmRouter = require('./routes/crm');
++const matrixRouter = require('./routes/matrix');
+ const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant');
+ 
+ initDb();
+ 
+ const app = express();
+ app.set('trust proxy', 1);
+ 
+ app.use((req, res, next) => {
+   res.setHeader('X-Content-Type-Options', 'nosniff');
+   res.setHeader('X-Frame-Options', 'DENY');
+@@ -97,20 +98,21 @@ app.use('/api/quote-sheets', quoteSheetsRouter);
+ app.use('/api/cost', costRouter);
+ app.use('/api/export', exportRouter);
+ app.use('/api/system', systemRouter);
+ app.use('/api/work-orders', workOrdersRouter);
+ app.use('/api/menu', menuRouter);
+ app.use('/api/stocks', stocksRouter);
+ app.use('/api/futures', futuresRouter);
+ app.use('/api/stats', statsRouter);
+ app.use('/api/foreign-costing-assistant', foreignCostingAssistantRouter);
+ app.use('/api/crm', crmRouter);
++app.use('/api/matrix', matrixRouter);
+ 
+ if (process.env.DISABLE_CRON !== '1') {
+   // 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）
+   cron.schedule('40 14 * * 1-5', async () => {
+     try {
+       await stocksRouter.runStrategy({ sendMail: false, operator: 'cron-stock' });
+       console.log('[股市筛选任务] 已执行（未自动发邮件）');
+     } catch (e) {
+       console.warn('[股市筛选任务] 失败', e?.message || e);
+     }

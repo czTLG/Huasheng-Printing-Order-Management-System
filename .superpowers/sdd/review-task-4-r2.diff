@@ -1,0 +1,1043 @@
+# Review package: ef87174..965b4ae
+
+## Commits
+965b4ae fix: harden current matrix dry run
+822daaf feat: add current matrix dry run
+
+## Files changed
+ package.json                       |   1 +
+ scripts/matrix-classify-current.js | 135 ++++++++++++
+ scripts/test-matrix-crm-adapter.js | 427 +++++++++++++++++++++++++++++++++++++
+ src/lib/matrixCrmAdapter.js        | 423 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 986 insertions(+)
+
+## Diff
+diff --git a/package.json b/package.json
+index ff65022..2bd8e1a 100644
+--- a/package.json
++++ b/package.json
+@@ -5,20 +5,21 @@
+   "main": "src/server.js",
+   "scripts": {
+     "start": "node src/server.js",
+     "baseline:verify": "node scripts/verify-baseline.js",
+     "verify:smoke": "node scripts/smoke-test.js",
+     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+     "test:private-baseline": "node scripts/test-private-baseline.js",
+     "test:matrix-rank": "node scripts/test-schema-rank.js",
+     "test:signal-cache": "node scripts/test-signal-cache.js",
+     "test:matrix-stream": "node scripts/test-matrix-stream.js",
++    "test:matrix-crm": "node scripts/test-matrix-crm-adapter.js",
+     "runtime:audit": "node scripts/runtime-audit.js",
+     "runtime:backup": "node scripts/runtime-backup.js",
+     "runtime:verify": "node scripts/runtime-verify.js",
+     "baseline:generate-private": "node scripts/generate-private-baseline.js"
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.3",
+     "better-sqlite3": "^11.8.1",
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+diff --git a/scripts/matrix-classify-current.js b/scripts/matrix-classify-current.js
+new file mode 100644
+index 0000000..23d7636
+--- /dev/null
++++ b/scripts/matrix-classify-current.js
+@@ -0,0 +1,135 @@
++'use strict';
++
++const fs = require('fs');
++const path = require('path');
++const crypto = require('crypto');
++const Database = require('better-sqlite3');
++const jwt = require('jsonwebtoken');
++const { classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
++
++function parseArgs(argv) {
++  const parsed = { includePrivatePreview: false, output: '' };
++  for (let index = 0; index < argv.length; index += 1) {
++    const arg = argv[index];
++    if (arg === '--include-private-preview') parsed.includePrivatePreview = true;
++    else if (arg === '--output') {
++      if (!argv[index + 1]) throw new Error('--output requires a path');
++      parsed.output = argv[index += 1];
++    } else {
++      throw new Error(`unknown argument: ${arg}`);
++    }
++  }
++  return parsed;
++}
++
++function authenticatedLocalOperator(db) {
++  const token = process.env.MATRIX_LOCAL_OPERATOR_TOKEN;
++  const secret = process.env.JWT_SECRET;
++  if (!token || !secret || secret === 'change-this-in-production') return false;
++  try {
++    const payload = jwt.verify(token, secret);
++    const id = Number(payload.sub);
++    if (!Number.isInteger(id) || id <= 0) return false;
++    const hasUsers = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
++    if (!hasUsers) return false;
++    const user = db.prepare('SELECT id, role, status FROM users WHERE id = ?').get(id);
++    return Boolean(user
++      && user.status === 'active'
++      && ['super_admin', 'foreign_trade_crm_admin'].includes(user.role));
++  } catch {
++    return false;
++  }
++}
++
++function workspaceOutputPath(value) {
++  const workspace = fs.realpathSync(path.resolve(__dirname, '..'));
++  const output = path.resolve(process.cwd(), value);
++  if (output !== workspace && !output.startsWith(`${workspace}${path.sep}`)) {
++    throw new Error('--output must stay inside the workspace');
++  }
++  if (path.dirname(output) !== workspace) {
++    throw new Error('--output must be a file in the workspace root');
++  }
++  const outputEntry = fs.lstatSync(output, { throwIfNoEntry: false });
++  if (outputEntry && (!outputEntry.isFile() || outputEntry.nlink !== 1)) {
++    throw new Error('--output must be a single-link regular file');
++  }
++  let ancestor = path.dirname(output);
++  while (!fs.existsSync(ancestor)) {
++    const parent = path.dirname(ancestor);
++    if (parent === ancestor) throw new Error('--output has no existing parent');
++    ancestor = parent;
++  }
++  const realAncestor = fs.realpathSync(ancestor);
++  if (realAncestor !== workspace && !realAncestor.startsWith(`${workspace}${path.sep}`)) {
++    throw new Error('--output parent must stay inside the workspace');
++  }
++  return output;
++}
++
++function writeWorkspaceOutput(output, content) {
++  const target = workspaceOutputPath(output);
++  const workspace = fs.realpathSync(path.resolve(__dirname, '..'));
++  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
++  const temporary = path.join(workspace, `.matrix-output-${process.pid}-${crypto.randomBytes(12).toString('hex')}.tmp`);
++  let fd;
++  try {
++    fd = fs.openSync(temporary, flags, 0o600);
++    const opened = fs.fstatSync(fd);
++    if (!opened.isFile() || opened.nlink !== 1) throw new Error('temporary output is not a single-link regular file');
++    fs.writeFileSync(fd, content, { encoding: 'utf8' });
++    fs.fsyncSync(fd);
++    fs.closeSync(fd);
++    fd = undefined;
++
++    if (fs.realpathSync(path.dirname(target)) !== workspace) {
++      throw new Error('--output parent changed during write');
++    }
++    const destination = fs.lstatSync(target, { throwIfNoEntry: false });
++    if (destination && (!destination.isFile() || destination.nlink !== 1)) {
++      throw new Error('--output changed to a non-regular or linked file');
++    }
++    const staged = fs.lstatSync(temporary);
++    if (!staged.isFile() || staged.nlink !== 1) throw new Error('temporary output changed during write');
++
++    fs.renameSync(temporary, target);
++    const directoryFd = fs.openSync(workspace, fs.constants.O_RDONLY);
++    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
++  } finally {
++    if (fd !== undefined) fs.closeSync(fd);
++    fs.rmSync(temporary, { force: true });
++  }
++}
++
++function main() {
++  const args = parseArgs(process.argv.slice(2));
++  const dbPath = process.env.DB_PATH
++    ? path.resolve(process.env.DB_PATH)
++    : path.resolve(__dirname, '..', 'data', 'app.db');
++  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
++  let report;
++  try {
++    const authenticated = authenticatedLocalOperator(db);
++    if (args.includePrivatePreview && !authenticated) {
++      throw new Error('private preview requires an authenticated local CRM administrator context');
++    }
++    report = classifyCurrentCrm(db, {
++      includePrivatePreview: args.includePrivatePreview,
++      authenticatedLocalOperator: authenticated,
++      now: new Date().toISOString().slice(0, 10)
++    });
++  } finally {
++    db.close();
++  }
++
++  const json = `${JSON.stringify(report, null, 2)}\n`;
++  if (args.output) writeWorkspaceOutput(args.output, json);
++  process.stdout.write(json);
++}
++
++try {
++  main();
++} catch (error) {
++  process.stderr.write(`${error.message}\n`);
++  process.exitCode = 1;
++}
+diff --git a/scripts/test-matrix-crm-adapter.js b/scripts/test-matrix-crm-adapter.js
+new file mode 100644
+index 0000000..9e7c0f2
+--- /dev/null
++++ b/scripts/test-matrix-crm-adapter.js
+@@ -0,0 +1,427 @@
++'use strict';
++
++const assert = require('assert');
++const crypto = require('crypto');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++const Database = require('better-sqlite3');
++const jwt = require('jsonwebtoken');
++const { spawnSync } = require('child_process');
++
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-crm-'));
++const dbPath = path.join(tempDir, 'fixture.db');
++const db = new Database(dbPath);
++
++function digest() {
++  return crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
++}
++
++function bySourceId(report, sourceType, id) {
++  return report.records.find((record) => record.source_ids[sourceType]?.includes(id));
++}
++
++try {
++  db.pragma('journal_mode = DELETE');
++  db.exec(`
++    CREATE TABLE users (
++      id INTEGER PRIMARY KEY,
++      username TEXT,
++      role TEXT,
++      status TEXT
++    );
++    CREATE TABLE customers (
++      id INTEGER PRIMARY KEY,
++      name TEXT,
++      company_name TEXT,
++      country TEXT,
++      email TEXT,
++      whatsapp TEXT,
++      phone TEXT,
++      website TEXT,
++      source_channel TEXT,
++      main_product TEXT,
++      notes TEXT,
++      last_contact_at TEXT,
++      created_at TEXT,
++      updated_at TEXT
++    );
++    CREATE TABLE crm_messages (
++      id INTEGER PRIMARY KEY,
++      source_type TEXT,
++      source_message_id TEXT,
++      thread_id TEXT,
++      customer_id INTEGER,
++      direction TEXT,
++      sender_name TEXT,
++      sender_contact TEXT,
++      receiver_contact TEXT,
++      message_text TEXT,
++      raw_payload_json TEXT,
++      received_at TEXT,
++      created_at TEXT,
++      updated_at TEXT
++    );
++    CREATE TABLE email_messages (
++      id INTEGER PRIMARY KEY,
++      message_id TEXT,
++      thread_id TEXT,
++      from_email TEXT,
++      from_name TEXT,
++      to_emails TEXT,
++      cc_emails TEXT,
++      bcc_emails TEXT,
++      subject TEXT,
++      text_body TEXT,
++      cleaned_text TEXT,
++      sent_at TEXT,
++      received_at TEXT,
++      direction TEXT,
++      contact_email TEXT,
++      contact_name TEXT,
++      matched_customer_id INTEGER,
++      business_relevance TEXT,
++      noise_level TEXT,
++      raw_headers_json TEXT,
++      detected_signals_json TEXT,
++      parser_hints_json TEXT,
++      created_at TEXT,
++      updated_at TEXT
++    );
++  `);
++
++  const insertCustomer = db.prepare(`
++    INSERT INTO customers (
++      id, name, company_name, country, email, whatsapp, phone, website,
++      source_channel, main_product, notes, last_contact_at, created_at, updated_at
++    ) VALUES (
++      @id, @name, @company_name, @country, @email, @whatsapp, @phone, @website,
++      @source_channel, @main_product, @notes, @last_contact_at, @created_at, @updated_at
++    )
++  `);
++  const customerDefaults = {
++    email: '', whatsapp: '', phone: '', website: '', source_channel: '',
++    main_product: '', notes: '', last_contact_at: '2026-07-01T00:00:00Z',
++    created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z'
++  };
++  insertCustomer.run({ ...customerDefaults, id: 1, name: '国内老客户', company_name: '本地食品厂', country: '中国' });
++  insertCustomer.run({ ...customerDefaults, id: 2, name: 'Token Test', company_name: 'Token Test', country: '', source_channel: 'whatsapp' });
++  insertCustomer.run({
++    ...customerDefaults,
++    id: 5,
++    name: 'Overseas Mail Contact',
++    company_name: 'Vietnam Coffee Brand',
++    country: 'Vietnam',
++    email: 'buyer@vietcoffee.example',
++    website: 'https://vietcoffee.example',
++    source_channel: 'email',
++    main_product: 'coffee pouch'
++  });
++  insertCustomer.run({
++    ...customerDefaults,
++    id: 6,
++    name: 'Overseas Chat Contact',
++    company_name: 'Indonesia Care Brand',
++    country: 'Indonesia',
++    whatsapp: '+628123456789',
++    website: 'https://carebrand.example',
++    source_channel: 'whatsapp',
++    main_product: 'detergent refill pouch'
++  });
++  insertCustomer.run({ ...customerDefaults, id: 7, name: 'Legacy Local', company_name: 'Legacy Local', country: '' });
++  insertCustomer.run({ ...customerDefaults, id: 8, name: 'Duplicate Chat', company_name: 'Duplicate Brand', country: 'Thailand', whatsapp: '+66812345678', website: 'duplicate.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 9, name: 'Broken Payload', company_name: 'Payload Brand', country: 'Malaysia', email: 'buyer@payload.example', website: 'payload.example', main_product: 'liquid pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 10, name: 'Greeting Only', company_name: '', country: 'Philippines', email: 'hello@greeting.example', website: 'greeting.example', main_product: '' });
++  insertCustomer.run({ ...customerDefaults, id: 11, name: 'Local Linked Legacy', company_name: 'Local Linked Legacy', country: '' });
++  insertCustomer.run({ ...customerDefaults, id: 12, name: 'Malformed Time Brand', company_name: 'Malformed Time Brand', country: 'Vietnam', email: 'buyer@timebrand.example', website: 'timebrand.example', main_product: 'coffee pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 13, name: 'Repeated Messages', company_name: 'Repeated Messages Brand', country: 'Indonesia', whatsapp: '+628555555555', website: 'repeatbrand.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 14, name: 'Unknown Linked Legacy', company_name: 'Unknown Linked Legacy', country: '' });
++  insertCustomer.run({ ...customerDefaults, id: 15, name: 'Broken Mail JSON', company_name: 'Broken Mail JSON Brand', country: 'Vietnam', email: 'buyer@brokenmail.example', website: 'brokenmail.example', main_product: 'coffee pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 16, name: 'Company Shell', company_name: 'Company Only', country: 'Vietnam', email: 'buyer@companyshell.example', website: 'companyshell.example', main_product: '' });
++  insertCustomer.run({ ...customerDefaults, id: 17, name: 'Impossible Day', company_name: 'Impossible Day Brand', country: 'Vietnam', email: 'buyer@daybrand.example', website: 'daybrand.example', main_product: 'coffee pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 18, name: 'Impossible Month', company_name: 'Impossible Month Brand', country: 'Thailand', email: 'buyer@monthbrand.example', website: 'monthbrand.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 19, name: 'Permissive Date', company_name: 'Permissive Date Brand', country: 'Malaysia', email: 'buyer@datebrand.example', website: 'datebrand.example', main_product: 'liquid pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 20, name: 'Bad Customer Update', company_name: 'Bad Customer Update Brand', country: 'Vietnam', email: 'buyer@customerupdate.example', website: 'customerupdate.example', main_product: 'coffee pouch', updated_at: '2026-02-30' });
++  insertCustomer.run({ ...customerDefaults, id: 21, name: 'Bad CRM Update', company_name: 'Bad CRM Update Brand', country: 'Thailand', email: 'buyer@crmupdate.example', website: 'crmupdate.example', main_product: 'snack pouch' });
++  insertCustomer.run({ ...customerDefaults, id: 22, name: 'Bad Email Update', company_name: 'Bad Email Update Brand', country: 'Malaysia', email: 'buyer@emailupdate.example', website: 'emailupdate.example', main_product: 'liquid pouch' });
++
++  const insertCrm = db.prepare(`
++    INSERT INTO crm_messages (
++      id, source_type, source_message_id, thread_id, customer_id, direction,
++      sender_name, sender_contact, receiver_contact, message_text, raw_payload_json,
++      received_at, created_at, updated_at
++    ) VALUES (
++      @id, @source_type, @source_message_id, @thread_id, @customer_id, @direction,
++      @sender_name, @sender_contact, @receiver_contact, @message_text, @raw_payload_json,
++      @received_at, @created_at, @updated_at
++    )
++  `);
++  const crmDefaults = {
++    source_message_id: '', thread_id: '', customer_id: null, direction: 'inbound',
++    sender_name: '', sender_contact: '', receiver_contact: '', raw_payload_json: '{}',
++    received_at: '2026-07-01T00:00:00Z', created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z'
++  };
++  insertCrm.run({ ...crmDefaults, id: 20, source_type: 'whatsapp', customer_id: 2, sender_name: 'Token Test', message_text: 'hello token ok' });
++  insertCrm.run({
++    ...crmDefaults,
++    id: 40,
++    source_type: 'whatsapp',
++    sender_name: '',
++    sender_contact: '',
++    message_text: 'Hello\nHello',
++    received_at: 'not-a-date'
++  });
++  insertCrm.run({
++    ...crmDefaults,
++    id: 60,
++    source_type: 'whatsapp',
++    customer_id: 6,
++    sender_name: 'Purchasing',
++    sender_contact: '+628123456789',
++    message_text: 'Need detergent refill pouch specifications'
++  });
++  insertCrm.run({ ...crmDefaults, id: 80, source_type: 'whatsapp', customer_id: 8, sender_name: 'Buyer', sender_contact: '+66812345678', message_text: 'Need snack pouch\nNeed snack pouch' });
++  insertCrm.run({ ...crmDefaults, id: 90, source_type: 'whatsapp', customer_id: 9, sender_name: 'Buyer', sender_contact: '+60123456789', message_text: 'Need liquid pouch specifications', raw_payload_json: '{broken' });
++  insertCrm.run({ ...crmDefaults, id: 110, source_type: 'whatsapp', customer_id: 11, sender_name: 'Local', sender_contact: '+8613812345678', message_text: '本地沟通' });
++  insertCrm.run({ ...crmDefaults, id: 120, source_type: 'whatsapp', direction: 'outbound', sender_contact: '+8613900000000', receiver_contact: '+84911111111', message_text: 'First overseas conversation' });
++  insertCrm.run({ ...crmDefaults, id: 121, source_type: 'whatsapp', direction: 'outbound', sender_contact: '+8613900000000', receiver_contact: '+66822222222', message_text: 'Second overseas conversation' });
++  insertCrm.run({ ...crmDefaults, id: 122, source_type: 'whatsapp', direction: 'unknown', sender_contact: '+84933333333', receiver_contact: '+8613900000000', message_text: 'Direction is uncertain' });
++  insertCrm.run({ ...crmDefaults, id: 130, source_type: 'whatsapp', customer_id: 12, sender_name: 'Buyer', sender_contact: '+84944444444', message_text: 'Need coffee pouch specifications', received_at: 'bad-time' });
++  insertCrm.run({ ...crmDefaults, id: 131, source_type: 'whatsapp', customer_id: 12, sender_name: 'Buyer', sender_contact: '+84944444444', message_text: 'Follow up coffee pouch specifications', received_at: '2026-07-02T00:00:00Z' });
++  insertCrm.run({ ...crmDefaults, id: 132, source_type: 'whatsapp', customer_id: 13, sender_name: 'Buyer', sender_contact: '+628555555555', message_text: 'Need the same snack pouch specification with zipper and matte finish' });
++  insertCrm.run({ ...crmDefaults, id: 133, source_type: 'whatsapp', customer_id: 13, sender_name: 'Buyer', sender_contact: '+628555555555', message_text: 'Forwarded context: Need the same snack pouch specification with zipper and matte finish. Thanks.' });
++  insertCrm.run({ ...crmDefaults, id: 140, source_type: 'whatsapp', customer_id: 14, sender_name: '', sender_contact: '', receiver_contact: '', message_text: 'Unknown overseas identity' });
++  insertCrm.run({ ...crmDefaults, id: 170, source_type: 'whatsapp', customer_id: 17, sender_name: 'Buyer', sender_contact: '+84955555555', message_text: 'Need coffee pouch specifications', received_at: '2026-02-30' });
++  insertCrm.run({ ...crmDefaults, id: 180, source_type: 'whatsapp', customer_id: 18, sender_name: 'Buyer', sender_contact: '+66866666666', message_text: 'Need snack pouch specifications', received_at: '2026-13-01' });
++  insertCrm.run({ ...crmDefaults, id: 190, source_type: 'whatsapp', customer_id: 19, sender_name: 'Buyer', sender_contact: '+60177777777', message_text: 'Need liquid pouch specifications', received_at: '2026/07/01' });
++  insertCrm.run({ ...crmDefaults, id: 200, source_type: 'whatsapp', customer_id: 20, sender_name: 'Buyer', sender_contact: '+84966666666', message_text: 'Need coffee pouch specifications' });
++  insertCrm.run({ ...crmDefaults, id: 210, source_type: 'whatsapp', customer_id: 21, sender_name: 'Buyer', sender_contact: '+66877777777', message_text: 'Need snack pouch specifications', updated_at: '2026-13-01' });
++
++  const insertEmail = db.prepare(`
++    INSERT INTO email_messages (
++      id, message_id, thread_id, from_email, from_name, to_emails, cc_emails, bcc_emails, subject,
++      text_body, cleaned_text, sent_at, received_at, direction, contact_email,
++      contact_name, matched_customer_id, business_relevance, noise_level,
++      raw_headers_json, detected_signals_json, parser_hints_json, created_at, updated_at
++    ) VALUES (
++      @id, @message_id, @thread_id, @from_email, @from_name, @to_emails, @cc_emails, @bcc_emails, @subject,
++      @text_body, @cleaned_text, @sent_at, @received_at, @direction, @contact_email,
++      @contact_name, @matched_customer_id, @business_relevance, @noise_level,
++      @raw_headers_json, @detected_signals_json, @parser_hints_json, @created_at, @updated_at
++    )
++  `);
++  const emailDefaults = {
++    thread_id: '', from_name: '', to_emails: '["sales@factory.invalid"]', cc_emails: '[]', bcc_emails: '[]',
++    sent_at: '2026-07-01T00:00:00Z', received_at: '2026-07-01T00:00:00Z',
++    direction: 'inbound', contact_email: '', contact_name: '', matched_customer_id: null,
++    business_relevance: 'low', noise_level: 'low', raw_headers_json: '{}', detected_signals_json: '{}', parser_hints_json: '{}', created_at: '2026-07-01T00:00:00Z',
++    updated_at: '2026-07-01T00:00:00Z'
++  };
++  insertEmail.run({
++    ...emailDefaults,
++    id: 30,
++    message_id: '<system-30@example.invalid>',
++    from_email: 'no-reply@accounts.example.invalid',
++    subject: 'Security alert',
++    text_body: 'Automated account verification notice',
++    cleaned_text: 'Automated account verification notice',
++    contact_email: 'no-reply@accounts.example.invalid',
++    noise_level: 'high'
++  });
++  insertEmail.run({
++    ...emailDefaults,
++    id: 50,
++    message_id: '<business-50@vietcoffee.example>',
++    from_email: 'buyer@vietcoffee.example',
++    from_name: 'Buyer',
++    subject: 'Coffee pouch inquiry',
++    text_body: 'Please quote printed coffee pouches',
++    cleaned_text: 'Please quote printed coffee pouches',
++    contact_email: 'buyer@vietcoffee.example',
++    contact_name: 'Buyer',
++    matched_customer_id: 5,
++    business_relevance: 'high'
++  });
++  insertEmail.run({ ...emailDefaults, id: 100, message_id: '<greeting-100@greeting.example>', from_email: 'hello@greeting.example', subject: 'Hello', text_body: 'Hello', cleaned_text: 'Hello', contact_email: 'hello@greeting.example', matched_customer_id: 10 });
++  insertEmail.run({ ...emailDefaults, id: 150, message_id: '<broken-150@brokenmail.example>', from_email: 'buyer@brokenmail.example', subject: 'Coffee pouch inquiry', text_body: 'Need coffee pouch specifications', cleaned_text: 'Need coffee pouch specifications', contact_email: 'buyer@brokenmail.example', matched_customer_id: 15, business_relevance: 'high', bcc_emails: '{broken' });
++  insertEmail.run({ ...emailDefaults, id: 220, message_id: '<update-220@emailupdate.example>', from_email: 'buyer@emailupdate.example', subject: 'Liquid pouch inquiry', text_body: 'Need liquid pouch specifications', cleaned_text: 'Need liquid pouch specifications', contact_email: 'buyer@emailupdate.example', matched_customer_id: 22, business_relevance: 'high', updated_at: '2026/07/01' });
++
++  const before = digest();
++  const { readEligibleCrmRecords, classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
++  const normalized = readEligibleCrmRecords(db);
++  const report = classifyCurrentCrm(db, { now: '2026-07-16' });
++  const after = digest();
++
++  assert.equal(before, after, 'classification must not change the database bytes');
++  assert.equal(normalized.excluded_domestic_ids.includes(1), true);
++  assert.equal(normalized.excluded_domestic_ids.includes(7), true);
++  assert.equal(normalized.excluded_domestic_ids.includes(11), true);
++  assert.equal(normalized.excluded_domestic_ids.includes(14), true);
++  assert.equal(report.counts.excluded_domestic, 4);
++  assert.equal(bySourceId(report, 'crm_message_ids', 20).classification, 'test');
++  assert.equal(bySourceId(report, 'email_message_ids', 30).classification, 'noise');
++  assert.equal(bySourceId(report, 'crm_message_ids', 40).classification, 'needs_review');
++  assert.equal(bySourceId(report, 'email_message_ids', 50).classification, 'valid');
++  assert.equal(bySourceId(report, 'crm_message_ids', 60).classification, 'valid');
++  assert.equal(bySourceId(report, 'crm_message_ids', 80).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 80).reason_codes.includes('duplicated_message_segments'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 90).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 90).reason_codes.includes('malformed_json_payload'));
++  assert.equal(bySourceId(report, 'email_message_ids', 100).classification, 'needs_review');
++  assert(bySourceId(report, 'email_message_ids', 100).reason_codes.includes('missing_business_evidence'));
++  assert.notEqual(bySourceId(report, 'crm_message_ids', 120).identity_id, bySourceId(report, 'crm_message_ids', 121).identity_id);
++  assert.equal(bySourceId(report, 'crm_message_ids', 122).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 122).reason_codes.includes('uncertain_direction'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 130).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 130).reason_codes.includes('malformed_source_time'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 132).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 132).reason_codes.includes('duplicated_message_segments'));
++  assert.equal(bySourceId(report, 'crm_message_ids', 140).classification, 'needs_review');
++  assert(bySourceId(report, 'crm_message_ids', 140).reason_codes.includes('unknown_whatsapp_sender'));
++  assert.equal(bySourceId(report, 'email_message_ids', 150).classification, 'needs_review');
++  assert(bySourceId(report, 'email_message_ids', 150).reason_codes.includes('malformed_json_payload'));
++  const companyShell = report.records.find((record) => record.source_ids.customer_ids.includes(16));
++  assert.equal(companyShell.classification, 'needs_review');
++  assert(companyShell.reason_codes.includes('missing_business_evidence'));
++  for (const id of [170, 180, 190]) {
++    assert.equal(bySourceId(report, 'crm_message_ids', id).classification, 'needs_review');
++    assert(bySourceId(report, 'crm_message_ids', id).reason_codes.includes('malformed_source_time'));
++  }
++  for (const id of [200, 210, 220]) {
++    const sourceType = id === 220 ? 'email_message_ids' : 'crm_message_ids';
++    assert.equal(bySourceId(report, sourceType, id).classification, 'needs_review');
++    assert(bySourceId(report, sourceType, id).reason_codes.includes('malformed_source_time'));
++  }
++
++  const errorReport = classifyCurrentCrm(db, {
++    now: '2026-07-16',
++    classifier() { throw new Error('fixture classifier failure'); }
++  });
++  assert.equal(errorReport.counts.errors, errorReport.counts.input);
++  assert.equal(errorReport.counts.needs_review, errorReport.counts.input);
++  assert.equal(errorReport.records.length, errorReport.counts.input);
++  assert(errorReport.records.every((record) => record.classification === 'needs_review'));
++  assert(errorReport.records.every((record) => record.reason_codes.includes('classification_error')));
++  assert(errorReport.records.every((record) => record.identity_id && record.source_ids));
++  assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('unknown_whatsapp_sender'));
++  assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('malformed_source_time'));
++  assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('duplicated_message_segments'));
++
++  const defaultJson = JSON.stringify(report);
++  for (const secret of [
++    'buyer@vietcoffee.example',
++    '+628123456789',
++    'no-reply@accounts.example.invalid',
++    'Please quote printed coffee pouches'
++  ]) {
++    assert.equal(defaultJson.includes(secret), false, `default report leaked private value: ${secret}`);
++  }
++  assert(report.records.every((record) => !Object.hasOwn(record, 'private_preview')));
++
++  const flagOnly = classifyCurrentCrm(db, { includePrivatePreview: true, authenticatedLocalOperator: false });
++  assert(flagOnly.records.every((record) => !Object.hasOwn(record, 'private_preview')));
++  const authOnly = classifyCurrentCrm(db, { includePrivatePreview: false, authenticatedLocalOperator: true });
++  assert(authOnly.records.every((record) => !Object.hasOwn(record, 'private_preview')));
++  const privateReport = classifyCurrentCrm(db, { includePrivatePreview: true, authenticatedLocalOperator: true });
++  assert(privateReport.records.some((record) => record.private_preview?.contact));
++  assert(privateReport.records.every((record) => !record.private_preview?.message_body));
++
++  db.exec("INSERT INTO users (id, username, role, status) VALUES (10, 'crm-operator', 'foreign_trade_crm_admin', 'active')");
++  db.exec("INSERT INTO users (id, username, role, status) VALUES (11, 'inactive-admin', 'super_admin', 'pending')");
++  db.exec("INSERT INTO users (id, username, role, status) VALUES (12, 'ordinary-user', 'worker', 'active')");
++  const cliPath = path.join(__dirname, 'matrix-classify-current.js');
++  const insecureToken = jwt.sign({ sub: '10', role: 'super_admin' }, 'change-this-in-production');
++  const insecurePreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++    env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: insecureToken, JWT_SECRET: '' },
++    encoding: 'utf8'
++  });
++  assert.notEqual(insecurePreview.status, 0, 'private preview must reject the public fallback JWT secret');
++
++  const jwtSecret = 'fixture-secret-that-is-explicitly-configured';
++  const missingUserToken = jwt.sign({ sub: '999', role: 'super_admin' }, jwtSecret);
++  const missingUserPreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++    env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: missingUserToken, JWT_SECRET: jwtSecret },
++    encoding: 'utf8'
++  });
++  assert.notEqual(missingUserPreview.status, 0, 'private preview must reject a token without an active database user');
++
++  const validToken = jwt.sign({ sub: '10', role: 'foreign_trade_crm_admin' }, jwtSecret);
++  const validPreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++    env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: validToken, JWT_SECRET: jwtSecret },
++    encoding: 'utf8'
++  });
++  assert.equal(validPreview.status, 0, validPreview.stderr);
++
++  for (const id of ['11', '12']) {
++    const deniedToken = jwt.sign({ sub: id, role: 'super_admin' }, jwtSecret);
++    const deniedPreview = spawnSync(process.execPath, [cliPath, '--include-private-preview'], {
++      env: { ...process.env, DB_PATH: dbPath, MATRIX_LOCAL_OPERATOR_TOKEN: deniedToken, JWT_SECRET: jwtSecret },
++      encoding: 'utf8'
++    });
++    assert.notEqual(deniedPreview.status, 0, `database user ${id} must not receive a private preview`);
++  }
++
++  const escapedOutput = path.join(tempDir, 'escaped-report.json');
++  const linkPath = path.join(__dirname, '.matrix-output-link');
++  fs.rmSync(linkPath, { force: true });
++  fs.symlinkSync(escapedOutput, linkPath);
++  const symlinkOutput = spawnSync(process.execPath, [cliPath, '--output', linkPath], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(linkPath, { force: true });
++  assert.notEqual(symlinkOutput.status, 0, 'output must reject a symlink target');
++  assert.equal(fs.existsSync(escapedOutput), false, 'output symlink escaped the workspace');
++
++  const escapedDirectory = path.join(tempDir, 'escaped-directory');
++  fs.mkdirSync(escapedDirectory);
++  const directoryLink = path.join(__dirname, '.matrix-output-directory-link');
++  fs.rmSync(directoryLink, { recursive: true, force: true });
++  fs.symlinkSync(escapedDirectory, directoryLink);
++  const ancestorEscape = spawnSync(process.execPath, [cliPath, '--output', path.join(directoryLink, 'report.json')], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(directoryLink, { force: true });
++  assert.notEqual(ancestorEscape.status, 0, 'output must reject a symlinked parent directory');
++  assert.equal(fs.existsSync(path.join(escapedDirectory, 'report.json')), false);
++
++  const externalHardLinkTarget = path.resolve(__dirname, '..', '..', '..', `.matrix-external-hard-link-${process.pid}.json`);
++  const hardLinkOutput = path.join(__dirname, '..', '.matrix-hard-link-output.json');
++  fs.writeFileSync(externalHardLinkTarget, 'external sentinel', { mode: 0o600 });
++  fs.rmSync(hardLinkOutput, { force: true });
++  fs.linkSync(externalHardLinkTarget, hardLinkOutput);
++  const hardLinkWrite = spawnSync(process.execPath, [cliPath, '--output', hardLinkOutput], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(hardLinkOutput, { force: true });
++  assert.notEqual(hardLinkWrite.status, 0, 'output must reject an existing hard link');
++  assert.equal(fs.readFileSync(externalHardLinkTarget, 'utf8'), 'external sentinel');
++  fs.rmSync(externalHardLinkTarget, { force: true });
++
++  const nonRegularOutput = path.join(__dirname, '..', '.matrix-non-regular-output');
++  fs.rmSync(nonRegularOutput, { recursive: true, force: true });
++  fs.mkdirSync(nonRegularOutput);
++  const nonRegularWrite = spawnSync(process.execPath, [cliPath, '--output', nonRegularOutput], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  fs.rmSync(nonRegularOutput, { recursive: true, force: true });
++  assert.notEqual(nonRegularWrite.status, 0, 'output must reject non-regular files');
++
++  const safeOutput = path.join(__dirname, '..', '.matrix-safe-output-test.json');
++  fs.rmSync(safeOutput, { force: true });
++  const safeWrite = spawnSync(process.execPath, [cliPath, '--output', safeOutput], {
++    env: { ...process.env, DB_PATH: dbPath },
++    encoding: 'utf8'
++  });
++  assert.equal(safeWrite.status, 0, safeWrite.stderr);
++  assert.equal(fs.statSync(safeOutput).mode & 0o777, 0o600);
++  fs.rmSync(safeOutput, { force: true });
++
++  console.log('matrix CRM adapter tests passed');
++} finally {
++  db.close();
++  fs.rmSync(tempDir, { recursive: true, force: true });
++}
+diff --git a/src/lib/matrixCrmAdapter.js b/src/lib/matrixCrmAdapter.js
+new file mode 100644
+index 0000000..cb66c15
+--- /dev/null
++++ b/src/lib/matrixCrmAdapter.js
+@@ -0,0 +1,423 @@
++'use strict';
++
++const { classifyRecord, isApprovedCountry, RULESET_VERSION } = require('./schemaRank');
++
++const DOMESTIC_COUNTRIES = new Set([
++  'china', 'cn', 'prc', "people's republic of china", '中国', '中国大陆', '中华人民共和国'
++]);
++const AUTOMATED_SENDER = /(?:^|[._-])(no[._-]?reply|do[._-]?not[._-]?reply|mailer[._-]?daemon|postmaster)(?:@|[._-]|$)/i;
++const SYSTEM_NOTICE = /(?:security alert|account verification|verify your account|delivery failure|undeliverable|automated (?:report|notice)|machine notification)/i;
++const FIXTURE_MARKER = /(?:\btoken test\b|\bhello token ok\b|token-verification|sync verification|fixture (?:mailbox|payload))/i;
++const BUSINESS_SIGNAL = /(?:inquir|quot|packag|pouch|film|bag|specification|material|dimension|size|product|coffee|snack|detergent|refill)/i;
++
++function text(value) {
++  return typeof value === 'string' ? value.trim() : '';
++}
++
++function lower(value) {
++  return text(value).toLowerCase();
++}
++
++function tableExists(db, name) {
++  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
++}
++
++function rows(db, table) {
++  return tableExists(db, table) ? db.prepare(`SELECT * FROM ${table} ORDER BY id`).all() : [];
++}
++
++function normalizePhone(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  const digits = raw.replace(/\D/g, '');
++  return raw.startsWith('+') ? `+${digits}` : digits;
++}
++
++function internationalPhone(value) {
++  const phone = normalizePhone(value);
++  return /^\+[1-9]\d{7,14}$/.test(phone) && !phone.startsWith('+86');
++}
++
++function emailDomain(value) {
++  const match = lower(value).match(/^[^@\s]+@([^@\s]+)$/);
++  return match ? match[1].replace(/^www\./, '') : '';
++}
++
++function websiteDomain(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  try {
++    return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.toLowerCase().replace(/^www\./, '');
++  } catch {
++    return '';
++  }
++}
++
++function canonicalTime(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
++    ? `${raw.replace(' ', 'T')}Z`
++    : raw;
++}
++
++function strictSourceTime(value) {
++  const candidate = canonicalTime(value);
++  if (!candidate) return false;
++  const match = candidate.match(/^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/);
++  if (!match) return false;
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  const calendarDate = new Date(Date.UTC(year, month - 1, day));
++  if (calendarDate.getUTCFullYear() !== year
++    || calendarDate.getUTCMonth() !== month - 1
++    || calendarDate.getUTCDate() !== day) return false;
++  return !candidate.includes('T') || !Number.isNaN(Date.parse(candidate));
++}
++
++function normalizedTime(value) {
++  const raw = text(value);
++  if (!raw) return '';
++  const candidate = canonicalTime(raw);
++  return strictSourceTime(candidate) ? candidate : raw;
++}
++
++function isDomestic(customer) {
++  const country = lower(customer?.country);
++  if (DOMESTIC_COUNTRIES.has(country)) return true;
++  const phone = normalizePhone(customer?.whatsapp || customer?.phone);
++  const domain = emailDomain(customer?.email);
++  return Boolean(phone.startsWith('+86') || (domain && domain.endsWith('.cn')));
++}
++
++function customerHasOverseasEvidence(customer) {
++  if (!customer) return false;
++  const country = lower(customer.country);
++  return Boolean(
++    (country && !DOMESTIC_COUNTRIES.has(country))
++    || (emailDomain(customer.email) && !emailDomain(customer.email).endsWith('.cn'))
++    || internationalPhone(customer.whatsapp || customer.phone)
++  );
++}
++
++function repeatedSegments(value) {
++  const segments = text(value)
++    .split(/\r?\n+/)
++    .map((part) => part.trim().toLowerCase())
++    .filter((part) => part.length >= 3);
++  return new Set(segments).size < segments.length;
++}
++
++function substantiallyOverlaps(left, right) {
++  const tokens = (value) => lower(value).match(/[\p{L}\p{N}]+/gu) || [];
++  const shingles = (items) => new Set(items.slice(0, -2).map((_, index) => items.slice(index, index + 3).join(' ')));
++  const leftTokens = tokens(left);
++  const rightTokens = tokens(right);
++  if (Math.min(leftTokens.length, rightTokens.length) < 5) return false;
++  const leftShingles = shingles(leftTokens);
++  const rightShingles = shingles(rightTokens);
++  const smaller = leftShingles.size <= rightShingles.size ? leftShingles : rightShingles;
++  const larger = smaller === leftShingles ? rightShingles : leftShingles;
++  let shared = 0;
++  for (const shingle of smaller) if (larger.has(shingle)) shared += 1;
++  return smaller.size > 0 && shared / smaller.size >= 0.6;
++}
++
++function crmExternalContact(row) {
++  return lower(row.direction) === 'outbound'
++    ? text(row.receiver_contact)
++    : text(row.sender_contact);
++}
++
++function identityKey(kind, row, customer) {
++  if (customer?.id != null) return `customer:${customer.id}`;
++  const contact = kind === 'email'
++    ? lower(row.contact_email || row.from_email)
++    : normalizePhone(crmExternalContact(row));
++  return contact ? `${kind}:${contact}` : `${kind}-record:${row.id}`;
++}
++
++function createGroup(key, customer) {
++  return {
++    identity_id: key,
++    customer,
++    crmMessages: [],
++    emailMessages: []
++  };
++}
++
++function addToGroup(groups, key, customer, kind, row) {
++  if (!groups.has(key)) groups.set(key, createGroup(key, customer));
++  const group = groups.get(key);
++  if (!group.customer && customer) group.customer = customer;
++  (kind === 'email' ? group.emailMessages : group.crmMessages).push(row);
++}
++
++function groupTime(group) {
++  const values = [
++    ...group.crmMessages.map((row) => row.received_at || row.created_at),
++    ...group.emailMessages.map((row) => row.received_at || row.sent_at || row.created_at),
++    group.customer?.last_contact_at,
++    group.customer?.updated_at
++  ].map(normalizedTime).filter(Boolean);
++  return values.sort().at(-1) || '';
++}
++
++function hasMalformedTime(group) {
++  const rowsToCheck = [group.customer, ...group.crmMessages, ...group.emailMessages].filter(Boolean);
++  const values = rowsToCheck.flatMap((row) => Object.entries(row)
++    .filter(([key, value]) => key.endsWith('_at')
++      && value !== null
++      && value !== undefined
++      && String(value).trim())
++    .map(([, value]) => value));
++  return values.some((value) => !strictSourceTime(value));
++}
++
++function hasMalformedJson(group) {
++  const values = [
++    ...group.crmMessages.flatMap((row) => [row.raw_payload_json, row.attachments_json]),
++    ...group.emailMessages.flatMap((row) => [
++      row.raw_headers_json,
++      row.detected_signals_json,
++      row.parser_hints_json,
++      row.attachments_json,
++      row.to_emails,
++      row.cc_emails,
++      row.bcc_emails
++    ])
++  ].map(text).filter(Boolean);
++  return values.some((value) => {
++    try { JSON.parse(value); return false; } catch { return true; }
++  });
++}
++
++function hasFixtureMarker(group) {
++  const values = [
++    group.customer?.name,
++    group.customer?.company_name,
++    ...group.crmMessages.flatMap((row) => [row.sender_name, row.message_text, row.raw_payload_json, row.source_message_id]),
++    ...group.emailMessages.flatMap((row) => [row.from_email, row.subject, row.text_body, row.cleaned_text, row.message_id])
++  ];
++  return values.some((value) => FIXTURE_MARKER.test(text(value)));
++}
++
++function isSystemGroup(group) {
++  return group.emailMessages.some((row) => {
++    const sender = row.contact_email || row.from_email;
++    const content = `${text(row.subject)} ${text(row.cleaned_text || row.text_body)}`;
++    return AUTOMATED_SENDER.test(text(sender))
++      || SYSTEM_NOTICE.test(content)
++      || lower(row.noise_level) === 'high';
++  });
++}
++
++function businessEvidence(group) {
++  const customer = group.customer || {};
++  const evidence = [customer.main_product, customer.industry, customer.business_background]
++    .map(text).filter(Boolean);
++  const substantive = group.crmMessages.some((row) => BUSINESS_SIGNAL.test(text(row.message_text)))
++    || group.emailMessages.some((row) => lower(row.business_relevance) === 'high'
++      || Number(row.inquiry_detected) === 1
++      || Number(row.quote_detected) === 1
++      || BUSINESS_SIGNAL.test(`${text(row.subject)} ${text(row.cleaned_text || row.text_body)}`));
++  return substantive ? [...evidence, 'substantive_conversation'] : evidence;
++}
++
++function normalizeGroup(group) {
++  const customer = group.customer || {};
++  const latestEmail = group.emailMessages.at(-1);
++  const latestCrm = group.crmMessages.at(-1);
++  const businessEmail = text(customer.email || latestEmail?.contact_email || latestEmail?.from_email);
++  const whatsapp = text(customer.whatsapp || customer.phone || crmExternalContact(latestCrm || {}));
++  const sourceKind = group.crmMessages.some((row) => lower(row.source_type) === 'whatsapp') ? 'whatsapp' : 'email';
++  const officialDomain = websiteDomain(customer.website) || emailDomain(businessEmail);
++  const lastInteraction = groupTime(group);
++  const rawMessageContents = [
++    ...group.crmMessages.map((row) => row.message_text),
++    ...group.emailMessages.map((row) => row.cleaned_text || row.text_body)
++  ].filter((value) => text(value));
++  const messageContents = rawMessageContents.map((value) => lower(value).replace(/\s+/g, ' '));
++  const duplicate = rawMessageContents.some(repeatedSegments)
++    || new Set(messageContents).size < messageContents.length
++    || rawMessageContents.some((left, index) => rawMessageContents
++      .slice(index + 1).some((right) => substantiallyOverlaps(left, right)));
++  const internalIdentity = customer.id != null
++    ? `customer:${customer.id}`
++    : group.crmMessages.length
++      ? `crm-message:${Math.min(...group.crmMessages.map((row) => Number(row.id)))}`
++      : `email-message:${Math.min(...group.emailMessages.map((row) => Number(row.id)))}`;
++
++  return {
++    identity_id: internalIdentity,
++    country: text(customer.country),
++    official_domain: officialDomain,
++    business_email: businessEmail,
++    sender_name: lower(latestCrm?.direction) === 'outbound' ? '' : text(latestCrm?.sender_name || customer.contact_person),
++    sender_phone: normalizePhone(whatsapp),
++    source_kind: isSystemGroup(group) ? 'security_notice' : sourceKind,
++    fixture_marker: hasFixtureMarker(group) ? 'known-verification-artifact' : '',
++    product_evidence: businessEvidence(group),
++    last_interaction_at: lastInteraction,
++    duplicated_message_segments: duplicate,
++    has_malformed_source_time: hasMalformedTime(group),
++    has_malformed_json_payload: hasMalformedJson(group),
++    uncertain_direction: group.crmMessages.some((row) => {
++      const direction = lower(row.direction);
++      return lower(row.source_type) === 'whatsapp' && !['inbound', 'outbound'].includes(direction);
++    }),
++    confirmed_international_whatsapp: internationalPhone(whatsapp),
++    source_ids: {
++      customer_ids: customer.id == null ? [] : [customer.id],
++      crm_message_ids: group.crmMessages.map((row) => row.id),
++      email_message_ids: group.emailMessages.map((row) => row.id)
++    },
++    private_contact: businessEmail || whatsapp || ''
++  };
++}
++
++function readEligibleCrmRecords(db) {
++  const customers = rows(db, 'customers');
++  const crmMessages = rows(db, 'crm_messages');
++  const emailMessages = rows(db, 'email_messages');
++  const customerById = new Map(customers.map((row) => [Number(row.id), row]));
++  const linkedCustomerIds = new Set([
++    ...crmMessages
++      .filter((row) => {
++        const contact = crmExternalContact(row);
++        return FIXTURE_MARKER.test(`${text(row.sender_name)} ${text(row.message_text)} ${text(row.raw_payload_json)}`)
++          || (lower(row.source_type) === 'whatsapp' && internationalPhone(contact));
++      })
++      .map((row) => Number(row.customer_id)).filter(Number.isFinite),
++    ...emailMessages
++      .filter((row) => {
++        const domain = emailDomain(row.contact_email || row.from_email);
++        return domain && !domain.endsWith('.cn');
++      })
++      .map((row) => Number(row.matched_customer_id)).filter(Number.isFinite)
++  ]);
++  const excludedDomesticIds = customers
++    .filter((customer) => isDomestic(customer)
++      || (!customerHasOverseasEvidence(customer) && !linkedCustomerIds.has(Number(customer.id))))
++    .map((row) => row.id);
++  const excludedSet = new Set(excludedDomesticIds.map(Number));
++  const groups = new Map();
++
++  for (const customer of customers) {
++    if (excludedSet.has(Number(customer.id)) || !customerHasOverseasEvidence(customer)) continue;
++    const key = identityKey('customer', {}, customer);
++    if (!groups.has(key)) groups.set(key, createGroup(key, customer));
++  }
++
++  for (const row of crmMessages) {
++    const customer = customerById.get(Number(row.customer_id));
++    if (customer && excludedSet.has(Number(customer.id))) {
++      if (lower(row.source_type) === 'whatsapp' && !crmExternalContact(row)) {
++        addToGroup(groups, identityKey('crm', row, null), null, 'crm', row);
++      }
++      continue;
++    }
++    addToGroup(groups, identityKey('crm', row, customer), customer, 'crm', row);
++  }
++
++  for (const row of emailMessages) {
++    const customer = customerById.get(Number(row.matched_customer_id));
++    if (customer && excludedSet.has(Number(customer.id))) continue;
++    addToGroup(groups, identityKey('email', row, customer), customer, 'email', row);
++  }
++
++  return {
++    records: [...groups.values()].map(normalizeGroup),
++    excluded_domestic_ids: excludedDomesticIds
++  };
++}
++
++function classifyNormalizedRecord(record, context, classifier = classifyRecord) {
++  const base = classifier(record, context);
++  let result = base;
++  if (base.classification === 'needs_review'
++    && isApprovedCountry(record.country)
++    && record.official_domain
++    && record.confirmed_international_whatsapp
++    && record.product_evidence.length
++    && base.reason_codes.every((reason) => reason === 'missing_identity')) {
++    result = {
++      classification: 'valid',
++      priority: 'B',
++      reason_codes: ['approved_country', 'official_domain', 'confirmed_international_whatsapp', 'business_evidence'],
++      confidence: 0.85
++    };
++  }
++
++  const safetyReasons = [];
++  if (record.duplicated_message_segments) safetyReasons.push('duplicated_message_segments');
++  if (record.has_malformed_source_time) safetyReasons.push('malformed_source_time');
++  if (record.has_malformed_json_payload) safetyReasons.push('malformed_json_payload');
++  if (record.uncertain_direction) safetyReasons.push('uncertain_direction');
++  if (result.classification === 'valid' && !record.product_evidence.length) {
++    safetyReasons.push('missing_business_evidence');
++  }
++  const reasons = [...new Set([...result.reason_codes, ...safetyReasons])];
++  if (!['test', 'noise'].includes(result.classification) && safetyReasons.length) {
++    return { classification: 'needs_review', priority: 'B', reason_codes: reasons, confidence: 0.5 };
++  }
++  return { ...result, reason_codes: reasons };
++}
++
++function classifyCurrentCrm(db, options = {}) {
++  const normalized = readEligibleCrmRecords(db);
++  const counts = {
++    input: normalized.records.length,
++    excluded_domestic: normalized.excluded_domestic_ids.length,
++    test: 0,
++    noise: 0,
++    needs_review: 0,
++    valid: 0,
++    errors: 0
++  };
++  const includePrivate = options.includePrivatePreview === true
++    && options.authenticatedLocalOperator === true;
++  const classifier = typeof options.classifier === 'function' ? options.classifier : classifyRecord;
++  const records = [];
++
++  for (const record of normalized.records) {
++    try {
++      const classification = classifyNormalizedRecord(record, { now: options.now }, classifier);
++      counts[classification.classification] += 1;
++      const output = {
++        identity_id: record.identity_id,
++        source_ids: record.source_ids,
++        classification: classification.classification,
++        priority: classification.priority,
++        reason_codes: classification.reason_codes,
++        confidence: classification.confidence
++      };
++      if (includePrivate) output.private_preview = { contact: record.private_contact };
++      records.push(output);
++    } catch {
++      counts.errors += 1;
++      counts.needs_review += 1;
++      records.push({
++        identity_id: record.identity_id,
++        source_ids: record.source_ids,
++        classification: 'needs_review',
++        priority: 'B',
++        reason_codes: ['classification_error'],
++        confidence: 0
++      });
++    }
++  }
++
++  return {
++    ruleset_version: RULESET_VERSION,
++    counts,
++    excluded_domestic_ids: normalized.excluded_domestic_ids,
++    records
++  };
++}
++
++module.exports = {
++  readEligibleCrmRecords,
++  classifyCurrentCrm
++};

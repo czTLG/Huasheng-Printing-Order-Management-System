@@ -1,0 +1,327 @@
+# Review package: 11422b0..ac8af11
+
+## Commits
+ac8af11 fix: harden schema rank boundaries
+67548f9 feat: add schema rank classifier
+
+## Files changed
+ package.json                |   1 +
+ scripts/test-schema-rank.js | 125 ++++++++++++++++++++++++++++++++++++
+ src/lib/schemaRank.js       | 151 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 277 insertions(+)
+
+## Diff
+diff --git a/package.json b/package.json
+index e652420..b79a0b5 100644
+--- a/package.json
++++ b/package.json
+@@ -2,20 +2,21 @@
+   "name": "packaging-printing-mes-demo",
+   "version": "0.1.0",
+   "description": "包装袋印刷厂智能生产管理系统（演示版后端）",
+   "main": "src/server.js",
+   "scripts": {
+     "start": "node src/server.js",
+     "baseline:verify": "node scripts/verify-baseline.js",
+     "verify:smoke": "node scripts/smoke-test.js",
+     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+     "test:private-baseline": "node scripts/test-private-baseline.js",
++    "test:matrix-rank": "node scripts/test-schema-rank.js",
+     "runtime:audit": "node scripts/runtime-audit.js",
+     "runtime:backup": "node scripts/runtime-backup.js",
+     "runtime:verify": "node scripts/runtime-verify.js",
+     "baseline:generate-private": "node scripts/generate-private-baseline.js"
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.3",
+     "better-sqlite3": "^11.8.1",
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+diff --git a/scripts/test-schema-rank.js b/scripts/test-schema-rank.js
+new file mode 100644
+index 0000000..67b5aed
+--- /dev/null
++++ b/scripts/test-schema-rank.js
+@@ -0,0 +1,125 @@
++const assert = require('assert');
++const {
++  classifyRecord,
++  isApprovedCountry,
++  APPROVED_COUNTRIES,
++  EXCLUDED_COUNTRIES,
++  RULESET_VERSION
++} = require('../src/lib/schemaRank');
++
++const validRecord = (overrides = {}) => ({
++  country: 'Indonesia',
++  official_domain: 'brand.example',
++  business_email: 'sales@brand.example',
++  product_evidence: ['coffee'],
++  last_interaction_at: '2026-07-01',
++  ...overrides
++});
++
++const assertClassification = (record, classification, reasonCode, context = {}) => {
++  const result = classifyRecord(record, context);
++  assert.equal(result.classification, classification);
++  assert(result.reason_codes.includes(reasonCode));
++  assert.equal(typeof result.confidence, 'number');
++  assert(result.confidence >= 0 && result.confidence <= 1);
++  return result;
++};
++
++assert.equal(isApprovedCountry('Vietnam'), true);
++assert.equal(isApprovedCountry('India'), false);
++assert.equal(classifyRecord({ fixture_marker: 'token-verification' }, {}).classification, 'test');
++assert.equal(classifyRecord({ source_kind: 'security_notice', country: 'Malaysia' }, {}).classification, 'noise');
++assert.equal(classifyRecord({ country: 'Thailand', business_email: 'sales@example.co.th' }, {}).classification, 'needs_review');
++const valid = classifyRecord(validRecord(), { now: '2026-07-16' });
++assert.equal(valid.classification, 'valid');
++assert(valid.reason_codes.includes('official_domain'));
++
++const expectedApprovedCountries = [
++  'Vietnam',
++  'Thailand',
++  'Malaysia',
++  'Indonesia',
++  'Philippines',
++  'Kazakhstan'
++];
++assert.deepEqual([...APPROVED_COUNTRIES].sort(), [...expectedApprovedCountries].sort());
++for (const country of expectedApprovedCountries) {
++  assert.equal(isApprovedCountry(`  ${country.toUpperCase()}  `), true);
++}
++assert.deepEqual(EXCLUDED_COUNTRIES, ['India']);
++assert.equal(isApprovedCountry(' INDIA '), false);
++assert.equal(typeof RULESET_VERSION, 'string');
++assert(RULESET_VERSION.length > 0);
++
++const testCollision = assertClassification({
++  fixture_marker: 'collision',
++  source_kind: 'security_notice',
++  country: 'India'
++}, 'test', 'fixture_marker');
++assert.equal(testCollision.priority, 'C');
++assert.equal(testCollision.confidence, 1);
++
++const noiseCollision = assertClassification({
++  source_kind: 'security_notice',
++  country: 'Unknown',
++  official_domain: 'one.example',
++  business_email: 'sales@two.example'
++}, 'noise', 'security_notice');
++assert.equal(noiseCollision.priority, 'C');
++assert.equal(noiseCollision.confidence, 1);
++
++const excludedCountry = assertClassification(validRecord({
++  country: ' India '
++}), 'noise', 'excluded_country');
++assert.equal(excludedCountry.priority, 'C');
++
++const missingIdentity = assertClassification({ country: 'Vietnam' }, 'needs_review', 'missing_identity');
++assert.equal(missingIdentity.priority, 'B');
++assert.equal(missingIdentity.confidence, 0.5);
++
++assertClassification({
++  country: 'Thailand',
++  official_domain: 'company.co.th',
++  business_email: 'sales@example.co.th'
++}, 'needs_review', 'ambiguous_contact');
++
++assertClassification(validRecord({
++  source_kind: 'whatsapp',
++  sender_name: '   ',
++  sender_phone: '\t'
++}), 'needs_review', 'unknown_whatsapp_sender');
++
++assertClassification(validRecord({
++  source_kind: 'whatsapp'
++}), 'needs_review', 'unknown_whatsapp_sender');
++
++assertClassification(validRecord({
++  last_interaction_at: '2026-02-30'
++}), 'needs_review', 'malformed_source_time');
++
++assertClassification(validRecord({
++  official_domain: 'brand.example',
++  business_email: 'sales@other.example'
++}), 'needs_review', 'conflicting_domains');
++
++assertClassification(validRecord({
++  country: 'Philippines',
++  official_domain: 'company.ph',
++  business_email: 'sales@gmail.com'
++}), 'needs_review', 'ambiguous_contact');
++
++assert.equal(valid.priority, 'A');
++assert.equal(valid.confidence, 0.95);
++assert(valid.reason_codes.includes('approved_country'));
++assert(valid.reason_codes.includes('product_evidence'));
++assert(valid.reason_codes.includes('valid_source_time'));
++
++const staleValid = assertClassification(validRecord({
++  country: 'Kazakhstan',
++  last_interaction_at: '2026-05-01'
++}), 'valid', 'official_domain', { now: '2026-07-16' });
++assert.equal(staleValid.priority, 'B');
++assert.equal(staleValid.confidence, 0.85);
++
++assert.deepEqual(Object.keys(valid), ['classification', 'priority', 'reason_codes', 'confidence']);
++console.log('schema-rank tests passed');
+diff --git a/src/lib/schemaRank.js b/src/lib/schemaRank.js
+new file mode 100644
+index 0000000..e5bf1f4
+--- /dev/null
++++ b/src/lib/schemaRank.js
+@@ -0,0 +1,151 @@
++'use strict';
++
++const RULESET_VERSION = '1.0.0';
++
++const APPROVED_COUNTRIES = Object.freeze([
++  'Vietnam',
++  'Thailand',
++  'Malaysia',
++  'Indonesia',
++  'Philippines',
++  'Kazakhstan'
++]);
++
++const EXCLUDED_COUNTRIES = Object.freeze([
++  'India'
++]);
++
++const approvedCountryKeys = new Set(APPROVED_COUNTRIES.map(normalizeCountry));
++const excludedCountryKeys = new Set(EXCLUDED_COUNTRIES.map(normalizeCountry));
++const AMBIGUOUS_CONTACT_DOMAINS = Object.freeze([
++  'gmail.com',
++  'googlemail.com',
++  'hotmail.com',
++  'icloud.com',
++  'live.com',
++  'outlook.com',
++  'proton.me',
++  'protonmail.com',
++  'qq.com',
++  'yahoo.com'
++]);
++const ambiguousContactDomainKeys = new Set(AMBIGUOUS_CONTACT_DOMAINS);
++
++function normalizeCountry(country) {
++  return typeof country === 'string'
++    ? country.trim().toLowerCase().replace(/\s+/g, ' ')
++    : '';
++}
++
++function isApprovedCountry(country) {
++  return approvedCountryKeys.has(normalizeCountry(country));
++}
++
++function emailDomain(email) {
++  if (typeof email !== 'string') return '';
++  const match = email.trim().toLowerCase().match(/^[^@\s]+@([^@\s]+)$/);
++  return match ? match[1].replace(/^www\./, '') : '';
++}
++
++function normalizeDomain(domain) {
++  return typeof domain === 'string'
++    ? domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]
++    : '';
++}
++
++function domainsMatch(left, right) {
++  return left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`);
++}
++
++function validDate(value) {
++  if (typeof value !== 'string') return false;
++  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/);
++  if (!match) return false;
++
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  const calendarDate = new Date(Date.UTC(year, month - 1, day));
++  if (calendarDate.getUTCFullYear() !== year
++    || calendarDate.getUTCMonth() !== month - 1
++    || calendarDate.getUTCDate() !== day) {
++    return false;
++  }
++
++  return !value.includes('T') || !Number.isNaN(Date.parse(value));
++}
++
++function isAmbiguousContactDomain(domain) {
++  return domain.split('.')[0] === 'example' || ambiguousContactDomainKeys.has(domain);
++}
++
++function hasIdentityValue(value) {
++  return typeof value === 'string' && value.trim().length > 0;
++}
++
++function result(classification, priority, reasonCodes, confidence) {
++  return {
++    classification,
++    priority,
++    reason_codes: reasonCodes,
++    confidence
++  };
++}
++
++function classifyRecord(record = {}, context = {}) {
++  const countryKey = normalizeCountry(record.country);
++  const officialDomain = normalizeDomain(record.official_domain);
++  const contactDomain = emailDomain(record.business_email);
++
++  if (record.fixture_marker) {
++    return result('test', 'C', ['fixture_marker'], 1);
++  }
++
++  if (record.source_kind === 'security_notice' || excludedCountryKeys.has(countryKey)) {
++    const reason = record.source_kind === 'security_notice' ? 'security_notice' : 'excluded_country';
++    return result('noise', 'C', [reason], 1);
++  }
++
++  const reviewReasons = [];
++  if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push('unapproved_country');
++  if (!officialDomain || !contactDomain) reviewReasons.push('missing_identity');
++  if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push('ambiguous_contact');
++  if (record.source_kind === 'whatsapp'
++    && !hasIdentityValue(record.sender_name)
++    && !hasIdentityValue(record.sender_phone)) {
++    reviewReasons.push('unknown_whatsapp_sender');
++  }
++  if (record.last_interaction_at && !validDate(record.last_interaction_at)) {
++    reviewReasons.push('malformed_source_time');
++  }
++  if (officialDomain && contactDomain && !domainsMatch(officialDomain, contactDomain)) {
++    reviewReasons.push('conflicting_domains');
++  }
++
++  if (reviewReasons.length) {
++    return result('needs_review', 'B', reviewReasons, 0.5);
++  }
++
++  const validReasons = ['approved_country', 'official_domain'];
++  if (Array.isArray(record.product_evidence) && record.product_evidence.length) {
++    validReasons.push('product_evidence');
++  }
++  if (record.last_interaction_at && validDate(record.last_interaction_at)) {
++    validReasons.push('valid_source_time');
++  }
++
++  const now = validDate(context.now) ? Date.parse(context.now) : NaN;
++  const interaction = validDate(record.last_interaction_at) ? Date.parse(record.last_interaction_at) : NaN;
++  const recent = !Number.isNaN(now) && !Number.isNaN(interaction)
++    && now >= interaction && now - interaction <= 30 * 24 * 60 * 60 * 1000;
++
++  return result('valid', recent ? 'A' : 'B', validReasons, recent ? 0.95 : 0.85);
++}
++
++module.exports = {
++  classifyRecord,
++  isApprovedCountry,
++  APPROVED_COUNTRIES,
++  EXCLUDED_COUNTRIES,
++  RULESET_VERSION
++};

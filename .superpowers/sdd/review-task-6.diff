@@ -1,0 +1,501 @@
+# Review package: d21d18c..bf2eef3
+
+## Commits
+bf2eef3 test: verify matrix stream phase one
+
+## Files changed
+ docs/operations/matrix-phase1-runbook.md | 145 +++++++++++++++
+ package.json                             |   1 +
+ scripts/verify-matrix-phase1.js          | 306 +++++++++++++++++++++++++++++++
+ 3 files changed, 452 insertions(+)
+
+## Diff
+diff --git a/docs/operations/matrix-phase1-runbook.md b/docs/operations/matrix-phase1-runbook.md
+new file mode 100644
+index 0000000..893894a
+--- /dev/null
++++ b/docs/operations/matrix-phase1-runbook.md
+@@ -0,0 +1,145 @@
++# Matrix Phase 1 运行手册
++
++本阶段只做确定性分类、公开证据导入和只读候选查看。它不发送邮件、WhatsApp 或表单消息，也不创建、更新或删除正式 CRM 记录。
++
++## 安全验证
++
++每次运行前，在仓库根目录执行：
++
++```bash
++npm run verify:matrix-phase1
++```
++
++验证器使用系统临时目录中的独立 SQLite 数据库，初始化完整 schema，并覆盖分类、证据存储、受限导入、当前 CRM 只读适配器和候选 API。它同时确认：
++
++- 允许国家严格为 Vietnam、Thailand、Malaysia、Indonesia、Philippines、Kazakhstan；India 被排除；
++- 每个国家最多接受 20 条，每个 run 最多输入 120 条；
++- 导入和只读操作不会改写 `customers`、`crm_messages`、`email_messages`、`communication_logs`；
++- Matrix 路由没有写接口，相关模块没有交付适配器。
++
++验证器会在结束时删除临时数据库。出现任一断言失败时退出码非零，不得继续导入。
++
++## 当前 CRM 只读干跑
++
++默认命令只输出聚合计数、内部 identity 和源记录 ID：
++
++```bash
++node scripts/matrix-classify-current.js
++```
++
++它读取 `customers`、`crm_messages`、`email_messages`，不写数据库，也不输出消息正文。若确需本机人工核对联系方式，必须同时满足本地已认证 operator 上下文，并显式使用 `--include-private-preview`；不要把该输出写入工单、聊天或共享日志。
++
++只有需要保留不含私密预览的审计结果时才指定工作区内路径：
++
++```bash
++node scripts/matrix-classify-current.js --output ./tmp/matrix-current-summary.json
++```
++
++输出前后应记录数据库文件校验和；校验和变化即停止操作并调查。
++
++## 公开证据导入 schema
++
++输入是 JSON 数组。每条记录仅允许公开页面可验证的公司字段：
++
++```json
++[
++  {
++    "country": "Vietnam",
++    "display_name": "Example Foods",
++    "official_url": "https://example.com/",
++    "business_email": "sales@example.com",
++    "public_contacts": {
++      "email": "sales@example.com",
++      "phone": "+84 000 000 000",
++      "whatsapp": "+84 000 000 000",
++      "linkedin_url": "https://www.linkedin.com/company/example",
++      "contact_page_url": "https://example.com/contact"
++    },
++    "product_evidence": ["coffee"],
++    "evidence": [
++      {
++        "field": "product",
++        "value": "coffee",
++        "source_url": "https://example.com/products",
++        "page_title": "Products",
++        "retrieved_at": "2026-07-16T00:00:00Z",
++        "content_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
++        "confidence": "high",
++        "extraction_method": "public-page-review"
++      }
++    ]
++  }
++]
++```
++
++`country`、`official_url` 和至少一个 `evidence` 项是必需的；每个 evidence 必须有非空 `field`、`source_url`、`retrieved_at`。`content_fingerprint` 如提供，必须是 32–128 位十六进制摘要。不要存整页 HTML、登录后页面、私人资料、猜测的个人邮箱、cookie、token、API key 或内部规则文本。
++
++导入必须通过调用 `importDiscoveryBatch(db, runId, records, { dnsLookup, transport, now })` 的受控本地 runner 完成。生产 transport 必须保留地址固定和每跳重定向复验；不得用普通 `fetch` 替代。Phase 1 没有面向操作员的通用导入 CLI，不能临时拼接脚本绕过这些守卫。
++
++## 计数与抽检
++
++每次导入保存 run ID，并记录以下计数：
++
++- `input`：输入总数，包含随后排除或报错的记录；
++- `excluded`：India 等明确排除记录；
++- `test`：已知测试或验证伪记录；
++- `noise`：系统通知等噪声；
++- `needs_review`：证据或身份不足，必须人工复核；
++- `valid`：通过当前规则的候选；
++- `errors`：URL、证据、国家上限或存储校验失败。
++
++计数必须满足 `input = excluded + test + noise + needs_review + valid + errors`。若不相等、任一国家超过 20、总输入超过 120、出现 India 实体，立即停止。
++
++人工抽检至少覆盖每个国家和每个非零分类；每组抽取 10%，不足 10 条时至少 1 条。逐项核对 official domain、证据 URL、检索时间、confidence、分类 reason code，并确认 API 只展示掩码联系方式。`needs_review` 和 `errors` 不得按 valid 使用。
++
++可用只读 SQL 复核：
++
++```sql
++SELECT id, status, ruleset_version, counters_json, created_at
++FROM matrix_runs
++WHERE id = :run_id;
++
++SELECT e.country, c.classification, COUNT(*) AS count
++FROM matrix_classifications c
++JOIN matrix_entities e ON e.id = c.entity_id
++WHERE c.run_id = :run_id
++GROUP BY e.country, c.classification
++ORDER BY e.country, c.classification;
++
++SELECT e.id, e.normalized_domain, e.country, c.classification,
++       c.priority, c.reason_json
++FROM matrix_classifications c
++JOIN matrix_entities e ON e.id = c.entity_id
++WHERE c.run_id = :run_id
++ORDER BY e.country, e.id;
++```
++
++## 回滚
++
++优先在临时数据库执行整次演练，回滚方式是在关闭连接后删除该临时数据库文件。对持久数据库，Phase 1 能明确证明归属某个 run 的只有 `matrix_classifications.run_id` 和该 `matrix_runs.id`；`matrix_entities` 与 `matrix_evidence` 可被多个 run 复用，不能凭时间或 domain 推测归属并删除。
++
++先备份数据库并确认 `:run_id`，然后在单个事务中仅删除该 run 明确拥有的 Matrix 行：
++
++```sql
++BEGIN IMMEDIATE;
++
++SELECT COUNT(*) AS classifications_to_delete
++FROM matrix_classifications
++WHERE run_id = :run_id;
++
++DELETE FROM matrix_classifications
++WHERE run_id = :run_id;
++
++DELETE FROM matrix_runs
++WHERE id = :run_id;
++
++COMMIT;
++```
++
++不要删除或更新任何非 `matrix_*` 表。不要对 `matrix_entities` 或 `matrix_evidence` 做级联清理；当前 schema 没有足够的 run 所有权信息。若必须清理这些共享行，停止并走单独的变更评审，而不是扩大本回滚。
++
++## 秘密隔离与交付状态
++
++DNS/HTTP provider 凭据、数据库凭据、JWT、SMTP、邮箱和消息平台秘密只能来自进程环境或受管秘密存储，不能进入导入 JSON、`campaign_json`、evidence、日志、报告或仓库。公开证据数据与正式 CRM 数据使用独立表；私密预览不得持久化到 Matrix 表。
++
++Phase 1 的 delivery 明确不可用：没有邮件或 WhatsApp 发送适配器，没有自动表单提交，没有 Matrix POST/PATCH/DELETE API，也没有最终发送按钮或后台交付任务。任何交付需求都属于后续独立阶段；不得通过现有通用邮件模块旁路实现。
+diff --git a/package.json b/package.json
+index 242444a..2f07383 100644
+--- a/package.json
++++ b/package.json
+@@ -7,20 +7,21 @@
+     "start": "node src/server.js",
+     "baseline:verify": "node scripts/verify-baseline.js",
+     "verify:smoke": "node scripts/smoke-test.js",
+     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+     "test:private-baseline": "node scripts/test-private-baseline.js",
+     "test:matrix-rank": "node scripts/test-schema-rank.js",
+     "test:signal-cache": "node scripts/test-signal-cache.js",
+     "test:matrix-stream": "node scripts/test-matrix-stream.js",
+     "test:matrix-crm": "node scripts/test-matrix-crm-adapter.js",
+     "test:matrix-api": "node scripts/test-matrix-api.js",
++    "verify:matrix-phase1": "node scripts/verify-matrix-phase1.js",
+     "runtime:audit": "node scripts/runtime-audit.js",
+     "runtime:backup": "node scripts/runtime-backup.js",
+     "runtime:verify": "node scripts/runtime-verify.js",
+     "baseline:generate-private": "node scripts/generate-private-baseline.js"
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.3",
+     "better-sqlite3": "^11.8.1",
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+diff --git a/scripts/verify-matrix-phase1.js b/scripts/verify-matrix-phase1.js
+new file mode 100644
+index 0000000..dd710f8
+--- /dev/null
++++ b/scripts/verify-matrix-phase1.js
+@@ -0,0 +1,306 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const net = require('net');
++const os = require('os');
++const path = require('path');
++const { spawn } = require('child_process');
++
++const root = path.resolve(__dirname, '..');
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-phase1-'));
++const dbPath = path.join(tempDir, 'phase1.db');
++process.env.DB_PATH = dbPath;
++
++const { db, initDb } = require('../src/db');
++const {
++  APPROVED_COUNTRIES,
++  EXCLUDED_COUNTRIES,
++  classifyRecord,
++  isApprovedCountry
++} = require('../src/lib/schemaRank');
++const { createRun } = require('../src/lib/signalCache');
++const { importDiscoveryBatch } = require('../src/lib/matrixStream');
++const { classifyCurrentCrm } = require('../src/lib/matrixCrmAdapter');
++
++const PUBLIC_ADDRESS = '203.0.113.10';
++const FORMAL_TABLES = Object.freeze([
++  'customers',
++  'crm_messages',
++  'email_messages',
++  'communication_logs'
++]);
++let server;
++let serverError = '';
++
++function record(country, index) {
++  const slug = `${country.toLowerCase().replace(/[^a-z]+/g, '-')}-${index}`;
++  const domain = `${slug}.example`;
++  return {
++    country,
++    display_name: `${country} Brand ${index}`,
++    official_url: `https://${domain}/`,
++    business_email: `sales@${domain}`,
++    product_evidence: ['coffee'],
++    evidence: [{
++      field: 'product',
++      value: 'coffee',
++      source_url: `https://${domain}/products`,
++      retrieved_at: '2026-07-16T00:00:00Z',
++      confidence: 'high'
++    }]
++  };
++}
++
++async function publicDnsLookup(hostname, options) {
++  assert(hostname.endsWith('.example'), `unexpected DNS lookup: ${hostname}`);
++  return options && options.all
++    ? [{ address: PUBLIC_ADDRESS, family: 4 }]
++    : { address: PUBLIC_ADDRESS, family: 4 };
++}
++
++async function safeTransport(_url, options) {
++  return {
++    status: 200,
++    connectedAddress: options.connectAddress,
++    connectedFamily: options.connectFamily,
++    headers: { get: () => null }
++  };
++}
++
++function tableRows(table) {
++  return db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
++}
++
++function formalSnapshot() {
++  return Object.fromEntries(FORMAL_TABLES.map(table => [table, tableRows(table)]));
++}
++
++function seedCurrentCrmFixture() {
++  const now = '2026-07-16T00:00:00Z';
++  const customer = db.prepare(`
++    INSERT INTO customers (name, active, created_at, updated_at)
++    VALUES (?, 1, ?, ?)
++  `).run('Phase One Read Fixture', now, now);
++  db.prepare(`
++    INSERT INTO crm_messages (
++      source_type, source_message_id, customer_id, direction, sender_name,
++      sender_contact, receiver_contact, message_text, raw_payload_json,
++      received_at, dedupe_hash, created_at, updated_at
++    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++  `).run(
++    'whatsapp', 'phase1-fixture', Number(customer.lastInsertRowid), 'inbound',
++    'Fixture', '+84912345678', '', 'hello token ok', '{}', now,
++    'phase1-fixture-dedupe', now, now
++  );
++}
++
++function assertClassification() {
++  assert.deepEqual(APPROVED_COUNTRIES, [
++    'Vietnam', 'Thailand', 'Malaysia', 'Indonesia', 'Philippines', 'Kazakhstan'
++  ]);
++  assert(EXCLUDED_COUNTRIES.includes('India'));
++  for (const country of APPROVED_COUNTRIES) assert.equal(isApprovedCountry(country), true);
++  assert.equal(isApprovedCountry('India'), false);
++  assert.equal(classifyRecord({ fixture_marker: 'token-verification' }, {}).classification, 'test');
++  assert.equal(classifyRecord({ source_kind: 'security_notice', country: 'Malaysia' }, {}).classification, 'noise');
++}
++
++async function assertBoundedImport() {
++  const records = APPROVED_COUNTRIES.flatMap(country =>
++    Array.from({ length: 20 }, (_, index) => record(country, index + 1))
++  );
++  assert.equal(records.length, 120);
++  const run = createRun(db, { name: 'phase-one-verification', countries: APPROVED_COUNTRIES });
++  const summary = await importDiscoveryBatch(db, run.id, records, {
++    dnsLookup: publicDnsLookup,
++    transport: safeTransport,
++    now: '2026-07-16'
++  });
++  assert.deepEqual(summary, {
++    input: 120,
++    excluded: 0,
++    test: 0,
++    noise: 0,
++    needs_review: 0,
++    valid: 120,
++    errors: 0
++  });
++  const persistedCountries = db.prepare(`
++    SELECT country, COUNT(*) count
++    FROM matrix_entities
++    GROUP BY country
++    ORDER BY country
++  `).all();
++  assert.deepEqual(
++    Object.fromEntries(persistedCountries.map(row => [row.country, row.count])),
++    Object.fromEntries(APPROVED_COUNTRIES.map(country => [country, 20]))
++  );
++
++  const indiaRun = createRun(db, { name: 'india-exclusion-check', countries: ['India'] });
++  const indiaSummary = await importDiscoveryBatch(db, indiaRun.id, [record('India', 1)], {
++    dnsLookup: publicDnsLookup,
++    transport: safeTransport,
++    now: '2026-07-16'
++  });
++  assert.equal(indiaSummary.excluded, 1);
++  assert.equal(db.prepare("SELECT COUNT(*) count FROM matrix_entities WHERE lower(country) = 'india'").get().count, 0);
++
++  const countryLimitRun = createRun(db, { name: 'country-limit-check', countries: ['Vietnam'] });
++  const countryLimitSummary = await importDiscoveryBatch(
++    db,
++    countryLimitRun.id,
++    Array.from({ length: 21 }, (_, index) => record('Vietnam', index + 101)),
++    { dnsLookup: publicDnsLookup, transport: safeTransport, now: '2026-07-16' }
++  );
++  assert.equal(countryLimitSummary.valid, 20);
++  assert.equal(countryLimitSummary.errors, 1);
++
++  const oversizedRun = createRun(db, { name: 'run-limit-check', countries: APPROVED_COUNTRIES });
++  await assert.rejects(
++    importDiscoveryBatch(
++      db,
++      oversizedRun.id,
++      Array.from({ length: 121 }, (_, index) => record('Thailand', index + 201)),
++      { dnsLookup: publicDnsLookup, transport: safeTransport, now: '2026-07-16' }
++    ),
++    /exceeds 120 input records/
++  );
++}
++
++function assertCurrentCrmReadOnly() {
++  const before = formalSnapshot();
++  const report = classifyCurrentCrm(db, { now: '2026-07-16' });
++  assert.equal(report.counts.input, 1);
++  assert.equal(report.counts.test, 1);
++  assert.deepEqual(formalSnapshot(), before);
++}
++
++function assertDeliveryUnavailable() {
++  const phaseOneFiles = [
++    'src/lib/schemaRank.js',
++    'src/lib/signalCache.js',
++    'src/lib/matrixStream.js',
++    'src/lib/matrixCrmAdapter.js',
++    'src/routes/matrix.js'
++  ];
++  const prohibitedImports = /require\(['"](?:nodemailer|imapflow)['"]\)|\b(?:sendMail|sendMessage|deliverCandidate)\s*\(/;
++  for (const relative of phaseOneFiles) {
++    const source = fs.readFileSync(path.join(root, relative), 'utf8');
++    assert(!prohibitedImports.test(source), `${relative} must not expose a delivery adapter`);
++  }
++  for (const modulePath of [
++    '../src/lib/schemaRank',
++    '../src/lib/signalCache',
++    '../src/lib/matrixStream',
++    '../src/lib/matrixCrmAdapter'
++  ]) {
++    const exportedNames = Object.keys(require(modulePath));
++    assert(
++      exportedNames.every(name => !/(?:send|deliver|dispatch|smtp|whatsapp)/i.test(name)),
++      `${modulePath} must export zero delivery adapters`
++    );
++  }
++  const routerSource = fs.readFileSync(path.join(root, 'src/routes/matrix.js'), 'utf8');
++  assert(!/router\.(?:post|put|patch|delete)\s*\(/.test(routerSource), 'matrix API must remain read-only');
++  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
++  const phaseScripts = Object.keys(packageJson.scripts || {}).filter(name => name.includes('matrix'));
++  assert(
++    phaseScripts.every(name => !/(?:send|deliver|dispatch|smtp|whatsapp)/i.test(name)),
++    'package scripts must expose zero Matrix delivery commands'
++  );
++}
++
++function availablePort() {
++  return new Promise((resolve, reject) => {
++    const probe = net.createServer();
++    probe.once('error', reject);
++    probe.listen(0, '127.0.0.1', () => {
++      const port = probe.address().port;
++      probe.close(error => error ? reject(error) : resolve(port));
++    });
++  });
++}
++
++async function waitForHealth(baseUrl) {
++  const deadline = Date.now() + 15000;
++  while (Date.now() < deadline) {
++    try {
++      const response = await fetch(`${baseUrl}/health`);
++      if (response.ok) return;
++    } catch (_) {}
++    await new Promise(resolve => setTimeout(resolve, 100));
++  }
++  throw new Error(`server health timeout: ${serverError.slice(-1000)}`);
++}
++
++async function assertReadOnlyApi() {
++  const now = '2026-07-16T00:00:00Z';
++  db.prepare(`
++    INSERT INTO users (username, password, role, status, created_at, approved_at)
++    VALUES (?, ?, ?, 'active', ?, ?)
++  `).run('phase1_verifier', 'verify123', 'foreign_trade_crm_admin', now, now);
++
++  const before = formalSnapshot();
++  const port = await availablePort();
++  const baseUrl = `http://127.0.0.1:${port}`;
++  server = spawn(process.execPath, ['src/server.js'], {
++    cwd: root,
++    env: {
++      ...process.env,
++      DB_PATH: dbPath,
++      PORT: String(port),
++      DISABLE_CRON: '1',
++      FORCE_HTTPS: '0'
++    },
++    stdio: ['ignore', 'ignore', 'pipe']
++  });
++  server.stderr.on('data', chunk => { serverError += String(chunk); });
++  await waitForHealth(baseUrl);
++
++  const login = await fetch(`${baseUrl}/api/auth/login`, {
++    method: 'POST',
++    headers: { 'content-type': 'application/json' },
++    body: JSON.stringify({ username: 'phase1_verifier', password: 'verify123' })
++  });
++  assert.equal(login.status, 200);
++  const { token } = await login.json();
++  assert(token);
++  const response = await fetch(`${baseUrl}/api/matrix/candidates?page_size=100`, {
++    headers: { authorization: `Bearer ${token}` }
++  });
++  assert.equal(response.status, 200);
++  const payload = await response.json();
++  assert(payload.total >= 120);
++  assert(payload.rows.length <= 100);
++  assert.deepEqual(formalSnapshot(), before);
++}
++
++async function main() {
++  initDb();
++  seedCurrentCrmFixture();
++  assertClassification();
++  const formalBeforeImport = formalSnapshot();
++  await assertBoundedImport();
++  assert.deepEqual(formalSnapshot(), formalBeforeImport, 'guarded import must not write formal CRM tables');
++  assertCurrentCrmReadOnly();
++  assertDeliveryUnavailable();
++  await assertReadOnlyApi();
++
++  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
++  assert.equal(
++    packageJson.scripts && packageJson.scripts['verify:matrix-phase1'],
++    'node scripts/verify-matrix-phase1.js',
++    'package command must wire the phase-one verifier'
++  );
++  console.log('matrix phase-one verification passed');
++}
++
++main().catch(error => {
++  console.error(error.stack || error);
++  process.exitCode = 1;
++}).finally(() => {
++  if (server) server.kill('SIGTERM');
++  try { db.close(); } catch (_) {}
++  fs.rmSync(tempDir, { recursive: true, force: true });
++});

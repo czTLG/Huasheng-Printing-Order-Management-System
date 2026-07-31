@@ -1,0 +1,953 @@
+# Review package: 965b4ae..d21d18c
+
+## Commits
+d21d18c refactor: enforce matrix reason code contract
+400059a refactor: centralize matrix reason codes
+2d32ca2 feat: expose read only matrix candidates
+
+## Files changed
+ package.json                       |   1 +
+ scripts/test-matrix-api.js         | 241 +++++++++++++++++++++++++++++++++++++
+ scripts/test-matrix-crm-adapter.js |  13 ++
+ scripts/test-schema-rank.js        |  33 ++++-
+ src/lib/matrixCrmAdapter.js        |  25 ++--
+ src/lib/schemaRank.js              |  52 ++++++--
+ src/routes/matrix.js               | 215 +++++++++++++++++++++++++++++++++
+ src/server.js                      |   2 +
+ 8 files changed, 559 insertions(+), 23 deletions(-)
+
+## Diff
+diff --git a/package.json b/package.json
+index 2bd8e1a..242444a 100644
+--- a/package.json
++++ b/package.json
+@@ -6,20 +6,21 @@
+   "scripts": {
+     "start": "node src/server.js",
+     "baseline:verify": "node scripts/verify-baseline.js",
+     "verify:smoke": "node scripts/smoke-test.js",
+     "test:runtime-rebuild": "node scripts/test-runtime-rebuild.js",
+     "test:private-baseline": "node scripts/test-private-baseline.js",
+     "test:matrix-rank": "node scripts/test-schema-rank.js",
+     "test:signal-cache": "node scripts/test-signal-cache.js",
+     "test:matrix-stream": "node scripts/test-matrix-stream.js",
+     "test:matrix-crm": "node scripts/test-matrix-crm-adapter.js",
++    "test:matrix-api": "node scripts/test-matrix-api.js",
+     "runtime:audit": "node scripts/runtime-audit.js",
+     "runtime:backup": "node scripts/runtime-backup.js",
+     "runtime:verify": "node scripts/runtime-verify.js",
+     "baseline:generate-private": "node scripts/generate-private-baseline.js"
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.3",
+     "better-sqlite3": "^11.8.1",
+     "compression": "^1.8.1",
+     "dotenv": "^17.4.2",
+diff --git a/scripts/test-matrix-api.js b/scripts/test-matrix-api.js
+new file mode 100644
+index 0000000..a534977
+--- /dev/null
++++ b/scripts/test-matrix-api.js
+@@ -0,0 +1,241 @@
++'use strict';
++
++const assert = require('assert');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++const { spawn } = require('child_process');
++const Database = require('better-sqlite3');
++const { REASON_CODES, PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
++
++const root = path.resolve(__dirname, '..');
++const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-api-'));
++const dbPath = path.join(tempDir, 'app.db');
++const port = Number(process.env.MATRIX_API_TEST_PORT || 19115);
++const baseUrl = `http://127.0.0.1:${port}`;
++let child;
++let stderr = '';
++
++function sleep(ms) {
++  return new Promise(resolve => setTimeout(resolve, ms));
++}
++
++async function waitForHealth() {
++  const deadline = Date.now() + 15000;
++  while (Date.now() < deadline) {
++    try {
++      const response = await fetch(`${baseUrl}/health`);
++      if (response.ok) return;
++    } catch (_) {}
++    await sleep(100);
++  }
++  throw new Error(`server health timeout: ${stderr.slice(-1000)}`);
++}
++
++async function request(urlPath, { method = 'GET', token, body, status = 200 } = {}) {
++  const headers = {};
++  if (token) headers.authorization = `Bearer ${token}`;
++  if (body !== undefined) headers['content-type'] = 'application/json';
++  const response = await fetch(`${baseUrl}${urlPath}`, {
++    method,
++    headers,
++    body: body === undefined ? undefined : JSON.stringify(body)
++  });
++  const text = await response.text();
++  let json;
++  try { json = text ? JSON.parse(text) : null; } catch (_) { json = { raw: text }; }
++  assert.equal(response.status, status, `${method} ${urlPath}: ${text}`);
++  return json;
++}
++
++async function login(username) {
++  const result = await request('/api/auth/login', {
++    method: 'POST',
++    body: { username, password: 'guard123' }
++  });
++  assert(result.token, `${username} login should return a token`);
++  return result.token;
++}
++
++function assertNoPrivateFields(value, forbiddenValues = []) {
++  const serialized = JSON.stringify(value);
++  const forbiddenKeys = [
++    'public_contacts_json', 'reason_json', 'campaign_json', 'ruleset_version',
++    'content_fingerprint', 'extraction_method', 'human_override_reason',
++    'human_override_actor', 'raw_page', 'page_text', 'message_body',
++    'secret', 'config'
++  ];
++  forbiddenKeys.forEach(key => assert(!serialized.toLowerCase().includes(`"${key.toLowerCase()}"`), `response leaked ${key}`));
++  forbiddenValues.forEach(secret => assert(!serialized.includes(secret), `response leaked ${secret}`));
++}
++
++function seed() {
++  process.env.DB_PATH = dbPath;
++  const { db, initDb } = require('../src/db');
++  const { createRun, upsertEntity, appendEvidence, saveClassification } = require('../src/lib/signalCache');
++  initDb();
++  const createdAt = '2026-07-16 09:00:00';
++  const insertUser = db.prepare(`
++    INSERT INTO users (username, password, role, status, created_at, approved_at)
++    VALUES (?, 'guard123', ?, 'active', ?, ?)
++  `);
++  insertUser.run('matrix_super', 'super_admin', createdAt, createdAt);
++  insertUser.run('matrix_crm', 'foreign_trade_crm_admin', createdAt, createdAt);
++  insertUser.run('matrix_sales', 'ai_sales', createdAt, createdAt);
++
++  const firstRun = createRun(db, {
++    name: 'Southeast Asia public scan',
++    countries: ['Vietnam'],
++    actor: 'SECRET_CONFIG_ACTOR'
++  });
++  const secondRun = createRun(db, { name: 'Thailand public scan', countries: ['Thailand'] });
++  const first = upsertEntity(db, {
++    official_domain: 'alpha.example',
++    display_name: 'Alpha Foods',
++    country: 'Vietnam',
++    public_contacts: {
++      email: 'buyer@alpha.example',
++      phone: '+84 912 345 678',
++      whatsapp: '+84 998 765 432',
++      linkedin_url: 'https://linkedin.example/private-contact',
++      contact_page_url: 'https://alpha.example/private-contact'
++    }
++  });
++  const second = upsertEntity(db, {
++    official_domain: 'beta.example',
++    display_name: 'Beta Foods',
++    country: 'Thailand',
++    public_contacts: { email: 'owner@beta.example' }
++  });
++  appendEvidence(db, first.id, {
++    field: 'SECRET_EVIDENCE_FIELD_SENTINEL',
++    value: 'RAW_PAGE_TEXT_SENTINEL private CRM message body',
++    source_url: 'https://alpha.example/products',
++    page_title: 'Alpha public products',
++    retrieved_at: '2026-07-16T01:00:00Z',
++    confidence: 'high',
++    extraction_method: 'SECRET_INTERNAL_RULE'
++  });
++  saveClassification(db, first.id, {
++    classification: 'valid',
++    priority: 'A',
++    reason_codes: [...PUBLIC_REASON_CODES, 'SECRET_REASON_RULE_SENTENCE'],
++    confidence: 0.95,
++    human_override_reason: 'SECRET_OVERRIDE_TEXT',
++    human_override_actor: 'private-reviewer'
++  }, firstRun.id);
++  saveClassification(db, second.id, {
++    classification: 'needs_review',
++    priority: 'B',
++    reason_codes: ['missing_identity'],
++    confidence: 0.5
++  }, secondRun.id);
++  db.close();
++  return { firstId: Number(first.id) };
++}
++
++async function main() {
++  assert(REASON_CODES && typeof REASON_CODES === 'object' && !Array.isArray(REASON_CODES), 'schemaRank should export REASON_CODES');
++  assert(Object.isFrozen(REASON_CODES), 'REASON_CODES should be immutable');
++  assert(Array.isArray(PUBLIC_REASON_CODES) && Object.isFrozen(PUBLIC_REASON_CODES), 'PUBLIC_REASON_CODES should be an immutable collection');
++  const reasonCodeValues = Object.values(REASON_CODES);
++  assert.equal(reasonCodeValues.length, 20, 'reason-code contract should cover all 20 current codes');
++  assert.equal(new Set(reasonCodeValues).size, 20, 'reason-code values should be unique');
++  assert.deepEqual(PUBLIC_REASON_CODES, reasonCodeValues, 'every REASON_CODES value should be public');
++
++  const schemaSource = fs.readFileSync(path.join(root, 'src', 'lib', 'schemaRank.js'), 'utf8');
++  const schemaProducerSource = schemaSource.slice(schemaSource.indexOf('function result'));
++  const crmProducerSource = fs.readFileSync(path.join(root, 'src', 'lib', 'matrixCrmAdapter.js'), 'utf8');
++  for (const code of reasonCodeValues) {
++    const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++    const literal = new RegExp(`['"]${escaped}['"]`);
++    assert(!literal.test(schemaProducerSource), `schemaRank producer should consume REASON_CODES for ${code}`);
++    assert(!literal.test(crmProducerSource), `matrixCrmAdapter producer should consume REASON_CODES for ${code}`);
++  }
++
++  const { firstId } = seed();
++  child = spawn(process.execPath, ['src/server.js'], {
++    cwd: root,
++    env: { ...process.env, DB_PATH: dbPath, PORT: String(port), DISABLE_CRON: '1', FORCE_HTTPS: '0' },
++    stdio: ['ignore', 'ignore', 'pipe']
++  });
++  child.stderr.on('data', chunk => { stderr += String(chunk); });
++  await waitForHealth();
++
++  await request('/api/matrix/candidates', { status: 401 });
++  const salesToken = await login('matrix_sales');
++  await request('/api/matrix/candidates', { token: salesToken, status: 403 });
++  const adminToken = await login('matrix_super');
++  const crmToken = await login('matrix_crm');
++
++  const list = await request('/api/matrix/candidates?page=1&page_size=1&classification=valid&priority=A&country=Vietnam', { token: crmToken });
++  assert.deepEqual(Object.keys(list).sort(), ['page', 'page_size', 'rows', 'total', 'total_pages']);
++  assert.equal(list.page, 1);
++  assert.equal(list.page_size, 1);
++  assert.equal(list.total, 1);
++  assert.equal(list.rows.length, 1);
++  const publicReasonCodes = [...PUBLIC_REASON_CODES];
++  assert.deepEqual(list.rows[0].reason_codes, publicReasonCodes);
++  assert.deepEqual(list.rows[0].evidence_urls, ['https://alpha.example/products']);
++  assert.equal(list.rows[0].contacts.email, 'b***@alpha.example');
++  assert.equal(list.rows[0].contacts.phone, '***5678');
++  assertNoPrivateFields(list, [
++    'buyer@alpha.example', '+84 912 345 678', '+84 998 765 432',
++    'private-contact', 'RAW_PAGE_TEXT_SENTINEL', 'SECRET_INTERNAL_RULE',
++    'SECRET_OVERRIDE_TEXT', 'private-reviewer', 'SECRET_REASON_RULE_SENTENCE'
++  ]);
++
++  const capped = await request('/api/matrix/candidates?page_size=999', { token: adminToken });
++  assert.equal(capped.page_size, 100);
++  assert.equal(capped.total, 2);
++  await request('/api/matrix/candidates?classification=unknown', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?priority=urgent', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?country=Neverland', { token: adminToken, status: 400 });
++  await request('/api/matrix/candidates?page=0', { token: adminToken, status: 400 });
++  await request(`/api/matrix/candidates?page=${'9'.repeat(400)}`, { token: adminToken, status: 400 });
++
++  const secondPage = await request('/api/matrix/candidates?page=2&page_size=1', { token: adminToken });
++  assert.equal(secondPage.page, 2);
++  assert.equal(secondPage.rows.length, 1);
++
++  const runs = await request('/api/matrix/runs', { token: adminToken });
++  assert.equal(runs.total, 2);
++  assert.equal(runs.rows[0].id > 0, true);
++  assertNoPrivateFields(runs, ['SECRET_CONFIG_ACTOR']);
++
++  const before = new Database(dbPath, { readonly: true });
++  const entityBefore = before.prepare('SELECT * FROM matrix_entities WHERE id = ?').get(firstId);
++  const classificationBefore = before.prepare('SELECT * FROM matrix_classifications WHERE entity_id = ? ORDER BY id DESC LIMIT 1').get(firstId);
++  const auditBefore = before.prepare("SELECT count(*) count FROM audit_logs WHERE action = 'read_matrix_candidate_detail'").get().count;
++  before.close();
++
++  const detail = await request(`/api/matrix/candidates/${firstId}`, { token: crmToken });
++  assert.equal(detail.id, firstId);
++  assert.deepEqual(detail.reason_codes, publicReasonCodes);
++  assert.deepEqual(detail.evidence.map(item => item.source_url), ['https://alpha.example/products']);
++  assert.deepEqual(Object.keys(detail.evidence[0]).sort(), ['confidence', 'retrieved_at', 'source_url']);
++  assertNoPrivateFields(detail, [
++    'buyer@alpha.example', 'RAW_PAGE_TEXT_SENTINEL', 'SECRET_INTERNAL_RULE',
++    'SECRET_OVERRIDE_TEXT', 'SECRET_REASON_RULE_SENTENCE', 'SECRET_EVIDENCE_FIELD_SENTINEL'
++  ]);
++  await request('/api/matrix/candidates/999999', { token: crmToken, status: 404 });
++
++  const after = new Database(dbPath, { readonly: true });
++  assert.deepEqual(after.prepare('SELECT * FROM matrix_entities WHERE id = ?').get(firstId), entityBefore);
++  assert.deepEqual(after.prepare('SELECT * FROM matrix_classifications WHERE entity_id = ? ORDER BY id DESC LIMIT 1').get(firstId), classificationBefore);
++  assert.equal(after.prepare("SELECT count(*) count FROM audit_logs WHERE action = 'read_matrix_candidate_detail'").get().count, auditBefore + 1);
++  after.close();
++
++  for (const method of ['POST', 'PATCH', 'DELETE']) {
++    await request('/api/matrix/candidates', { method, token: adminToken, body: {}, status: 404 });
++  }
++  console.log('matrix API tests passed');
++}
++
++main().catch(error => {
++  console.error(error.stack || error);
++  process.exitCode = 1;
++}).finally(() => {
++  if (child) child.kill('SIGTERM');
++  fs.rmSync(tempDir, { recursive: true, force: true });
++});
+diff --git a/scripts/test-matrix-crm-adapter.js b/scripts/test-matrix-crm-adapter.js
+index 9e7c0f2..8a7f1cb 100644
+--- a/scripts/test-matrix-crm-adapter.js
++++ b/scripts/test-matrix-crm-adapter.js
+@@ -1,20 +1,21 @@
+ 'use strict';
+ 
+ const assert = require('assert');
+ const crypto = require('crypto');
+ const fs = require('fs');
+ const os = require('os');
+ const path = require('path');
+ const Database = require('better-sqlite3');
+ const jwt = require('jsonwebtoken');
+ const { spawnSync } = require('child_process');
++const { REASON_CODES, PUBLIC_REASON_CODES } = require('../src/lib/schemaRank');
+ 
+ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-crm-'));
+ const dbPath = path.join(tempDir, 'fixture.db');
+ const db = new Database(dbPath);
+ 
+ function digest() {
+   return crypto.createHash('sha256').update(fs.readFileSync(dbPath)).digest('hex');
+ }
+ 
+ function bySourceId(report, sourceType, id) {
+@@ -296,20 +297,32 @@ try {
+   const errorReport = classifyCurrentCrm(db, {
+     now: '2026-07-16',
+     classifier() { throw new Error('fixture classifier failure'); }
+   });
+   assert.equal(errorReport.counts.errors, errorReport.counts.input);
+   assert.equal(errorReport.counts.needs_review, errorReport.counts.input);
+   assert.equal(errorReport.records.length, errorReport.counts.input);
+   assert(errorReport.records.every((record) => record.classification === 'needs_review'));
+   assert(errorReport.records.every((record) => record.reason_codes.includes('classification_error')));
+   assert(errorReport.records.every((record) => record.identity_id && record.source_ids));
++  const publicReasonCodeSet = new Set(PUBLIC_REASON_CODES);
++  const observedAdapterCodes = new Set([...report.records, ...errorReport.records].flatMap(record => record.reason_codes));
++  observedAdapterCodes.forEach(code => assert(publicReasonCodeSet.has(code), `matrixCrmAdapter produced non-public reason code: ${code}`));
++  [
++    REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
++    REASON_CODES.BUSINESS_EVIDENCE,
++    REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS,
++    REASON_CODES.MALFORMED_JSON_PAYLOAD,
++    REASON_CODES.UNCERTAIN_DIRECTION,
++    REASON_CODES.MISSING_BUSINESS_EVIDENCE,
++    REASON_CODES.CLASSIFICATION_ERROR
++  ].forEach(code => assert(observedAdapterCodes.has(code), `matrixCrmAdapter contract did not exercise ${code}`));
+   assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('unknown_whatsapp_sender'));
+   assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('malformed_source_time'));
+   assert(bySourceId(report, 'crm_message_ids', 40).reason_codes.includes('duplicated_message_segments'));
+ 
+   const defaultJson = JSON.stringify(report);
+   for (const secret of [
+     'buyer@vietcoffee.example',
+     '+628123456789',
+     'no-reply@accounts.example.invalid',
+     'Please quote printed coffee pouches'
+diff --git a/scripts/test-schema-rank.js b/scripts/test-schema-rank.js
+index 67b5aed..1f9dd26 100644
+--- a/scripts/test-schema-rank.js
++++ b/scripts/test-schema-rank.js
+@@ -1,43 +1,57 @@
+ const assert = require('assert');
+ const {
+   classifyRecord,
+   isApprovedCountry,
+   APPROVED_COUNTRIES,
+   EXCLUDED_COUNTRIES,
++  REASON_CODES,
++  PUBLIC_REASON_CODES,
+   RULESET_VERSION
+ } = require('../src/lib/schemaRank');
+ 
++const publicReasonCodeSet = new Set(PUBLIC_REASON_CODES);
++const observedReasonCodes = new Set();
++
++const assertPublicReasonCodes = (result) => {
++  result.reason_codes.forEach((code) => {
++    assert(publicReasonCodeSet.has(code), `schemaRank produced non-public reason code: ${code}`);
++    observedReasonCodes.add(code);
++  });
++  return result;
++};
++
+ const validRecord = (overrides = {}) => ({
+   country: 'Indonesia',
+   official_domain: 'brand.example',
+   business_email: 'sales@brand.example',
+   product_evidence: ['coffee'],
+   last_interaction_at: '2026-07-01',
+   ...overrides
+ });
+ 
+ const assertClassification = (record, classification, reasonCode, context = {}) => {
+-  const result = classifyRecord(record, context);
++  const result = assertPublicReasonCodes(classifyRecord(record, context));
+   assert.equal(result.classification, classification);
+   assert(result.reason_codes.includes(reasonCode));
+   assert.equal(typeof result.confidence, 'number');
+   assert(result.confidence >= 0 && result.confidence <= 1);
+   return result;
+ };
+ 
+ assert.equal(isApprovedCountry('Vietnam'), true);
+ assert.equal(isApprovedCountry('India'), false);
+ assert.equal(classifyRecord({ fixture_marker: 'token-verification' }, {}).classification, 'test');
+ assert.equal(classifyRecord({ source_kind: 'security_notice', country: 'Malaysia' }, {}).classification, 'noise');
+ assert.equal(classifyRecord({ country: 'Thailand', business_email: 'sales@example.co.th' }, {}).classification, 'needs_review');
+ const valid = classifyRecord(validRecord(), { now: '2026-07-16' });
++assertPublicReasonCodes(valid);
+ assert.equal(valid.classification, 'valid');
+ assert(valid.reason_codes.includes('official_domain'));
+ 
+ const expectedApprovedCountries = [
+   'Vietnam',
+   'Thailand',
+   'Malaysia',
+   'Indonesia',
+   'Philippines',
+   'Kazakhstan'
+@@ -115,11 +129,28 @@ assert(valid.reason_codes.includes('product_evidence'));
+ assert(valid.reason_codes.includes('valid_source_time'));
+ 
+ const staleValid = assertClassification(validRecord({
+   country: 'Kazakhstan',
+   last_interaction_at: '2026-05-01'
+ }), 'valid', 'official_domain', { now: '2026-07-16' });
+ assert.equal(staleValid.priority, 'B');
+ assert.equal(staleValid.confidence, 0.85);
+ 
+ assert.deepEqual(Object.keys(valid), ['classification', 'priority', 'reason_codes', 'confidence']);
++assertPublicReasonCodes(classifyRecord({ country: 'Unknown' }, {}));
++const schemaRankReasonCodes = [
++  REASON_CODES.FIXTURE_MARKER,
++  REASON_CODES.SECURITY_NOTICE,
++  REASON_CODES.EXCLUDED_COUNTRY,
++  REASON_CODES.UNAPPROVED_COUNTRY,
++  REASON_CODES.MISSING_IDENTITY,
++  REASON_CODES.AMBIGUOUS_CONTACT,
++  REASON_CODES.UNKNOWN_WHATSAPP_SENDER,
++  REASON_CODES.MALFORMED_SOURCE_TIME,
++  REASON_CODES.CONFLICTING_DOMAINS,
++  REASON_CODES.APPROVED_COUNTRY,
++  REASON_CODES.OFFICIAL_DOMAIN,
++  REASON_CODES.PRODUCT_EVIDENCE,
++  REASON_CODES.VALID_SOURCE_TIME
++];
++schemaRankReasonCodes.forEach(code => assert(observedReasonCodes.has(code), `schemaRank contract did not exercise ${code}`));
+ console.log('schema-rank tests passed');
+diff --git a/src/lib/matrixCrmAdapter.js b/src/lib/matrixCrmAdapter.js
+index cb66c15..85946c6 100644
+--- a/src/lib/matrixCrmAdapter.js
++++ b/src/lib/matrixCrmAdapter.js
+@@ -1,13 +1,13 @@
+ 'use strict';
+ 
+-const { classifyRecord, isApprovedCountry, RULESET_VERSION } = require('./schemaRank');
++const { classifyRecord, isApprovedCountry, REASON_CODES, RULESET_VERSION } = require('./schemaRank');
+ 
+ const DOMESTIC_COUNTRIES = new Set([
+   'china', 'cn', 'prc', "people's republic of china", '中国', '中国大陆', '中华人民共和国'
+ ]);
+ const AUTOMATED_SENDER = /(?:^|[._-])(no[._-]?reply|do[._-]?not[._-]?reply|mailer[._-]?daemon|postmaster)(?:@|[._-]|$)/i;
+ const SYSTEM_NOTICE = /(?:security alert|account verification|verify your account|delivery failure|undeliverable|automated (?:report|notice)|machine notification)/i;
+ const FIXTURE_MARKER = /(?:\btoken test\b|\bhello token ok\b|token-verification|sync verification|fixture (?:mailbox|payload))/i;
+ const BUSINESS_SIGNAL = /(?:inquir|quot|packag|pouch|film|bag|specification|material|dimension|size|product|coffee|snack|detergent|refill)/i;
+ 
+ function text(value) {
+@@ -249,21 +249,21 @@ function normalizeGroup(group) {
+       ? `crm-message:${Math.min(...group.crmMessages.map((row) => Number(row.id)))}`
+       : `email-message:${Math.min(...group.emailMessages.map((row) => Number(row.id)))}`;
+ 
+   return {
+     identity_id: internalIdentity,
+     country: text(customer.country),
+     official_domain: officialDomain,
+     business_email: businessEmail,
+     sender_name: lower(latestCrm?.direction) === 'outbound' ? '' : text(latestCrm?.sender_name || customer.contact_person),
+     sender_phone: normalizePhone(whatsapp),
+-    source_kind: isSystemGroup(group) ? 'security_notice' : sourceKind,
++    source_kind: isSystemGroup(group) ? REASON_CODES.SECURITY_NOTICE : sourceKind,
+     fixture_marker: hasFixtureMarker(group) ? 'known-verification-artifact' : '',
+     product_evidence: businessEvidence(group),
+     last_interaction_at: lastInteraction,
+     duplicated_message_segments: duplicate,
+     has_malformed_source_time: hasMalformedTime(group),
+     has_malformed_json_payload: hasMalformedJson(group),
+     uncertain_direction: group.crmMessages.some((row) => {
+       const direction = lower(row.direction);
+       return lower(row.source_type) === 'whatsapp' && !['inbound', 'outbound'].includes(direction);
+     }),
+@@ -334,36 +334,41 @@ function readEligibleCrmRecords(db) {
+ }
+ 
+ function classifyNormalizedRecord(record, context, classifier = classifyRecord) {
+   const base = classifier(record, context);
+   let result = base;
+   if (base.classification === 'needs_review'
+     && isApprovedCountry(record.country)
+     && record.official_domain
+     && record.confirmed_international_whatsapp
+     && record.product_evidence.length
+-    && base.reason_codes.every((reason) => reason === 'missing_identity')) {
++    && base.reason_codes.every((reason) => reason === REASON_CODES.MISSING_IDENTITY)) {
+     result = {
+       classification: 'valid',
+       priority: 'B',
+-      reason_codes: ['approved_country', 'official_domain', 'confirmed_international_whatsapp', 'business_evidence'],
++      reason_codes: [
++        REASON_CODES.APPROVED_COUNTRY,
++        REASON_CODES.OFFICIAL_DOMAIN,
++        REASON_CODES.CONFIRMED_INTERNATIONAL_WHATSAPP,
++        REASON_CODES.BUSINESS_EVIDENCE
++      ],
+       confidence: 0.85
+     };
+   }
+ 
+   const safetyReasons = [];
+-  if (record.duplicated_message_segments) safetyReasons.push('duplicated_message_segments');
+-  if (record.has_malformed_source_time) safetyReasons.push('malformed_source_time');
+-  if (record.has_malformed_json_payload) safetyReasons.push('malformed_json_payload');
+-  if (record.uncertain_direction) safetyReasons.push('uncertain_direction');
++  if (record.duplicated_message_segments) safetyReasons.push(REASON_CODES.DUPLICATED_MESSAGE_SEGMENTS);
++  if (record.has_malformed_source_time) safetyReasons.push(REASON_CODES.MALFORMED_SOURCE_TIME);
++  if (record.has_malformed_json_payload) safetyReasons.push(REASON_CODES.MALFORMED_JSON_PAYLOAD);
++  if (record.uncertain_direction) safetyReasons.push(REASON_CODES.UNCERTAIN_DIRECTION);
+   if (result.classification === 'valid' && !record.product_evidence.length) {
+-    safetyReasons.push('missing_business_evidence');
++    safetyReasons.push(REASON_CODES.MISSING_BUSINESS_EVIDENCE);
+   }
+   const reasons = [...new Set([...result.reason_codes, ...safetyReasons])];
+   if (!['test', 'noise'].includes(result.classification) && safetyReasons.length) {
+     return { classification: 'needs_review', priority: 'B', reason_codes: reasons, confidence: 0.5 };
+   }
+   return { ...result, reason_codes: reasons };
+ }
+ 
+ function classifyCurrentCrm(db, options = {}) {
+   const normalized = readEligibleCrmRecords(db);
+@@ -396,21 +401,21 @@ function classifyCurrentCrm(db, options = {}) {
+       if (includePrivate) output.private_preview = { contact: record.private_contact };
+       records.push(output);
+     } catch {
+       counts.errors += 1;
+       counts.needs_review += 1;
+       records.push({
+         identity_id: record.identity_id,
+         source_ids: record.source_ids,
+         classification: 'needs_review',
+         priority: 'B',
+-        reason_codes: ['classification_error'],
++        reason_codes: [REASON_CODES.CLASSIFICATION_ERROR],
+         confidence: 0
+       });
+     }
+   }
+ 
+   return {
+     ruleset_version: RULESET_VERSION,
+     counts,
+     excluded_domestic_ids: normalized.excluded_domestic_ids,
+     records
+diff --git a/src/lib/schemaRank.js b/src/lib/schemaRank.js
+index e5bf1f4..0182bb4 100644
+--- a/src/lib/schemaRank.js
++++ b/src/lib/schemaRank.js
+@@ -8,20 +8,44 @@ const APPROVED_COUNTRIES = Object.freeze([
+   'Malaysia',
+   'Indonesia',
+   'Philippines',
+   'Kazakhstan'
+ ]);
+ 
+ const EXCLUDED_COUNTRIES = Object.freeze([
+   'India'
+ ]);
+ 
++const REASON_CODES = Object.freeze({
++  FIXTURE_MARKER: 'fixture_marker',
++  SECURITY_NOTICE: 'security_notice',
++  EXCLUDED_COUNTRY: 'excluded_country',
++  UNAPPROVED_COUNTRY: 'unapproved_country',
++  MISSING_IDENTITY: 'missing_identity',
++  AMBIGUOUS_CONTACT: 'ambiguous_contact',
++  UNKNOWN_WHATSAPP_SENDER: 'unknown_whatsapp_sender',
++  MALFORMED_SOURCE_TIME: 'malformed_source_time',
++  CONFLICTING_DOMAINS: 'conflicting_domains',
++  APPROVED_COUNTRY: 'approved_country',
++  OFFICIAL_DOMAIN: 'official_domain',
++  PRODUCT_EVIDENCE: 'product_evidence',
++  VALID_SOURCE_TIME: 'valid_source_time',
++  CONFIRMED_INTERNATIONAL_WHATSAPP: 'confirmed_international_whatsapp',
++  BUSINESS_EVIDENCE: 'business_evidence',
++  DUPLICATED_MESSAGE_SEGMENTS: 'duplicated_message_segments',
++  MALFORMED_JSON_PAYLOAD: 'malformed_json_payload',
++  UNCERTAIN_DIRECTION: 'uncertain_direction',
++  MISSING_BUSINESS_EVIDENCE: 'missing_business_evidence',
++  CLASSIFICATION_ERROR: 'classification_error'
++});
++const PUBLIC_REASON_CODES = Object.freeze(Object.values(REASON_CODES));
++
+ const approvedCountryKeys = new Set(APPROVED_COUNTRIES.map(normalizeCountry));
+ const excludedCountryKeys = new Set(EXCLUDED_COUNTRIES.map(normalizeCountry));
+ const AMBIGUOUS_CONTACT_DOMAINS = Object.freeze([
+   'gmail.com',
+   'googlemail.com',
+   'hotmail.com',
+   'icloud.com',
+   'live.com',
+   'outlook.com',
+   'proton.me',
+@@ -91,61 +115,65 @@ function result(classification, priority, reasonCodes, confidence) {
+     confidence
+   };
+ }
+ 
+ function classifyRecord(record = {}, context = {}) {
+   const countryKey = normalizeCountry(record.country);
+   const officialDomain = normalizeDomain(record.official_domain);
+   const contactDomain = emailDomain(record.business_email);
+ 
+   if (record.fixture_marker) {
+-    return result('test', 'C', ['fixture_marker'], 1);
++    return result('test', 'C', [REASON_CODES.FIXTURE_MARKER], 1);
+   }
+ 
+-  if (record.source_kind === 'security_notice' || excludedCountryKeys.has(countryKey)) {
+-    const reason = record.source_kind === 'security_notice' ? 'security_notice' : 'excluded_country';
++  if (record.source_kind === REASON_CODES.SECURITY_NOTICE || excludedCountryKeys.has(countryKey)) {
++    const reason = record.source_kind === REASON_CODES.SECURITY_NOTICE
++      ? REASON_CODES.SECURITY_NOTICE
++      : REASON_CODES.EXCLUDED_COUNTRY;
+     return result('noise', 'C', [reason], 1);
+   }
+ 
+   const reviewReasons = [];
+-  if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push('unapproved_country');
+-  if (!officialDomain || !contactDomain) reviewReasons.push('missing_identity');
+-  if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push('ambiguous_contact');
++  if (!countryKey || !approvedCountryKeys.has(countryKey)) reviewReasons.push(REASON_CODES.UNAPPROVED_COUNTRY);
++  if (!officialDomain || !contactDomain) reviewReasons.push(REASON_CODES.MISSING_IDENTITY);
++  if (contactDomain && isAmbiguousContactDomain(contactDomain)) reviewReasons.push(REASON_CODES.AMBIGUOUS_CONTACT);
+   if (record.source_kind === 'whatsapp'
+     && !hasIdentityValue(record.sender_name)
+     && !hasIdentityValue(record.sender_phone)) {
+-    reviewReasons.push('unknown_whatsapp_sender');
++    reviewReasons.push(REASON_CODES.UNKNOWN_WHATSAPP_SENDER);
+   }
+   if (record.last_interaction_at && !validDate(record.last_interaction_at)) {
+-    reviewReasons.push('malformed_source_time');
++    reviewReasons.push(REASON_CODES.MALFORMED_SOURCE_TIME);
+   }
+   if (officialDomain && contactDomain && !domainsMatch(officialDomain, contactDomain)) {
+-    reviewReasons.push('conflicting_domains');
++    reviewReasons.push(REASON_CODES.CONFLICTING_DOMAINS);
+   }
+ 
+   if (reviewReasons.length) {
+     return result('needs_review', 'B', reviewReasons, 0.5);
+   }
+ 
+-  const validReasons = ['approved_country', 'official_domain'];
++  const validReasons = [REASON_CODES.APPROVED_COUNTRY, REASON_CODES.OFFICIAL_DOMAIN];
+   if (Array.isArray(record.product_evidence) && record.product_evidence.length) {
+-    validReasons.push('product_evidence');
++    validReasons.push(REASON_CODES.PRODUCT_EVIDENCE);
+   }
+   if (record.last_interaction_at && validDate(record.last_interaction_at)) {
+-    validReasons.push('valid_source_time');
++    validReasons.push(REASON_CODES.VALID_SOURCE_TIME);
+   }
+ 
+   const now = validDate(context.now) ? Date.parse(context.now) : NaN;
+   const interaction = validDate(record.last_interaction_at) ? Date.parse(record.last_interaction_at) : NaN;
+   const recent = !Number.isNaN(now) && !Number.isNaN(interaction)
+     && now >= interaction && now - interaction <= 30 * 24 * 60 * 60 * 1000;
+ 
+   return result('valid', recent ? 'A' : 'B', validReasons, recent ? 0.95 : 0.85);
+ }
+ 
+ module.exports = {
+   classifyRecord,
+   isApprovedCountry,
+   APPROVED_COUNTRIES,
+   EXCLUDED_COUNTRIES,
++  REASON_CODES,
++  PUBLIC_REASON_CODES,
+   RULESET_VERSION
+ };
+diff --git a/src/routes/matrix.js b/src/routes/matrix.js
+new file mode 100644
+index 0000000..3b7734b
+--- /dev/null
++++ b/src/routes/matrix.js
+@@ -0,0 +1,215 @@
++'use strict';
++
++const express = require('express');
++const { db, audit } = require('../db');
++const { allowRoles } = require('../middleware/auth');
++const { listCandidates } = require('../lib/signalCache');
++const { APPROVED_COUNTRIES, EXCLUDED_COUNTRIES, PUBLIC_REASON_CODES } = require('../lib/schemaRank');
++
++const router = express.Router();
++const CRM_ROLES = ['super_admin', 'foreign_trade_crm_admin'];
++const CLASSIFICATIONS = new Set(['valid', 'needs_review', 'noise', 'test']);
++const PRIORITIES = new Set(['A', 'B', 'C']);
++const COUNTRIES = new Set([...APPROVED_COUNTRIES, ...EXCLUDED_COUNTRIES]);
++const PUBLIC_REASON_CODE_SET = new Set(PUBLIC_REASON_CODES);
++
++router.use(allowRoles(...CRM_ROLES));
++
++function parseObject(value) {
++  if (!value) return {};
++  try {
++    const parsed = JSON.parse(String(value));
++    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
++  } catch (_) {
++    return {};
++  }
++}
++
++function publicReasonCodes(value) {
++  if (!value) return [];
++  try {
++    const parsed = JSON.parse(String(value));
++    return Array.isArray(parsed) ? parsed.filter(item => PUBLIC_REASON_CODE_SET.has(item)) : [];
++  } catch (_) {
++    return [];
++  }
++}
++
++function pagination(query) {
++  const rawPage = query.page === undefined ? '1' : String(query.page);
++  const rawPageSize = query.page_size === undefined ? '20' : String(query.page_size);
++  const page = Number(rawPage);
++  const pageSize = Number(rawPageSize);
++  if (!/^\d+$/.test(rawPage) || !Number.isSafeInteger(page) || page < 1) throw new Error('page must be a positive safe integer');
++  if (!/^\d+$/.test(rawPageSize) || !Number.isSafeInteger(pageSize) || pageSize < 1) throw new Error('page_size must be a positive safe integer');
++  return { page, pageSize: Math.min(pageSize, 100) };
++}
++
++function assertQueryFields(query, allowed) {
++  for (const key of Object.keys(query)) {
++    if (!allowed.has(key)) throw new Error(`unknown query field: ${key}`);
++  }
++}
++
++function candidateFilters(query) {
++  assertQueryFields(query, new Set(['classification', 'priority', 'country', 'page', 'page_size']));
++  const filters = {};
++  if (query.classification !== undefined) {
++    if (!CLASSIFICATIONS.has(query.classification)) throw new Error('invalid classification');
++    filters.classification = query.classification;
++  }
++  if (query.priority !== undefined) {
++    if (!PRIORITIES.has(query.priority)) throw new Error('invalid priority');
++    filters.priority = query.priority;
++  }
++  if (query.country !== undefined) {
++    if (!COUNTRIES.has(query.country)) throw new Error('invalid country');
++    filters.country = query.country;
++  }
++  return filters;
++}
++
++function maskContact(key, value) {
++  const text = typeof value === 'string' ? value.trim() : '';
++  if (!text) return '';
++  if (key === 'email') {
++    const match = text.match(/^([^@])[^@]*(@.+)$/);
++    return match ? `${match[1]}***${match[2]}` : '[redacted]';
++  }
++  if (key === 'phone' || key === 'whatsapp') {
++    const digits = text.replace(/\D/g, '');
++    return digits ? `***${digits.slice(-4)}` : '[redacted]';
++  }
++  if (key === 'linkedin_url' || key === 'contact_page_url') return '[available]';
++  return '[redacted]';
++}
++
++function maskedContacts(value) {
++  const contacts = parseObject(value);
++  return Object.fromEntries(Object.entries(contacts).map(([key, item]) => [key, maskContact(key, item)]));
++}
++
++function safeCandidate(row, evidenceUrls = []) {
++  return {
++    id: Number(row.id),
++    domain: row.normalized_domain,
++    display_name: row.display_name || null,
++    country: row.country || null,
++    status: row.status,
++    classification: row.classification,
++    priority: row.priority || null,
++    reason_codes: publicReasonCodes(row.reason_json),
++    confidence: row.classification_confidence,
++    contacts: maskedContacts(row.public_contacts_json),
++    evidence_urls: [...new Set(evidenceUrls)],
++    created_at: row.created_at,
++    updated_at: row.updated_at
++  };
++}
++
++function evidenceUrlsByEntity(rows) {
++  if (!rows.length) return new Map();
++  const ids = rows.map(row => Number(row.id));
++  const placeholders = ids.map(() => '?').join(', ');
++  const evidence = db.prepare(`
++    SELECT entity_id, source_url
++    FROM matrix_evidence
++    WHERE entity_id IN (${placeholders})
++    ORDER BY id
++  `).all(...ids);
++  const grouped = new Map();
++  for (const item of evidence) {
++    const urls = grouped.get(Number(item.entity_id)) || [];
++    urls.push(item.source_url);
++    grouped.set(Number(item.entity_id), urls);
++  }
++  return grouped;
++}
++
++function pagedResponse(rows, page, pageSize) {
++  const total = rows.length;
++  const start = (page - 1) * pageSize;
++  return {
++    rows: rows.slice(start, start + pageSize),
++    page,
++    page_size: pageSize,
++    total,
++    total_pages: total ? Math.ceil(total / pageSize) : 0
++  };
++}
++
++router.get('/runs', (req, res) => {
++  try {
++    assertQueryFields(req.query, new Set(['page', 'page_size']));
++    const { page, pageSize } = pagination(req.query);
++    const rows = db.prepare(`
++      SELECT id, campaign_json, status, created_at, updated_at, completed_at
++      FROM matrix_runs
++      ORDER BY id DESC
++    `).all().map(row => {
++      const campaign = parseObject(row.campaign_json);
++      return {
++        id: Number(row.id),
++        name: typeof campaign.name === 'string' ? campaign.name : null,
++        countries: Array.isArray(campaign.countries)
++          ? campaign.countries.filter(country => typeof country === 'string' && COUNTRIES.has(country))
++          : [],
++        status: row.status,
++        created_at: row.created_at,
++        updated_at: row.updated_at,
++        completed_at: row.completed_at || null
++      };
++    });
++    res.json(pagedResponse(rows, page, pageSize));
++  } catch (error) {
++    res.status(400).json({ error: error.message });
++  }
++});
++
++router.get('/candidates', (req, res) => {
++  try {
++    const filters = candidateFilters(req.query);
++    const { page, pageSize } = pagination(req.query);
++    const matches = listCandidates(db, filters);
++    const total = matches.length;
++    const start = (page - 1) * pageSize;
++    const selected = matches.slice(start, start + pageSize);
++    const evidence = evidenceUrlsByEntity(selected);
++    res.json({
++      rows: selected.map(row => safeCandidate(row, evidence.get(Number(row.id)) || [])),
++      page,
++      page_size: pageSize,
++      total,
++      total_pages: total ? Math.ceil(total / pageSize) : 0
++    });
++  } catch (error) {
++    res.status(400).json({ error: error.message });
++  }
++});
++
++router.get('/candidates/:id', (req, res) => {
++  const id = Number(req.params.id);
++  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'invalid candidate id' });
++  const row = listCandidates(db).find(candidate => Number(candidate.id) === id);
++  if (!row) return res.status(404).json({ error: 'candidate not found' });
++
++  const evidence = db.prepare(`
++    SELECT source_url, retrieved_at, confidence
++    FROM matrix_evidence
++    WHERE entity_id = ?
++    ORDER BY id
++  `).all(id);
++  audit({
++    role: req.user.role,
++    userName: req.user.userName,
++    action: 'read_matrix_candidate_detail',
++    resourceType: 'matrix_candidate',
++    resourceId: id
++  });
++  res.json({
++    ...safeCandidate(row, evidence.map(item => item.source_url)),
++    evidence
++  });
++});
++
++module.exports = router;
+diff --git a/src/server.js b/src/server.js
+index 63044b0..56a1d94 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -17,20 +17,21 @@ const quotesRouter = require('./routes/quotes');
+ const quoteSheetsRouter = require('./routes/quoteSheets');
+ const costRouter = require('./routes/cost');
+ const exportRouter = require('./routes/export');
+ const systemRouter = require('./routes/system');
+ const workOrdersRouter = require('./routes/workOrders');
+ const menuRouter = require('./routes/menu');
+ const stocksRouter = require('./routes/stocks');
+ const futuresRouter = require('./routes/futures');
+ const statsRouter = require('./routes/stats');
+ const crmRouter = require('./routes/crm');
++const matrixRouter = require('./routes/matrix');
+ const foreignCostingAssistantRouter = require('./routes/foreignCostingAssistant');
+ 
+ initDb();
+ 
+ const app = express();
+ app.set('trust proxy', 1);
+ 
+ app.use((req, res, next) => {
+   res.setHeader('X-Content-Type-Options', 'nosniff');
+   res.setHeader('X-Frame-Options', 'DENY');
+@@ -97,20 +98,21 @@ app.use('/api/quote-sheets', quoteSheetsRouter);
+ app.use('/api/cost', costRouter);
+ app.use('/api/export', exportRouter);
+ app.use('/api/system', systemRouter);
+ app.use('/api/work-orders', workOrdersRouter);
+ app.use('/api/menu', menuRouter);
+ app.use('/api/stocks', stocksRouter);
+ app.use('/api/futures', futuresRouter);
+ app.use('/api/stats', statsRouter);
+ app.use('/api/foreign-costing-assistant', foreignCostingAssistantRouter);
+ app.use('/api/crm', crmRouter);
++app.use('/api/matrix', matrixRouter);
+ 
+ if (process.env.DISABLE_CRON !== '1') {
+   // 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）
+   cron.schedule('40 14 * * 1-5', async () => {
+     try {
+       await stocksRouter.runStrategy({ sendMail: false, operator: 'cron-stock' });
+       console.log('[股市筛选任务] 已执行（未自动发邮件）');
+     } catch (e) {
+       console.warn('[股市筛选任务] 失败', e?.message || e);
+     }
