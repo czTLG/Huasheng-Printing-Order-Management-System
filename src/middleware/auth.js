@@ -44,6 +44,14 @@ function fakeAuth(req, res, next) {
           req.user.role = viewAs;
         }
 
+        if (req.user.role === 'stream_publisher') {
+          const requestPath = String(req.originalUrl || req.path || '').split('?')[0];
+          const allowed = requestPath.startsWith('/api/stream-desk/')
+            || requestPath === '/api/auth/me'
+            || requestPath === '/api/auth/change-password';
+          if (!allowed) return res.status(403).json({ error: '内容发布账号只能访问内容发布台' });
+        }
+
         return next();
       }
     } catch (_) {
@@ -59,6 +67,13 @@ function fakeAuth(req, res, next) {
         try { permissions = u.permissions_json ? JSON.parse(u.permissions_json) : defaultPermissionsByRole(u.role); } catch(_) { permissions = defaultPermissionsByRole(u.role); }
         req.user = { id: u.id, role: u.role, userName: u.username, fullName: u.full_name || '', permissions };
         req.authMode = 'legacy';
+        if (req.user.role === 'stream_publisher') {
+          const requestPath = String(req.originalUrl || req.path || '').split('?')[0];
+          const allowed = requestPath.startsWith('/api/stream-desk/')
+            || requestPath === '/api/auth/me'
+            || requestPath === '/api/auth/change-password';
+          if (!allowed) return res.status(403).json({ error: '内容发布账号只能访问内容发布台' });
+        }
         return next();
       }
     }
