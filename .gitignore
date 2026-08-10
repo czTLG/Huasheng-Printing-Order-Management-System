@@ -27,6 +27,7 @@ data/*.sqlite3
 data/*.backup
 data/*.bak
 data/uploads/
+data/stream-media/
 
 public/uploads/
 public/new/
