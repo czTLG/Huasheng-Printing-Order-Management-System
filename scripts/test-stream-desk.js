@@ -30,12 +30,16 @@ async function run() {
   await assert.rejects(() => inspectOwnedPage('https://example.com/', async () => ({})), /gdhspack/);
   const inspected = await inspectOwnedPage('https://gdhspack.com/test', async () => ({
     ok: true,
-    text: async () => '<html><head><title>Packaging Test Guide</title><meta name="description" content="A sufficiently detailed packaging test guide for purchasing teams and factory validation."><meta property="og:image" content="https://gdhspack.com/test.webp"></head></html>',
+    text: async () => '<html><head><title>Packaging Test Guide</title><meta name="description" content="A sufficiently detailed packaging test guide for purchasing teams and factory validation."><meta property="og:image" content="https://gdhspack.com/test.webp"></head><body><main class="fb-container"><h2>Material checks</h2><h3>Printed sample</h3><p>This paragraph contains enough useful purchasing detail to be retained by the parser.</p></main></body></html>',
   }));
   assert.equal(inspected.title, 'Packaging Test Guide');
+  assert.deepEqual(inspected.content.sections, ['Material checks']);
   const wechat = createWechatDraftAdapter({ env: {}, fetchImpl: async () => { throw new Error('must not call'); } });
   assert.equal(wechat.readiness().ready, false);
   await assert.rejects(() => wechat.addDraft({}), /尚未配置/);
+  const rendered = wechat.renderContent({ title: '示例标题', body: '示例标题\n\n一、采购判断\n• 袋型结构\n\n阅读原文：https://gdhspack.com/test' });
+  assert.match(rendered, /<h2/);
+  assert.match(rendered, /阅读华胜包装完整技术页面/);
   const sample = await new Jimp(40, 60, 0xff0000ff).getBufferAsync(Jimp.MIME_PNG);
   const media = createStreamMedia({ root: path.join(dir, 'media'), fetchImpl: async () => ({
     ok: true, url: 'https://gdhspack.com/media/sample.png', headers: new Headers({ 'content-type': 'image/png', 'content-length': String(sample.length) }),

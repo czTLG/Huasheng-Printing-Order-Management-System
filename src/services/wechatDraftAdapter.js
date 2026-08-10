@@ -23,7 +23,7 @@ function createWechatDraftAdapter({ env = process.env, fetchImpl = fetch } = {})
         title: task.title,
         author: 'Huasheng Packaging',
         digest: String(task.body || '').slice(0, 120),
-        content: `<p>${String(task.body || '').split('\n').map((line) => line.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]))).join('</p><p>')}</p>`,
+        content: renderContent(task),
         content_source_url: task.target_url,
         thumb_media_id: thumbMediaId,
         need_open_comment: 0,
@@ -35,7 +35,25 @@ function createWechatDraftAdapter({ env = process.env, fetchImpl = fetch } = {})
     return { mediaId: data.media_id };
   }
 
-  return { readiness, addDraft };
+  return { readiness, addDraft, renderContent };
 }
 
 module.exports = { createWechatDraftAdapter };
+  function escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  }
+
+  function renderContent(task) {
+    return String(task.body || '').split('\n').map((raw, index) => {
+      const line = raw.trim();
+      if (!line || (index === 0 && line === task.title)) return '';
+      if (/^(导语|[一二三四五六七八九十]+、|结语)/.test(line)) return `<h2 style="margin:28px 0 12px;font-size:20px;color:#173f4f;line-height:1.5">${escapeHtml(line)}</h2>`;
+      if (/^\d+\./.test(line)) return `<p style="margin:10px 0;font-size:16px;font-weight:600;line-height:1.8;color:#263238">${escapeHtml(line)}</p>`;
+      if (/^•/.test(line)) return `<p style="margin:8px 0;padding-left:12px;border-left:3px solid #77a8a0;font-size:16px;line-height:1.8;color:#37474f">${escapeHtml(line)}</p>`;
+      if (/^阅读原文：https:\/\//.test(line)) {
+        const url = line.replace(/^阅读原文：/, '');
+        return `<p style="margin:28px 0 8px"><a href="${escapeHtml(url)}" style="color:#176b78;font-size:16px;font-weight:600">阅读华胜包装完整技术页面</a></p>`;
+      }
+      return `<p style="margin:10px 0;font-size:16px;line-height:1.9;color:#37474f">${escapeHtml(line)}</p>`;
+    }).join('');
+  }

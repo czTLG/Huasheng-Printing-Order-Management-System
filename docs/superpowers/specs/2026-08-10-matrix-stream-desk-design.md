@@ -46,6 +46,8 @@ Competitor observations are stored in `config/stream-content-strategy.json`. Eve
 
 The second-phase review also considered maintained open-source schedulers with calendars and analytics. BrightBean Studio and TryPost provide useful product references, but adopting either would duplicate the existing authentication and queue, add a separate stack, and still require official platform credentials. The current phase therefore reuses installed Jimp and the existing React/SQLite stack. This decision should be revisited if direct publishing credentials become available.
 
+For source-page extraction, `node-html-parser` 9.0.0 was selected after checking its current release, MIT license and security status. It replaces brittle HTML regular expressions for visible H2/H3/paragraph extraction. The dependency audit did not attribute a vulnerability to this parser; the repository still has pre-existing advisories in unrelated packages that require a separately tested upgrade batch.
+
 ## Security And Boundaries
 
 - Module permission: `streamDesk`; role: `stream_publisher`.
