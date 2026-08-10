@@ -4,6 +4,8 @@ const os = require('os');
 const path = require('path');
 const { openStreamDeskStore, inspectOwnedPage } = require('../src/services/streamDeskStore');
 const { createWechatDraftAdapter } = require('../src/services/wechatDraftAdapter');
+const { createStreamMedia } = require('../src/services/streamMedia');
+const Jimp = require('jimp');
 
 async function run() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-stream-desk-'));
@@ -14,6 +16,7 @@ async function run() {
     summary: 'A practical purchasing guide covering pouch structure, printed samples and validation decisions.',
     imageUrl: 'https://gdhspack.com/media/sample.webp',
     platforms: ['linkedin', 'wechat', 'invalid'],
+    recommendedAt: '2026-08-11 09:30:00',
   }, 'tester');
   assert.equal(imported.created, 2);
   assert.equal(store.listTasks().length, 2);
@@ -21,6 +24,9 @@ async function run() {
   const published = store.recordAction(1, 'published', 'tester', 'https://www.linkedin.com/posts/example');
   assert.equal(published.task.status, 'published');
   assert.equal(store.summary().counts.published, 1);
+  assert.equal(store.calendar({ from: '2026-08-11', to: '2026-08-11' }).length, 2);
+  store.recordMetrics(1, { impressions: 100, clicks: 8, reactions: 4, comments: 2, shares: 1, saves: 3 }, 'tester');
+  assert.deepEqual(store.analytics().totals, { published: 1, impressions: 100, clicks: 8, engagement: 10 });
   await assert.rejects(() => inspectOwnedPage('https://example.com/', async () => ({})), /gdhspack/);
   const inspected = await inspectOwnedPage('https://gdhspack.com/test', async () => ({
     ok: true,
@@ -30,6 +36,15 @@ async function run() {
   const wechat = createWechatDraftAdapter({ env: {}, fetchImpl: async () => { throw new Error('must not call'); } });
   assert.equal(wechat.readiness().ready, false);
   await assert.rejects(() => wechat.addDraft({}), /尚未配置/);
+  const sample = await new Jimp(40, 60, 0xff0000ff).getBufferAsync(Jimp.MIME_PNG);
+  const media = createStreamMedia({ root: path.join(dir, 'media'), fetchImpl: async () => ({
+    ok: true, url: 'https://gdhspack.com/media/sample.png', headers: new Headers({ 'content-type': 'image/png', 'content-length': String(sample.length) }),
+    arrayBuffer: async () => sample,
+  }) });
+  const prepared = await media.prepare({ id: 2, platform: 'linkedin', media_url: 'https://gdhspack.com/media/sample.png' });
+  assert.equal(fs.existsSync(prepared.file), true);
+  const output = await Jimp.read(prepared.file);
+  assert.deepEqual([output.bitmap.width, output.bitmap.height], [1200, 627]);
   store.db.close();
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('stream desk tests passed');

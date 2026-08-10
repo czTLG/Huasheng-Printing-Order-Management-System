@@ -44,6 +44,8 @@ Competitor observations are stored in `config/stream-content-strategy.json`. Eve
 | BrightBean Studio | Useful approval/calendar reference, but direct APIs still require platform credentials and account review. | Use as a workflow reference only. |
 | Custom Stream Desk | Fits the current manual operator, existing authentication/audit model and low server footprint. | Adopt for this phase. |
 
+The second-phase review also considered maintained open-source schedulers with calendars and analytics. BrightBean Studio and TryPost provide useful product references, but adopting either would duplicate the existing authentication and queue, add a separate stack, and still require official platform credentials. The current phase therefore reuses installed Jimp and the existing React/SQLite stack. This decision should be revisited if direct publishing credentials become available.
+
 ## Security And Boundaries
 
 - Module permission: `streamDesk`; role: `stream_publisher`.

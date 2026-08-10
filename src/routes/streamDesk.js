@@ -4,8 +4,9 @@ const path = require('path');
 const { allowRoles } = require('../middleware/auth');
 const { openStreamDeskStore, inspectOwnedPage } = require('../services/streamDeskStore');
 const { createWechatDraftAdapter } = require('../services/wechatDraftAdapter');
+const { createStreamMedia } = require('../services/streamMedia');
 
-function createStreamDeskRouter({ audit, store = openStreamDeskStore(), wechat = createWechatDraftAdapter() } = {}) {
+function createStreamDeskRouter({ audit, store = openStreamDeskStore(), wechat = createWechatDraftAdapter(), media = createStreamMedia() } = {}) {
   const router = express.Router();
   const roles = allowRoles('super_admin', 'stream_publisher');
 
@@ -20,6 +21,8 @@ function createStreamDeskRouter({ audit, store = openStreamDeskStore(), wechat =
     res.json(JSON.parse(fs.readFileSync(file, 'utf8')));
   });
   router.get('/tasks', (req, res) => res.json({ tasks: store.listTasks({ status: String(req.query.status || 'ready'), limit: req.query.limit }) }));
+  router.get('/calendar', (req, res) => res.json({ tasks: store.calendar({ from: req.query.from, to: req.query.to }) }));
+  router.get('/analytics', (_, res) => res.json(store.analytics()));
   router.post('/inspect', allowRoles('super_admin'), async (req, res) => {
     try {
       res.json(await inspectOwnedPage(req.body?.sourceUrl));
@@ -44,6 +47,32 @@ function createStreamDeskRouter({ audit, store = openStreamDeskStore(), wechat =
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
+  });
+  router.post('/tasks/:id/metrics', (req, res) => {
+    try {
+      const result = store.recordMetrics(Number(req.params.id), req.body || {}, req.user.userName);
+      audit?.({ role: req.user.role, userName: req.user.userName, action: 'stream_metrics_recorded', resourceType: 'stream_task', resourceId: req.params.id, detail: 'manual performance snapshot' });
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+  router.post('/tasks/:id/media', async (req, res) => {
+    try {
+      const task = store.db.prepare('SELECT * FROM stream_tasks WHERE id=?').get(Number(req.params.id));
+      if (!task) return res.status(404).json({ error: '任务不存在' });
+      const result = await media.prepare(task);
+      audit?.({ role: req.user.role, userName: req.user.userName, action: 'stream_media_prepared', resourceType: 'stream_task', resourceId: task.id, detail: `${result.width}x${result.height}` });
+      res.json({ ok: true, width: result.width, height: result.height, downloadUrl: `/api/stream-desk/tasks/${task.id}/media` });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+  router.get('/tasks/:id/media', (req, res) => {
+    const task = store.db.prepare('SELECT * FROM stream_tasks WHERE id=?').get(Number(req.params.id));
+    const file = task && media.locate(task);
+    if (!file) return res.status(404).json({ error: '尚未生成平台配图' });
+    res.download(file, `huasheng-${task.platform}-${task.id}.jpg`);
   });
   router.post('/tasks/:id/wechat-draft', async (req, res) => {
     try {

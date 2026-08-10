@@ -17,7 +17,8 @@ function decodeEntities(value) {
 function metaValue(html, key, attribute = 'name') {
   const tags = String(html || '').match(/<meta\s+[^>]*>/gi) || [];
   const tag = tags.find((item) => new RegExp(`${attribute}=["']${key}["']`, 'i').test(item));
-  return decodeEntities(tag?.match(/content=["']([^"']*)["']/i)?.[1] || '');
+  const value = tag?.match(/content="([^"]*)"/i)?.[1] || tag?.match(/content='([^']*)'/i)?.[1] || '';
+  return decodeEntities(value);
 }
 
 async function inspectOwnedPage(sourceUrl, fetchImpl = fetch) {
@@ -32,7 +33,7 @@ async function inspectOwnedPage(sourceUrl, fetchImpl = fetch) {
   const title = metaValue(html, 'og:title', 'property') || decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
   const summary = metaValue(html, 'description') || metaValue(html, 'og:description', 'property');
   const imageUrl = metaValue(html, 'og:image', 'property');
-  if (title.length < 8 || summary.length < 30) throw new Error('页面缺少可用的标题或 SEO description');
+  if (title.length < 4 || summary.length < 10) throw new Error('页面缺少可用的标题或 SEO description');
   return { sourceUrl: parsed.toString(), title, summary, imageUrl };
 }
 
@@ -83,6 +84,19 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
       created_at TEXT NOT NULL,
       FOREIGN KEY(task_id) REFERENCES stream_tasks(id)
     );
+    CREATE TABLE IF NOT EXISTS stream_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      impressions INTEGER NOT NULL DEFAULT 0,
+      clicks INTEGER NOT NULL DEFAULT 0,
+      reactions INTEGER NOT NULL DEFAULT 0,
+      comments INTEGER NOT NULL DEFAULT 0,
+      shares INTEGER NOT NULL DEFAULT 0,
+      saves INTEGER NOT NULL DEFAULT 0,
+      reported_by TEXT NOT NULL,
+      reported_at TEXT NOT NULL,
+      FOREIGN KEY(task_id) REFERENCES stream_tasks(id)
+    );
     CREATE INDEX IF NOT EXISTS idx_stream_tasks_queue ON stream_tasks(status, recommended_at, id);
     CREATE INDEX IF NOT EXISTS idx_stream_events_task ON stream_events(task_id, id);
   `);
@@ -122,6 +136,11 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
       image_url: String(input.imageUrl || '').trim(),
       language: String(input.language || 'en').trim(),
     };
+    if (source.summary.length >= 10 && source.summary.length < 30) {
+      source.summary += source.language === 'zh'
+        ? ' 本文进一步整理袋型、材料、印刷和样品验证等采购判断要点。'
+        : ' This guide adds practical purchasing checks for format, materials, printing and sample validation.';
+    }
     if (!/^https:\/\/gdhspack\.com\//.test(source.source_url)) throw new Error('来源必须是 gdhspack.com 的 HTTPS 页面');
     if (source.title.length < 8 || source.summary.length < 30) throw new Error('标题或摘要过短');
     const sourceId = db.prepare(`INSERT INTO stream_sources(source_url,title,summary,image_url,language,created_by,created_at)
@@ -130,11 +149,20 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
       RETURNING id`).get({ ...source, created_by: operator, created_at: createdAt }).id;
     const platforms = Array.isArray(input.platforms) && input.platforms.length ? input.platforms : ['pinterest', 'linkedin', 'facebook', 'wechat', 'zhihu', 'medium'];
     const validPlatforms = platforms.filter((item) => platformProfiles[item]);
-    const insert = db.prepare(`INSERT OR IGNORE INTO stream_tasks(source_id,platform,language,title,body,hashtags,media_url,target_url,destination_url,recommended_at,status,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,'ready',?,?)`);
+    const insert = db.prepare(`INSERT INTO stream_tasks(source_id,platform,language,title,body,hashtags,media_url,target_url,destination_url,recommended_at,status,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,'ready',?,?)
+      ON CONFLICT(source_id,platform,language) DO UPDATE SET
+        title=CASE WHEN stream_tasks.status='ready' THEN excluded.title ELSE stream_tasks.title END,
+        body=CASE WHEN stream_tasks.status='ready' THEN excluded.body ELSE stream_tasks.body END,
+        hashtags=CASE WHEN stream_tasks.status='ready' THEN excluded.hashtags ELSE stream_tasks.hashtags END,
+        media_url=CASE WHEN stream_tasks.status='ready' THEN excluded.media_url ELSE stream_tasks.media_url END,
+        target_url=CASE WHEN stream_tasks.status='ready' THEN excluded.target_url ELSE stream_tasks.target_url END,
+        destination_url=CASE WHEN stream_tasks.status='ready' THEN excluded.destination_url ELSE stream_tasks.destination_url END,
+        recommended_at=CASE WHEN stream_tasks.status='ready' THEN excluded.recommended_at ELSE stream_tasks.recommended_at END,
+        updated_at=CASE WHEN stream_tasks.status='ready' THEN excluded.updated_at ELSE stream_tasks.updated_at END`);
     validPlatforms.forEach((platform, index) => {
       const copy = adapt(source, platform);
-      const schedule = new Date(Date.now() + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) + ' 09:30:00';
+      const schedule = String(input.recommendedAt || '').trim() || new Date(Date.now() + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) + ' 09:30:00';
       insert.run(sourceId, platform, source.language, copy.title, copy.body, copy.hashtags, source.image_url, copy.targetUrl, platformProfiles[platform].destination, schedule, createdAt, createdAt);
     });
     return { sourceId, created: validPlatforms.length };
@@ -152,6 +180,34 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
     return { counts: Object.fromEntries(counts.map((row) => [row.status, row.count])), publishedToday, next };
   }
 
+  function calendar({ from, to } = {}) {
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from || '')) ? from : new Date().toISOString().slice(0, 10);
+    const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to || '')) ? to : new Date(Date.now() + 31 * 86400000).toISOString().slice(0, 10);
+    return db.prepare(`SELECT id,platform,title,status,recommended_at,published_at,public_url FROM stream_tasks
+      WHERE date(recommended_at) BETWEEN date(?) AND date(?) ORDER BY recommended_at,id`).all(start, end);
+  }
+
+  function recordMetrics(taskId, input, operator) {
+    const task = db.prepare('SELECT id FROM stream_tasks WHERE id=?').get(taskId);
+    if (!task) throw new Error('任务不存在');
+    const values = ['impressions', 'clicks', 'reactions', 'comments', 'shares', 'saves'].map((key) => Math.max(0, Math.floor(Number(input?.[key]) || 0)));
+    const ts = now();
+    db.prepare(`INSERT INTO stream_metrics(task_id,impressions,clicks,reactions,comments,shares,saves,reported_by,reported_at)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(taskId, ...values, operator, ts);
+    return { ok: true, reportedAt: ts };
+  }
+
+  function analytics() {
+    const byPlatform = db.prepare(`SELECT t.platform,count(DISTINCT CASE WHEN t.status='published' THEN t.id END) published,
+      coalesce(sum(m.impressions),0) impressions,coalesce(sum(m.clicks),0) clicks,coalesce(sum(m.reactions+m.comments+m.shares+m.saves),0) engagement
+      FROM stream_tasks t LEFT JOIN stream_metrics m ON m.task_id=t.id GROUP BY t.platform ORDER BY impressions DESC,t.platform`).all();
+    const totals = byPlatform.reduce((acc, row) => ({
+      published: acc.published + Number(row.published), impressions: acc.impressions + Number(row.impressions),
+      clicks: acc.clicks + Number(row.clicks), engagement: acc.engagement + Number(row.engagement),
+    }), { published: 0, impressions: 0, clicks: 0, engagement: 0 });
+    return { totals, byPlatform };
+  }
+
   function recordAction(taskId, action, operator, detail = '') {
     const allowed = new Set(['opened', 'copied', 'published', 'skipped', 'failed', 'draft_saved']);
     if (!allowed.has(action)) throw new Error('不支持的任务动作');
@@ -166,7 +222,7 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
     return { task: db.prepare('SELECT * FROM stream_tasks WHERE id=?').get(taskId), next: listTasks({ status: 'ready', limit: 1 })[0] || null };
   }
 
-  return { db, platformProfiles, importSource, listTasks, summary, recordAction };
+  return { db, platformProfiles, importSource, listTasks, summary, calendar, recordMetrics, analytics, recordAction };
 }
 
 module.exports = { openStreamDeskStore, inspectOwnedPage };
