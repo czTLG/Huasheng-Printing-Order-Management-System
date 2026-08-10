@@ -1,5 +1,5 @@
 {
-  "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin", "crm"],
+  "moduleKeys": ["orders", "workorder", "board", "cost", "stats", "admin", "crm", "streamDesk"],
   "capabilityKeys": ["matrixSend"],
   "defaultsByRole": {
     "super_admin": {
@@ -32,6 +32,21 @@
       },
       "ordersStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
       "boardStages": ["印刷", "复膜", "制袋", "发货", "完成", "全部"],
+      "capabilities": { "matrixSend": false }
+    },
+    "stream_publisher": {
+      "modules": {
+        "orders": false,
+        "workorder": false,
+        "board": false,
+        "cost": false,
+        "stats": false,
+        "admin": false,
+        "crm": false,
+        "streamDesk": true
+      },
+      "ordersStages": [],
+      "boardStages": [],
       "capabilities": { "matrixSend": false }
     },
     "costing_user": {

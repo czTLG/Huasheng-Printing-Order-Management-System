@@ -46,6 +46,7 @@ const { createMatrixStreamPreview } = require('./services/matrixStreamPreview');
 const { createMatrixThreadRoute } = require('./services/matrixThreadRoute');
 const { createMatrixThreadPreview } = require('./services/matrixThreadPreview');
 const { createMatrixThreadDelivery } = require('./services/matrixThreadDelivery');
+const { createStreamDeskRouter } = require('./routes/streamDesk');
 
 initDb();
 
@@ -216,6 +217,7 @@ app.use('/api/stats', statsRouter);
 app.use('/api/foreign-costing-assistant', foreignCostingAssistantRouter);
 app.use('/api/crm', crmRouter);
 app.use('/api/matrix', dispatchMatrix);
+app.use('/api/stream-desk', createStreamDeskRouter({ audit }));
 
 if (process.env.DISABLE_CRON !== '1') {
   // 每日14:40（交易日）先执行筛选，不自动发邮件（邮件由独立动作触发）

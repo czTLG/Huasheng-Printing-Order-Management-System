@@ -23,6 +23,7 @@ const TABS = [
 const ROLE_LABELS: Record<string, string> = {
   super_admin: '超级管理员', manager: '生产经理',
   foreign_trade_crm_admin: '外贸客户管理负责人',
+  stream_publisher: '内容发布员',
   costing_user: '成本核算员',
   freight_user: '物流费用员',
   ai_sales: '业务员', worker: '通用工人',
@@ -58,6 +59,7 @@ export default function Admin() {
     { key: 'stats', label: '统计分析' },
     { key: 'admin', label: '系统管理' },
     { key: 'crm', label: '外贸客户管理' },
+    { key: 'streamDesk', label: '内容发布台' },
   ];
 
   const getDefaultRoleModules = (role: string) => {

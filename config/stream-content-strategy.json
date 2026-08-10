@@ -1,0 +1,40 @@
+{
+  "reviewedAt": "2026-08-10",
+  "evidenceRule": "Observed cadence is a sample-window observation, not a claim about every social account.",
+  "recommendedWeeklyMix": [
+    { "pillar": "buyer-decision", "share": 35, "examples": ["bag-format comparison", "material selection", "quotation checklist"] },
+    { "pillar": "real-evidence", "share": 30, "examples": ["printed samples", "factory process", "quality-control checkpoint"] },
+    { "pillar": "application", "share": 20, "examples": ["coffee", "nuts", "snacks", "daily chemicals"] },
+    { "pillar": "regulation-and-testing", "share": 15, "examples": ["PPWR context", "OTR/WVTR", "sample validation"] }
+  ],
+  "peers": [
+    {
+      "name": "Mondi",
+      "sourceUrl": "https://www.mondigroup.com/news-and-insight?page=1",
+      "sampleWindow": "2026-05-01/2026-07-28",
+      "observedPattern": "Frequent short insights, case studies and press releases connect an application problem with measured outcomes, machinery collaboration or regulatory context.",
+      "lesson": "Use evidence-led application stories and state validation boundaries.",
+      "doNotCopy": "Claims, customer names, test results and branded campaign language."
+    },
+    {
+      "name": "CarePac",
+      "sourceUrl": "https://www.carepac.com/blog/",
+      "sampleWindow": "2026-06-10/2026-06-30",
+      "observedPattern": "The sampled blog archive published multiple buyer-intent articles per week around pouch formats, volume, configuration and cost decisions.",
+      "lesson": "Build dense purchasing-question clusters and repurpose each article into visual checklists and short posts.",
+      "doNotCopy": "Article wording, branded examples, unsupported volume or cost claims."
+    },
+    {
+      "name": "Amcor",
+      "sourceUrl": "https://www.amcor.com/media/news",
+      "sampleWindow": "Public newsroom review on 2026-08-10",
+      "observedPattern": "Product announcements are framed around a concrete brand or operational outcome and supported by named product families.",
+      "lesson": "Lead with the buyer outcome, then explain the packaging decision and supporting evidence.",
+      "doNotCopy": "Product names, customer relationships and performance claims."
+    }
+  ],
+  "experiments": [
+    { "name": "evidence-carousel", "channels": ["linkedin", "pinterest", "wechat"], "measure": "qualified impressions and saves after 28 days" },
+    { "name": "buyer-checklist", "channels": ["zhihu", "medium", "baijiahao"], "measure": "indexed pages, referral sessions and branded searches after 28 days" }
+  ]
+}

@@ -38,7 +38,7 @@ function fakeAuth(req, res, next) {
         req.authMode = 'jwt';
 
         const viewAs = req.header('x-view-as-role');
-        const allowedViewRoles = new Set(['manager', 'foreign_trade_crm_admin', 'costing_user', 'freight_user', 'ai_sales', 'worker', 'worker_print', 'worker_film', 'worker_bag', 'worker_ship']);
+        const allowedViewRoles = new Set(['manager', 'foreign_trade_crm_admin', 'stream_publisher', 'costing_user', 'freight_user', 'ai_sales', 'worker', 'worker_print', 'worker_film', 'worker_bag', 'worker_ship']);
         if (u.role === 'super_admin' && viewAs && allowedViewRoles.has(viewAs)) {
           req.user.viewAsRole = viewAs;
           req.user.role = viewAs;

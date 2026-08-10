@@ -14,6 +14,7 @@ import {
   Activity,
   Shield,
   ShieldAlert,
+  Send,
   X,
   CheckCircle2
 } from 'lucide-react';
@@ -33,12 +34,14 @@ const Cost = lazy(() => import('./components/Cost'));
 const Admin = lazy(() => import('./components/Admin'));
 const Stats = lazy(() => import('./components/Stats'));
 const CrmModule = lazy(() => import('./components/crm/CrmModule'));
+const StreamDesk = lazy(() => import('./components/StreamDesk'));
 
-type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm';
+type Tab = 'orders' | 'workorders' | 'board' | 'cost' | 'stats' | 'admin' | 'crm' | 'stream';
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin: '超级管理员', manager: '生产经理',
   foreign_trade_crm_admin: '外贸客户管理负责人',
+  stream_publisher: '内容发布员',
   costing_user: '成本核算员',
   freight_user: '物流费用员',
   ai_sales: '业务员', worker: '通用工人',
@@ -64,6 +67,7 @@ const App: React.FC = () => {
         setActiveTab('crm');
       } else if (cached.role.startsWith('worker')) setActiveTab('board');
       else if (cached.role === 'ai_sales') setActiveTab('workorders');
+      else if (cached.role === 'stream_publisher') setActiveTab('stream');
     }
     const token = localStorage.getItem('token');
     if (!token) return;
@@ -75,6 +79,7 @@ const App: React.FC = () => {
           setActiveTab('crm');
         } else if (fresh.role.startsWith('worker')) setActiveTab('board');
         else if (fresh.role === 'ai_sales') setActiveTab('workorders');
+        else if (fresh.role === 'stream_publisher') setActiveTab('stream');
       })
       .catch(() => {});
   }, []);
@@ -162,6 +167,8 @@ const App: React.FC = () => {
        setActiveTab('board');
     } else if (loggedInUser.role === 'ai_sales') {
        setActiveTab('workorders');
+    } else if (loggedInUser.role === 'stream_publisher') {
+       setActiveTab('stream');
     } else {
        setActiveTab('orders');
     }
@@ -184,6 +191,7 @@ const App: React.FC = () => {
     { id: 'board', label: '生产看板', icon: Activity, requiredModule: 'board' },
     { id: 'cost', label: '成本核算', icon: Calculator, requiredModule: 'cost' },
     { id: 'crm', label: '外贸 CRM', icon: MessageSquare, requiredModule: 'crm' },
+    { id: 'stream', label: '内容发布台', icon: Send, requiredModule: 'streamDesk' },
     { id: 'stats', label: '统计分析', icon: BarChart3, requiredModule: 'stats' },
     { id: 'admin', label: '系统管理', icon: Shield, requiredModule: 'admin' },
   ];
@@ -217,6 +225,7 @@ const App: React.FC = () => {
       case 'board': return <Board />;
       case 'cost': return <Cost />;
       case 'crm': return visibleModules.includes('crm') ? <CrmModule initialTab={window.location.pathname.startsWith('/crm/messages') ? 'messages' : 'dashboard'} /> : forbidden;
+      case 'stream': return visibleModules.includes('streamDesk') ? <StreamDesk user={user} /> : forbidden;
       case 'stats': return <Stats />;
       case 'admin': return <Admin />;
       default: return <Orders />;
