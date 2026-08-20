@@ -13,6 +13,10 @@ const {
   calcBackSealBag,
   calcMaterialWeight
 } = require('../services/quoteEngine');
+const {
+  evaluatePreCostingReadiness,
+  normalizeLegacyQuoteInput
+} = require('../services/foreignCostingAssistant');
 
 const router = express.Router();
 
@@ -1004,7 +1008,19 @@ router.post('/export.pdf', allowRoles('super_admin', 'manager', 'ai_sales'), (re
 
 router.post('/calculate', allowRoles('super_admin', 'manager', 'ai_sales'), (req, res) => {
   try {
-    const { costType, input = {}, withTrace = true } = req.body || {};
+    const { costType, input: rawInput = {}, withTrace = true } = req.body || {};
+    const input = normalizeLegacyQuoteInput(costType, rawInput);
+    const readiness = evaluatePreCostingReadiness(input, {
+      requireQuantity: false,
+      allowManualTemplates: true
+    });
+    if (!readiness.can_calculate) {
+      return res.status(422).json({
+        ok: false,
+        status: 'blocked',
+        readiness
+      });
+    }
     let result;
     let trace;
 
@@ -1051,7 +1067,7 @@ router.post('/calculate', allowRoles('super_admin', 'manager', 'ai_sales'), (req
         return res.status(400).json({ error: '不支持的 costType' });
     }
 
-    res.json({ ok: true, costType, result, trace: withTrace ? trace : undefined });
+    res.json({ ok: true, status: 'internal_estimate', costType, result, readiness, trace: withTrace ? trace : undefined });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }

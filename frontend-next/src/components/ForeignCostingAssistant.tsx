@@ -819,24 +819,29 @@ function normalizeCalculationRows(table: any, form: CostingForm, parsed: any, dr
 
 function buildQuoteInput(form: CostingForm) {
   return {
-    thick: form.thick.map(v => safeNumber(v)),
-    proportion: form.proportion.map(v => safeNumber(v)),
-    price: form.price.map(v => safeNumber(v)),
-    jgf: safeNumber(form.jgf),
-    zxyf: safeNumber(form.zxyf),
-    yf: safeNumber(form.yf),
-    fqfy: safeNumber(form.fqfy),
-    lldj: safeNumber(form.lldj),
-    ba_zdf: safeNumber(form.ba_zdf),
-    sh: safeNumber(form.sh),
-    lr: safeNumber(form.lr),
+    thick: form.thick.map(v => optionalNumber(v)),
+    proportion: form.proportion.map(v => optionalNumber(v)),
+    price: form.price.map(v => optionalNumber(v)),
+    jgf: optionalNumber(form.jgf),
+    zxyf: optionalNumber(form.zxyf),
+    yf: optionalNumber(form.yf),
+    fqfy: optionalNumber(form.fqfy),
+    lldj: optionalNumber(form.lldj),
+    ba_zdf: optionalNumber(form.ba_zdf),
+    sh: optionalRate(form.sh),
+    lr: optionalRate(form.lr),
   };
 }
 
-function safeNumber(value: string) {
-  if (value == null || value === '') return 0;
+function optionalNumber(value: string) {
+  if (value == null || value.trim() === '') return null;
   const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
+}
+
+function optionalRate(value: string) {
+  const n = optionalNumber(value);
+  return n === null ? null : n / 100;
 }
 
 function parseNumberOrNull(value: string) {

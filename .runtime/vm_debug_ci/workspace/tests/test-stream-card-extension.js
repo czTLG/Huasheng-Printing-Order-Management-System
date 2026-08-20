@@ -1370,6 +1370,89 @@ async function testRecommendationSnapshotTransitions() {
   assert.strictEqual(filtered.patches[0].snapshot_key, 'c'.repeat(64));
 }
 
+async function testKnowledgeQuestionBindingFlow() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-knowledge-extension-'));
+  const previousOwner = process.env.MATRIX_OWNER_OPEN_ID;
+  process.env.MATRIX_OWNER_OPEN_ID = 'ou-chen';
+  const handlers = new Map();
+  const sent = [];
+  let messageSequence = 0;
+  const knowledgeReview = require('../scripts/matrix-knowledge-review.js');
+  const knowledgeStorePath = path.join(root, 'knowledge.json');
+  try {
+    const registered = extension.register({
+      channel: {},
+      dispatcher: { on: (name, handler) => handlers.set(name, handler) },
+      card: helpers(),
+      knowledgeReview,
+      knowledgeStorePath,
+      now: () => Date.parse('2026-08-20T01:00:00.000Z'),
+      scheduleReminderPoll: () => ({ unref() {} }),
+      clearReminderPoll: () => undefined,
+      sendManagedCard: async (_channel, chatId, card) => {
+        const messageId = `knowledge-message-${++messageSequence}`;
+        sent.push({ messageId, chatId, card });
+        return { messageId };
+      },
+      client: {}
+    });
+
+    assert.strictEqual(await registered.onMessage({
+      msg: { content: '知识确认', chatId: 'build-chat', senderId: 'ou-chen', messageId: 'command-1' }
+    }), true);
+    const first = knowledgeReview.currentQuestion(knowledgeStorePath);
+    const firstMessage = sent.at(-1).messageId;
+    const firstButton = buttons(sent.at(-1).card).find(button => button?.behaviors?.[0]?.value?.c === 'A');
+    assert.ok(firstButton, 'knowledge question must expose A-D callback buttons');
+
+    assert.strictEqual(await registered.shouldHandleUnmentioned({
+      msg: { content: 'A', chatId: 'build-chat', senderId: 'ou-chen', replyToMessageId: firstMessage, mentions: [] }
+    }), true);
+    assert.strictEqual(await registered.onMessage({
+      msg: { content: 'A', chatId: 'build-chat', senderId: 'ou-chen', messageId: 'answer-1', replyToMessageId: firstMessage }
+    }), true);
+    const second = knowledgeReview.currentQuestion(knowledgeStorePath);
+    assert.notStrictEqual(second.id, first.id);
+    const secondMessage = sent.at(-1).messageId;
+
+    await handlers.get('mx.knowledge_choice')({
+      evt: { operator: { openId: 'ou-chen' }, chatId: 'build-chat', messageId: firstMessage },
+      value: firstButton.behaviors[0].value
+    });
+    assert.strictEqual(knowledgeReview.currentQuestion(knowledgeStorePath).id, second.id, 'stale card must not advance a newer question');
+
+    assert.strictEqual(await registered.onMessage({
+      msg: { content: '我回答的是另外一件事情', chatId: 'build-chat', senderId: 'ou-chen', messageId: 'answer-text', replyToMessageId: secondMessage }
+    }), true);
+    assert.strictEqual(knowledgeReview.currentQuestion(knowledgeStorePath).id, second.id, 'free text must not advance before classification');
+    const classificationCard = sent.at(-1).card;
+    const otherButton = buttons(classificationCard).find(button => button?.behaviors?.[0]?.value?.k === 'different_question');
+    assert.ok(otherButton, 'classification card must expose a different-question action');
+    await handlers.get('mx.knowledge_classify')({
+      evt: { operator: { openId: 'ou-chen' }, chatId: 'build-chat', messageId: 'classification-1' },
+      value: otherButton.behaviors[0].value
+    });
+    assert.strictEqual(knowledgeReview.currentQuestion(knowledgeStorePath).id, second.id, 'different-question text must remain detached');
+
+    const beforeOtherActor = fs.readFileSync(knowledgeStorePath, 'utf8');
+    const currentMessage = sent.at(-1).messageId;
+    assert.strictEqual(await registered.onMessage({
+      msg: { content: 'B', chatId: 'build-chat', senderId: 'ou-other', messageId: 'answer-other', replyToMessageId: currentMessage }
+    }), true);
+    assert.strictEqual(fs.readFileSync(knowledgeStorePath, 'utf8'), beforeOtherActor, 'unbound actor must not mutate knowledge state');
+
+    assert.strictEqual(await registered.onMessage({
+      msg: { content: '知识回答：直接写入', chatId: 'build-chat', senderId: 'ou-chen', messageId: 'unquoted' }
+    }), true);
+    assert.strictEqual(knowledgeReview.currentQuestion(knowledgeStorePath).id, second.id, 'unquoted text must never be guessed onto the current question');
+    registered.dispose();
+  } finally {
+    if (previousOwner === undefined) delete process.env.MATRIX_OWNER_OPEN_ID;
+    else process.env.MATRIX_OWNER_OPEN_ID = previousOwner;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   await testNarrowClient();
   await testAuthoritativeContextInjection();
@@ -1388,6 +1471,7 @@ async function testRecommendationSnapshotTransitions() {
   await testSelectionReplayAfterRestart();
   await testInteractiveZeroRecommendations();
   await testRecommendationSnapshotTransitions();
+  await testKnowledgeQuestionBindingFlow();
   testSanitizedCompose();
   process.env.MATRIX_DELIVERY_ENABLED = '1';
   assert.throws(() => extension.register({}), /MATRIX_DELIVERY_ENABLED/);
@@ -1643,7 +1727,7 @@ async function testRecommendationSnapshotTransitions() {
   assert.ok(visibleText(incompleteSent.at(-1)).includes('开发客户'));
   incomplete.dispose();
   assert.strictEqual(await registered.onMessage({ msg: { content: '开发客户!', chatId: 'chat-1', senderId: 'ou-1' }, project: {} }), false);
-  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.approve', 'mx.back', 'mx.category', 'mx.confirm', 'mx.detail', 'mx.filters', 'mx.ledger_confirm', 'mx.ledger_preview', 'mx.page', 'mx.pick', 'mx.preview', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.review', 'mx.revise', 'mx.select', 'mx.thread_approve', 'mx.thread_confirm', 'mx.thread_preview', 'mx.today', 'mx.work']);
+  assert.deepStrictEqual([...handlers.keys()].sort(), ['mx.approve', 'mx.back', 'mx.category', 'mx.confirm', 'mx.detail', 'mx.filters', 'mx.knowledge_choice', 'mx.knowledge_classify', 'mx.ledger_confirm', 'mx.ledger_preview', 'mx.page', 'mx.pick', 'mx.preview', 'mx.quick', 'mx.region', 'mx.reply_draft', 'mx.retry_translation', 'mx.review', 'mx.revise', 'mx.select', 'mx.thread_approve', 'mx.thread_confirm', 'mx.thread_preview', 'mx.today', 'mx.work']);
 
   console.log('stream card extension tests passed');
 })().catch(error => {

@@ -20,11 +20,16 @@ async function run() {
   }, 'tester');
   assert.equal(imported.created, 2);
   assert.equal(store.listTasks().length, 2);
+  assert.equal(store.listTasks({ platform: 'linkedin' }).length, 1);
+  assert.equal(store.dailyDrafts({ date: '2026-08-11', platform: 'linkedin' }).contract_version, 1);
+  assert.throws(() => store.recordAction(1, 'published', 'tester', 'https://www.linkedin.com/posts/example'), /审批/);
+  store.recordApproval(1, 'approved', 'reviewer');
   assert.throws(() => store.recordAction(1, 'published', 'tester', ''), /公开 URL/);
   const published = store.recordAction(1, 'published', 'tester', 'https://www.linkedin.com/posts/example');
   assert.equal(published.task.status, 'published');
   assert.equal(store.summary().counts.published, 1);
   assert.equal(store.calendar({ from: '2026-08-11', to: '2026-08-11' }).length, 2);
+  assert.equal(store.db.prepare("SELECT count(*) count FROM stream_events WHERE action='approval_updated'").get().count, 1);
   store.recordMetrics(1, { impressions: 100, clicks: 8, reactions: 4, comments: 2, shares: 1, saves: 3 }, 'tester');
   assert.deepEqual(store.analytics().totals, { published: 1, impressions: 100, clicks: 8, engagement: 10 });
   await assert.rejects(() => inspectOwnedPage('https://example.com/', async () => ({})), /gdhspack/);

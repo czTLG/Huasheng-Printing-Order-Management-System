@@ -78,6 +78,10 @@ function atomicReceipt(target, value) {
 
 async function deliverDailyDigest({
   enabled = process.env.MATRIX_SUPERVISOR_ENABLED === '1',
+  channelPolicy = {
+    bill: process.env.MATRIX_SUPERVISOR_BILL_ENABLED === '1',
+    vmci: process.env.MATRIX_SUPERVISOR_VMCI_ENABLED === '1'
+  },
   hour = Number(process.env.MATRIX_SUPERVISOR_HOUR || 9),
   timeZone = process.env.MATRIX_SUPERVISOR_TIMEZONE || 'Asia/Shanghai',
   stateRoot = DEFAULT_STATE_ROOT,
@@ -90,13 +94,16 @@ async function deliverDailyDigest({
   clock = () => new Date()
 } = {}) {
   if (!enabled) return { status: 'disabled' };
+  const enabledTargets = ['bill', 'vmci'].filter(target => channelPolicy?.[target] === true);
+  if (!enabledTargets.length) return { status: 'disabled_by_channel_policy' };
+  const enabledSet = new Set(enabledTargets);
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error('supervisor hour invalid');
   if (!client || typeof client.supervisorDigest !== 'function' || typeof sendManagedCard !== 'function') throw new Error('supervisor dependencies required');
   const now = clock();
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error('supervisor clock invalid');
   const local = localParts(now, timeZone);
   if (local.hour < hour) return { status: 'early', date: local.date };
-  const completionPath = path.join(stateRoot, local.date, 'complete.json');
+  const completionPath = path.join(stateRoot, local.date, `complete-${enabledTargets.join('-')}.json`);
   if (fs.existsSync(completionPath)) return { status: 'delivered', date: local.date };
   const digest = await client.supervisorDigest(openId);
   if (digest.date !== local.date || !/^[a-f0-9]{32}$/.test(String(digest.digest_id || ''))) throw new Error('supervisor digest invalid');
@@ -104,6 +111,7 @@ async function deliverDailyDigest({
   for (const item of digest.channels || []) {
     const target = safeName(item.channel);
     if (!['bill', 'vmci'].includes(target) || !item.counts || !Array.isArray(item.items)) throw new Error('supervisor channel payload invalid');
+    if (!enabledSet.has(target)) continue;
     if (item.counts.actionable < 1) {
       results.push({ channel: target, status: 'empty' });
       continue;

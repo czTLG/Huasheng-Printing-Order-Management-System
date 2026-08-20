@@ -28,6 +28,7 @@ function badgeClass(value: string, type: 'ai' | 'workflow') {
 
 export default function CrmMessages({ onOpenMessage }: Props) {
   const [rows, setRows] = useState<any[]>([]);
+  const [whatsappControl, setWhatsappControl] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({
     source_type: 'whatsapp',
@@ -43,6 +44,7 @@ export default function CrmMessages({ onOpenMessage }: Props) {
     setLoading(true);
     try {
       const data = await mockService.listCrmWhatsappMessages(filters);
+      setWhatsappControl(await mockService.getWhatsappControlState().catch(() => null));
       setRows(Array.isArray(data?.rows) ? data.rows : []);
     } finally {
       setLoading(false);
@@ -66,6 +68,12 @@ export default function CrmMessages({ onOpenMessage }: Props) {
           <RefreshCcw className="w-4 h-4" /> 刷新
         </button>
       </div>
+
+      {whatsappControl && <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
+        <div className="font-black">WhatsApp 官方接管：尚未接入</div>
+        <div className="mt-1 leading-5">仅允许 Meta WhatsApp Business Platform Cloud API；当前自动化关闭、外发关闭、未接凭据。24 小时窗口外只能使用已批准模板。</div>
+        <div className="mt-2 font-bold">人工接管状态：可自动处理 → 请求人工 → 人工处理中 → 自动化暂停 → 已关闭。询价承诺、规格不确定、投诉、付款、合规问题或客户要求人工时必须接管。</div>
+      </section>}
 
       <section className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-6 gap-3">

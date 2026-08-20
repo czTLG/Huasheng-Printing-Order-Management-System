@@ -92,7 +92,7 @@ function buildCrmWorkbench(db) {
     `),
     father_tasks_pending: countOne(db, "SELECT COUNT(*) AS total FROM crm_father_review_tasks WHERE status = 'pending'"),
     father_tasks_done_pending_sales: countOne(db, "SELECT COUNT(*) AS total FROM crm_father_review_tasks WHERE status = 'done' AND COALESCE(sales_handled_at, '') = ''"),
-    costing_drafts_pending_review: countOne(db, "SELECT COUNT(*) AS total FROM foreign_costing_drafts WHERE COALESCE(status, '') IN ('internal_pre_quote', 'draft', 'pending_review')"),
+    costing_drafts_pending_review: countOne(db, "SELECT COUNT(*) AS total FROM foreign_costing_drafts WHERE COALESCE(status, '') IN ('blocked', 'internal_estimate', 'internal_pre_quote', 'draft', 'pending_review')"),
     quoted_waiting_customer: countOne(db, `
       SELECT COUNT(*) AS total
       FROM customers
@@ -173,7 +173,7 @@ function buildCrmWorkbench(db) {
     FROM foreign_costing_drafts d
     LEFT JOIN customers c ON c.id = d.customer_id
     LEFT JOIN inquiries i ON i.id = d.crm_inquiry_id
-    WHERE COALESCE(d.status, '') IN ('internal_pre_quote', 'draft', 'pending_review')
+    WHERE COALESCE(d.status, '') IN ('blocked', 'internal_estimate', 'internal_pre_quote', 'draft', 'pending_review')
     ORDER BY d.created_at DESC, d.id DESC
     LIMIT 30
   `).all().forEach((row) => items.push(normalizeItem(row, 'costing_draft_pending_review', { title: '待报价助手复核', owner: '父亲' })));

@@ -20,8 +20,15 @@ function createStreamDeskRouter({ audit, store = openStreamDeskStore(), wechat =
     const file = path.join(__dirname, '..', '..', 'config', 'stream-content-strategy.json');
     res.json(JSON.parse(fs.readFileSync(file, 'utf8')));
   });
-  router.get('/tasks', (req, res) => res.json({ tasks: store.listTasks({ status: String(req.query.status || 'ready'), limit: req.query.limit }) }));
-  router.get('/calendar', (req, res) => res.json({ tasks: store.calendar({ from: req.query.from, to: req.query.to }) }));
+  router.get('/tasks', (req, res) => res.json({ tasks: store.listTasks({
+    status: String(req.query.status || 'ready'), platform: String(req.query.platform || 'all'),
+    approvalStatus: String(req.query.approval_status || 'all'), limit: req.query.limit
+  }) }));
+  router.get('/calendar', (req, res) => res.json({ tasks: store.calendar({ from: req.query.from, to: req.query.to, platform: String(req.query.platform || 'all') }) }));
+  router.get('/daily-drafts', (req, res) => res.json(store.dailyDrafts({
+    date: req.query.date,
+    platform: String(req.query.platform || 'all')
+  })));
   router.get('/analytics', (_, res) => res.json(store.analytics()));
   router.post('/inspect', allowRoles('super_admin'), async (req, res) => {
     try {
@@ -43,6 +50,16 @@ function createStreamDeskRouter({ audit, store = openStreamDeskStore(), wechat =
     try {
       const result = store.recordAction(Number(req.params.id), String(req.body?.action || ''), req.user.userName, String(req.body?.detail || ''));
       audit?.({ role: req.user.role, userName: req.user.userName, action: `stream_task_${req.body?.action}`, resourceType: 'stream_task', resourceId: req.params.id, detail: String(req.body?.detail || '').slice(0, 500) });
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+  router.post('/tasks/:id/approval', allowRoles('super_admin'), (req, res) => {
+    try {
+      const approvalStatus = String(req.body?.approval_status || '');
+      const result = store.recordApproval(Number(req.params.id), approvalStatus, req.user.userName, String(req.body?.detail || ''));
+      audit?.({ role: req.user.role, userName: req.user.userName, action: 'stream_task_approval_updated', resourceType: 'stream_task', resourceId: req.params.id, detail: approvalStatus });
       res.json(result);
     } catch (error) {
       res.status(400).json({ error: error.message });

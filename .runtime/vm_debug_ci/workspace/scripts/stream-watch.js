@@ -22,6 +22,15 @@ const WEEKLY_HOUR = Number(process.env.STREAM_WEEKLY_HOUR || 8);
 const WEEKLY_MINUTE = Number(process.env.STREAM_WEEKLY_MINUTE || 20);
 const BASE_URL = 'https://open.feishu.cn/open-apis';
 
+function streamSwitches(env = process.env) {
+  return Object.freeze({
+    orderEventsEnabled: true,
+    summarySupervisorSectionEnabled: String(env?.STREAM_SUMMARY_SUPERVISOR_SECTION_ENABLED || '') === '1'
+  });
+}
+
+const STREAM_SWITCHES = streamSwitches();
+
 function resolveOrderChatId({
   explicitChatId = '',
   appId = APP_ID,
@@ -169,7 +178,7 @@ function workCardFor(row) {
   };
 }
 
-function summaryCardFor(summary) {
+function summaryCardFor(summary, { includeSupervisor = STREAM_SWITCHES.summarySupervisorSectionEnabled } = {}) {
   const stageLine = summary.stage_counts.length
     ? summary.stage_counts.map(row => `${row.status} ${row.total}`).join('｜')
     : '暂无在制订单';
@@ -182,9 +191,14 @@ function summaryCardFor(summary) {
   const newWorkList = summary.new_work_orders.length
     ? summary.new_work_orders.map(row => `• ${text(row.work_no)} ${text(row.customer_name)}｜${text(row.product_name)}`).join('\n')
     : '• 今日无新开单';
-  const supervisorList = (summary.supervisor_items || []).length
-    ? summary.supervisor_items.slice(0, 3).map(row => `• ${text(row.priority)}｜${text(row.company)}｜${text(row.state)}\n  下一步：${text((row.next_actions || [])[0])}`).join('\n')
-    : '• 当前没有登记的P0/P1主管待办';
+  const supervisorElements = includeSupervisor ? [
+    { tag: 'hr' },
+    {
+      tag: 'div', text: { tag: 'lark_md', content: `**主管待办（P0/P1）**\n${(summary.supervisor_items || []).length
+        ? summary.supervisor_items.slice(0, 3).map(row => `• ${text(row.priority)}｜${text(row.company)}｜${text(row.state)}\n  下一步：${text((row.next_actions || [])[0])}`).join('\n')
+        : '• 当前没有登记的P0/P1主管待办'}` }
+    }
+  ] : [];
 
   return {
     config: { wide_screen_mode: true },
@@ -210,8 +224,7 @@ function summaryCardFor(summary) {
       { tag: 'hr' },
       { tag: 'div', text: { tag: 'lark_md', content: `**今日有变化的订单（最多10条）**\n${changedList}` } },
       { tag: 'div', text: { tag: 'lark_md', content: `**今日新开单（最多10条）**\n${newWorkList}` } },
-      { tag: 'hr' },
-      { tag: 'div', text: { tag: 'lark_md', content: `**主管待办（P0/P1）**\n${supervisorList}` } },
+      ...supervisorElements,
       { tag: 'note', elements: [{ tag: 'plain_text', content: '数据截至北京时间17:40；统计来源：订单系统数据库。' }] }
     ]
   };
@@ -584,6 +597,7 @@ module.exports = {
   sendInteractiveCard,
   sendTextMessage,
   summaryCardFor,
+  streamSwitches,
   cardFor,
   workCardFor,
   buildDailySummary

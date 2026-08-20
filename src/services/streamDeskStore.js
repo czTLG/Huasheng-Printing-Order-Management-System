@@ -81,6 +81,9 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
       destination_url TEXT NOT NULL,
       recommended_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'ready',
+      approval_status TEXT NOT NULL DEFAULT 'pending_review' CHECK(approval_status IN ('pending_review','approved','changes_requested')),
+      approved_by TEXT,
+      approved_at TEXT,
       public_url TEXT,
       operator TEXT,
       published_at TEXT,
@@ -116,6 +119,11 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
   `);
   const sourceColumns = new Set(db.prepare('PRAGMA table_info(stream_sources)').all().map((column) => column.name));
   if (!sourceColumns.has('content_json')) db.exec("ALTER TABLE stream_sources ADD COLUMN content_json TEXT NOT NULL DEFAULT '{}'");
+
+  const taskColumns = new Set(db.prepare('PRAGMA table_info(stream_tasks)').all().map((column) => column.name));
+  if (!taskColumns.has('approval_status')) db.exec("ALTER TABLE stream_tasks ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending_review' CHECK(approval_status IN ('pending_review','approved','changes_requested'))");
+  if (!taskColumns.has('approved_by')) db.exec('ALTER TABLE stream_tasks ADD COLUMN approved_by TEXT');
+  if (!taskColumns.has('approved_at')) db.exec('ALTER TABLE stream_tasks ADD COLUMN approved_at TEXT');
 
   const platformProfiles = {
     pinterest: { destination: 'https://www.pinterest.com/pin-builder/', cadenceDays: 2 },
@@ -186,6 +194,9 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
         target_url=CASE WHEN stream_tasks.status='ready' THEN excluded.target_url ELSE stream_tasks.target_url END,
         destination_url=CASE WHEN stream_tasks.status='ready' THEN excluded.destination_url ELSE stream_tasks.destination_url END,
         recommended_at=CASE WHEN stream_tasks.status='ready' THEN excluded.recommended_at ELSE stream_tasks.recommended_at END,
+        approval_status=CASE WHEN stream_tasks.status='ready' THEN 'pending_review' ELSE stream_tasks.approval_status END,
+        approved_by=CASE WHEN stream_tasks.status='ready' THEN NULL ELSE stream_tasks.approved_by END,
+        approved_at=CASE WHEN stream_tasks.status='ready' THEN NULL ELSE stream_tasks.approved_at END,
         updated_at=CASE WHEN stream_tasks.status='ready' THEN excluded.updated_at ELSE stream_tasks.updated_at END`);
     validPlatforms.forEach((platform, index) => {
       const copy = adapt({ ...source, content: input.content || {} }, platform);
@@ -195,9 +206,11 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
     return { sourceId, created: validPlatforms.length };
   }
 
-  function listTasks({ status = 'ready', limit = 50 } = {}) {
+  function listTasks({ status = 'ready', platform = 'all', approvalStatus = 'all', limit = 50 } = {}) {
     return db.prepare(`SELECT t.*,s.source_url,s.summary FROM stream_tasks t JOIN stream_sources s ON s.id=t.source_id
-      WHERE (?='all' OR t.status=?) ORDER BY CASE WHEN t.recommended_at<=datetime('now','localtime') THEN 0 ELSE 1 END,t.recommended_at,t.id LIMIT ?`).all(status, status, Math.min(Number(limit) || 50, 200));
+      WHERE (?='all' OR t.status=?) AND (?='all' OR t.platform=?) AND (?='all' OR t.approval_status=?)
+      ORDER BY CASE WHEN t.recommended_at<=datetime('now','localtime') THEN 0 ELSE 1 END,t.recommended_at,t.id LIMIT ?`)
+      .all(status, status, platform, platform, approvalStatus, approvalStatus, Math.min(Number(limit) || 50, 200));
   }
 
   function summary() {
@@ -207,11 +220,37 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
     return { counts: Object.fromEntries(counts.map((row) => [row.status, row.count])), publishedToday, next };
   }
 
-  function calendar({ from, to } = {}) {
+  function calendar({ from, to, platform = 'all' } = {}) {
     const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from || '')) ? from : new Date().toISOString().slice(0, 10);
     const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to || '')) ? to : new Date(Date.now() + 31 * 86400000).toISOString().slice(0, 10);
     return db.prepare(`SELECT id,platform,title,status,recommended_at,published_at,public_url FROM stream_tasks
-      WHERE date(recommended_at) BETWEEN date(?) AND date(?) ORDER BY recommended_at,id`).all(start, end);
+      WHERE date(recommended_at) BETWEEN date(?) AND date(?) AND (?='all' OR platform=?) ORDER BY recommended_at,id`).all(start, end, platform, platform);
+  }
+
+  function dailyDrafts({ date, platform = 'all' } = {}) {
+    const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : now().slice(0, 10);
+    const rows = db.prepare(`SELECT t.id,t.platform,t.language,t.title,t.body,t.hashtags,t.media_url,t.target_url,t.recommended_at,t.approval_status,s.source_url
+      FROM stream_tasks t JOIN stream_sources s ON s.id=t.source_id
+      WHERE date(t.recommended_at)=date(?) AND (?='all' OR t.platform=?)
+      ORDER BY t.recommended_at,t.id`).all(selectedDate, platform, platform);
+    return {
+      contract_version: 1,
+      date: selectedDate,
+      timezone: 'Asia/Shanghai',
+      platform,
+      drafts: rows.map((row) => ({
+        id: row.id,
+        platform: row.platform,
+        language: row.language,
+        approval_status: row.approval_status,
+        scheduled_for: row.recommended_at,
+        content: { title: row.title, body: row.body, hashtags: row.hashtags },
+        assets: row.media_url ? [{ type: 'image', source_url: row.media_url }] : [],
+        source_url: row.source_url,
+        target_url: row.target_url,
+        delivery: { mode: 'draft_only', enabled: false }
+      }))
+    };
   }
 
   function recordMetrics(taskId, input, operator) {
@@ -235,21 +274,35 @@ function openStreamDeskStore(filePath = process.env.MATRIX_STREAM_DB_PATH || DEF
     return { totals, byPlatform };
   }
 
+  function recordApproval(taskId, approvalStatus, operator, detail = '') {
+    const allowed = new Set(['pending_review', 'approved', 'changes_requested']);
+    if (!allowed.has(approvalStatus)) throw new Error('不支持的审批状态');
+    const task = db.prepare('SELECT id FROM stream_tasks WHERE id=?').get(taskId);
+    if (!task) throw new Error('任务不存在');
+    const ts = now();
+    db.prepare('UPDATE stream_tasks SET approval_status=?,approved_by=?,approved_at=?,updated_at=? WHERE id=?')
+      .run(approvalStatus, approvalStatus === 'approved' ? operator : null, approvalStatus === 'approved' ? ts : null, ts, taskId);
+    db.prepare('INSERT INTO stream_events(task_id,action,operator,detail,created_at) VALUES(?,?,?,?,?)')
+      .run(taskId, 'approval_updated', operator, JSON.stringify({ approval_status: approvalStatus, detail: String(detail || '').slice(0, 500) }), ts);
+    return { task: db.prepare('SELECT * FROM stream_tasks WHERE id=?').get(taskId) };
+  }
+
   function recordAction(taskId, action, operator, detail = '') {
     const allowed = new Set(['opened', 'copied', 'published', 'skipped', 'failed', 'draft_saved']);
     if (!allowed.has(action)) throw new Error('不支持的任务动作');
     const task = db.prepare('SELECT * FROM stream_tasks WHERE id=?').get(taskId);
     if (!task) throw new Error('任务不存在');
     const ts = now();
+    if (action === 'published' && task.approval_status !== 'approved') throw new Error('发布前必须完成审批');
     if (action === 'published' && !/^https?:\/\//.test(String(detail))) throw new Error('完成发布时必须填写公开 URL');
     const status = action === 'published' ? 'published' : action === 'skipped' ? 'skipped' : action === 'failed' ? 'failed' : action === 'draft_saved' ? 'draft_saved' : task.status;
     db.prepare(`UPDATE stream_tasks SET status=?,public_url=CASE WHEN ?='published' THEN ? ELSE public_url END,operator=?,published_at=CASE WHEN ?='published' THEN ? ELSE published_at END,updated_at=? WHERE id=?`)
       .run(status, action, detail, operator, action, ts, ts, taskId);
     db.prepare('INSERT INTO stream_events(task_id,action,operator,detail,created_at) VALUES(?,?,?,?,?)').run(taskId, action, operator, String(detail || ''), ts);
-    return { task: db.prepare('SELECT * FROM stream_tasks WHERE id=?').get(taskId), next: listTasks({ status: 'ready', limit: 1 })[0] || null };
+    return { task: db.prepare('SELECT * FROM stream_tasks WHERE id=?').get(taskId), next: listTasks({ status: 'ready', platform: task.platform, limit: 1 })[0] || null };
   }
 
-  return { db, platformProfiles, importSource, listTasks, summary, calendar, recordMetrics, analytics, recordAction };
+  return { db, platformProfiles, importSource, listTasks, summary, calendar, dailyDrafts, recordMetrics, analytics, recordApproval, recordAction };
 }
 
 module.exports = { openStreamDeskStore, inspectOwnedPage };

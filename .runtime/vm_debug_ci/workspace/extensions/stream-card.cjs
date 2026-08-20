@@ -4,10 +4,11 @@ const crypto = require('crypto');
 const fs = require('fs');
 const defaultChoiceContext = require('../scripts/matrix-choice-context.js');
 const defaultAssetContext = require('../scripts/matrix-asset-context.js');
+const defaultKnowledgeReview = require('../scripts/matrix-knowledge-review.js');
 const defaultDiagnosticsWatcher = require('../scripts/matrix-diagnostics-watch.js');
 const defaultSupervisorWatcher = require('../scripts/matrix-supervisor-watch.js');
 
-const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.ledger_preview', 'mx.ledger_confirm', 'mx.reply_draft', 'mx.retry_translation', 'mx.thread_approve', 'mx.thread_preview', 'mx.thread_confirm'];
+const ACTIONS = ['mx.today', 'mx.pick', 'mx.quick', 'mx.page', 'mx.detail', 'mx.back', 'mx.select', 'mx.work', 'mx.filters', 'mx.region', 'mx.category', 'mx.review', 'mx.revise', 'mx.approve', 'mx.preview', 'mx.confirm', 'mx.ledger_preview', 'mx.ledger_confirm', 'mx.reply_draft', 'mx.retry_translation', 'mx.knowledge_choice', 'mx.knowledge_classify', 'mx.thread_approve', 'mx.thread_preview', 'mx.thread_confirm'];
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const REVISION_TTL_MS = 10 * 60 * 1000;
@@ -669,6 +670,11 @@ function register(context) {
   const { channel, dispatcher, sendManagedCard, card: cardHelpers } = context;
   const client = context.client || require('../scripts/matrix-client.js');
   const choiceContext = context.choiceContext || defaultChoiceContext;
+  const knowledgeReview = context.knowledgeReview || defaultKnowledgeReview;
+  const knowledgeStore = context.knowledgeStore || knowledgeReview.createStore({
+    storePath: context.knowledgeStorePath,
+    now: () => new Date(clockMillis())
+  });
   const diagnosticsWatcher = context.diagnosticsWatcher || defaultDiagnosticsWatcher;
   const supervisorWatcher = context.supervisorWatcher || defaultSupervisorWatcher;
   const now = typeof context.now === 'function' ? context.now : () => Date.now();
@@ -706,6 +712,22 @@ function register(context) {
       expires_at: new Date(createdAt.getTime() + SESSION_TTL_MS).toISOString()
     });
   }
+  function registerKnowledgeMessage(messageValue, chatId, renderedCard) {
+    const messageId = typeof messageValue === 'string'
+      ? messageValue
+      : String(messageValue?.messageId || '');
+    const binding = knowledgeReview.cardBinding(renderedCard);
+    if (!messageId || !binding) return null;
+    const createdAt = new Date(clockMillis());
+    return choiceContext.registerChoiceContext({
+      message_id: messageId,
+      chat_id: String(chatId || ''),
+      kind: 'knowledge',
+      ...binding,
+      created_at: createdAt.toISOString(),
+      expires_at: new Date(createdAt.getTime() + SESSION_TTL_MS).toISOString()
+    });
+  }
   const pollReminder = async () => {
     if (reminderPollActive) return;
     reminderPollActive = true;
@@ -718,7 +740,10 @@ function register(context) {
           receiptPath: context.reminderReceiptPath || REMINDER_RECEIPT_PATH,
           writeReceipt: context.writeReminderReceipt || writeReceiptAtomic,
           removeInflight: context.removeReminderInflight || (file => fs.unlinkSync(file)),
-          onDelivered: ({ messageId, chatId }) => registerCandidateMessage(messageId, chatId)
+          onDelivered: ({ messageId, chatId, card: deliveredCard }) => {
+            if (knowledgeReview.cardBinding(deliveredCard)) registerKnowledgeMessage(messageId, chatId, deliveredCard);
+            else registerCandidateMessage(messageId, chatId);
+          }
         });
         if (result?.status === 'ambiguous') {
           logReminder(`[stream-card] reminder delivery ambiguous: ${result.id}; manual reconciliation required`);
@@ -1215,6 +1240,65 @@ function register(context) {
       `translation_status=${result.translation_status}；${result.translation_status === 'ready' ? '请重新查看回复通知。' : '翻译仍待处理，未生成推测内容。'}`));
   }
 
+  function knowledgeActionBinding(value) {
+    const binding = {
+      question_id: String(value?.q || ''),
+      question_version: Number(value?.v),
+      fingerprint: String(value?.f || '')
+    };
+    if (!/^[a-z0-9-]{4,80}$/.test(binding.question_id)
+        || !Number.isInteger(binding.question_version) || binding.question_version < 1
+        || !/^[a-f0-9]{64}$/.test(binding.fingerprint)) throw new Error('valid knowledge question binding required');
+    return binding;
+  }
+
+  function requireKnowledgeReviewer(actorId) {
+    const reviewer = String(actorId || '').trim();
+    if (!knowledgeReview.reviewerAllowed(reviewer)) throw new Error('knowledge reviewer mismatch');
+    return reviewer;
+  }
+
+  async function sendCurrentKnowledgeCard({ chatId, messageId = '', threadId = '' }, current) {
+    const rendered = knowledgeReview.questionCard(current);
+    const sent = await sendManagedCard(channel, chatId, rendered, messageId, Boolean(threadId));
+    registerKnowledgeMessage(sent, chatId, rendered);
+    return sent;
+  }
+
+  async function knowledgeChoiceAction({ evt, value }) {
+    const actorId = requireKnowledgeReviewer(evt?.operator?.openId);
+    const binding = knowledgeActionBinding(value);
+    const choice = String(value?.c || '').trim().toUpperCase();
+    if (!/^[A-D]$/.test(choice)) throw new Error('valid knowledge choice required');
+    const result = knowledgeStore.submitChoice({
+      ...binding,
+      choice,
+      actor_id: actorId,
+      event_key: actionKey('knowledge-choice', actorId, binding.question_id, binding.question_version, binding.fingerprint, choice, evt.messageId || '')
+    });
+    await sendCurrentKnowledgeCard(evt, result.current);
+  }
+
+  async function knowledgeClassifyAction({ evt, value }) {
+    const actorId = requireKnowledgeReviewer(evt?.operator?.openId);
+    const binding = knowledgeActionBinding(value);
+    const pendingId = String(value?.p || '');
+    const textHash = String(value?.h || '');
+    const classification = String(value?.k || '');
+    if (!/^[0-9a-f-]{36}$/i.test(pendingId) || !/^[a-f0-9]{64}$/.test(textHash)) throw new Error('valid knowledge text binding required');
+    const result = knowledgeStore.confirmText({
+      ...binding,
+      pending_id: pendingId,
+      text_hash: textHash,
+      classification,
+      actor_id: actorId
+    });
+    if (result.status === 'stored_for_routing') {
+      await sendForEvent(evt, infoCard(cardHelpers, '这段文字已单独保存为“回答了别的问题”，当前题没有被错误推进。'));
+    }
+    await sendCurrentKnowledgeCard(evt, result.current);
+  }
+
   function threadActionValue(evt, value) {
     const openId=String(evt?.operator?.openId||'').trim(),routeId=Number(value?.i),revision=Number(value?.v),hash=String(value?.h||'').trim().toLowerCase();
     if(!openId||!Number.isInteger(routeId)||routeId<1||!Number.isInteger(revision)||revision<1||!/^[a-f0-9]{64}$/.test(hash)) throw new Error('valid thread action required');
@@ -1253,7 +1337,9 @@ function register(context) {
     'mx.ledger_preview': ledgerPreviewAction,
     'mx.ledger_confirm': ledgerConfirmAction,
     'mx.reply_draft': replyDraftAction,
-    'mx.retry_translation': retryTranslationAction
+    'mx.retry_translation': retryTranslationAction,
+    'mx.knowledge_choice': knowledgeChoiceAction,
+    'mx.knowledge_classify': knowledgeClassifyAction
     , 'mx.thread_approve': threadApproveAction
     , 'mx.thread_preview': threadPreviewAction
     , 'mx.thread_confirm': threadConfirmAction
@@ -1287,6 +1373,14 @@ function register(context) {
       if (msg?.mentionedBot || msg?.mentionAll) return false;
       const mentions = Array.isArray(msg?.mentions) ? msg.mentions : [];
       if (mentions.some(mention => mention && mention.isBot !== true)) return false;
+      const knowledgeBinding = choiceContext.resolveChoiceContext({
+        messageId: msg?.replyToMessageId,
+        chatId: msg?.chatId,
+        now: new Date(clockMillis())
+      });
+      if (knowledgeBinding?.kind === 'knowledge') {
+        return Boolean(String(msg?.content || '').trim());
+      }
       const key = sessionKey(msg?.chatId, msg?.senderId, msg?.threadId);
       const expiresAt = unmentionedFollowups.get(key);
       if (!Number.isFinite(expiresAt)) return false;
@@ -1296,6 +1390,54 @@ function register(context) {
     async onMessage({ msg }) {
       const text = String(msg?.content || '').trim();
       const revisionKey = sessionKey(msg?.chatId, msg?.senderId, msg?.threadId);
+      if (/^知识确认[！!。.]?$/u.test(text)) {
+        const actorId = String(msg?.senderId || '').trim();
+        if (!knowledgeReview.reviewerAllowed(actorId)) {
+          await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '当前账号不是这套知识确认队列的绑定复核人。'), msg.messageId, Boolean(msg.threadId));
+          return true;
+        }
+        await sendCurrentKnowledgeCard(msg, knowledgeStore.current());
+        return true;
+      }
+      const knowledgeBinding = choiceContext.resolveChoiceContext({
+        messageId: msg?.replyToMessageId,
+        chatId: msg?.chatId,
+        now: new Date(clockMillis())
+      });
+      if (knowledgeBinding?.kind === 'knowledge') {
+        const actorId = String(msg?.senderId || '').trim();
+        if (!knowledgeReview.reviewerAllowed(actorId)) {
+          await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '当前账号不是这道题的绑定复核人，答案未登记。'), msg.messageId, Boolean(msg.threadId));
+          return true;
+        }
+        const exactChoice = text.toUpperCase();
+        if (/^[A-D]$/.test(exactChoice)) {
+          const result = knowledgeStore.submitChoice({
+            question_id: knowledgeBinding.question_id,
+            question_version: knowledgeBinding.question_version,
+            fingerprint: knowledgeBinding.fingerprint,
+            choice: exactChoice,
+            actor_id: actorId,
+            event_key: actionKey('knowledge-reply-choice', actorId, knowledgeBinding.question_id, knowledgeBinding.question_version, knowledgeBinding.fingerprint, exactChoice, msg.messageId || '')
+          });
+          await sendCurrentKnowledgeCard(msg, result.current);
+          return true;
+        }
+        const staged = knowledgeStore.stageText({
+          question_id: knowledgeBinding.question_id,
+          question_version: knowledgeBinding.question_version,
+          fingerprint: knowledgeBinding.fingerprint,
+          text,
+          actor_id: actorId,
+          event_key: actionKey('knowledge-reply-text', actorId, knowledgeBinding.question_id, knowledgeBinding.question_version, knowledgeBinding.fingerprint, msg.messageId || '')
+        });
+        await sendManagedCard(channel, msg.chatId, knowledgeReview.classificationCard(staged), msg.messageId, Boolean(msg.threadId));
+        return true;
+      }
+      if (/^知识回答[:：]/u.test(text)) {
+        await sendManagedCard(channel, msg.chatId, infoCard(cardHelpers, '为防止串题，请直接引用对应知识问题卡再回复；这段文字未登记。'), msg.messageId, Boolean(msg.threadId));
+        return true;
+      }
       if (/^发送邮件[！!。.]?$/u.test(text)) {
         const openId=String(msg?.senderId||'').trim();const binding=assetContext.resolve({chatId:msg?.chatId,operatorId:openId});
         if(!binding||typeof client.prepareThreadRoute!=='function'){await sendManagedCard(channel,msg.chatId,infoCard(cardHelpers,'当前没有绑定到本会话的客户邮件上下文，尚未发送。'),msg.messageId,Boolean(msg.threadId));return true;}

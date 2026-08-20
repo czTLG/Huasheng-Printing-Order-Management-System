@@ -107,7 +107,7 @@ function buildMatrixOverview(db, { backlogItems = [] } = {}) {
     else if (messageClass === 'stream_response') state = latest.direction === 'outbound' || !inbound.length ? 'outreach_waiting' : 'awaiting_our_reply';
     else if (['system_notice', 'delivery_notice', 'supplier_service'].includes(messageClass)) state = 'archive_review';
     else if (latest.direction === 'outbound') state = 'waiting_customer';
-    else if (quoteRequired && ((costing && ['internal_pre_quote', 'draft', 'pending_review'].includes(text(costing.status))) || costingRequest)) state = 'quote_in_progress';
+    else if (quoteRequired && ((costing && ['blocked', 'internal_estimate', 'internal_pre_quote', 'draft', 'pending_review'].includes(text(costing.status))) || costingRequest)) state = 'quote_in_progress';
     else if (quoteRequired) state = 'quote_required';
     else if (!outboundEvidence) state = 'first_contact_unanswered';
     else state = 'awaiting_our_reply';

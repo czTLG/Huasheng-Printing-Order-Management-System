@@ -68,6 +68,15 @@ function nOrNull(v) {
   return Number.isFinite(x) ? x : null;
 }
 
+function normalizeThicknessToC(value, unit) {
+  const parsed = nOrNull(value);
+  if (parsed === null) return null;
+  const normalizedUnit = String(unit || '').trim().toLowerCase();
+  if (normalizedUnit === 'c') return parsed;
+  if (['mic', 'micron', 'um', 'μm', 'µm'].includes(normalizedUnit)) return parsed / 10;
+  return null;
+}
+
 function toText(v) {
   return v === null || v === undefined ? '' : String(v);
 }
@@ -323,10 +332,10 @@ function extractQuantity(text) {
 
 function parseThicknessToken(token) {
   const raw = normalizeText(token);
-  let m = raw.match(/(\d+(?:\.\d+)?)\s*(?:mic|micron|um|μm|µm|c)\b/i);
-  if (m) return nOrNull(m[1]) / 10;
-  m = raw.match(/\b([A-Za-z][A-Za-z0-9 \-./]*)\s*(\d+(?:\.\d+)?)\s*(?:mic|micron|um|μm|µm|c)\b/i);
-  if (m) return nOrNull(m[2]) / 10;
+  let m = raw.match(/(\d+(?:\.\d+)?)\s*(mic|micron|um|μm|µm|c)\b/i);
+  if (m) return normalizeThicknessToC(m[1], m[2]);
+  m = raw.match(/\b([A-Za-z][A-Za-z \-./()]*)\s*(\d+(?:\.\d+)?)\s*(mic|micron|um|μm|µm|c)\b/i);
+  if (m) return normalizeThicknessToC(m[2], m[3]);
   return null;
 }
 
@@ -383,14 +392,14 @@ function extractMaterialCandidates(text) {
       return;
     }
     let matched = false;
-    const thickFirst = segment.match(/(\d+(?:\.\d+)?)\s*(?:mic|micron|um|μm|µm|c)\s*([A-Za-z][A-Za-z0-9 \-./()]*)/i);
+    const thickFirst = segment.match(/(\d+(?:\.\d+)?)\s*(mic|micron|um|μm|µm|c)\s*([A-Za-z][A-Za-z0-9 \-./()]*)/i);
     if (thickFirst) {
-      tokens.push({ raw_name: thickFirst[2].trim(), thickness_value: nOrNull(thickFirst[1]) / 10, source: segment });
+      tokens.push({ raw_name: thickFirst[3].trim(), thickness_value: normalizeThicknessToC(thickFirst[1], thickFirst[2]), source: segment });
       matched = true;
     }
-    const materialFirst = segment.match(/([A-Za-z][A-Za-z0-9 \-./()]*)\s*(\d+(?:\.\d+)?)\s*(?:mic|micron|um|μm|µm|c)\b/i);
+    const materialFirst = segment.match(/([A-Za-z][A-Za-z \-./()]*)\s*(\d+(?:\.\d+)?)\s*(mic|micron|um|μm|µm|c)\b/i);
     if (materialFirst) {
-      tokens.push({ raw_name: materialFirst[1].trim(), thickness_value: nOrNull(materialFirst[2]) / 10, source: segment });
+      tokens.push({ raw_name: materialFirst[1].trim(), thickness_value: normalizeThicknessToC(materialFirst[2], materialFirst[3]), source: segment });
       matched = true;
     }
     if (!matched && /pet|bopp|cpp|ldpe|lldpe|vmpet|vmcpp|alox|kraft|aluminum foil|al\b/i.test(segment)) {
@@ -868,6 +877,7 @@ function normalizeToQuoteInput(parsedSpec = {}) {
     quantity_basis: order.quantity_basis || '',
     source_text: parsedSpec.source_text || '',
     default_notes: defaults.defaultNotes,
+    defaulted_fields: defaults.defaultedFields,
     material_mapping_json: materialLayerRecords,
     material_mapping_warnings: uniq([
       ...(parsedSpec.material_mapping_warnings || []),
@@ -892,6 +902,216 @@ function normalizeToQuoteInput(parsedSpec = {}) {
     default_notes: defaults.defaultNotes,
     defaultedFields: defaults.defaultedFields,
     warnings: defaults.warnings
+  };
+}
+
+function isPositiveFinite(value) {
+  const parsed = nOrNull(value);
+  return parsed !== null && parsed > 0;
+}
+
+function evaluatePreCostingReadiness(quoteInput = {}, options = {}) {
+  const input = quoteInput.quote_input || quoteInput.input || quoteInput;
+  const costType = String(quoteInput.cost_type || input.cost_type || '').trim();
+  const quoteType = String(quoteInput.quoteType || input.quoteType || mapCostTypeForEngine(costType)).trim();
+  const blockingFields = [];
+  const warnings = [];
+  const block = (field, reason) => {
+    if (!blockingFields.some(item => item.field === field && item.reason === reason)) {
+      blockingFields.push({ field, reason });
+    }
+  };
+
+  if (!costType || !quoteType) block('cost_type', 'missing');
+  if (options.allowManualTemplates !== true) {
+    if (CAUTIOUS_COST_TYPES.has(costType)) block('cost_type', 'manual_template_review_required');
+    if (SECONDARY_COST_TYPES.has(costType)) block('cost_type', 'secondary_template_review_required');
+  }
+
+  if (quoteType === 'material_weight') {
+    if (!isPositiveFinite(input.chang)) block('chang', 'missing_or_non_positive');
+    if (!isPositiveFinite(input.kuang)) block('kuang', 'missing_or_non_positive');
+  } else if (quoteType === 'auto_bag') {
+    if (!isPositiveFinite(input.roll_w)) block('roll_w', 'missing_or_non_positive');
+    if (!isPositiveFinite(input.roll_l)) block('roll_l', 'missing_or_non_positive');
+  } else {
+    if (!isPositiveFinite(input.ba_chang)) block('ba_chang', 'missing_or_non_positive');
+    if (!isPositiveFinite(input.ba_kuang)) block('ba_kuang', 'missing_or_non_positive');
+    if (['stand_zipper_bag', 'eight_side_seal'].includes(costType) && !isPositiveFinite(input.ba_di)) {
+      block('ba_di', 'missing_or_non_positive');
+    }
+  }
+
+  if (options.requireQuantity !== false) {
+    if (!isPositiveFinite(input.quantity_total)) block('quantity_total', 'missing_or_non_positive');
+    if (!isPositiveFinite(input.quantity_per_variant)) block('quantity_per_variant', 'missing_or_non_positive');
+    if (!isPositiveFinite(input.variants)) block('variants', 'missing_or_non_positive');
+  }
+
+  const layers = Array.isArray(input.material_layers) ? input.material_layers : [];
+  const activeLayers = layers.filter(layer => {
+    return Boolean(layer?.raw_name || layer?.normalized_material || isPositiveFinite(layer?.thickness));
+  });
+  if (!activeLayers.length) block('material_layers', 'missing');
+  activeLayers.forEach((layer, index) => {
+    const prefix = `material_layers[${index}]`;
+    if (!isPositiveFinite(layer.thickness)) block(`${prefix}.thickness`, 'missing_or_non_positive');
+    if (!isPositiveFinite(layer.proportion_used)) block(`${prefix}.proportion_used`, 'missing_or_non_positive');
+    if (quoteType !== 'material_weight' && !isPositiveFinite(layer.price_used)) {
+      block(`${prefix}.price_used`, 'missing_or_non_positive');
+    }
+    if (options.requireMappingConfirmation !== false
+      && (Number(layer.needs_confirm || 0) === 1 || String(layer.confidence || 'low') !== 'high')) {
+      block(`${prefix}.mapping`, 'unconfirmed');
+    }
+  });
+
+  const defaultedFields = new Set([
+    ...(Array.isArray(quoteInput.defaultedFields) ? quoteInput.defaultedFields : []),
+    ...(Array.isArray(input.defaulted_fields) ? input.defaulted_fields : [])
+  ]);
+  const requiredCommercialFields = quoteType === 'material_weight'
+    ? []
+    : quoteType === 'auto_bag'
+      ? ['jgf', 'sh', 'lr', 'fqfy', 'yf']
+      : ['jgf', 'sh', 'lr', 'zxyf'];
+  requiredCommercialFields.forEach(field => {
+    if (nOrNull(input[field]) === null) block(field, 'missing');
+    if (defaultedFields.has(field)) block(field, 'unconfirmed_default');
+  });
+
+  if (input.zipper_required === true
+    && !isPositiveFinite(input.lldj)
+    && !isPositiveFinite(input.ba_zdf)) {
+    block('lldj_or_ba_zdf', 'zipper_cost_missing');
+  }
+
+  if (blockingFields.length) {
+    warnings.push('Required fields are missing or unconfirmed; no numeric result was generated.');
+  }
+  return {
+    status: blockingFields.length ? 'blocked' : 'internal_estimate',
+    can_calculate: blockingFields.length === 0,
+    blocking_fields: blockingFields,
+    warnings
+  };
+}
+
+const QUOTE_OVERRIDE_ARRAY_FIELDS = new Set(['thick', 'proportion', 'price']);
+const QUOTE_OVERRIDE_SCALAR_FIELDS = new Set([
+  'jgf', 'zxyf', 'yf', 'fqfy', 'lldj', 'ba_zdf', 'sh', 'lr', 'zt', 'btzt'
+]);
+
+function finiteOverride(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function mergeQuoteInputOverrides(quoteNorm = {}, overrides = {}, source = 'reviewed_form') {
+  const baseInput = quoteNorm.quote_input || {};
+  const nextInput = {
+    ...baseInput,
+    thick: Array.isArray(baseInput.thick) ? [...baseInput.thick] : [],
+    proportion: Array.isArray(baseInput.proportion) ? [...baseInput.proportion] : [],
+    price: Array.isArray(baseInput.price) ? [...baseInput.price] : [],
+    material_layers: Array.isArray(baseInput.material_layers)
+      ? baseInput.material_layers.map(layer => ({ ...layer }))
+      : []
+  };
+  const appliedFields = [];
+  const ignoredFields = [];
+  const fieldSources = { ...(baseInput.input_provenance?.field_sources || {}) };
+
+  Object.entries(overrides && typeof overrides === 'object' ? overrides : {}).forEach(([field, rawValue]) => {
+    if (QUOTE_OVERRIDE_ARRAY_FIELDS.has(field)) {
+      if (!Array.isArray(rawValue)) {
+        ignoredFields.push(field);
+        return;
+      }
+      rawValue.slice(0, 4).forEach((value, index) => {
+        const parsed = finiteOverride(value);
+        if (parsed === null) return;
+        if (!nextInput.material_layers[index]) {
+          ignoredFields.push(`${field}[${index}]`);
+          return;
+        }
+        nextInput[field][index] = parsed;
+        if (field === 'thick') nextInput.material_layers[index].thickness = parsed;
+        if (field === 'proportion') nextInput.material_layers[index].proportion_used = parsed;
+        if (field === 'price') nextInput.material_layers[index].price_used = parsed;
+        const key = `${field}[${index}]`;
+        appliedFields.push(key);
+        fieldSources[key] = source;
+      });
+      return;
+    }
+    if (!QUOTE_OVERRIDE_SCALAR_FIELDS.has(field)) {
+      ignoredFields.push(field);
+      return;
+    }
+    const parsed = finiteOverride(rawValue);
+    if (parsed === null) return;
+    nextInput[field] = parsed;
+    appliedFields.push(field);
+    fieldSources[field] = source;
+  });
+
+  const defaultedFields = new Set([
+    ...(Array.isArray(quoteNorm.defaultedFields) ? quoteNorm.defaultedFields : []),
+    ...(Array.isArray(nextInput.defaulted_fields) ? nextInput.defaulted_fields : [])
+  ]);
+  appliedFields.forEach(field => defaultedFields.delete(field.replace(/\[\d+\]$/, '')));
+  const appliedScalarFields = new Set(appliedFields.filter(field => !field.includes('[')));
+  const remainingDefaultNotes = (Array.isArray(quoteNorm.default_notes) ? quoteNorm.default_notes : [])
+    .filter(note => ![...appliedScalarFields].some(field => String(note).startsWith(`${field} `)));
+  nextInput.defaulted_fields = [...defaultedFields];
+  nextInput.default_notes = remainingDefaultNotes;
+  nextInput.input_provenance = {
+    ...(baseInput.input_provenance || {}),
+    field_sources: fieldSources,
+    revisions: [
+      ...(Array.isArray(baseInput.input_provenance?.revisions) ? baseInput.input_provenance.revisions : []),
+      { source, applied_fields: uniq(appliedFields), ignored_fields: uniq(ignoredFields) }
+    ]
+  };
+
+  return {
+    ...quoteNorm,
+    quote_input: nextInput,
+    defaultedFields: [...defaultedFields],
+    default_notes: remainingDefaultNotes,
+    override_provenance: nextInput.input_provenance.revisions.at(-1)
+  };
+}
+
+function normalizeLegacyQuoteInput(costType, rawInput = {}) {
+  const input = { ...rawInput };
+  const quoteType = mapCostTypeForEngine(costType);
+  const thick = Array.isArray(input.thick) ? input.thick.slice(0, 4) : [input.t1, input.t2, input.t3, input.t4];
+  const proportion = Array.isArray(input.proportion) ? input.proportion.slice(0, 4) : [input.p1, input.p2, input.p3, input.p4];
+  const price = Array.isArray(input.price) ? input.price.slice(0, 4) : [input.pr1, input.pr2, input.pr3, input.pr4];
+  const names = [input.mat1, input.mat2, input.mat3, input.mat4];
+  const materialLayers = [0, 1, 2, 3].map(index => ({
+    raw_name: toText(names[index]).trim(),
+    normalized_material: toText(names[index]).trim(),
+    thickness: finiteOverride(thick[index]),
+    proportion_used: finiteOverride(proportion[index]),
+    price_used: finiteOverride(price[index]),
+    confidence: names[index] ? 'high' : 'low',
+    needs_confirm: names[index] ? 0 : 1
+  })).filter(layer => layer.raw_name || layer.thickness !== null || layer.proportion_used !== null || layer.price_used !== null);
+
+  return {
+    ...input,
+    cost_type: costType,
+    quoteType,
+    thick,
+    proportion,
+    price,
+    material_layers: materialLayers,
+    zipper_required: input.zipper_required ?? ['stand_zipper_bag', 'irregular_zipper_bag'].includes(costType),
+    defaulted_fields: Array.isArray(input.defaulted_fields) ? input.defaulted_fields : []
   };
 }
 
@@ -1362,13 +1582,27 @@ function runPreCosting(quoteInput = {}) {
   const quoteType = quoteInput.quoteType || quoteInput.cost_type || mapCostTypeForEngine(quoteInput.suggested_cost_type);
   if (!quoteType) throw new Error('quoteType is required for pre-costing');
   const input = quoteInput.quote_input || quoteInput.input || quoteInput;
-  const result = generateQuote({ quoteType, input, margin: nOrNull(input.margin) ?? 0.1 });
+  const readiness = evaluatePreCostingReadiness(quoteInput);
+  if (!readiness.can_calculate) {
+    return {
+      quoteType,
+      input,
+      status: 'blocked',
+      readiness,
+      result: null,
+      internalVersion: null,
+      customerVersion: null
+    };
+  }
+  const result = generateQuote({ quoteType, input, margin: nOrNull(input.lr) });
   return {
     quoteType,
     input,
+    status: 'internal_estimate',
+    readiness,
     result,
     internalVersion: result.internalVersion,
-    customerVersion: result.customerVersion
+    customerVersion: null
   };
 }
 
@@ -1462,6 +1696,7 @@ function buildFatherReviewPanel(parsedSpec = {}, quoteInput = {}, quoteResult = 
     return 'ok';
   };
 
+  const readiness = quoteResult?.readiness || evaluatePreCostingReadiness(quoteInput);
   const checklist = [
     { key: 'bag_type', label: '袋型模板是否正确', status: parsedSpec.suggested_cost_type ? 'needs_review' : 'missing' },
     { key: 'size', label: '尺寸字段是否正确', status: (input.ba_chang || input.ba_kuang || input.chang) ? 'needs_review' : 'missing' },
@@ -1473,13 +1708,16 @@ function buildFatherReviewPanel(parsedSpec = {}, quoteInput = {}, quoteResult = 
     { key: 'freight', label: 'zxyf/yf/fqfy 是否合适', status: (statusByField('zxyf', input.zxyf) === 'ok' || statusByField('yf', input.yf) === 'ok' || statusByField('fqfy', input.fqfy) === 'ok') ? 'ok' : 'needs_review' },
     { key: 'zipper', label: 'lldj/ba_zdf 是否合适', status: (statusByField('lldj', input.lldj) === 'ok' || (input.ba_zdf !== null && input.ba_zdf !== undefined)) ? 'ok' : 'needs_review' },
     { key: 'accessories', label: '版费/样品费/特殊工艺/配件是否明确', status: 'needs_review' },
-    { key: 'customer_quote', label: '是否可作为 EXW 内部预核价', status: 'internal_pre_quote' }
+    { key: 'customer_quote', label: '是否可作为 EXW 内部预核价', status: readiness.status }
   ];
 
   return {
-    status: 'internal_pre_quote',
-    summary: '本结果仅供陈湧杰复核，不可直接对客户正式报价。',
+    status: readiness.status,
+    summary: readiness.status === 'blocked'
+      ? '资料缺失或存在未确认字段，系统未生成数值结果。'
+      : '本结果仅供陈湧杰复核，不可直接对客户正式报价。',
     checklist,
+    blocking_fields: readiness.blocking_fields || [],
     warnings,
     questions: [
       '袋型模板是否选对？',
@@ -1492,8 +1730,8 @@ function buildFatherReviewPanel(parsedSpec = {}, quoteInput = {}, quoteResult = 
     ],
     father_note: '',
     father_correction_note: '',
-    approved_unit_price: nOrNull(calc.finalQuote || calc.unitQuote) ?? null,
-    approved_total_price: nOrNull(calc.finalQuote || calc.totalCost) ?? null,
+    approved_unit_price: readiness.status === 'blocked' ? null : (nOrNull(calc.finalQuote || calc.unitQuote) ?? null),
+    approved_total_price: readiness.status === 'blocked' ? null : (nOrNull(calc.finalQuote || calc.totalCost) ?? null),
     can_generate_quote_draft: false
   };
 }
@@ -1511,6 +1749,7 @@ async function createDraftFromText(text, options = {}) {
     material_mapping_json: quoteNorm.material_mapping_json,
     quote_input: quoteNorm.quote_input,
     quote_result: preCost.internalVersion,
+    readiness: preCost.readiness,
     calculation_table: calculationTable,
     father_review_panel: fatherReviewPanel,
     warnings: uniq([
@@ -1519,7 +1758,7 @@ async function createDraftFromText(text, options = {}) {
       ...quoteNorm.warnings,
       ...quoteNorm.default_notes
     ]),
-    status: 'internal_pre_quote',
+    status: preCost.status,
     ai_provider: getProviderConfig(options.provider).provider,
     ai_model: getProviderConfig(options.provider).model
   };
@@ -1532,6 +1771,9 @@ module.exports = {
   normalizeMaterialLayers,
   normalizeToQuoteInput,
   applyDefaultCostParams,
+  evaluatePreCostingReadiness,
+  mergeQuoteInputOverrides,
+  normalizeLegacyQuoteInput,
   runPreCosting,
   buildCalculationTable,
   buildFatherReviewPanel,
@@ -1544,6 +1786,8 @@ module.exports = {
     detectTradeTerm,
     detectDestination,
     parseInquiryTextRuleBased,
-    mapCostTypeForEngine
+    mapCostTypeForEngine,
+    normalizeThicknessToC,
+    extractMaterialCandidates
   }
 };

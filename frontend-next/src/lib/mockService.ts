@@ -702,6 +702,10 @@ export const mockService = {
     return api<any>(`/api/crm/messages?${search.toString()}`);
   },
 
+  async getWhatsappControlState() {
+    return api<any>('/api/crm/whatsapp/control-state');
+  },
+
   async getCrmWhatsappMessage(id: number | string) {
     return api<any>(`/api/crm/messages/${id}`);
   },

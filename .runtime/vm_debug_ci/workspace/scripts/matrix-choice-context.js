@@ -35,16 +35,25 @@ function readRecords(storePath) {
 }
 
 function normalizeRecord(value) {
+  const kind = String(value?.kind || '').trim();
   const record = {
     message_id: String(value?.message_id || '').trim(),
     chat_id: String(value?.chat_id || '').trim(),
-    kind: String(value?.kind || '').trim(),
+    kind,
     created_at: String(value?.created_at || '').trim(),
-    expires_at: String(value?.expires_at || '').trim()
+    expires_at: String(value?.expires_at || '').trim(),
+    ...(kind === 'knowledge' ? {
+      question_id: String(value?.question_id || '').trim(),
+      question_version: Number(value?.question_version),
+      fingerprint: String(value?.fingerprint || '').trim()
+    } : {})
   };
-  if (!record.message_id || !record.chat_id || record.kind !== 'candidate') {
+  if (!record.message_id || !record.chat_id || !['candidate', 'knowledge'].includes(record.kind)) {
     throw new Error('invalid choice context binding');
   }
+  if (kind === 'knowledge' && (!/^[a-z0-9-]{4,80}$/.test(record.question_id)
+      || !Number.isInteger(record.question_version) || record.question_version < 1
+      || !/^[a-f0-9]{64}$/.test(record.fingerprint))) throw new Error('invalid knowledge choice context binding');
   if (!Number.isFinite(Date.parse(record.created_at)) || !Number.isFinite(Date.parse(record.expires_at))) {
     throw new Error('invalid choice context timestamps');
   }

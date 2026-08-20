@@ -177,8 +177,8 @@ function collectRiskFlags(context = {}) {
   const values = []
     .concat(Array.isArray(parsed.risk_flags) ? parsed.risk_flags : [])
     .concat(inquiryRiskFlags(context.inquiry));
-  if (context.costing_draft && ['internal_pre_quote', 'draft', 'pending_review'].includes(text(context.costing_draft.status))) {
-    values.push('Costing draft is internal_pre_quote and must be reviewed before customer quotation.');
+  if (context.costing_draft && ['blocked', 'internal_estimate', 'internal_pre_quote', 'draft', 'pending_review'].includes(text(context.costing_draft.status))) {
+    values.push('Costing draft is not approved and must be reviewed before customer quotation.');
   }
   return Array.from(new Set(values.map(text).filter(Boolean)));
 }
@@ -222,7 +222,7 @@ function templateLinesForContext(context = {}, options = {}) {
     lines.push('To prepare an accurate quotation, could you please help confirm the key details below?');
   }
 
-  if (costingStatus === 'internal_pre_quote') {
+  if (['blocked', 'internal_estimate', 'internal_pre_quote'].includes(costingStatus)) {
     lines.push('We are reviewing the cost internally based on your specifications. Once the material structure, quantity and shipping terms are confirmed, we will send you a formal quotation.');
   }
 

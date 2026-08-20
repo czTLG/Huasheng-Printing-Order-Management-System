@@ -27,6 +27,35 @@ try {
   assert.strictEqual(context.resolveChoiceContext({
     messageId: 'om-candidate', chatId: 'build-chat', now
   }, { storePath }).kind, 'candidate');
+  context.registerChoiceContext({
+    message_id: 'om-knowledge',
+    chat_id: 'build-chat',
+    kind: 'knowledge',
+    question_id: 'commercial-threshold-scope',
+    question_version: 1,
+    fingerprint: 'a'.repeat(64),
+    created_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + 30 * 60 * 1000).toISOString()
+  }, { storePath, now });
+  const knowledge = context.resolveChoiceContext({
+    messageId: 'om-knowledge', chatId: 'build-chat', now
+  }, { storePath });
+  assert.deepStrictEqual({
+    kind: knowledge.kind,
+    question_id: knowledge.question_id,
+    question_version: knowledge.question_version,
+    fingerprint: knowledge.fingerprint
+  }, {
+    kind: 'knowledge',
+    question_id: 'commercial-threshold-scope',
+    question_version: 1,
+    fingerprint: 'a'.repeat(64)
+  });
+  assert.throws(() => context.registerChoiceContext({
+    message_id: 'om-bad-knowledge', chat_id: 'build-chat', kind: 'knowledge',
+    question_id: 'bad', question_version: 1, fingerprint: 'short',
+    created_at: now.toISOString(), expires_at: new Date(now.getTime() + 1000).toISOString()
+  }, { storePath, now }), /knowledge choice context/);
   assert.strictEqual(context.resolveChoiceContext({
     messageId: 'om-other', chatId: 'build-chat', now
   }, { storePath }), null);

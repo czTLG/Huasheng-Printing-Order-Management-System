@@ -310,6 +310,7 @@ async function main() {
   const pollMs = Math.max(15000, Number(process.env.MATRIX_INBOX_RELAY_POLL_MS || 60000));
   const statePath = process.env.MATRIX_INBOX_RELAY_STATE_PATH || DEFAULT_STATE_PATH;
   const instantEnabled = process.env.MATRIX_INBOX_INSTANT_ENABLED === '1';
+  const dailyWorkbenchEnabled = process.env.MATRIX_INBOX_DAILY_WORKBENCH_ENABLED === '1';
   while (true) {
     const result = instantEnabled ? await runOne({
       client, openId, chatId,
@@ -321,7 +322,7 @@ async function main() {
     if (result.status === 'failed') process.stderr.write(`[matrix-inbox] job #${result.job_id} failed: ${result.error_code}\n`);
     const state = loadState(statePath);
     const current = new Date();
-    if (shouldSendDailyWorkbench(current, state.last_workbench_date)) {
+    if (dailyWorkbenchEnabled && shouldSendDailyWorkbench(current, state.last_workbench_date)) {
       const workbench = await client.inboxWorkbench(openId);
       if (workbench.overall_ready !== true) {
         process.stdout.write(`[matrix-inbox] daily workbench held: ${Number(workbench.incomplete_count || 0)} incomplete\n`);

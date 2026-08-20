@@ -88,6 +88,17 @@ const DEFAULT_FORM: FormData = {
   roll_w: '17', roll_l: '1000',
 };
 
+function optionalNumber(value: string) {
+  if (value == null || value.trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function optionalRate(value: string) {
+  const parsed = optionalNumber(value);
+  return parsed === null ? null : parsed / 100;
+}
+
 export default function Cost() {
   const [form, setForm] = useState<FormData>({ ...DEFAULT_FORM, mat: [...DEFAULT_FORM.mat] as any, thick: [...DEFAULT_FORM.thick] as any, prop: [...DEFAULT_FORM.prop] as any, price: [...DEFAULT_FORM.price] as any });
   const [result, setResult] = useState<any>(null);
@@ -246,46 +257,46 @@ export default function Cost() {
   // === Build payload — exactly matching legacy collectCostInput() ===
   const buildPayload = () => {
     const t = costType;
-    const ba_di_raw = Number(form.ba_di || 0);
+    const ba_di_raw = optionalNumber(form.ba_di);
     const ba_di = t === 'three_side_seal' ? 0 : ba_di_raw;
-    const ba_ce_input = Number(form.ba_ce || 0);
+    const ba_ce_input = optionalNumber(form.ba_ce);
     const ba_ce = ['back_seal', 'side_seal', 'four_side_seal'].includes(t)
       ? ba_ce_input
       : (t === 'eight_side_seal' ? ba_di : 0);
-    const thick = [0, 1, 2, 3].map(i => Number(form.thick[i] || 0));
-    const rawPrice = [0, 1, 2, 3].map(i => Number(form.price[i] || 0));
-    const proportion = [0, 1, 2, 3].map(i => Number(form.prop[i] || 0));
+    const thick = [0, 1, 2, 3].map(i => optionalNumber(form.thick[i]));
+    const rawPrice = [0, 1, 2, 3].map(i => optionalNumber(form.price[i]));
+    const proportion = [0, 1, 2, 3].map(i => optionalNumber(form.prop[i]));
 
     return {
       costType: t,
       input: {
-        ba_chang: Number(form.ba_chang || 0),
-        ba_kuang: Number(form.ba_kuang || 0),
+        ba_chang: optionalNumber(form.ba_chang),
+        ba_kuang: optionalNumber(form.ba_kuang),
         ba_ce,
         ba_di,
         irregular_has_bottom: Number(form.ir_has_bottom || 0),
         thick,
         price: rawPrice,
         proportion,
-        jgf: Number(form.jgf || 0),
-        zxyf: Number(form.zxyf || 0),
-        sh: (Number(form.sh || 0) / 100),
-        lr: (Number(form.lr || 0) / 100),
-        lldj: Number(form.lldj || 0),
-        ba_zdf: Number(form.ba_zdf || 0),
-        z_mian_2: 0, z_mian_3: 0, z_mian_4: 0,
-        chang: Number(form.ba_chang || 0),
-        kuang: Number(form.ba_kuang || 0),
+        jgf: optionalNumber(form.jgf),
+        zxyf: optionalNumber(form.zxyf),
+        sh: optionalRate(form.sh),
+        lr: optionalRate(form.lr),
+        lldj: optionalNumber(form.lldj),
+        ba_zdf: optionalNumber(form.ba_zdf),
+        z_mian_2: null, z_mian_3: null, z_mian_4: null,
+        chang: optionalNumber(form.ba_chang),
+        kuang: optionalNumber(form.ba_kuang),
         t1: thick[0], t2: thick[1], t3: thick[2], t4: thick[3],
         p1: proportion[0], p2: proportion[1], p3: proportion[2], p4: proportion[3],
         pr1: rawPrice[0], pr2: rawPrice[1], pr3: rawPrice[2], pr4: rawPrice[3],
         mat1: form.mat[0], mat2: form.mat[1], mat3: form.mat[2], mat4: form.mat[3],
-        fqfy: Number(form.fqfy || 0),
-        yf: Number(form.yf || 0),
-        zt: Number(form.zt || 0),
-        btzt: Number(form.btzt || 0),
-        roll_w: Number(form.roll_w || 0),
-        roll_l: Number(form.roll_l || 0),
+        fqfy: optionalNumber(form.fqfy),
+        yf: optionalNumber(form.yf),
+        zt: optionalNumber(form.zt),
+        btzt: optionalNumber(form.btzt),
+        roll_w: optionalNumber(form.roll_w),
+        roll_l: optionalNumber(form.roll_l),
       }
     };
   };

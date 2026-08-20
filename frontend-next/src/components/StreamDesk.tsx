@@ -5,6 +5,7 @@ import { User } from '../types';
 type Task = {
   id: number; platform: string; title: string; body: string; hashtags: string; media_url?: string;
   target_url: string; destination_url: string; recommended_at: string; status: string; source_url: string;
+  approval_status: 'pending_review' | 'approved' | 'changes_requested';
 };
 
 async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -22,6 +23,9 @@ const platformNames: Record<string, string> = {
   youtube: 'YouTube', medium: 'Medium', baijiahao: '百家号', toutiao: '头条号', sohu: '搜狐号', instagram: 'Instagram', vk: 'VK',
 };
 
+const importPlatformOptions = ['facebook', 'linkedin', 'instagram', 'pinterest', 'youtube', 'wechat'];
+const approvalNames = { pending_review: '待审批', approved: '已批准', changes_requested: '需修改' };
+
 export default function StreamDesk({ user }: { user: User }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [summary, setSummary] = useState<any>(null);
@@ -29,6 +33,8 @@ export default function StreamDesk({ user }: { user: User }) {
   const [calendar, setCalendar] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
   const [status, setStatus] = useState('ready');
+  const [platform, setPlatform] = useState('facebook');
+  const [importPlatforms, setImportPlatforms] = useState<string[]>(['facebook']);
   const [metrics, setMetrics] = useState({ impressions: 0, clicks: 0, reactions: 0, comments: 0, shares: 0, saves: 0 });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -40,14 +46,14 @@ export default function StreamDesk({ user }: { user: User }) {
     const from = new Date().toISOString().slice(0, 10);
     const to = new Date(Date.now() + 31 * 86400000).toISOString().slice(0, 10);
     const [taskData, summaryData, strategyData, calendarData, analyticsData] = await Promise.all([
-      api<{ tasks: Task[] }>(`/api/stream-desk/tasks?status=${status}&limit=50`),
+      api<{ tasks: Task[] }>(`/api/stream-desk/tasks?status=${status}&platform=${platform}&limit=50`),
       api('/api/stream-desk/summary'), api('/api/stream-desk/strategy'),
-      api<{ tasks: any[] }>(`/api/stream-desk/calendar?from=${from}&to=${to}`), api('/api/stream-desk/analytics'),
+      api<{ tasks: any[] }>(`/api/stream-desk/calendar?from=${from}&to=${to}&platform=${platform}`), api('/api/stream-desk/analytics'),
     ]);
     setTasks(taskData.tasks); setSummary(summaryData); setStrategy(strategyData); setCalendar(calendarData.tasks); setAnalytics(analyticsData);
   }
 
-  useEffect(() => { load().catch((error) => setMessage(error.message)); }, [status]);
+  useEffect(() => { load().catch((error) => setMessage(error.message)); }, [status, platform]);
   const progress = useMemo(() => Object.values(summary?.counts || {}).reduce((sum: number, value: any) => sum + Number(value), 0), [summary]);
 
   async function act(action: string, detail = '') {
@@ -68,7 +74,7 @@ export default function StreamDesk({ user }: { user: User }) {
     setBusy(true);
     try {
       const page: any = await api('/api/stream-desk/inspect', { method: 'POST', body: JSON.stringify({ sourceUrl }) });
-      await api('/api/stream-desk/sources', { method: 'POST', body: JSON.stringify({ ...page, language: sourceUrl.includes('/zh/') ? 'zh' : 'en' }) });
+      await api('/api/stream-desk/sources', { method: 'POST', body: JSON.stringify({ ...page, platforms: importPlatforms, language: sourceUrl.includes('/zh/') ? 'zh' : 'en' }) });
       setMessage('官网内容已生成多平台任务。'); await load();
     } catch (error: any) { setMessage(error.message); } finally { setBusy(false); }
   }
@@ -92,10 +98,19 @@ export default function StreamDesk({ user }: { user: User }) {
     setMessage('绩效快照已保存。'); await load();
   }
 
+  async function approve(approvalStatus: Task['approval_status']) {
+    if (!current) return;
+    setBusy(true);
+    try {
+      await api(`/api/stream-desk/tasks/${current.id}/approval`, { method: 'POST', body: JSON.stringify({ approval_status: approvalStatus }) });
+      setMessage(`审批状态已更新为${approvalNames[approvalStatus]}。`); await load();
+    } catch (error: any) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
   return <div className="space-y-5 pb-10">
     <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
       <div><p className="text-xs font-bold text-indigo-600">PRIVATE PUBLISHING WORKSPACE</p><h1 className="text-2xl font-black text-slate-900">内容发布台</h1><p className="mt-1 text-sm text-slate-500">逐稿发布、记录公开链接，并自动进入下一项。</p></div>
-      <div className="flex gap-2"><select value={status} onChange={(event) => setStatus(event.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600"><option value="ready">待发布</option><option value="published">已发布</option><option value="draft_saved">微信草稿</option><option value="all">全部</option></select><button onClick={() => load()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600"><RefreshCw className="h-4 w-4" />刷新</button></div>
+      <div className="flex gap-2"><select value={platform} onChange={(event) => setPlatform(event.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600"><option value="facebook">仅 Facebook</option><option value="all">全部平台</option>{Object.entries(platformNames).filter(([key]) => key !== 'facebook').map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><select value={status} onChange={(event) => setStatus(event.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600"><option value="ready">待发布</option><option value="published">已发布</option><option value="draft_saved">微信草稿</option><option value="all">全部</option></select><button onClick={() => load()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600"><RefreshCw className="h-4 w-4" />刷新</button></div>
     </div>
 
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -104,14 +119,16 @@ export default function StreamDesk({ user }: { user: User }) {
 
     {user.role === 'super_admin' && <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4 md:flex-row">
       <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} className="h-10 flex-1 rounded-lg border border-slate-200 px-3 text-sm" aria-label="官网页面 URL" />
-      <button disabled={busy} onClick={importPage} className="h-10 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white">从官网生成任务</button>
+      <div className="flex flex-wrap gap-1">{importPlatformOptions.map((item) => <label key={item} className="flex items-center gap-1 rounded border border-slate-200 px-2 text-xs font-bold"><input type="checkbox" checked={importPlatforms.includes(item)} onChange={() => setImportPlatforms((currentItems) => currentItems.includes(item) ? currentItems.filter((value) => value !== item) : [...currentItems, item])} />{platformNames[item]}</label>)}</div>
+      <button disabled={busy || importPlatforms.length === 0} onClick={importPage} className="h-10 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white disabled:opacity-40">从官网生成任务</button>
     </div>}
 
     {message && <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-700">{message}</div>}
 
     {current ? <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
       <div className="rounded-lg border border-slate-200 bg-white p-5 md:p-6">
-        <div className="flex items-center justify-between gap-3"><span className="rounded bg-slate-100 px-2 py-1 text-xs font-black text-slate-600">{platformNames[current.platform] || current.platform}</span><span className="text-xs font-bold text-slate-400">建议 {current.recommended_at}</span></div>
+        <div className="flex items-center justify-between gap-3"><div className="flex gap-2"><span className="rounded bg-slate-100 px-2 py-1 text-xs font-black text-slate-600">{platformNames[current.platform] || current.platform}</span><span className={`rounded px-2 py-1 text-xs font-black ${current.approval_status === 'approved' ? 'bg-emerald-100 text-emerald-700' : current.approval_status === 'changes_requested' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>{approvalNames[current.approval_status] || current.approval_status}</span></div><span className="text-xs font-bold text-slate-400">建议 {current.recommended_at}</span></div>
+        {user.role === 'super_admin' && <div className="mt-3 flex gap-2"><button disabled={busy} onClick={() => approve('approved')} className="h-8 rounded bg-emerald-600 px-3 text-xs font-bold text-white">批准</button><button disabled={busy} onClick={() => approve('changes_requested')} className="h-8 rounded border border-rose-200 px-3 text-xs font-bold text-rose-700">需修改</button><button disabled={busy} onClick={() => approve('pending_review')} className="h-8 rounded border border-slate-200 px-3 text-xs font-bold text-slate-600">退回待审</button></div>}
         <h2 className="mt-5 text-xl font-black text-slate-900">{current.title}</h2>
         <div className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-700">{current.body}</div>
         {current.media_url && <a href={current.media_url} target="_blank" rel="noreferrer" className="mt-4 flex items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm font-bold text-slate-700"><Image className="h-5 w-5 text-indigo-500" /><span className="truncate">查看并保存配图</span><ExternalLink className="ml-auto h-4 w-4" /></a>}
@@ -122,7 +139,7 @@ export default function StreamDesk({ user }: { user: User }) {
           <button onClick={() => { act('opened', current.destination_url); window.open(current.destination_url, '_blank', 'noopener'); }} className="h-10 rounded-lg bg-slate-900 text-sm font-bold text-white"><ExternalLink className="mr-2 inline h-4 w-4" />打开平台</button>
           <button onClick={() => act('skipped', 'operator skipped')} className="h-10 rounded-lg border border-slate-200 text-sm font-bold text-slate-500"><SkipForward className="mr-2 inline h-4 w-4" />稍后处理</button>
         </div>
-        <div className="mt-3 flex gap-2"><input value={publicUrl} onChange={(event) => setPublicUrl(event.target.value)} placeholder="粘贴发布后的公开 URL" className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-sm" /><button disabled={busy || !publicUrl} onClick={() => act('published', publicUrl)} className="h-10 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white disabled:opacity-40">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Check className="mr-2 inline h-4 w-4" />完成</>}</button></div>
+        <div className="mt-3 flex gap-2"><input value={publicUrl} onChange={(event) => setPublicUrl(event.target.value)} placeholder={current.approval_status === 'approved' ? '粘贴发布后的公开 URL' : '审批通过后才能登记发布'} disabled={current.approval_status !== 'approved'} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-sm disabled:bg-slate-50" /><button disabled={busy || !publicUrl || current.approval_status !== 'approved'} onClick={() => act('published', publicUrl)} className="h-10 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white disabled:opacity-40">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Check className="mr-2 inline h-4 w-4" />完成</>}</button></div>
         {current.status === 'published' && <div className="mt-5 border-t border-slate-100 pt-5"><h3 className="text-sm font-black text-slate-900">7/28 天绩效快照</h3><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-6">{Object.keys(metrics).map((key) => <label key={key} className="text-[11px] font-bold text-slate-500">{key}<input type="number" min="0" value={(metrics as any)[key]} onChange={(event) => setMetrics({ ...metrics, [key]: Number(event.target.value) })} className="mt-1 h-9 w-full rounded border border-slate-200 px-2 text-sm" /></label>)}</div><button onClick={saveMetrics} className="mt-3 h-9 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white">保存快照</button></div>}
       </div>
       <aside className="space-y-4">

@@ -1471,7 +1471,7 @@ router.get('/customers/:id', (req, res) => {
       messages_pending_ai: whatsappMessages.filter((row) => row.ai_status === 'pending').length,
       father_tasks_pending: fatherTasks.filter((row) => row.status === 'pending').length,
       father_tasks_done_pending_sales: fatherTasks.filter((row) => row.status === 'done' && !row.sales_handled_at).length,
-      costing_drafts_pending_review: foreignCostingDrafts.filter((row) => ['internal_pre_quote', 'draft', 'pending_review'].includes(String(row.status || ''))).length,
+      costing_drafts_pending_review: foreignCostingDrafts.filter((row) => ['blocked', 'internal_estimate', 'internal_pre_quote', 'draft', 'pending_review'].includes(String(row.status || ''))).length,
       latest_father_task: fatherTasks[0] || null,
       latest_costing_draft: foreignCostingDrafts[0] || null
     };
@@ -2119,6 +2119,41 @@ router.post('/messages/:id/father-task', (req, res) => {
   } catch (err) {
     handleError(res, err, '父亲确认任务创建失败');
   }
+});
+
+const WHATSAPP_CONTROL_CONTRACT = Object.freeze({
+  contract_version: 1,
+  provider: 'meta_whatsapp_business_platform',
+  transport: 'cloud_api',
+  implementation_phase: 'design_only',
+  official_connection_state: 'not_connected',
+  automation_state: 'disabled',
+  outbound_enabled: false,
+  conversation_window_hours: 24,
+  outside_window_policy: 'approved_template_only',
+  ownership_states: ['automation_eligible', 'human_requested', 'human_active', 'automation_paused', 'closed'],
+  allowed_transitions: {
+    automation_eligible: ['human_requested'],
+    human_requested: ['human_active'],
+    human_active: ['automation_paused', 'closed'],
+    automation_paused: ['human_active', 'closed'],
+    closed: []
+  },
+  takeover: {
+    human_always_available: true,
+    automation_stops_on: ['human_requested', 'human_active', 'automation_paused'],
+    required_reasons: ['quote_commitment', 'custom_spec_uncertainty', 'complaint', 'payment', 'legal_or_policy', 'customer_requests_human']
+  },
+  safeguards: {
+    credentials_present: false,
+    sends_messages: false,
+    reads_message_body: false,
+    webhook_enabled: false
+  }
+});
+
+router.get('/whatsapp/control-state', (_req, res) => {
+  res.json({ ok: true, ...WHATSAPP_CONTROL_CONTRACT });
 });
 
 router.post('/whatsapp/sync', (req, res) => {

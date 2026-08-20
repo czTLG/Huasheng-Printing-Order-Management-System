@@ -3,8 +3,10 @@
 
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const knowledgeReview = require('./matrix-knowledge-review.js');
 
 const STATE_PATH = '/workspace/store/matrix-watch-state.json';
+const KNOWLEDGE_STATE_PATH = '/workspace/store/matrix-knowledge-watch-state.json';
 const REMINDER_SPOOL_PATH = '/workspace/store/matrix-reminder-pending.json';
 const REMINDER_INFLIGHT_PATH = '/workspace/store/matrix-reminder-inflight.json';
 const REMINDER_RECEIPT_PATH = '/workspace/store/matrix-reminder-receipt.json';
@@ -33,16 +35,16 @@ function normalizedState(value) {
   };
 }
 
-function loadState() {
-  try { return normalizedState(JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'))); }
+function loadState(statePath = STATE_PATH) {
+  try { return normalizedState(JSON.parse(fs.readFileSync(statePath, 'utf8'))); }
   catch (_) { return {}; }
 }
 
-function saveState(state) {
+function saveState(state, statePath = STATE_PATH) {
   const clean = normalizedState(state);
-  const temporary = `${STATE_PATH}.${process.pid}.tmp`;
+  const temporary = `${statePath}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(clean), { mode: 0o600 });
-  fs.renameSync(temporary, STATE_PATH);
+  fs.renameSync(temporary, statePath);
 }
 
 function readJson(file) {
@@ -62,11 +64,14 @@ function readProcessIdentity(pid = process.pid, readFile = fs.readFileSync) {
   return { pid: processId, boot_id: bootId, start_time: startTime };
 }
 
-function deliveryId(date, chatId) {
+function deliveryId(date, chatId, namespace = 'candidate') {
   const day = String(date || '');
   const chat = String(chatId || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !chat) throw new Error('valid reminder date and chat required');
-  const bytes = crypto.createHash('sha256').update(`matrix-reminder\0${day}\0${chat}`).digest().subarray(0, 16);
+  const scope = String(namespace || 'candidate');
+  if (!/^[a-z][a-z0-9-]{2,30}$/.test(scope)) throw new Error('valid reminder namespace required');
+  const seed = scope === 'candidate' ? `matrix-reminder\0${day}\0${chat}` : `matrix-${scope}-reminder\0${day}\0${chat}`;
+  const bytes = crypto.createHash('sha256').update(seed).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString('hex');
@@ -75,13 +80,14 @@ function deliveryId(date, chatId) {
 
 function queueReminder(card, chatId, {
   date,
+  namespace = 'candidate',
   spoolPath = REMINDER_SPOOL_PATH,
   inflightPath = REMINDER_INFLIGHT_PATH,
   receiptPath = REMINDER_RECEIPT_PATH
 } = {}) {
   const targetChat = String(chatId || '').trim();
   if (!targetChat || !card || typeof card !== 'object' || Array.isArray(card)) throw new Error('valid reminder card and chat required');
-  const id = deliveryId(date, targetChat);
+  const id = deliveryId(date, targetChat, namespace);
   const receipt = readJson(receiptPath);
   const inflight = readJson(inflightPath);
   if (inflight) {
@@ -352,29 +358,70 @@ async function runDue({ now = new Date(), state = {}, client, ownerOpenId, chatI
   return { last_success_date: current.date, last_message_id: String(messageId || '') };
 }
 
+async function runKnowledgeDue({
+  now = new Date(), state = {}, chatId, send,
+  hour = 9, minute = 0,
+  storePath = process.env.MATRIX_KNOWLEDGE_REVIEW_PATH || knowledgeReview.DEFAULT_STORE_PATH
+}) {
+  if (!chatId || typeof send !== 'function') throw new Error('knowledge watcher binding required');
+  const current = shanghaiParts(now);
+  const clean = normalizedState(state);
+  const passed = current.hour > hour || (current.hour === hour && current.minute >= minute);
+  if (!passed || clean.last_success_date === current.date) return clean;
+  const question = knowledgeReview.currentQuestion(storePath);
+  const messageId = await send(knowledgeReview.questionCard(question), chatId, current.date);
+  return { last_success_date: current.date, last_message_id: String(messageId || '') };
+}
+
+function recommendationEnabled(env = process.env) {
+  return String(env?.MATRIX_RECOMMEND_ENABLED || '') === '1';
+}
+
+async function runRecommendationCycle({
+  enabled = recommendationEnabled(),
+  state = {}, client, ownerOpenId, chatId, hour = 9, minute = 0,
+  now = new Date(), send,
+  claim = claimAndQueueReply,
+  due = runDue
+} = {}) {
+  if (enabled !== true) return { status: 'disabled', state: normalizedState(state) };
+  await claim({ client, ownerOpenId, chatId });
+  const next = await due({ now, state, client, ownerOpenId, chatId, hour, minute, send });
+  return { status: 'checked', state: next };
+}
+
 async function main() {
   const pollMs = Math.max(60000, Number(process.env.MATRIX_RECOMMEND_POLL_MS || 60000));
   if (String(process.env.MATRIX_DELIVERY_ENABLED || '0') !== '0') {
     throw new Error('watcher delivery capability is not installed');
   }
+  const enabled = recommendationEnabled();
+  const knowledgeEnabled = knowledgeReview.enabled();
+  if (enabled && knowledgeEnabled) throw new Error('recommendation and knowledge review cannot run together');
   const ownerOpenId = String(process.env.MATRIX_OWNER_OPEN_ID || '').trim();
   const chatId = String(process.env.STREAM_CHAT_ID || '').trim();
-  if (!ownerOpenId || !chatId) throw new Error('watcher environment incomplete');
-  const client = require('./matrix-client.js');
-  const hour = Number(process.env.MATRIX_RECOMMEND_HOUR || 9);
-  const minute = Number(process.env.MATRIX_RECOMMEND_MINUTE || 0);
-  let state = loadState();
+  if ((enabled || knowledgeEnabled) && (!ownerOpenId || !chatId)) throw new Error('watcher environment incomplete');
+  const client = enabled ? require('./matrix-client.js') : null;
+  const hour = Number(knowledgeEnabled ? (process.env.MATRIX_KNOWLEDGE_REVIEW_HOUR || 9) : (process.env.MATRIX_RECOMMEND_HOUR || 9));
+  const minute = Number(knowledgeEnabled ? (process.env.MATRIX_KNOWLEDGE_REVIEW_MINUTE || 0) : (process.env.MATRIX_RECOMMEND_MINUTE || 0));
+  const statePath = knowledgeEnabled ? KNOWLEDGE_STATE_PATH : STATE_PATH;
+  let state = loadState(statePath);
   while (true) {
     try {
-      await claimAndQueueReply({ client, ownerOpenId, chatId });
-      const next = await runDue({
-        now: new Date(), state, client, ownerOpenId, chatId, hour, minute,
-        send: (card, _chat, date) => queueReminder(card, chatId, { date })
-      });
+      const next = knowledgeEnabled
+        ? await runKnowledgeDue({
+          now: new Date(), state, chatId, hour, minute,
+          send: (card, _chat, date) => queueReminder(card, chatId, { date, namespace: 'knowledge' })
+        })
+        : (await runRecommendationCycle({
+          enabled,
+          now: new Date(), state, client, ownerOpenId, chatId, hour, minute,
+          send: (card, _chat, date) => queueReminder(card, chatId, { date })
+        })).state;
       if (next.last_success_date !== state.last_success_date) {
         state = next;
-        saveState(state);
-        process.stdout.write(`[matrix-watch] reminder queued for ${state.last_success_date}\n`);
+        saveState(state, statePath);
+        process.stdout.write(`[matrix-watch] ${knowledgeEnabled ? 'knowledge' : 'recommendation'} reminder queued for ${state.last_success_date}\n`);
       }
     } catch (error) {
       process.stderr.write(`[matrix-watch] reminder queue failed: ${error?.message || 'unknown error'}\n`);
@@ -388,4 +435,4 @@ if (require.main === module) main().catch(error => {
   process.exit(1);
 });
 
-module.exports = { runDue, reminderCard, replyNotificationCard, claimAndQueueReply, readProcessIdentity, shanghaiParts, queueReminder, deliveryId };
+module.exports = { runDue, runKnowledgeDue, runRecommendationCycle, recommendationEnabled, reminderCard, replyNotificationCard, claimAndQueueReply, readProcessIdentity, shanghaiParts, queueReminder, deliveryId };

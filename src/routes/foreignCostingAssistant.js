@@ -4,11 +4,14 @@ const {
   parseInquiryText,
   normalizeMaterialLayers,
   normalizeToQuoteInput,
-  applyDefaultCostParams,
+  mergeQuoteInputOverrides,
   runPreCosting,
   buildCalculationTable,
-  buildFatherReviewPanel
+  buildFatherReviewPanel,
+  _internals
 } = require('../services/foreignCostingAssistant');
+
+const { normalizeThicknessToC } = _internals;
 
 const router = express.Router();
 
@@ -60,7 +63,7 @@ function extractRouteMaterialLayers(text) {
       const num = Number(m[2]);
       return {
         raw_name: m[1].trim(),
-        thickness_value: Number.isFinite(num) ? Number((num / 10).toFixed(6)) : null,
+        thickness_value: Number.isFinite(num) ? Number(normalizeThicknessToC(num, m[3]).toFixed(6)) : null,
         source: segment
       };
     })
@@ -215,15 +218,19 @@ router.post('/draft', async (req, res) => {
       normalized_surface_finish: materialMapping.surface_finish
     };
 
-    const quoteNorm = normalizeToQuoteInput(parsedForQuote);
-    const defaultCostParams = applyDefaultCostParams(quoteNorm.cost_type, parsedForQuote);
+    const parsedQuoteNorm = normalizeToQuoteInput(parsedForQuote);
+    const quoteNorm = mergeQuoteInputOverrides(
+      parsedQuoteNorm,
+      req.body?.quote_input && typeof req.body.quote_input === 'object' ? req.body.quote_input : {},
+      'reviewed_form'
+    );
     const preCost = runPreCosting(quoteNorm);
     const calculationTable = buildCalculationTable(quoteNorm.cost_type, quoteNorm, preCost);
     const fatherReviewPanel = buildFatherReviewPanel(parsed, quoteNorm, preCost);
     const warnings = buildWarningList(parsed, materialMapping, {
       ...quoteNorm,
-      warnings: uniq([...(quoteNorm.warnings || []), ...(defaultCostParams.warnings || [])]),
-      default_notes: uniq([...(quoteNorm.default_notes || []), ...(defaultCostParams.defaultNotes || [])])
+      warnings: uniq(quoteNorm.warnings || []),
+      default_notes: uniq(quoteNorm.default_notes || [])
     });
 
     const result = db.prepare(`
@@ -241,11 +248,11 @@ router.post('/draft', async (req, res) => {
       JSON.stringify(parsed),
       JSON.stringify(materialMapping),
       JSON.stringify(quoteNorm.quote_input),
-      JSON.stringify(preCost.internalVersion),
+      JSON.stringify(preCost.internalVersion || { status: preCost.status, readiness: preCost.readiness }),
       JSON.stringify(calculationTable),
       String(req.body?.provider || ''),
       String(req.body?.model || ''),
-      'internal_pre_quote',
+      preCost.status,
       String(req.user?.userName || ''),
       now(),
       now(),
@@ -269,12 +276,14 @@ router.post('/draft', async (req, res) => {
       parsed_spec: parsed,
       material_mapping: materialMapping,
       quote_input: quoteNorm.quote_input,
+      quote_input_provenance: quoteNorm.override_provenance,
       quote_result: preCost.internalVersion,
+      readiness: preCost.readiness,
       calculation_table: calculationTable,
       father_review_panel: fatherReviewPanel,
       warnings,
       crm_context: parsed.crm_context,
-      status: 'internal_pre_quote'
+      status: preCost.status
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -299,6 +308,12 @@ router.post('/review', (req, res) => {
     const fatherCorrectionNote = String(req.body?.father_correction_note ?? '');
     const approvedUnitPrice = nOrNull(req.body?.approved_unit_price);
     const approvedTotalPrice = nOrNull(req.body?.approved_total_price);
+    if (String(draftRow.status || '') === 'blocked'
+      && (approvedUnitPrice !== null || approvedTotalPrice !== null)) {
+      return res.status(409).json({
+        error: '该草稿仍为 blocked；补齐并重新计算后才能保存批准金额'
+      });
+    }
     const changedFields = req.body?.changed_fields && typeof req.body.changed_fields === 'object'
       ? req.body.changed_fields
       : {};
