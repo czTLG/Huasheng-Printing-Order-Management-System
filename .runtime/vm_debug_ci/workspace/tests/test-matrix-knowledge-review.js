@@ -25,7 +25,15 @@ const store = review.createStore({ storePath, now: () => now });
 
 try {
   const first = store.current();
-  assert.strictEqual(review.cardBinding(review.questionCard(first)).question_id, first.id);
+  const firstCard = review.questionCard(first);
+  assert.strictEqual(review.cardBinding(firstCard).question_id, first.id);
+  const firstMarkdown = firstCard.body.elements.filter(element => element.tag === 'markdown').map(element => element.content).join('\n');
+  for (const [letter, label] of Object.entries(first.options)) {
+    assert(firstMarkdown.includes(label), `full option ${letter} must remain visible outside the button`);
+  }
+  const firstButtons = firstCard.body.elements.flatMap(element => element.columns || []).flatMap(column => column.elements || []);
+  assert.deepStrictEqual(firstButtons.map(button => button.text.content), ['选择 A', '选择 B', '选择 C', '选择 D']);
+  assert(firstButtons.every(button => button.text.content.length <= 4), 'choice buttons must stay short enough to avoid truncation');
   assert.strictEqual(review.reviewerAllowed('ou-owner', { MATRIX_OWNER_OPEN_ID: 'ou-owner' }), true);
   assert.strictEqual(review.reviewerAllowed('ou-other', { MATRIX_OWNER_OPEN_ID: 'ou-owner' }), false);
 
@@ -109,6 +117,13 @@ try {
     ...binding(second), text: '我说的是另一个问题，不是这道题', actor_id: 'ou-owner', event_key: 'text-other'
   });
   assert.strictEqual(staged.pending.proposed_classification, 'different_question');
+  const classificationCard = review.classificationCard(staged);
+  const classificationMarkdown = classificationCard.body.elements.filter(element => element.tag === 'markdown').map(element => element.content).join('\n');
+  for (const label of ['这是当前题的答案', '这道题问得不对', '我回答的是另一道题', '暂时跳过这道题']) {
+    assert(classificationMarkdown.includes(label), `full classification label must remain visible: ${label}`);
+  }
+  const classificationButtons = classificationCard.body.elements.flatMap(element => element.columns || []).flatMap(column => column.elements || []);
+  assert.deepStrictEqual(classificationButtons.map(button => button.text.content), ['确认 A', '确认 B', '确认 C', '确认 D']);
   assert.strictEqual(store.current().id, second.id);
   assert.throws(() => store.confirmText({
     ...binding(second), pending_id: staged.pending.id, text_hash: '1'.repeat(64),

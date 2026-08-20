@@ -450,10 +450,12 @@ function questionCard(question) {
     };
   }
   const binding = { q: question.id, v: question.version, f: question.fingerprint };
-  const columns = Object.entries(question.options).map(([letter, label]) => ({
+  const optionEntries = Object.entries(question.options);
+  const optionText = optionEntries.map(([letter, label]) => `**${letter}**　${label}`).join('\n\n');
+  const columns = optionEntries.map(([letter]) => ({
     tag: 'column', width: 'weighted', weight: 1,
     elements: [{
-      tag: 'button', type: 'default', text: { tag: 'plain_text', content: `${letter}. ${label}` },
+      tag: 'button', type: 'default', text: { tag: 'plain_text', content: `选择 ${letter}` },
       behaviors: [{ type: 'callback', value: { a: 'mx.knowledge_choice', ...binding, c: letter } }]
     }]
   }));
@@ -462,6 +464,7 @@ function questionCard(question) {
     header: { template: 'blue', title: { tag: 'plain_text', content: '陈湧杰知识确认' } },
     body: { elements: [
       { tag: 'markdown', content: `**第 ${question.index + 1}/${question.total} 题｜${question.title}**\n${question.prompt}` },
+      { tag: 'markdown', content: optionText },
       { tag: 'column_set', flex_mode: 'bisect', horizontal_spacing: 'small', columns: columns.slice(0, 2) },
       { tag: 'column_set', flex_mode: 'bisect', horizontal_spacing: 'small', columns: columns.slice(2, 4) },
       { tag: 'markdown', content: `题目编号：\`${question.id}\`｜版本：${question.version}\n可直接点击 A-D，也可以**引用本卡**输入文字。文字不会直接归档，必须再确认它属于当前题、问题不对，还是回答了别的问题。` }
@@ -484,11 +487,12 @@ function classificationCard(staged) {
     ['skip', labels.skip]
   ];
   const binding = { q: question.id, v: question.version, f: question.fingerprint, p: pending.id, h: pending.text_hash };
+  const classificationText = values.map(([, label]) => label.replace(/^([A-D])\.\s*/, '**$1**　')).join('\n\n');
   const columns = values.map(([classification, label]) => ({
     tag: 'column', width: 'weighted', weight: 1,
     elements: [{
       tag: 'button', type: classification === pending.proposed_classification ? 'primary' : 'default',
-      text: { tag: 'plain_text', content: label },
+      text: { tag: 'plain_text', content: `确认 ${label.slice(0, 1)}` },
       behaviors: [{ type: 'callback', value: { a: 'mx.knowledge_classify', ...binding, k: classification } }]
     }]
   }));
@@ -497,6 +501,7 @@ function classificationCard(staged) {
     header: { template: 'orange', title: { tag: 'plain_text', content: '先确认回答对应哪道题' } },
     body: { elements: [
       { tag: 'markdown', content: `**系统准备关联的题目**\n${question.title}\n\n**收到的文字**\n${[...pending.text].slice(0, 600).join('')}\n\n系统初步判断：**${labels[pending.proposed_classification]}**。确认前不会推进题目。` },
+      { tag: 'markdown', content: classificationText },
       { tag: 'column_set', flex_mode: 'bisect', horizontal_spacing: 'small', columns: columns.slice(0, 2) },
       { tag: 'column_set', flex_mode: 'bisect', horizontal_spacing: 'small', columns: columns.slice(2, 4) }
     ] }
