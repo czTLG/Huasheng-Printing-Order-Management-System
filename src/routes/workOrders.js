@@ -5,6 +5,7 @@ const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 const { allowRoles } = require('../middleware/auth');
 const { db, now, audit } = require('../db');
+const { isAutomaticWorkOrderMailEnabled } = require('../lib/workOrderMailPolicy');
 
 const router = express.Router();
 // 模板锁版规则：见 docs/workorder-template-lock.md（改导出前先对照）
@@ -1038,32 +1039,35 @@ router.post('/', allowRoles('super_admin', 'manager', 'ai_sales'), async (req, r
   );
 
   const workOrderId = ret.lastInsertRowid;
+  const autoEmailEnabled = isAutomaticWorkOrderMailEnabled();
   let emailStatus = 'pending';
   let emailError = '';
-  const sendRet = await sendWorkOrderEmail({
-    workNo,
-    to: resolvedEmailTo,
-    cc: resolvedEmailCc,
-    row: {
-      customer_name: customerName,
-      product_name: productNameSaved,
-      bag_type: bagType,
-      spec,
-      quantity,
-      roller,
-      remark,
-      created_by: req.user.userName,
-      created_at: ts,
-      delivery_date: String(deliveryDate || '')
-    },
-    p: processReq || {}
-  }).catch(e => ({ ok: false, error: e?.message || '邮件发送失败' }));
-  if (sendRet?.ok) {
-    emailStatus = 'sent';
-    audit({ role: req.user.role, userName: req.user.userName, action: 'work_order_mail_sent', resourceType: 'work_order', resourceId: workOrderId, detail: `to=${resolvedEmailTo};cc=${resolvedEmailCc || ''}` });
-  } else {
-    emailStatus = 'send_failed';
-    emailError = String(sendRet?.error || '邮件发送失败');
+  if (autoEmailEnabled) {
+    const sendRet = await sendWorkOrderEmail({
+      workNo,
+      to: resolvedEmailTo,
+      cc: resolvedEmailCc,
+      row: {
+        customer_name: customerName,
+        product_name: productNameSaved,
+        bag_type: bagType,
+        spec,
+        quantity,
+        roller,
+        remark,
+        created_by: req.user.userName,
+        created_at: ts,
+        delivery_date: String(deliveryDate || '')
+      },
+      p: processReq || {}
+    }).catch(e => ({ ok: false, error: e?.message || '邮件发送失败' }));
+    if (sendRet?.ok) {
+      emailStatus = 'sent';
+      audit({ role: req.user.role, userName: req.user.userName, action: 'work_order_mail_sent', resourceType: 'work_order', resourceId: workOrderId, detail: `to=${resolvedEmailTo};cc=${resolvedEmailCc || ''}` });
+    } else {
+      emailStatus = 'send_failed';
+      emailError = String(sendRet?.error || '邮件发送失败');
+    }
   }
   db.prepare('UPDATE work_orders SET email_to=?, email_cc=?, email_status=?, email_error=?, updated_at=? WHERE id=?')
     .run(resolvedEmailTo, resolvedEmailCc, emailStatus, emailError, now(), workOrderId);
@@ -1115,7 +1119,7 @@ router.post('/', allowRoles('super_admin', 'manager', 'ai_sales'), async (req, r
   });
 
   invalidateWorkOrderReferenceCaches();
-  res.json({ ok: true, id: workOrderId, workNo, orderId, productNameSaved, emailQueued: true, emailTo: resolvedEmailTo, emailStatus });
+  res.json({ ok: true, id: workOrderId, workNo, orderId, productNameSaved, emailQueued: autoEmailEnabled, emailTo: resolvedEmailTo, emailStatus });
 });
 
 router.post('/:id/send-email', allowRoles('super_admin', 'manager', 'ai_sales'), async (req, res) => {
